@@ -33,7 +33,7 @@ export function guidedPageUrl(base: string, name: string): string {
 /** Where a guide entry's link leads (the daemon checked it at mount time). */
 export type GuideTarget =
   | { kind: "run"; runId: string }
-  | { kind: "node"; runId: string; nodeId: string }
+  | { kind: "node"; runId: string; nodeId: string; iter: number | null }
   | { kind: "artifact"; runId: string; nodeId: string; port: string }
   | { kind: "review"; runId: string; file: string | null; href: string }
   | { kind: "extension"; href: string }
@@ -56,15 +56,18 @@ function decode(segment: string): string {
 /** What a guide link points at. */
 export function guideTarget(link: string): GuideTarget {
   if (link.startsWith("#/runs/")) {
-    const [runId = "", nodes, nodeId = "", artifacts, port = ""] = link
+    const [runId = "", nodes, nodeId = "", what, value = ""] = link
       .slice("#/runs/".length)
       .replace(/\/+$/, "")
       .split("/")
       .map(decode);
-    if (nodes === "nodes" && artifacts === "artifacts") {
-      return { kind: "artifact", runId, nodeId, port };
+    if (nodes === "nodes" && what === "artifacts") {
+      return { kind: "artifact", runId, nodeId, port: value };
     }
-    if (nodes === "nodes") return { kind: "node", runId, nodeId };
+    if (nodes === "nodes") {
+      const iter = what === "iter" && /^[1-9][0-9]*$/.test(value) ? Number(value) : null;
+      return { kind: "node", runId, nodeId, iter };
+    }
     return { kind: "run", runId };
   }
   if (link.startsWith("#/ext/")) return { kind: "extension", href: link };

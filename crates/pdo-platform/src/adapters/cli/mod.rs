@@ -32,6 +32,7 @@ pub enum PageAction {
         /// A reading guide (YAML or JSON): a list of entries `{title, text,
         /// link}`, shown beside the page in PDO. A link leads into PDO
         /// (`#/runs/<run>`, `#/runs/<run>/nodes/<node>`,
+        /// `#/runs/<run>/nodes/<node>/iter/<n>`,
         /// `#/runs/<run>/nodes/<node>/artifacts/<port>`,
         /// `/runs/<run>/review?file=<path>`) or into the page (`#anchor`, a
         /// relative path).

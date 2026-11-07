@@ -1,6 +1,7 @@
 //! `serve(config, extensions)`: start a daemon with its extensions.
 
 use pdo_session::adapters::extension_hosted::ExtensionHostedSessions;
+use pdo_session::adapters::extension_node_write::ExtensionNodeWrites;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -240,6 +241,10 @@ fn identify_layer(extensions: Extensions, inner: Option<RouterLayer>) -> RouterL
         // Sessions hébergées go to the session context.
         started.serve_hosted_sessions(Arc::new(ExtensionHostedSessions(
             contexts.session.hosted().clone(),
+        )));
+        // API 0.23: its `Host::write_to_node` answers a Node that waits.
+        started.serve_node_writes(Arc::new(ExtensionNodeWrites(
+            contexts.session.write_to_node().clone(),
         )));
         contexts
     })

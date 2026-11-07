@@ -7,8 +7,9 @@ use std::sync::Arc;
 
 use pdo_extension_api::{
     ActorDisplay, Attributes, Authorization, EntityRef, ExtensionData, ExtensionEvent, Host,
-    HostedConfig, HostedGesture, HostedRefusal, HostedSession, LiveArtifact, NewRun, OpenSession,
-    OperationApplied, Presence, Resource, RunCostRead, RunCreation, RunNotCreated,
+    HostedConfig, HostedGesture, HostedRefusal, HostedSession, LiveArtifact, NewRun,
+    NodeNotWritten, NodeWrite, NodeWriting, OpenSession, OperationApplied, Presence, Resource,
+    RunCostRead, RunCreation, RunNotCreated,
 };
 
 use super::{ExtensionHost, Extensions, HostedSessions, Registry};
@@ -217,6 +218,19 @@ impl Host for ExtensionHostOf {
         match self.hosted() {
             Some(hosted) => hosted.live_artifact(&self.id, key, path),
             None => Err(HostedRefusal::unavailable(NOT_HOSTED)),
+        }
+    }
+
+    fn write_to_node(&self, actor: &Actor, write: NodeWrite) -> NodeWriting {
+        let writes = self
+            .registry
+            .upgrade()
+            .and_then(|registry| registry.node_writes.get().cloned());
+        match writes {
+            Some(writes) => writes.write(actor.clone(), write),
+            None => Box::pin(std::future::ready(Err(NodeNotWritten::unavailable(
+                "the daemon writes into no Node session yet (starting or stopping)",
+            )))),
         }
     }
 }

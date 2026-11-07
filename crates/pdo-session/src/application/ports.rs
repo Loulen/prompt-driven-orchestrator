@@ -75,6 +75,10 @@ pub trait Tmux: Send + Sync {
     /// pastes never mix. `false` when tmux refused the buffer or the paste.
     fn paste_without_enter(&self, name: &str, text: &str) -> bool;
 
+    /// Press Enter in the session, as a person submitting what its input
+    /// holds. `false` when tmux refused it.
+    fn press_enter(&self, name: &str) -> bool;
+
     /// The argv that attaches a client to the session from a terminal: the PTY
     /// bridge runs it, `ignore_size` for a spectator (#867, ADR-0075).
     fn attach_argv(&self, name: &str, ignore_size: bool) -> Vec<String>;

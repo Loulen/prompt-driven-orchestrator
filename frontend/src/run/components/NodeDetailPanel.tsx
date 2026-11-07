@@ -27,6 +27,7 @@ import type { ModalState, NodeGestureRights, TerminalView } from "./nodeDetail/t
 import { useMayOnNode } from "../store/gestureRightsStore";
 import { useFocusTab } from "../store/runSearchStore";
 import { useOrchestrationFocusTab } from "../store/orchestrationFocus";
+import { useNodeLinkIter } from "../store/nodeLinkFocus";
 
 interface Props {
   node: NodeState;
@@ -108,12 +109,7 @@ export default function NodeDetailPanel({
       ? userSelectedIter.iter
       : node.iter;
 
-  const setSelectedIter = useCallback(
-    (iter: number) => {
-      setUserSelectedIter({ nodeId: node.node_id, iter });
-    },
-    [node.node_id],
-  );
+  const setSelectedIter = useCallback((iter: number) => setUserSelectedIter({ nodeId: node.node_id, iter }), [node.node_id]);
 
   // A hit chosen in the Run's search opens this node's Transcript at its
   // iteration.
@@ -125,6 +121,8 @@ export default function NodeDetailPanel({
     [setSelectedIter],
   );
   useFocusTab(runId, node.node_id, focusTranscript);
+  // A deep link toward this node at an iteration it ran shows that iteration.
+  useNodeLinkIter(runId, node, setSelectedIter);
   // The « N runs » row of the card opens the Orchestration tab.
   const focusOrchestration = useCallback(() => setDetailTab("orchestration"), []);
   useOrchestrationFocusTab(runId, node.node_id, focusOrchestration);

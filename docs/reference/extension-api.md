@@ -202,11 +202,13 @@ core's mechanisms (amendment #34):
   `live_artifact(key, path)` (0.19): have
   the core hold an agent or a shell outside any Run
   ([Sessions hébergées](#sessions-hébergées-019)).
+- `write_to_node(actor, NodeWrite)` (0.23): type a text into the session of a Node that waits
+  for a person, on behalf of `actor`, and submit it ([Answering a Node](#answering-a-node-023)).
 
 `NeutralHost` allows everything, publishes nothing, answers the core's catalogue alone, creates no
 Run (`503`), names no Projet, signals nothing, sees nobody on a Run, knows no cost and holds no
-Session hébergée (`503`): the host of `ExtensionContext::new`, and a stand-in in an extension's
-tests.
+Session hébergée (`503`) and writes into no Node (`503`): the host of `ExtensionContext::new`, and
+a stand-in in an extension's tests.
 
 ## Admission of a request
 
@@ -548,6 +550,45 @@ that detail at `session/detail`; a page of `topbar/end` may show a counter on it
 (`UiContribution::with_counter`, answering a `PageCounter` for the Actor of the request); since
 0.20 so may a panel or an action of `topbar/end`, and a global Action of `palette` shows the same
 counter on its row.
+
+## Answering a Node (0.23)
+
+An extension answers a Node that waits for a person from elsewhere than its terminal (a message,
+a notification): `host.write_to_node(&actor, NodeWrite::new(run_id, node_id, text))` types the
+text into the Node's session as `actor` would type it, then presses Enter. `.at_iter(n)` aims at
+one iteration; without it, the Node's current one.
+
+- **The right.** The Operation `session` × `take_control` is asked first, on the Node's session
+  (`pdo-<run>-<node>-iter-<n>`), in the Projets of its Run: `actor` writes only where it could take
+  the hand. Refused: `403`, reason `refused`, the refusal's reason as message.
+- **The wait.** The Node must wait for a person at that iteration: a declared wait (`pdo
+  wait-user`) or a completion not released, in a live Run, its session still up. Running, ended,
+  waiting on its children, at another iteration: `409`; a Run or a Node the core does not know:
+  `404`. Both with the stable reason `not_waiting` (`NODE_NOT_WAITING`) and the message « the node
+  no longer waits » (`NODE_NOT_WAITING_MESSAGE`). Nothing is written.
+- **The text.** Blank, or over 16 KB (`NODE_WRITE_MAX_BYTES`): `400`, reason `invalid_text`. A text
+  on several lines is pasted on one line (a line break would submit early), then submitted once.
+  What the Node's input already holds (a draft someone left in the terminal) stays in front of
+  the text and is submitted with it. A paste or an Enter tmux refuses: `502`, reason
+  `write_failed`.
+- **What follows.** The Node resumes (`running`); its resumption names `actor` (`NodeResumed`,
+  `{"source": "extension", "actor"}`). `actor` is announced as taking control of the session
+  (`session_taken_over` with `actor`, [Session events](#session-events-013)), as a person who
+  takes the hand is: an extension that counts who acted on a Run counts it the same way.
+- **One at a time.** Of two writes to the same wait, the second finds the Node running and is
+  refused `not_waiting`.
+
+It answers `NodeWritten { run_id, node_id, iter, session }`, or `NodeNotWritten { status, reason,
+message }`; `NodeNotWritten::is_not_waiting()` tells the Node that no longer waits from the other
+refusals. Await it from a route or a task, not from a hook. A host that writes into no Node (the
+`NeutralHost`, a daemon starting) answers `503`, reason `unavailable`.
+
+The deep link toward a Node leads a person to it: `node_link(run_id, node_id, iter)` writes
+`#/runs/<run>/nodes/<node>`, or `…/iter/<n>` for one iteration, each segment percent-encoded;
+`run_link(run_id)` writes `#/runs/<run>`. Prefixed with the instance's public address, it opens the
+Run with that Node selected at that iteration and its detail shown, its terminal included; a Node
+the Run does not hold opens the Run alone ([extension-ui.md](extension-ui.md#toward-a-run)). The
+interface writes the same links with `nodeLink` and `runLink` of `@pdo/extension-ui`.
 
 ## The creation of a Run (0.9)
 

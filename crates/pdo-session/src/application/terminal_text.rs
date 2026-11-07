@@ -164,6 +164,6 @@ pub async fn live_node_session(
 
 /// `text` with every line break turned into a space: a pasted CR or LF is an
 /// Enter for a program that did not ask for bracketed paste.
-fn one_line(text: &str) -> String {
+pub(crate) fn one_line(text: &str) -> String {
     text.replace("\r\n", " ").replace(['\r', '\n'], " ")
 }

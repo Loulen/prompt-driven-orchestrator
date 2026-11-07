@@ -5,8 +5,8 @@
 // and renders the contributions to the locations it hosts through it, draws its
 // controls with the primitives of the shared design system (ADR-0091), shows a
 // session's terminal with the core's own, composes the detail of a Session
-// hébergée from the core's bricks, opens the core's New Run prefilled, and
-// never ships its own copy.
+// hébergée from the core's bricks, opens the core's New Run prefilled, writes
+// the deep links toward a Run and a Node, and never ships its own copy.
 const ExtensionUi = globalThis.__PDO_SHARED__.extensionUi;
 export default ExtensionUi;
 export const {
@@ -22,6 +22,8 @@ export const {
   openProbedSocket,
   copyToClipboard,
   openNewRun,
+  runLink,
+  nodeLink,
   Avatar,
   AvatarStack,
   personColor,

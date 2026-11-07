@@ -98,6 +98,10 @@ pub struct FakeTmux {
     pub pasted_without_enter: Mutex<Vec<(String, String)>>,
     /// `paste_without_enter` is refused.
     pub refuse_paste: Mutex<bool>,
+    /// The sessions `press_enter` reached, in order.
+    pub entered: Mutex<Vec<String>>,
+    /// `press_enter` is refused.
+    pub refuse_enter: Mutex<bool>,
     /// The next `new_session` fails with this message.
     pub fail_next_spawn: Mutex<Option<String>>,
     /// `kill` leaves the session alive.
@@ -210,6 +214,14 @@ impl Tmux for FakeTmux {
         true
     }
 
+    fn press_enter(&self, name: &str) -> bool {
+        if *self.refuse_enter.lock().unwrap() {
+            return false;
+        }
+        self.entered.lock().unwrap().push(name.into());
+        true
+    }
+
     fn attach_argv(&self, name: &str, ignore_size: bool) -> Vec<String> {
         let mut argv = vec![
             "tmux".to_string(),
@@ -304,6 +316,15 @@ impl NodeWaits for Waits {
                 .lock()
                 .unwrap()
                 .push((run_id.into(), node_id.into(), iter, payload));
+            // The node runs again, as the projection would fold it.
+            let mut facts = self.facts.lock().unwrap();
+            if let Some(node) = facts
+                .get_mut(&(run_id.to_string(), node_id.to_string()))
+                .and_then(|f| f.node.as_mut())
+            {
+                node.awaiting = false;
+                node.marker = None;
+            }
             Ok(())
         })
     }

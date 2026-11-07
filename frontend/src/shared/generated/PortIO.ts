@@ -7,4 +7,10 @@ export type PortIO = { port: string,
  * An input that pools several files: fed by a `repeated` edge, or by two
  * edges of the same name. Always `false` on an output.
  */
-repeated: boolean, port_type: PortType, files: Array<FileInfo>, };
+repeated: boolean, port_type: PortType, files: Array<FileInfo>, 
+/**
+ * An output with nothing on the blackboard yet, by the completion guard's
+ * own rule (`outputs::output_missing`): an
+ * inherited file counts as present. Always `false` on an input.
+ */
+missing: boolean, };

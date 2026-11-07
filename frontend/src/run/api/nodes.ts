@@ -37,6 +37,9 @@ export interface PortIO {
   repeated: boolean;
   port_type?: PortType;
   files: FileInfo[];
+  /** An output with nothing on the blackboard yet, by the completion guard's
+   *  rule (`missing` of the daemon's `PortIO`): Approve waits on it. */
+  missing?: boolean;
 }
 
 export interface NodeIO {

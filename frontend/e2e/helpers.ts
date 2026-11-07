@@ -82,7 +82,7 @@ export async function pickPipeline(page: Page, pipelineId: string): Promise<void
 
 /**
  * Select a run, select one of its nodes, and reveal the **Run inspector**
- * details pane (Inputs/Outputs sections, Mark complete, the failure banner).
+ * details pane (Inputs/Outputs sections, Approve, the failure banner).
  *
  * Post-refonte the run inspector is split into a Run/Edit tab pair, and for an
  * active run the Run pane auto-expands the live terminal to full height — which
@@ -116,7 +116,7 @@ export async function openRunNodeDetails(
   }
 
   // An active run opens with the terminal expanded to full height, which hides
-  // the details pane (Inputs/Outputs + Mark complete) below it. Wait for the run
+  // the details pane (Inputs/Outputs + Approve) below it. Wait for the run
   // pane to render, then — if the details pane isn't present — toggle the
   // terminal's expand button once to reveal it.
   await runPane

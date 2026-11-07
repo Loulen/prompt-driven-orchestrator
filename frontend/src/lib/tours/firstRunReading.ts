@@ -59,7 +59,8 @@ export const TUTORIAL_ENTRY = `${testId("repo-browse-entry")}[data-entry-name="$
 /** The Run inspector — the pane the node's terminal, guard and outputs live in. */
 export const INSPECTOR_RUN = testId("inspector-pane-run");
 export const TERMINAL = testId("tmux-terminal");
-export const RELEASE_BUTTON = testId("release-completion-btn");
+/** The chevron of Approve ▾: its menu holds « Auto-approve when ready ». */
+export const RELEASE_BUTTON = testId("approve-btn-menu");
 export const OUT_ROW = `${testId("port-row")}[data-kind="output"][data-port="${TUTORIAL_OUT_PORT}"]`;
 export const OUT_MODAL = `${testId("artifact-modal")}[data-port="${TUTORIAL_OUT_PORT}"]`;
 

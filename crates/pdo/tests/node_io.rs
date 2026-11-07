@@ -430,3 +430,97 @@ async fn io_endpoint_lists_the_live_artifacts_while_the_node_runs() {
     let io = daemon.get_json(&io_path).await;
     assert_eq!(io["live"].as_array().unwrap().len(), 3, "{io}");
 }
+
+const MISSING_PIPELINE: &str = "io-missing";
+
+fn seed_missing(repo: &std::path::Path) -> anyhow::Result<()> {
+    let yaml = crate::common::flow::solo_pipeline_yaml(MISSING_PIPELINE, false).replace(
+        "      - name: out\n",
+        "      - name: out\n      - name: shot\n        port_type: image\n      - name: bundle\n        port_type: files\n",
+    );
+    crate::common::flow::write_pipeline(repo, MISSING_PIPELINE, &yaml)?;
+    crate::common::flow::git_init(repo)
+}
+
+fn missing_of(io: &serde_json::Value, port: &str) -> bool {
+    io["outputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["port"] == port)
+        .unwrap_or_else(|| panic!("no output {port}: {io}"))["missing"]
+        .as_bool()
+        .unwrap_or_else(|| panic!("no `missing` on {port}: {io}"))
+}
+
+/// The node's I/O read says which outputs are missing, by the completion
+/// guard's own rule: `missing` turns false as each artifact appears (markdown:
+/// the file; image and files: one file of the folder); a file older than the
+/// iteration (inherited) counts as present; the guard refuses while one is
+/// missing and accepts once none is.
+#[tokio::test]
+async fn io_endpoint_says_which_outputs_are_missing_by_the_completion_rule() {
+    use crate::common::flow;
+
+    let daemon = TestDaemon::spawn(seed_missing).await.unwrap();
+    let run_id = flow::create_run(&daemon, MISSING_PIPELINE).await;
+    flow::wait_node_status(&daemon, &run_id, "worker", "running").await;
+
+    let io_path = format!("/runs/{run_id}/nodes/worker/io?iter=1");
+    let io = daemon.get_json(&io_path).await;
+    assert!(missing_of(&io, "out"), "{io}");
+    assert!(missing_of(&io, "shot"), "{io}");
+    assert!(missing_of(&io, "bundle"), "{io}");
+    assert!(
+        io["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["missing"] == false),
+        "an input is never missing: {io}"
+    );
+
+    let done_path = format!("/runs/{run_id}/nodes/worker/done");
+    let (status, body) =
+        flow::post_json(&daemon, &done_path, serde_json::json!({ "iter": 1 })).await;
+    assert_ne!(
+        status, 200,
+        "the guard refuses while outputs are missing: {body}"
+    );
+
+    let iter_dir = flow::worktree(&daemon, &run_id).join(".pdo/artifacts/worker/iter-1");
+
+    // An inherited markdown file (older than the iteration) counts as present.
+    flow::write_out_artifact(&daemon, &run_id, "worker");
+    let md = iter_dir.join("out/output.md");
+    std::fs::File::options()
+        .write(true)
+        .open(&md)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(86_400))
+        .unwrap();
+    let io = daemon.get_json(&io_path).await;
+    assert_eq!(io["outputs"][0]["files"][0]["inherited"], true, "{io}");
+    assert!(!missing_of(&io, "out"), "{io}");
+    assert!(missing_of(&io, "shot"), "{io}");
+
+    // A non-image file does not fill an image port.
+    std::fs::create_dir_all(iter_dir.join("shot")).unwrap();
+    std::fs::write(iter_dir.join("shot/notes.txt"), "not an image").unwrap();
+    let io = daemon.get_json(&io_path).await;
+    assert!(missing_of(&io, "shot"), "{io}");
+
+    std::fs::write(iter_dir.join("shot/screen.png"), b"\x89PNG").unwrap();
+    let io = daemon.get_json(&io_path).await;
+    assert!(!missing_of(&io, "shot"), "{io}");
+    assert!(missing_of(&io, "bundle"), "{io}");
+
+    std::fs::create_dir_all(iter_dir.join("bundle")).unwrap();
+    std::fs::write(iter_dir.join("bundle/data.csv"), "a,b\n").unwrap();
+    let io = daemon.get_json(&io_path).await;
+    assert!(!missing_of(&io, "bundle"), "{io}");
+
+    let (status, body) =
+        flow::post_json(&daemon, &done_path, serde_json::json!({ "iter": 1 })).await;
+    assert_eq!(status, 200, "nothing missing, the guard accepts: {body}");
+}

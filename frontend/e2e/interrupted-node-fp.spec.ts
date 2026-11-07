@@ -222,8 +222,8 @@ test("interrupted node offers Play + Reopen, revives on Reopen, and hides all of
   await expect(page.getByTestId("play-retry-btn")).toBeVisible();
   await expect(page.getByTestId("play-retry-btn")).toHaveAccessibleName("Retry");
   // The daemon does not complete an interrupted node (it re-drives on Reopen):
-  // « Mark complete » is not offered on it (`isMarkCompletable`).
-  await expect(page.getByTestId("mark-complete-btn")).toHaveCount(0);
+  // Approve is not offered on it (`isMarkCompletable`).
+  await expect(page.getByTestId("approve-btn")).toHaveCount(0);
   await expect(page.getByTestId("terminal-minimized")).toBeVisible();
   await expect(page.getByTestId("tmux-terminal")).toHaveCount(0);
   await expect(page.getByText(/can't find session/i)).toHaveCount(0);
@@ -276,7 +276,7 @@ test("interrupted node offers Play + Reopen, revives on Reopen, and hides all of
   await expect(page.getByTestId("node-controls")).toHaveCount(0);
   await expect(page.getByTestId("interrupted-reopen-btn")).toHaveCount(0);
   await expect(page.getByTestId("play-retry-btn")).toHaveCount(0);
-  await expect(page.getByTestId("mark-complete-btn")).toHaveCount(0);
+  await expect(page.getByTestId("approve-btn")).toHaveCount(0);
 
   await annotateAndShoot(page, "3-archived-no-affordances.png", [
     "Etape 3 — Variante archivee : sur un run archive (worktree + session detruits),",

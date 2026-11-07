@@ -6,36 +6,33 @@ import { MarkCompleteVerdict, ReleaseCompletionVerdict } from "./verdicts";
 const COMPLETABLE: ReadonlySet<NodeStatus> = new Set(["awaiting_user", "running", "failed", "stale", "interrupted"]);
 
 /**
- * The verdicts of the completion gestures (Mark ready, Approve / Mark
- * complete), each a banner line at the top of the panel, for the iteration
- * on screen, while the node may still complete.
+ * The verdicts of the completion gestures (Approve, « Auto-approve when
+ * ready ») that did not go through, each a banner line at the top of the
+ * panel, for the iteration on screen, while the node may still complete. A
+ * gesture that went through says nothing here: the blue dot on Approve ▾ and
+ * the node's status do.
  */
 export default function NodeVerdicts({
   status,
   selectedIter,
-  completionReleased,
   releaseVerdict,
   markVerdict,
 }: {
   status: NodeStatus;
   selectedIter: number;
-  completionReleased: boolean;
   releaseVerdict: ({ iter: number } & ReleaseVerdict) | null;
   markVerdict: ({ iter: number } & MarkVerdict) | null;
 }) {
   if (!COMPLETABLE.has(status)) return null;
   return (
     <>
-      {completionReleased ? (
-        <ReleaseCompletionVerdict verdict={{ kind: "released" }} />
-      ) : (
-        releaseVerdict &&
-        releaseVerdict.iter === selectedIter && <ReleaseCompletionVerdict verdict={releaseVerdict} />
+      {releaseVerdict && releaseVerdict.iter === selectedIter && releaseVerdict.kind !== "pending" && (
+        <ReleaseCompletionVerdict verdict={releaseVerdict} />
       )}
-      {/* #490: the verdict of the click, AT the gesture. Rendered for every
-          outcome including `pending`, so nothing ever blinks out without a
-          replacement. */}
-      {markVerdict && markVerdict.iter === selectedIter && <MarkCompleteVerdict verdict={markVerdict} />}
+      {/* #490: the refusal of the click, at the gesture. */}
+      {markVerdict && markVerdict.iter === selectedIter && markVerdict.kind !== "pending" && markVerdict.kind !== "completed" && (
+        <MarkCompleteVerdict verdict={markVerdict} />
+      )}
     </>
   );
 }

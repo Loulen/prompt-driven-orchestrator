@@ -55,7 +55,6 @@
 
 /* ------------------------------------------------------------ controls */
 .ri-ctl { display: flex; align-items: center; gap: var(--g-1); flex: none; }
-.ri-ctl .d-btn--primary { margin-left: var(--g-2); }
 
 /* ------------------------------------------------------------ node header, one 32 px line */
 .ri-nh {
@@ -240,14 +239,28 @@
   z-index: 2;
   flex: none;
   display: flex;
-  align-items: stretch;
+  align-items: center;
+  min-width: 0;
   height: var(--h-bar);
-  overflow-x: auto;
-  scrollbar-width: none;
   background: var(--surface-1);
   border-bottom: 1px solid var(--line);
 }
-.ri-dtabs__bar::-webkit-scrollbar { display: none; }
+/* The tabs scroll; the end of the bar (Approve ▾) stays pinned at the right. */
+.ri-dtabs__tabs {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  height: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.ri-dtabs__tabs::-webkit-scrollbar { display: none; }
+.ri-dtabs__end { flex: none; display: flex; align-items: center; padding: 0 var(--g-2) 0 var(--g-1); }
+.ri-dtabs__end:empty { display: none; }
+/* « Show Approve » of the waiting banner: an amber ring around the button. */
+.ri-approve { display: inline-flex; border-radius: var(--radius-ui); }
+.ri-approve[data-ring] { box-shadow: 0 0 0 1px var(--surface-1), 0 0 0 3px var(--color-st-await); }
 .ri-dtabs__body { flex: 1; min-height: 0; overflow: auto; }
 
 /* ------------------------------------------------------------ input / output rows */

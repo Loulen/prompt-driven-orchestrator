@@ -76,7 +76,7 @@ const NODE_ID = "assistant";
 const NODE_CARD = `.react-flow__node[data-id="${NODE_ID}"]`;
 const INSPECTOR_RUN = t("inspector-pane-run");
 const TERMINAL = t("tmux-terminal");
-const RELEASE = t("release-completion-btn");
+const RELEASE = t("approve-btn-menu");
 const OUT_ROW = `${t("port-row")}[data-kind="output"][data-port="out"]`;
 const OUT_MODAL = `${t("artifact-modal")}[data-port="out"]`;
 const LAUNCH = t("launch-button");

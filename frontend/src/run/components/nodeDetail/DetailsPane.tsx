@@ -21,7 +21,8 @@ import { useDetailTabs } from "../../../shared/extensions/catalogue";
 
 /**
  * The lower pane of the panel: the tabs — I/O, Transcript, Orchestration for
- * an orchestrator node, the extensions' — then the selected tab: Outputs,
+ * an orchestrator node, the extensions', Approve ▾ pinned at the right of
+ * them — then the selected tab: Outputs,
  * Inputs, Live artifacts, Properties and Prompt under I/O.
  */
 export default function DetailsPane({
@@ -43,6 +44,7 @@ export default function DetailsPane({
   selectedIter,
   onSelectIter,
   iterLive,
+  barEnd,
 }: {
   node: NodeState;
   runId: string;
@@ -72,6 +74,8 @@ export default function DetailsPane({
   onSelectIter: (iter: number) => void;
   /** The iteration on screen is running: its transcript is followed live. */
   iterLive: boolean;
+  /** Pinned at the right of the tab bar while the tabs scroll: Approve ▾. */
+  barEnd?: ReactNode;
 }) {
   // ADR-0081 (#31): the `node/detail` tabs extensions add, after the core's.
   // The tab bar always shows: I/O and Transcript are there for every node.
@@ -110,31 +114,34 @@ export default function DetailsPane({
     <div className="ri-dtabs" data-testid="details-pane">
       {/* I/O | Transcript (| Orchestration for an orchestrator node, #723) |
           the extensions' tabs, above the tab's content. */}
-      <div className="ri-dtabs__bar" role="tablist" aria-label="Node details" data-testid="detail-tabs">
-        {coreTabs.map((tab) => {
-          const active =
-            extensionTab === null && (detailTab === tab || (tab === "io" && !isCoreTab(detailTab)));
-          const [Icon, label, title] =
-            tab === "io"
-              ? [ArrowLeftRight, "I/O", "Inputs, outputs, prompt"]
-              : tab === "transcript"
-                ? [MessageSquare, "Transcript", "Transcript"]
-                : [Network, "Orchestration", "Child runs"];
-          return tabButton(
-            tab,
-            active,
-            <>
-              <span className="ri-tab__label">{label}</span>
-              {tab === "orchestration" && <ChildCountPills counts={childCounts} size="pill" testId="tab-child-pills" />}
-            </>,
-            <Icon size={13} strokeWidth={1.5} aria-hidden />,
-            `detail-tab-${tab}`,
-            title,
-          );
-        })}
-        {extensionTabs.map((t) =>
-          tabButton(t.key, extensionTab?.key === t.key, t.contribution.label, null, `detail-tab-ext-${t.key}`, t.contribution.label),
-        )}
+      <div className="ri-dtabs__bar" data-testid="detail-tabs-bar">
+        <div className="ri-dtabs__tabs" role="tablist" aria-label="Node details" data-testid="detail-tabs">
+          {coreTabs.map((tab) => {
+            const active =
+              extensionTab === null && (detailTab === tab || (tab === "io" && !isCoreTab(detailTab)));
+            const [Icon, label, title] =
+              tab === "io"
+                ? [ArrowLeftRight, "I/O", "Inputs, outputs, prompt"]
+                : tab === "transcript"
+                  ? [MessageSquare, "Transcript", "Transcript"]
+                  : [Network, "Orchestration", "Child runs"];
+            return tabButton(
+              tab,
+              active,
+              <>
+                <span className="ri-tab__label">{label}</span>
+                {tab === "orchestration" && <ChildCountPills counts={childCounts} size="pill" testId="tab-child-pills" />}
+              </>,
+              <Icon size={13} strokeWidth={1.5} aria-hidden />,
+              `detail-tab-${tab}`,
+              title,
+            );
+          })}
+          {extensionTabs.map((t) =>
+            tabButton(t.key, extensionTab?.key === t.key, t.contribution.label, null, `detail-tab-ext-${t.key}`, t.contribution.label),
+          )}
+        </div>
+        {barEnd && <div className="ri-dtabs__end">{barEnd}</div>}
       </div>
       <div className="ri-dtabs__body" role="tabpanel">
       {extensionTab ? (

@@ -118,6 +118,9 @@ export function useNodeRun(
   const [promptText, setPromptText] = useState<string | null>(null);
   const [inputs, setInputs] = useState<PortIO[]>([]);
   const [outputs, setOutputs] = useState<PortIO[]>([]);
+  // The iteration `outputs` were read for: until it is the one on screen, the
+  // outputs are not known (Approve waits rather than guess, CORE-211).
+  const [outputsIter, setOutputsIter] = useState<number | null>(null);
   // ADR-0089: the iteration's live artifacts, polled with the I/O.
   const [live, setLive] = useState<LiveArtifactIO[]>([]);
   // #490: a VERDICT object, not `string[] | null`. The old shape was
@@ -179,6 +182,7 @@ export function useNodeRun(
           if (!cancelled) {
             setInputs(io.inputs);
             setOutputs(io.outputs);
+            setOutputsIter(selectedIter);
             setLive(io.live ?? []);
           }
         })
@@ -198,6 +202,7 @@ export function useNodeRun(
         if (!cancelled) {
           setInputs(io.inputs);
           setOutputs(io.outputs);
+          setOutputsIter(selectedIter);
           setLive(io.live ?? []);
         }
       } catch {
@@ -365,6 +370,7 @@ export function useNodeRun(
     promptText,
     inputs,
     outputs,
+    outputsIter,
     live,
     markVerdict,
     releaseVerdict,

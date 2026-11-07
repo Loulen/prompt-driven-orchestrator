@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { ScopedProvisioningRules } from "../../shared/generated/ScopedProvisioningRules";
 import type { NodeState } from "../../shared/generated/NodeState";
 import type { RunStatus } from "../../shared/generated/RunStatus";
@@ -22,6 +22,7 @@ import "./inspector.css";
 import DetailsPane from "./nodeDetail/DetailsPane";
 import TerminalSection from "./nodeDetail/TerminalSection";
 import RetryConfirmDialog from "./nodeDetail/RetryConfirmDialog";
+import ApproveButton from "./nodeDetail/ApproveButton";
 import { isMarkCompletable, nodeSessionEnded } from "../model/nodeStatus";
 import type { ModalState, TerminalView } from "./nodeDetail/types";
 import { useNodeGestureRefusals } from "../store/useNodeGestureRefusals";
@@ -140,6 +141,7 @@ export default function NodeDetailPanel({
     promptText,
     inputs,
     outputs,
+    outputsIter,
     live,
     markVerdict,
     releaseVerdict,
@@ -162,7 +164,8 @@ export default function NodeDetailPanel({
   // CORE-42, CORE-205: the gestures the caller may not make here, greyed with why.
   const refused = useNodeGestureRefusals(runId, node.node_id);
   // The daemon would complete the node: the command field offers it on the same condition (paletteItems.ts).
-  const markCompletable = isMarkCompletable(node.status, runStatus ?? (isArchived ? "archived" : "running"));
+  const effectiveRunStatus: RunStatus = isArchived ? "archived" : (runStatus ?? "running");
+  const markCompletable = isMarkCompletable(node.status, effectiveRunStatus);
 
   const sessionName = `pdo-${runId}-${node.node_id}-iter-${selectedIter}`;
   const hasMultipleIters = (node.iterations?.length ?? 0) > 1;
@@ -182,19 +185,30 @@ export default function NodeDetailPanel({
     selectedIteration?.interactive === true &&
     (selectedIterStatus === "running" || selectedIterStatus === "awaiting_user") &&
     !isArchived;
-  // #588 (A3): a refused unreleased completion makes « Mark ready » the primary
-  // call to action — a ring on the button, the banner links to it.
   // The latest iteration awaits whenever the node rollup says so and carries
   // the `awaiting` info — even if the iteration row itself still reads
   // `running` (a derived child wait, FP #793 finding 1).
   const nodeAwaitsOnLatestIter =
     selectedIter === node.iter && node.status === "awaiting_user" && node.awaiting != null;
-  const releaseIsPrimary =
-    canReleaseCompletion &&
-    !completionReleased &&
-    selectedIter === node.iter &&
-    node.awaiting?.cause === "completion_not_released";
+  const awaitsApproval =
+    nodeAwaitsOnLatestIter && node.awaiting?.cause === "completion_not_released";
 
+  // #588 (A3): « Show Approve » of the waiting banner brings Approve ▾ to the
+  // screen and rings it, until the wait ends.
+  const approveRef = useRef<HTMLButtonElement>(null);
+  // The iteration « Show Approve » rang Approve for: the ring holds while that
+  // iteration awaits approval, and goes with the wait.
+  const [ringedIter, setRingedIter] = useState<number | null>(null);
+  const approveRinged = awaitsApproval && ringedIter === node.iter;
+  const latestIter = node.iter;
+  const showApprove = useCallback(() => {
+    setTerminalView((v) => (v === "expanded" ? "split" : v));
+    setRingedIter(latestIter);
+    requestAnimationFrame(() => {
+      approveRef.current?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+      approveRef.current?.focus({ preventScroll: true });
+    });
+  }, [latestIter, setTerminalView]);
   // #369: the I/O poll (`setInputs`/`setOutputs`) re-renders this panel every
   // tick (1s live, 5s settled). Building the modal's `source` prop as an inline
   // object literal handed the child a fresh reference on every one of those
@@ -233,17 +247,6 @@ export default function NodeDetailPanel({
       retry={retry}
       refused={refused}
       review={reviewTarget ? { href: reviewUrl(runId, reviewTarget.pair), label: reviewTarget.label } : null}
-      completion={{
-        canRelease: canReleaseCompletion,
-        released: completionReleased,
-        isReleasing,
-        releaseIsPrimary,
-        release: releaseCompletion,
-        releaseRefused: refused.release,
-        canMarkComplete: markCompletable,
-        markCompleteRefused: refused.markComplete,
-        markComplete,
-      }}
     />
   ) : null;
   // Under the Run / Config tabs, the controls sit at the right of the tab bar
@@ -279,7 +282,6 @@ export default function NodeDetailPanel({
           <NodeVerdicts
             status={node.status}
             selectedIter={selectedIter}
-            completionReleased={completionReleased}
             releaseVerdict={releaseVerdict}
             markVerdict={markVerdict}
           />
@@ -293,16 +295,12 @@ export default function NodeDetailPanel({
           nodeAwaitsOnLatestIter={nodeAwaitsOnLatestIter}
           terminalLive={terminalLive}
           terminalSpectating={terminalSpectating}
-          canReleaseCompletion={canReleaseCompletion}
-          isReleasing={isReleasing}
-          releaseCompletion={releaseCompletion}
-          markComplete={markComplete}
+          onShowApprove={awaitsApproval && markCompletable ? showApprove : undefined}
           onOpenChildRun={onOpenChildRun}
           killStale={killStale}
           restartIteration={restartIteration}
           retry={retry}
           refused={refused}
-          markCompletable={markCompletable}
         />
       </div>
 
@@ -360,6 +358,21 @@ export default function NodeDetailPanel({
             iterLive={
               !isArchived &&
               (selectedIterStatus === "running" || selectedIterStatus === "awaiting_user")
+            }
+            barEnd={
+              <ApproveButton
+                ref={approveRef}
+                node={node}
+                selectedIter={selectedIter}
+                runStatus={effectiveRunStatus}
+                outputs={outputsIter === selectedIter ? outputs : null}
+                refused={refused}
+                markVerdict={markVerdict}
+                releaseVerdict={releaseVerdict}
+                markComplete={markComplete}
+                release={releaseCompletion}
+                ringed={approveRinged}
+              />
             }
           />
         }

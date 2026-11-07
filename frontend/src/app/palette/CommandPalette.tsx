@@ -27,6 +27,7 @@ import {
 import { GroupHeader, PaletteRow } from "./PaletteRows";
 import { readRecent, rememberPick } from "./recent";
 import { usePalette } from "./paletteStore";
+import { useSelectionMissingOutputs } from "./useSelectionMissingOutputs";
 
 /**
  * The command palette under the top bar (Ctrl+K, or the command field):
@@ -130,6 +131,7 @@ function PaletteBox() {
   const pipelines = useEditStore((s) => s.pipelines);
   const openPipeline = useEditStore((s) => s.openPipeline);
   const rights = useGestureRightsStore((s) => s.rights);
+  const missing = useSelectionMissingOutputs(host.selection);
   const { theme, mode, setTheme, toggleMode } = useTheme();
   const { compactNodes, toggleCompactNodes } = useCompactNodes();
   const extensions = useExtensions();
@@ -156,10 +158,10 @@ function PaletteBox() {
   );
   const selection = useMemo(
     () => [
-      ...selectionItems(host.selection, rights, ask, host.openRun),
+      ...selectionItems(host.selection, rights, ask, host.openRun, missing),
       ...contextual.map((action) => actionItem(action, host.selection)),
     ],
-    [host.selection, host.openRun, rights, ask, contextual],
+    [host.selection, host.openRun, rights, ask, contextual, missing],
   );
   const groups = useMemo((): ExtensionGroup[] => {
     return extensions.flatMap(({ entry }): ExtensionGroup[] => {

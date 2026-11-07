@@ -15,6 +15,21 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 
 ## Unreleased
 
+### Approve ▾ beyond the node panel: enlarged terminal, command field, tour
+
+- The enlarged terminal carries the same Approve ▾ as the panel, in the normal size, in place of
+  its two compact icons. It shows whenever the node would complete (running too, not only
+  awaiting you), waits in a lighter ruby while an output is missing, and its "Auto-approve when
+  ready" entry stays checked when you collapse back to the panel. A refusal opens under the bar.
+- The terminal bar says who drives the session with a ruby chip instead of capital letters: the
+  pilot reads "You pilot" and how many browsers watch ("2 watching"); a spectator reads
+  "Watching" and takes control from "Take control" in the chip, which replaces the lone hand icon.
+- The command field offers "Approve" (formerly "Mark complete") and "Auto-approve when ready" on
+  the selected node, on the same conditions as the button: Approve greyed with the missing
+  outputs, the entry checked once armed, a refusal of your rights greyed with its sentence.
+- The First run tour points at Approve ▾ and its "Auto-approve when ready" entry. The completion
+  verdicts speak the same words ("Approving…", "Arming auto-approve…", "Auto-approve refused").
+
 ### One Approve ▾ in the node panel, waiting for the missing outputs
 
 - The node panel has one completion gesture, Approve ▾, at the right of the I/O / Transcript tabs,

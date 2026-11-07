@@ -191,12 +191,41 @@
   align-items: center;
   gap: 3px;
   font-size: var(--fs-2xs);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-caps-ui);
   color: var(--text-3);
   white-space: nowrap;
 }
-.ri-term-bar__tag[data-live] { color: var(--color-st-done); }
+/* #867, #870: who drives the session, a chip with a ruby accent (P2). */
+.ri-term-bar__role {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 18px;
+  padding: 0 7px;
+  border: 1px solid var(--primary);
+  border-radius: 999px;
+  font-size: var(--fs-2xs);
+  color: var(--text);
+  white-space: nowrap;
+}
+.ri-term-bar__role[data-role="spectator"] { border-color: var(--line); color: var(--text-2); }
+.ri-term-bar__role-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--primary); flex: none; }
+.ri-term-bar__role-sep { width: 1px; height: 10px; background: var(--line); flex: none; }
+.ri-term-bar__role-part { display: inline-flex; align-items: center; gap: 3px; }
+.ri-term-bar__role-part > svg { color: var(--text-3); }
+.ri-term-bar__role-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--primary-hi);
+  cursor: pointer;
+}
+.ri-term-bar__role-action:hover { text-decoration: underline; }
+.ri-term-bar__role-action:focus-visible { outline: 2px solid var(--primary-hi); outline-offset: 2px; border-radius: 2px; }
 .ri-term-bar__notice { flex: none; font-size: var(--fs-2xs); color: var(--color-st-await); white-space: nowrap; }
 .ri-term-bar__tools { display: inline-flex; align-items: center; gap: var(--g-1); flex: none; }
 .ri-term-bar__sep { width: 1px; height: 12px; margin: 0 2px; background: var(--line); flex: none; }

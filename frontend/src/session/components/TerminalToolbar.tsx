@@ -44,16 +44,58 @@ export const COLLAPSE_LABEL = "Collapse terminal";
 export const EXPAND_LABEL = "Expand terminal";
 
 /** The mode the bar names: who drives the session, or why nobody does. */
-function modeOf(connected: boolean, spectating: boolean, statusLabel: string): { icon: LucideIcon; tag: string; live: boolean } {
-  if (spectating) return { icon: Eye, tag: "spectator", live: true };
-  if (connected && statusLabel === "attached · live") return { icon: Keyboard, tag: "pilot", live: true };
-  return { icon: connected ? Keyboard : Lock, tag: statusLabel, live: false };
+function modeOf(connected: boolean, spectating: boolean, statusLabel: string): { icon: LucideIcon; role: "pilot" | "spectator" | null } {
+  if (spectating) return { icon: Eye, role: "spectator" };
+  if (connected && statusLabel === "attached · live") return { icon: Keyboard, role: "pilot" };
+  return { icon: connected ? Keyboard : Lock, role: null };
+}
+
+/**
+ * Who drives the session, as a chip with a ruby accent: the pilot reads « You
+ * pilot » and how many watch; a spectator reads « Watching » and takes control
+ * from the chip itself (#867, #870).
+ */
+function RoleChip({ role, watchers, onTakeControl }: { role: "pilot" | "spectator"; watchers: number; onTakeControl: () => void }) {
+  if (role === "pilot") {
+    return (
+      <span className="ri-term-bar__role" data-role="pilot" data-testid="term-mode">
+        <span className="ri-term-bar__role-dot" aria-hidden />
+        <span>You pilot</span>
+        {/* #867: the pilot knows it is watched. Nothing after the rule when solo. */}
+        {watchers > 0 && (
+          <>
+            <span className="ri-term-bar__role-sep" aria-hidden />
+            <Tooltip label={watchedLabel(watchers)}>
+              <span className="ri-term-bar__role-part" data-testid="term-watchers" aria-label={watchedLabel(watchers)} role="status">
+                <Eye size={11} strokeWidth={1.5} aria-hidden />
+                {watchers} watching
+              </span>
+            </Tooltip>
+          </>
+        )}
+      </span>
+    );
+  }
+  return (
+    <span className="ri-term-bar__role" data-role="spectator" data-testid="term-mode">
+      <span className="ri-term-bar__role-part">
+        <Eye size={11} strokeWidth={1.5} aria-hidden />
+        Watching
+      </span>
+      <span className="ri-term-bar__role-sep" aria-hidden />
+      {/* #870: a spectator takes control in one click. */}
+      <button type="button" className="ri-term-bar__role-action" data-testid="term-take-control" onClick={onTakeControl}>
+        <Hand size={11} strokeWidth={1.5} aria-hidden />
+        {TAKE_CONTROL_LABEL}
+      </button>
+    </span>
+  );
 }
 
 /**
  * The terminal's session bar, inside its always-dark screen: the mode icon,
- * the session, who drives it (pilot, spectator) or why nobody does, how many
- * watch it, then the tools.
+ * the session, who drives it (the pilot / spectator chip) or why nobody does,
+ * then the tools.
  */
 export default function TerminalToolbar({
   session,
@@ -90,30 +132,21 @@ export default function TerminalToolbar({
       <span className="ri-term-bar__session" title={session}>
         {session}
       </span>
-      <span className="ri-term-bar__tag" data-live={mode.live || undefined} data-testid="term-mode">
-        {mode.tag}
-      </span>
-      {/* #867: the pilot knows it is watched. Nothing when solo. */}
-      {watchers > 0 && (
-        <Tooltip label={watchedLabel(watchers)}>
-          <span className="ri-term-bar__tag" data-testid="term-watchers" aria-label={watchedLabel(watchers)} role="status">
-            <Eye size={11} strokeWidth={1.5} aria-hidden />
-            {watchers}
-          </span>
-        </Tooltip>
+      {mode.role ? (
+        <RoleChip role={mode.role} watchers={watchers} onTakeControl={onTakeControl} />
+      ) : (
+        <span className="ri-term-bar__tag" data-testid="term-mode">
+          {statusLabel}
+        </span>
       )}
       {/* #870: brief, non-blocking — the former pilot learns why its keys
-          stopped reaching the pane. The hand stays next to it. */}
+          stopped reaching the pane. « Take control » stays in the chip. */}
       {spectating && takenOver && (
         <span className="ri-term-bar__notice" data-testid="term-taken-over" role="status">
           {TAKEN_OVER_NOTICE}
         </span>
       )}
       <span className="ri-term-bar__tools">
-        {/* #870: a spectator takes control in one click. */}
-        {spectating && (
-          <IconButton icon={Hand} size="sm" label={TAKE_CONTROL_LABEL} data-testid="term-take-control" onClick={onTakeControl} />
-        )}
         {actions && (
           <>
             {actions}

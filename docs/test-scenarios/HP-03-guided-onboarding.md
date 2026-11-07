@@ -102,7 +102,7 @@ Features validated while crossing the tour:
 8. Open the **node** on the canvas → the inspector shows its live terminal.
 9. **Talk to the agent**: the card hands over a line to copy; paste it into the terminal and press
    Enter. **Escape inside the terminal belongs to the agent** — it must not end the tour.
-10. Click **Mark ready for completion** → the tour advances on the released guard, not on the click.
+10. Open the menu of **Approve ▾** and choose **Auto-approve when ready** → the tour advances on the released guard, not on the click.
 11. The **wait** step lights the whole inspector as a soft zone — the terminal stays readable and
    usable — shows a two-item checklist (released / finished) and says it has **no time limit**. It
    ends by itself when the node's status becomes terminal.

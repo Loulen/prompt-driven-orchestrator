@@ -5,17 +5,19 @@ import type { RunStatus } from "../../../shared/generated/RunStatus";
 import type { PortIO } from "../../api/nodes";
 import { SplitButton } from "../../../shared/ui/kit";
 import type { MenuEntry } from "../../../shared/ui/kit";
-import { isMarkCompletable } from "../../model/nodeStatus";
+import {
+  APPROVE_LABEL,
+  AUTO_APPROVE_ARMED,
+  AUTO_APPROVE_ARMING,
+  AUTO_APPROVE_LABEL,
+  approveReleasable,
+  approveShown,
+  approveWaitReason,
+  missingOutputs,
+} from "../../model/approve";
 import type { MarkVerdict, ReleaseVerdict } from "../../store/useNodeRun";
 import type { NodeGestureRefusals } from "./types";
 
-export const AUTO_APPROVE_LABEL = "Auto-approve when ready";
-export const AUTO_APPROVE_ARMED = "Auto-approve armed";
-
-/** The outputs of the iteration on screen that are not on the blackboard yet. */
-function missingOutputs(outputs: readonly PortIO[]): string[] {
-  return outputs.filter((p) => p.missing).map((p) => p.port);
-}
 
 export interface ApproveButtonProps {
   node: NodeState;
@@ -35,6 +37,10 @@ export interface ApproveButtonProps {
   size?: "sm" | "md";
   /** « Show Approve » of the waiting banner: an amber ring around it. */
   ringed?: boolean;
+  /** The base of its `data-testid`s: the wrapper takes `<base>`, the button
+   *  `<base>-btn`, the chevron `<base>-btn-menu`. The enlarged terminal
+   *  renders a second one under another base. */
+  testIdBase?: string;
 }
 
 /**
@@ -59,23 +65,21 @@ const ApproveButton = forwardRef<HTMLButtonElement, ApproveButtonProps>(function
     release,
     size = "sm",
     ringed = false,
+    testIdBase = "approve",
   },
   ref,
 ) {
-  if (selectedIter !== node.iter || !isMarkCompletable(node.status, runStatus)) return null;
+  if (!approveShown(node, selectedIter, runStatus)) return null;
   const iteration = node.iterations?.find((i) => i.iter === selectedIter);
-  const iterStatus = iteration?.status ?? node.status;
-  const canRelease =
-    iteration?.interactive === true && (iterStatus === "running" || iterStatus === "awaiting_user");
+  const canRelease = approveReleasable(iteration, node.status);
   const released = iteration?.completion_released === true;
   const releasing = releaseVerdict?.iter === selectedIter && releaseVerdict.kind === "pending";
   const approving = markVerdict?.iter === selectedIter && markVerdict.kind === "pending";
-  const missing = outputs ? missingOutputs(outputs) : [];
 
   const entries: MenuEntry[] = canRelease
     ? [
         {
-          label: releasing ? "Releasing…" : AUTO_APPROVE_LABEL,
+          label: releasing ? AUTO_APPROVE_ARMING : AUTO_APPROVE_LABEL,
           icon: LockOpen,
           checked: released,
           disabled: released || releasing,
@@ -86,30 +90,22 @@ const ApproveButton = forwardRef<HTMLButtonElement, ApproveButtonProps>(function
     : [];
 
   return (
-    <span className="ri-approve" data-ring={ringed || undefined} data-testid="approve">
+    <span className="ri-approve" data-ring={ringed || undefined} data-testid={testIdBase}>
       <SplitButton
         ref={ref}
         icon={Check}
         tone="primary"
         size={size}
-        data-testid="approve-btn"
+        data-testid={`${testIdBase}-btn`}
         disabledReason={refused.markComplete}
-        pendingReason={
-          outputs === null
-            ? "Reading the outputs…"
-            : missing.length > 0
-              ? `Missing outputs: ${missing.join(", ")}`
-              : approving
-                ? "Approving…"
-                : undefined
-        }
+        pendingReason={approveWaitReason(outputs ? missingOutputs(outputs) : null) ?? (approving ? "Approving…" : undefined)}
         onClick={markComplete}
         entries={entries}
         menuLabel="Approve options"
         chevronTip={released ? AUTO_APPROVE_ARMED : undefined}
         indicator={released}
       >
-        Approve
+        {APPROVE_LABEL}
       </SplitButton>
     </span>
   );

@@ -61,6 +61,9 @@ export const INSPECTOR_RUN = testId("inspector-pane-run");
 export const TERMINAL = testId("tmux-terminal");
 /** The chevron of Approve ▾: its menu holds « Auto-approve when ready ». */
 export const RELEASE_BUTTON = testId("approve-btn-menu");
+/** The menu of Approve ▾ once open (a portal), and its « Auto-approve when ready » entry. */
+export const APPROVE_MENU = '[role="menu"][aria-label="Approve options"]';
+export const AUTO_APPROVE_ENTRY = `${APPROVE_MENU} [role="menuitemcheckbox"]`;
 export const OUT_ROW = `${testId("port-row")}[data-kind="output"][data-port="${TUTORIAL_OUT_PORT}"]`;
 export const OUT_MODAL = `${testId("artifact-modal")}[data-port="${TUTORIAL_OUT_PORT}"]`;
 

@@ -12,6 +12,8 @@ import {
   TUTORIAL_TERMINAL_LINE,
 } from "./firstRunPreparation";
 import {
+  APPROVE_MENU,
+  AUTO_APPROVE_ENTRY,
   INSPECTOR_RUN,
   OUT_MODAL,
   OUT_ROW,
@@ -108,11 +110,14 @@ export const READING_STEPS: TourStep[] = [
   {
     id: "release-completion",
     title: "Release the completion",
-    body: "Click Mark ready for completion. An interactive node is guarded: the agent cannot finish until you release it — this is the release.",
-    note: '"Mark complete" next to it takes the artifacts as they are, without the agent — not for now.',
-    target: () => [RELEASE_BUTTON],
-    waitingFor: "the Mark ready for completion button",
-    failureHint: "It only shows while the node is live, under the terminal.",
+    body: "Open the menu of Approve ▾ and choose Auto-approve when ready. An interactive node is guarded: the agent cannot finish until you release it — this is the release.",
+    note: "Approve itself completes the node now, with the outputs as they are — not for now.",
+    // The chevron while the menu is shut, its entry once it is open (a portal):
+    // then a soft zone, so the entry stays clickable.
+    target: (o) => (o.present(APPROVE_MENU) ? [AUTO_APPROVE_ENTRY] : [RELEASE_BUTTON]),
+    soft: (o) => o.present(APPROVE_MENU),
+    waitingFor: "the Approve ▾ button",
+    failureHint: "It sits at the right of the I/O and Transcript tabs while the node is live.",
     targetTimeoutMs: READING_TIMEOUT_MS,
     skippable: true,
     advanceHint: "advances once released",
@@ -177,7 +182,7 @@ export const READING_STEPS: TourStep[] = [
           note:
             node?.released || finished
               ? undefined
-              : "the node waits for it: click Mark ready for completion",
+              : "the node waits for it: choose Auto-approve when ready under Approve ▾",
         },
         {
           label: "node finished",

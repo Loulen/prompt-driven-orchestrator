@@ -4,7 +4,7 @@ import type { RunStatus } from "../../shared/generated/RunStatus";
 import type { MarkVerdict } from "../store/useNodeRun";
 
 /**
- * The statuses « Mark complete » is offered on, in the Inspector as in the
+ * The statuses Approve is offered on, in the Inspector as in the
  * command field: those the daemon completes (its transition guard takes a
  * `running`, `awaiting_user` or `failed` iteration). An `interrupted` node
  * re-drives on Reopen, a `stale` one (historical Runs) on Retry: the daemon
@@ -13,7 +13,7 @@ import type { MarkVerdict } from "../store/useNodeRun";
 const MARK_COMPLETABLE: ReadonlySet<NodeStatus> = new Set(["awaiting_user", "running", "failed"]);
 
 /**
- * Whether « Mark complete » is offered on a node of this status, in a Run of
+ * Whether Approve is offered on a node of this status, in a Run of
  * this status: the daemon reopens a settled Run to complete it, never a
  * paused one (resumed first) nor an archived one.
  */
@@ -45,9 +45,9 @@ export function verdictTone(v: MarkVerdict): "await" | "failed" | "stopped" | "d
 export function verdictHeadline(v: MarkVerdict): string {
   switch (v.kind) {
     case "pending":
-      return "Marking complete…";
+      return "Approving…";
     case "completed":
-      return "Marked complete.";
+      return "Approved.";
     case "noop":
       return `Already complete — nothing to do (${v.reason})`;
     case "error":

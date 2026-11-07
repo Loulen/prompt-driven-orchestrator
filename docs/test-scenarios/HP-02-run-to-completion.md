@@ -322,7 +322,7 @@ Harness three-way pin, read-only probes:
   --auto` shows no such dialog, so a dialog on an `opencode` pane is a finding rather than a step.
   `copilot`'s equivalent is a **prerequisite**, not a step: trust the repo root once, before the Run
   (`docs/reference/harnesses.md` § Prerequisites), and it cascades to every node sub-worktree beneath it.
-- A node with no output yet returns **409 `missing_outputs`** on "Mark complete" — that guard is
+- A node with no output yet returns **409 `missing_outputs`** on Approve (greyed until then) — that guard is
   expected, not a bug.
 
 ### Sandbox A/B — why it is built this way

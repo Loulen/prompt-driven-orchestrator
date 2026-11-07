@@ -64,7 +64,7 @@ export const SEMANTIC_FIELDS: Record<SerializerScope, readonly string[]> = {
   inputPort: ["name", "port_type", "frontmatter"] satisfies (keyof PortDef)[],
   outputPort: ["name", "port_type", "frontmatter", "when", "instructions"] satisfies (keyof PortDef)[],
   edge: ["source", "target", "when", "else", "repeated"] satisfies (keyof EdgeDef)[],
-  loopRegion: ["id", "kind", "members", "max_iter", "over"] satisfies (keyof LoopRegion)[],
+  loopRegion: ["id", "kind", "members", "max_iter", "max_cost_usd", "over"] satisfies (keyof LoopRegion)[],
   note: [], // the whole `notes` block is layout — no semantic note field
 };
 

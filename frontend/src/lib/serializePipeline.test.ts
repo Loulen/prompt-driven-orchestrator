@@ -52,6 +52,31 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(yaml).toMatch(/members:/);
   });
 
+  it("round-trips a bounded region's max_cost_usd and omits it when unset (#1016)", () => {
+    const impl: NodeDef = {
+      id: "impl", name: "implementer", type: "agent",
+      inputs: [], outputs: [{ name: "code" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const pipeline = makeFullPipeline([impl]);
+    pipeline.loops = [
+      { id: "L", kind: "bounded", members: ["impl"], max_iter: 5, max_cost_usd: 2.5 },
+    ];
+    expect(serializePipeline(pipeline)).toContain("max_cost_usd: 2.5");
+    pipeline.loops = [
+      { id: "L", kind: "bounded", members: ["impl"], max_iter: 5, max_cost_usd: "$budget" },
+    ];
+    expect(serializePipeline(pipeline)).toMatch(/max_cost_usd: ["']?\$budget/);
+    // Unset (absent, null, or a cleared text field) ⇒ no key: an uncapped
+    // pipeline saves byte-identically to before #1016.
+    for (const cap of [undefined, null, ""]) {
+      pipeline.loops = [
+        { id: "L", kind: "bounded", members: ["impl"], max_iter: 5, max_cost_usd: cap },
+      ];
+      expect(serializePipeline(pipeline)).not.toContain("max_cost_usd");
+    }
+  });
+
   it("serializes a collection loops: region with its over: field (#269)", () => {
     const worker: NodeDef = {
       id: "worker", name: "worker", type: "agent",

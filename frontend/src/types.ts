@@ -421,6 +421,10 @@ export interface HarnessListItem {
    *  effort axis at all. Drives the effort-picker greying, replacing the client's
    *  hard-coded map. */
   has_effort?: boolean;
+  /** #1016: whether PDO can read this harness's cost (a cost source AND a
+   *  transcript). `false` ⇒ a capped loop cannot count that member's spend.
+   *  Optional so a daemon predating #1016 still typechecks (assumed `true`). */
+  can_cost?: boolean;
   /** #616/ADR-0053: the probed binary version the catalogue was read at, for the
    *  picker's provenance line. `null` when the binary answered no `--version`. */
   version?: string | null;
@@ -1011,6 +1015,39 @@ export interface MergeResolverInfo {
   failure_reason: string | null;
 }
 
+/**
+ * #1015 — the **Coût de boucle** of one loop region: the attributed cost (same
+ * fold as the Run total and the node costs, ADR-0058) of its member nodes'
+ * executions, sub-agents included, since the loop's last entry. Unlike
+ * `NodeCost`, an unreadable member keeps the known part and sets `partial`;
+ * `usd` is `null` only when no member execution has a readable cost (`—`).
+ */
+export interface LoopCost {
+  usd: number | null;
+  /** `~` — false only when every readable contribution is exact reported dollars. */
+  estimated: boolean;
+  /** Lower bound (`†`): an unreadable member execution or an unpriced model. */
+  partial: boolean;
+  unpriced_models?: string[];
+  unavailable_reasons?: string[];
+  executions: number;
+  readable_executions: number;
+  /** Each member's share over the same window, in the region's `members` order. */
+  members: LoopMemberCost[];
+  /** #1016 — the region's effective Plafond de coût in dollars (`max_cost_usd`
+   *  resolved against the Run's variables); absent = uncapped. */
+  cap_usd?: number | null;
+}
+
+export interface LoopMemberCost {
+  node_id: string;
+  usd: number | null;
+  /** `~` for this member's own share (false when exact reported dollars). */
+  estimated?: boolean;
+  partial: boolean;
+  executions: number;
+}
+
 export interface LoopStateInfo {
   loop_node_id: string;
   current_iter: number;
@@ -1094,6 +1131,19 @@ export interface RunState {
    * (ADR-0035). Absent for an interactive wait.
    */
   awaiting_reason_code?: string | null;
+  /**
+   * #1016 — the loop region a region park is about (`region_exhausted`,
+   * `region_ended_unrouted`, `region_budget_exhausted`), so the canvas marks
+   * THAT region. Absent on historical runs and non-region parks.
+   */
+  awaiting_region_id?: string | null;
+  /**
+   * #1017 — live Plafond de coût overrides set by `set_region_max_cost`, keyed
+   * by region id: a dollar cap, or `null` when the cap was REMOVED (the region
+   * is uncapped even if its YAML declares one). Absent when none was ever set.
+   * They beat the YAML `max_cost_usd` (ADR-0083).
+   */
+  region_max_cost_overrides?: Record<string, number | null>;
   nodes: Record<string, NodeState>;
   edges: EdgeInfo[];
   node_defs: NodeDefInfo[];
@@ -1105,6 +1155,9 @@ export interface RunState {
   loop_states?: Record<string, LoopStateInfo>;
   foreach_states?: Record<string, ForEachStateInfo>;
   collection_states?: Record<string, CollectionStateInfo>;
+  /** #1015 — Coût de boucle per region id, derived on read. Absent for a Run
+   *  with no loop region or before a member's first execution. */
+  loop_costs?: Record<string, LoopCost>;
   target_repo?: string | null;
   /**
    * The Run's read-only secondary repos (#465, ADR-0042). Absent/empty on a
@@ -1755,6 +1808,12 @@ export interface LoopRegion {
   kind: LoopKind;
   members: string[];
   max_iter?: number | string | null;
+  /**
+   * #1016 — the **Plafond de coût** of a `bounded` region (ADR-0083): a dollar
+   * cap on its Coût de boucle, checked at each re-entry. A positive number or a
+   * `$var` reference; absent/`null` = no cap. Never on a `collection` region.
+   */
+  max_cost_usd?: number | string | null;
   /** The frontmatter field a `collection` region fans out over (#151). */
   over?: string | null;
 }

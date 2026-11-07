@@ -1124,7 +1124,7 @@ export default function App() {
                     {selection.kind === "edge" ? (
                       <EdgeDetailPanel trigger={edgeTrigger} />
                     ) : selection.kind === "region" ? (
-                      <RegionInspector />
+                      <RegionInspector run={isEditingRun ? selectedRun : null} locked={runLocked} />
                     ) : (
                       <NoteInspector />
                     )}

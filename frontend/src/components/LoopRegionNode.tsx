@@ -1,4 +1,5 @@
 import { type Node, type NodeProps } from "@xyflow/react";
+import { Wallet } from "lucide-react";
 import type { LoopKind } from "../types";
 import { useEditStore } from "../stores/editStore";
 import { endRegion } from "../api";
@@ -29,6 +30,28 @@ export interface LoopRegionNodeData {
   /** True once the region reached `max_iter` with the loop still continuing. */
   exhausted: boolean;
   /**
+   * #1015 — the **Coût de boucle** shown after the counter on a live run
+   * (`~$1.20`, `~$1.20†` lower bound, `—` unknown), formatted by
+   * `lib/costLabel.ts`. `null`/absent in a template view and before the first
+   * member execution.
+   */
+  costText?: string | null;
+  /** Header tooltip for the cost, in the `nodeCostTitle` wording (#1015). */
+  costTitle?: string | null;
+  /**
+   * #1016 — the loop cost reached 80 % of the Plafond de coût: only the cost
+   * text turns amber (`--color-st-await`), the box stays as it is.
+   */
+  costWarn?: boolean;
+  /**
+   * #1016 — the Run is parked on this region's cost cap
+   * (`region_budget_exhausted`). Reuses the exhausted pattern (tinted box, header,
+   * bottom chip) in AMBER `--color-st-await` — the Run awaits you, it did not
+   * fail — with a `Wallet` glyph and `raise cap` / `end region` actions. Never
+   * shown together with {@link exhausted}.
+   */
+  budgetReached?: boolean;
+  /**
    * The live run this region belongs to, or `null` in a template view. Present
    * only when a run is active; the "route from manager" affordance (#152) on an
    * exhausted-unrouted region targets this run.
@@ -53,15 +76,32 @@ export interface LoopRegionNodeData {
 
 export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
   const setSelection = useEditStore((s) => s.setSelection);
+  const startRunEditing = useEditStore((s) => s.startRunEditing);
+  const activeTabId = useEditStore((s) => s.activeTabId);
 
-  const accent = data.exhausted
-    ? "var(--color-st-blocked)"
-    : "var(--color-acc)";
+  const accent = data.budgetReached
+    ? "var(--color-st-await)"
+    : data.exhausted
+      ? "var(--color-st-blocked)"
+      : "var(--color-acc)";
   // `⇉` (fan-out) for a collection region, `↻` (loop) for a bounded one.
   const glyph = data.kind === "collection" ? "⇉" : "↻";
 
   const openInspector = () =>
     setSelection({ kind: "region", id: null, regionId: data.regionId });
+  // #1016/#1017: `raise cap` opens the inspector in « Edit for this run »
+  // (ADR-0080) with the cost cap focused and editable — on a followed Run the
+  // fields are otherwise locked. Both updates land in one render, so the
+  // inspector mounts unlocked and the focus takes.
+  const raiseCap = () => {
+    if (data.runId != null && activeTabId) startRunEditing(activeTabId);
+    setSelection({
+      kind: "region",
+      id: null,
+      regionId: data.regionId,
+      focusField: "max_cost_usd",
+    });
+  };
 
   // The grouping layer: border + faint fill, nothing interactive. Sits behind
   // the member cards and lets every click through (#167).
@@ -78,9 +118,11 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
           border: `1px dashed ${accent}`,
           // Faint translucent fill so the box reads as a grouping layer behind
           // the member cards without obscuring them.
-          background: data.exhausted
-            ? "var(--color-st-blocked-bg)"
-            : "var(--color-acc-bg)",
+          background: data.budgetReached
+            ? "var(--color-st-await-bg)"
+            : data.exhausted
+              ? "var(--color-st-blocked-bg)"
+              : "var(--color-acc-bg)",
         }}
       />
     );
@@ -99,6 +141,7 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
       <div
         data-testid="loop-region-header"
         onClick={openInspector}
+        title={data.costTitle ?? undefined}
         className="pointer-events-auto absolute flex cursor-pointer items-center gap-1.5 rounded bg-bg-1 px-2 font-mono"
         style={{
           top: -13,
@@ -110,6 +153,14 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
           color: accent,
         }}
       >
+        {data.budgetReached && (
+          <Wallet
+            size={12}
+            aria-label="budget reached"
+            data-testid="loop-region-budget-glyph"
+            className="shrink-0"
+          />
+        )}
         <span className="loop-region-glyph" style={{ fontSize: 12, lineHeight: 1 }}>
           {glyph}
         </span>
@@ -119,7 +170,65 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
         <span className="loop-region-count" style={{ opacity: 0.85 }}>
           {data.counterText}
         </span>
+        {data.costText != null && (
+          <>
+            <span aria-hidden="true" style={{ opacity: 0.5 }}>
+              ·
+            </span>
+            <span
+              data-testid="loop-region-cost"
+              data-warn={data.costWarn ? "true" : undefined}
+              className="loop-region-cost"
+              style={data.costWarn ? { color: "var(--color-st-await)" } : undefined}
+            >
+              {data.costText}
+            </span>
+          </>
+        )}
       </div>
+      {data.budgetReached && (
+        <div
+          data-testid="loop-region-budget"
+          className="pointer-events-auto absolute flex items-center gap-1.5 rounded bg-bg-1 px-2 font-mono whitespace-nowrap"
+          style={{
+            bottom: -14,
+            left: "50%",
+            transform: "translateX(-50%)",
+            height: 23,
+            fontSize: 10,
+            border: "1px solid var(--color-st-await)",
+            color: "var(--color-st-await)",
+          }}
+        >
+          budget reached
+          <button
+            type="button"
+            data-testid="loop-region-raise-cap"
+            className="ml-1.5 rounded border px-1 leading-none hover:bg-st-await-bg"
+            style={{ borderColor: "var(--color-st-await)", color: "var(--color-st-await)" }}
+            onClick={(e) => {
+              e.stopPropagation();
+              raiseCap();
+            }}
+          >
+            raise cap
+          </button>
+          {data.runId != null && (
+            <button
+              type="button"
+              data-testid="loop-region-end-region"
+              className="rounded border px-1 leading-none hover:bg-st-await-bg"
+              style={{ borderColor: "var(--color-st-await)", color: "var(--color-st-await)" }}
+              onClick={(e) => {
+                e.stopPropagation();
+                void endRegion(data.runId as string, data.regionId);
+              }}
+            >
+              end region
+            </button>
+          )}
+        </div>
+      )}
       {data.exhausted && (
         <div
           data-testid="loop-region-block"

@@ -543,10 +543,14 @@ describe("deriveLoopRegions — bounded region rendering (ADR-0011 / #148)", () 
     expect(regions[0].exhausted).toBe(false);
   });
 
-  it("marks the region exhausted at max_iter on a live run", () => {
+  it("marks the region exhausted when the run is parked on it at max_iter", () => {
     const run = makeRunState({ impl: "completed", rev: "completed" });
     run.nodes.impl.iter = 3;
     run.nodes.rev.iter = 3;
+    // #1017: exhausted is the daemon's `region_exhausted` park, not `iter >= max`.
+    run.status = "awaiting_user";
+    run.awaiting_reason_code = "region_exhausted";
+    run.awaiting_region_id = "review_loop";
     const regions = deriveLoopRegions(regionPipeline(3), run);
     expect(regions[0].counterText).toBe("3/3");
     expect(regions[0].exhausted).toBe(true);

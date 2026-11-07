@@ -285,3 +285,145 @@ describe("LoopRegionNode — box / chrome layer split (#455)", () => {
     expect(screen.getByTestId("loop-region-header").className).toContain("pointer-events-auto");
   });
 });
+
+describe("LoopRegionNode header — Coût de boucle (#1015)", () => {
+  beforeEach(() => seedStore([reviewLoop]));
+
+  it.each([
+    ["~$1.20", "estimate"],
+    ["~$1.20†", "partial (lower bound)"],
+    ["—", "unknown"],
+    ["$1.20", "exact reported dollars"],
+  ])("shows `%s` (%s) after the counter", (costText) => {
+    render(
+      <Wrapper>
+        <LoopRegionNode {...props({ counterText: "3/5", costText, costTitle: "Loop cost, laps 1–3: …" })} />
+      </Wrapper>,
+    );
+    const header = screen.getByTestId("loop-region-header");
+    expect(header).toHaveTextContent(`3/5·${costText}`);
+    expect(screen.getByTestId("loop-region-cost")).toHaveTextContent(costText);
+    expect(header).toHaveAttribute("title", "Loop cost, laps 1–3: …");
+  });
+
+  it("shows no cost in a template view (no run)", () => {
+    render(
+      <Wrapper>
+        <LoopRegionNode {...props({ counterText: "max 5" })} />
+      </Wrapper>,
+    );
+    expect(screen.queryByTestId("loop-region-cost")).toBeNull();
+    expect(screen.getByTestId("loop-region-header")).not.toHaveAttribute("title");
+  });
+
+  it("shows the cost on a collection region too", () => {
+    render(
+      <Wrapper>
+        <LoopRegionNode
+          {...props({ kind: "collection", counterText: "2/4 items", costText: "~$0.8400" })}
+        />
+      </Wrapper>,
+    );
+    expect(screen.getByTestId("loop-region-header")).toHaveTextContent("⇉2/4 items·~$0.8400");
+  });
+});
+
+describe("LoopRegionNode — Plafond de coût (#1016)", () => {
+  beforeEach(() => {
+    mockEndRegion.mockClear();
+    seedStore([{ ...reviewLoop, max_cost_usd: 5 }]);
+  });
+
+  it("shows `/ $cap` after the loop cost", () => {
+    render(
+      <Wrapper>
+        <LoopRegionNode {...props({ counterText: "3/5", costText: "~$1.20 / $5" })} />
+      </Wrapper>,
+    );
+    expect(screen.getByTestId("loop-region-header")).toHaveTextContent("3/5·~$1.20 / $5");
+    expect(screen.getByTestId("loop-region-cost")).not.toHaveAttribute("data-warn");
+  });
+
+  it("turns only the cost text amber at 80 % of the cap", () => {
+    render(
+      <Wrapper>
+        <LoopRegionNode {...props({ counterText: "4/5", costText: "~$4.31 / $5", costWarn: true })} />
+      </Wrapper>,
+    );
+    const cost = screen.getByTestId("loop-region-cost");
+    expect(cost).toHaveAttribute("data-warn", "true");
+    expect(cost.style.color).toBe("var(--color-st-await)");
+    expect(screen.getByTestId("loop-region-header").style.color).toBe("var(--color-acc)");
+    expect(screen.queryByTestId("loop-region-budget")).toBeNull();
+  });
+
+  it("renders « budget reached » in amber, distinct from exhausted", () => {
+    render(
+      <Wrapper>
+        <LoopRegionNode
+          {...props({ counterText: "4/5", costText: "~$5.12 / $5", budgetReached: true, runId: "run-1" })}
+        />
+      </Wrapper>,
+    );
+    const chip = screen.getByTestId("loop-region-budget");
+    expect(chip).toHaveTextContent("budget reached");
+    expect(chip.style.color).toBe("var(--color-st-await)");
+    expect(screen.getByTestId("loop-region-header").style.color).toBe("var(--color-st-await)");
+    expect(screen.getByTestId("loop-region-budget-glyph")).toBeTruthy();
+    // Never the exhausted chip, never red/orange.
+    expect(screen.queryByTestId("loop-region-block")).toBeNull();
+    expect(chip.style.color).not.toContain("st-blocked");
+    expect(chip.style.color).not.toContain("st-failed");
+  });
+
+  it("tints the box amber when the budget is reached", () => {
+    render(
+      <Wrapper>
+        <LoopRegionNode {...props({ layer: "box", budgetReached: true, runId: "run-1" })} />
+      </Wrapper>,
+    );
+    const box = screen.getByTestId("loop-region");
+    expect(box.style.background).toBe("var(--color-st-await-bg)");
+    expect(box.style.border).toContain("var(--color-st-await)");
+  });
+
+  it("`raise cap` opens the inspector on max_cost_usd", () => {
+    render(
+      <Wrapper>
+        <LoopRegionNode {...props({ budgetReached: true, runId: "run-1" })} />
+      </Wrapper>,
+    );
+    fireEvent.click(screen.getByTestId("loop-region-raise-cap"));
+    expect(useEditStore.getState().selection).toEqual({
+      kind: "region",
+      id: null,
+      regionId: "review_loop",
+      focusField: "max_cost_usd",
+    });
+  });
+
+  it("`raise cap` unlocks « Edit for this run » on a followed run tab (#1017)", () => {
+    // A run tab in « pilotage »: locked until the user edits for this run.
+    useEditStore.setState((st) => ({
+      openTabs: st.openTabs.map((t) => ({ ...t, scope: "run", runId: "run-1", runEditing: false })),
+    }));
+    render(
+      <Wrapper>
+        <LoopRegionNode {...props({ budgetReached: true, runId: "run-1" })} />
+      </Wrapper>,
+    );
+    fireEvent.click(screen.getByTestId("loop-region-raise-cap"));
+    expect(useEditStore.getState().openTabs[0].runEditing).toBe(true);
+    expect(useEditStore.getState().selection.focusField).toBe("max_cost_usd");
+  });
+
+  it("`end region` ends the region by id", () => {
+    render(
+      <Wrapper>
+        <LoopRegionNode {...props({ budgetReached: true, runId: "run-1" })} />
+      </Wrapper>,
+    );
+    fireEvent.click(screen.getByTestId("loop-region-end-region"));
+    expect(mockEndRegion).toHaveBeenCalledWith("run-1", "review_loop");
+  });
+});

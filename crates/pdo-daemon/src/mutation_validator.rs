@@ -522,6 +522,7 @@ mod tests {
 
     fn region(id: &str, max_iter: i64) -> pipeline::LoopRegion {
         pipeline::LoopRegion {
+            max_cost_usd: None,
             id: id.to_string(),
             kind: pipeline::LoopKind::Bounded,
             members: vec!["impl".to_string(), "rev".to_string()],

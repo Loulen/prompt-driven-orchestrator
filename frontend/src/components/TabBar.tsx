@@ -181,6 +181,22 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
             </button>
           </>
         )}
+        {runEditing && (
+          // #1017 — the « Edit for this run » mode reads as such (ADR-0080):
+          // the purple edit tint, next to « Save for this run ».
+          <span
+            className="mr-1.5 rounded-md border px-1.5 py-0.5"
+            style={{
+              fontSize: "10.5px",
+              color: "var(--color-edit-tint)",
+              borderColor: "color-mix(in srgb, var(--color-edit-tint) 55%, transparent)",
+              background: "color-mix(in srgb, var(--color-edit-tint) 12%, transparent)",
+            }}
+            data-testid="run-editing-pill"
+          >
+            Editing for this run
+          </span>
+        )}
         {runEditing ? (
           <div className="flex items-center" data-testid="run-save-group">
             <button

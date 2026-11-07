@@ -14,6 +14,7 @@ import {
   savePipeline,
   fetchRunPipeline,
   saveRunPipeline,
+  setRegionMaxCost,
   overwriteDefaultPipelineFromRun,
   deletePipeline as apiDeletePipeline,
   renamePipeline as apiRenamePipeline,
@@ -23,6 +24,7 @@ import { carriedPorts, withCarriedPorts } from "../lib/edgePorts";
 import { requalifyWhen, renameWhenPorts } from "../lib/whenClause";
 import { isStructuralMarker } from "../lib/structuralMarkers";
 import { serializePipeline } from "../lib/serializePipeline";
+import { costCapEdits } from "../lib/costCapEdits";
 import { loadTabsDisabled, saveTabsDisabled } from "../lib/uiPrefs";
 import {
   generatedRegionId,
@@ -53,6 +55,11 @@ export interface Selection {
    * inspector and `updateRegion` use. Undefined for other selections.
    */
   regionId?: string;
+  /**
+   * #1016 — a region inspector field to focus on open: the « budget reached »
+   * chip's `raise cap` opens the inspector on `max_cost_usd`.
+   */
+  focusField?: "max_cost_usd";
   /**
    * The selected canvas note's `id` when `kind === "note"` (#307). Notes carry
    * a stable `id`, so the id is the selection key the note inspector and
@@ -1035,6 +1042,17 @@ export const useEditStore = create<EditState>((set, get) => ({
     try {
       const yaml = serializePipeline(tab.pipeline);
       if (tab.runId) {
+        // #1017: a hot-edited cost cap is a Run command (`set_region_max_cost`,
+        // an override in the event log), not just YAML — it is what resumes a
+        // Run parked « budget reached ». Read the snapshot as it stands BEFORE
+        // the save to know which caps this save changes.
+        let before: PipelineDef | null = null;
+        try {
+          before = (await fetchRunPipeline(tab.runId)).pipeline;
+        } catch {
+          // Snapshot unreadable: the YAML still carries the new cap; the
+          // daemon reads it at the next re-entry.
+        }
         await saveRunPipeline(tab.runId, yaml, tab.prompts);
         set((s) => ({
           openTabs: s.openTabs.map((t) =>
@@ -1042,6 +1060,27 @@ export const useEditStore = create<EditState>((set, get) => ({
           ),
           lastSavedAt: { ...s.lastSavedAt, [id]: Date.now() },
         }));
+        if (before) {
+          for (const edit of costCapEdits(before, tab.pipeline)) {
+            try {
+              await setRegionMaxCost(tab.runId, edit.regionId, edit.usd);
+            } catch (err: unknown) {
+              const why = err instanceof Error ? err.message : String(err);
+              set((s) => ({
+                openTabs: s.openTabs.map((t) =>
+                  t.id === id
+                    ? {
+                        ...t,
+                        saveError: {
+                          message: `Saved, but the cost cap of '${edit.regionId}' was not applied to the run: ${why}`,
+                        },
+                      }
+                    : t,
+                ),
+              }));
+            }
+          }
+        }
       } else {
         // Save back into the same store the tab was opened from, so a
         // `library`-scoped edit never overwrites a same-named repo file (#216).

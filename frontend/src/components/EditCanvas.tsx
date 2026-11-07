@@ -17,7 +17,7 @@ import {
   ViewportPortal,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import type { LoopKind, NodeDef, NodeStatus, NodeType, PortBrief, PortSide, RunState } from "../types";
+import type { NodeDef, NodeStatus, NodeType, PortBrief, PortSide, RunState } from "../types";
 import { isTerminalRun } from "../types";
 import { pendingCount, pendingTone, reviewQuickAccessTitle } from "../lib/reviewComments";
 import { reviewUrl } from "../lib/runRefs";
@@ -27,6 +27,7 @@ import { openRunShell, reopenRun, retryAll } from "../api";
 import RunShellModal from "./RunShellModal";
 import { RetryAllConfirmModal } from "./UnifiedLeftPanel";
 import { buildLoopRegionNodes, buildNoteNodes, deriveEditEdges, deriveEditNodes, edgeIndexFromId, resolveTargetGeometrySide } from "./editNodeDerivation";
+import type { LoopBadge } from "./editNodeDerivation";
 import { hasUnsavedWork, isRunTabLocked, useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
 import { CARD_HEIGHT, CARD_WIDTH, fallbackNodeSpot, freeDropSpot } from "../lib/nodePlacement";
@@ -104,7 +105,7 @@ interface EditNodeData {
   // Compact badge when this node is the single member of a loop region: a
   // collection (`⇉ ...`, #151) or a single-member bounded loop (`↻ ...`, #173).
   // Absent on non-member nodes and on multi-member regions (boxed instead).
-  loopBadge?: { text: string; kind: LoopKind };
+  loopBadge?: LoopBadge;
   agentMode?: "inherit" | "profile" | "custom" | "broken";
   /** #723: the node carries the « Orchestrator » toggle (ADR-0064). */
   orchestrator?: boolean;
@@ -166,6 +167,11 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
           : null),
         ...(isWireTarget
           ? { boxShadow: `0 0 0 1px var(--color-bg-1), 0 0 0 2.5px ${WIRE}` }
+          : null),
+        // #1016: a single-member region parked on its cost cap turns the card
+        // border amber — the box form's tinted border, for a boxless region.
+        ...(data.loopBadge?.budgetReached
+          ? { borderColor: "var(--color-st-await)" }
           : null),
       }}
     >
@@ -242,18 +248,47 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
         {data.loopBadge && (
           <span
             data-testid={data.loopBadge.kind === "collection" ? "collection-badge" : "loop-badge"}
-            className="ml-auto shrink-0 rounded border border-acc px-1.5 font-mono text-acc"
+            data-budget-reached={data.loopBadge.budgetReached ? "true" : undefined}
+            className={`ml-auto shrink-0 rounded border px-1.5 font-mono ${
+              data.loopBadge.budgetReached
+                ? "border-st-await text-st-await"
+                : "border-acc text-acc"
+            }`}
             style={{ fontSize: 10, lineHeight: "16px" }}
             title={
-              data.loopBadge.kind === "collection"
+              (data.loopBadge.kind === "collection"
                 ? "collection region — fans out one lap per item"
-                : "bounded loop region — one member"
+                : "bounded loop region — one member") +
+              (data.loopBadge.costTitle ? `\n${data.loopBadge.costTitle}` : "")
             }
           >
             {data.loopBadge.text}
+            {/* #1015: the Coût de boucle follows the counter, as in the box header. */}
+            {data.loopBadge.costText != null && (
+              <>
+                <span aria-hidden="true" style={{ opacity: 0.5 }}>{" · "}</span>
+                <span
+                  data-testid="loop-badge-cost"
+                  data-warn={data.loopBadge.costWarn ? "true" : undefined}
+                  className={data.loopBadge.costWarn ? "text-st-await" : undefined}
+                >
+                  {data.loopBadge.costText}
+                </span>
+              </>
+            )}
           </span>
         )}
       </div>
+      {/* #1016: the boxless twin of the region's « budget reached » chip. */}
+      {data.loopBadge?.budgetReached && (
+        <div
+          data-testid="loop-badge-budget-reached"
+          className="mt-1 pl-[22px] font-mono text-st-await"
+          style={{ fontSize: 10 }}
+        >
+          budget reached · awaiting you
+        </div>
+      )}
       {/* #723 / #1019 — child-count pastilles of a parent node: a row under the
           title (the card grows a line); omitted entirely without children, so
           a node that never launched a run stays byte-identical. */}

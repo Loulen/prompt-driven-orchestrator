@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { harnessColor, harnessCatalog, findHarnessOption, effortOffer } from "./harness";
+import { harnessColor, harnessCatalog, findHarnessOption, effortOffer, harnessCanCost } from "./harness";
 import type { HarnessOption } from "./harness";
 
 describe("harnessColor (#638)", () => {
@@ -112,5 +112,30 @@ describe("effortOffer (#798)", () => {
       levels: [],
       authoritative: true,
     });
+  });
+});
+
+describe("harnessCanCost (#1016)", () => {
+  it("reads the served cost capability, defaulting to costable", () => {
+    const catalog = harnessCatalog({
+      path: null,
+      names: ["claude", "opencode", "legacy"],
+      rejected: [],
+      reason: null,
+      harnesses: [
+        { name: "claude", source: "builtin", installed: true, can_cost: true },
+        { name: "opencode", source: "builtin", installed: true, can_cost: false },
+        { name: "legacy", source: "descriptor", installed: true },
+      ],
+    });
+    expect(harnessCanCost(catalog, "claude")).toBe(true);
+    expect(harnessCanCost(catalog, "opencode")).toBe(false);
+    expect(harnessCanCost(catalog, "legacy")).toBe(true);
+    expect(harnessCanCost(catalog, "unknown")).toBe(true);
+  });
+
+  it("knows opencode has no cost source before settings load", () => {
+    expect(harnessCanCost(harnessCatalog(null), "opencode")).toBe(false);
+    expect(harnessCanCost(harnessCatalog(null), "claude")).toBe(true);
   });
 });

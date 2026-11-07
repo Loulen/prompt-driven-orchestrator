@@ -727,6 +727,55 @@ pub struct NodeCost {
     pub readable_executions: i64,
 }
 
+/// The **Coût de boucle** of one loop region (#1015, CONTEXT.md): the attributed
+/// cost (ADR-0058 — the SAME fold as the Run total and the node costs) of the
+/// executions of the region's **member** nodes, sub-agents included, since the
+/// loop's last entry (its iteration counter back to 1). Derived on read, never
+/// persisted (ADR-0022/0029).
+///
+/// Unlike [`NodeCost`], an unreadable member execution does not blank the figure:
+/// the known part counts and `partial` says it is a lower bound (never `$0` for
+/// the unknown). `usd` is `None` only when no member execution in the window has
+/// a readable cost — the surface renders `—`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoopCost {
+    pub usd: Option<f64>,
+    /// Is the figure an estimate (`~`)? False only when every readable
+    /// contribution is a reported cost already in dollars (`pi`, #707).
+    pub estimated: bool,
+    /// A lower bound: a member execution has no readable cost, or a model was
+    /// unpriced.
+    pub partial: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unpriced_models: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unavailable_reasons: Vec<String>,
+    pub executions: i64,
+    pub readable_executions: i64,
+    /// Per-member share of the loop cost, in the region's `members` order;
+    /// a member with no execution in the window yet is omitted.
+    #[serde(default)]
+    pub members: Vec<LoopMemberCost>,
+    /// The region's effective **Plafond de coût** in dollars (#1016): its
+    /// `max_cost_usd` resolved against the Run's variables (a `$var` is fixed at
+    /// launch, which only the daemon knows). `None` = uncapped. Read-side only,
+    /// so the header can say `~$1.20 / $5` and warn at 80 %.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cap_usd: Option<f64>,
+}
+
+/// One member's share of a [`LoopCost`] (#1015), over the same window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoopMemberCost {
+    pub node_id: String,
+    pub usd: Option<f64>,
+    /// `~` for this member's share — false when all of it is exact reported dollars.
+    #[serde(default)]
+    pub estimated: bool,
+    pub partial: bool,
+    pub executions: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartNodeInfo {
     pub input_path: String,
@@ -1031,6 +1080,13 @@ pub struct RunState {
     /// carries a reason that is machine-branchable, not only prose to grep.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub awaiting_reason_code: Option<String>,
+    /// The loop region a region park is about (#1016): projected from the
+    /// `RunInterrupted` payload's `region_id` (`region_exhausted`,
+    /// `region_ended_unrouted`, `region_budget_exhausted`), cleared with
+    /// [`awaiting_reason_code`]. Lets the canvas mark THAT region « budget
+    /// reached » without parsing the prose. Absent on historical logs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub awaiting_region_id: Option<String>,
     pub nodes: HashMap<String, NodeState>,
     #[serde(default)]
     pub edges: Vec<EdgeInfo>,
@@ -1064,6 +1120,17 @@ pub struct RunState {
     /// byte-identically), which is every historical run.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub region_max_iter_overrides: HashMap<String, i64>,
+    /// Live **Plafond de coût** overrides folded from `set_region_max_cost`
+    /// commands (#1017, ADR-0083), keyed by region id. Absolute, last-write-wins,
+    /// consulted by the scheduler at re-entry in place of the region's declared
+    /// `max_cost_usd` — for a literal and a `$var` cap alike. `Some(usd)` = the
+    /// cap in dollars (NO floor: below the spend already is legal, it stops the
+    /// loop at the next re-entry); `None` = the cap was **removed** (the region is
+    /// uncapped even if its YAML declares one). Folded from the append-only log,
+    /// so it survives a reopen re-projection; empty (and absent on the wire) for
+    /// every Run that never set one.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub region_max_cost_overrides: HashMap<String, Option<f64>>,
     /// Forced routes folded from `force_route` commands (ADR-0011 / #600), keyed by
     /// **source** — a node id OR a region id — mapping to the target node id. The
     /// scheduler spawns the target (or completes, if it is `End`) when the source
@@ -1275,6 +1342,11 @@ pub struct RunState {
     /// `~/.claude/projects/` intact, so an archived Run keeps its cost.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost: Option<CostStat>,
+    /// The **Coût de boucle** of each loop region, keyed by region id (#1015).
+    /// Derived on read alongside `cost`, never persisted; additive on the API —
+    /// absent for a Run with no loop region or no member execution yet.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub loop_costs: HashMap<String, LoopCost>,
 }
 
 impl RunState {
@@ -1305,6 +1377,7 @@ impl RunState {
             failure_reason: None,
             awaiting_reason: None,
             awaiting_reason_code: None,
+            awaiting_region_id: None,
             nodes: HashMap::new(),
             edges: Vec::new(),
             node_defs: Vec::new(),
@@ -1317,6 +1390,7 @@ impl RunState {
             collection_states: HashMap::new(),
             switch_states: HashMap::new(),
             region_max_iter_overrides: HashMap::new(),
+            region_max_cost_overrides: HashMap::new(),
             forced_routes: HashMap::new(),
             target_repo: None,
             target_repos: Vec::new(),
@@ -1343,6 +1417,7 @@ impl RunState {
             sessions_spawned: 0,
             loc: None,
             cost: None,
+            loop_costs: HashMap::new(),
         }
     }
 
@@ -2241,6 +2316,7 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
             // no longer waiting on that incident.
             state.awaiting_reason = None;
             state.awaiting_reason_code = None;
+            state.awaiting_region_id = None;
         }
         // The runtime gave up on driving the run forward for a non-deliberate
         // reason (ADR-0049): park it `AwaitingUser` with the reason, NEVER
@@ -2254,6 +2330,12 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                 state.status = RunStatus::AwaitingUser;
                 state.awaiting_reason = run_event_reason(event);
                 state.awaiting_reason_code = run_event_reason_code(event);
+                state.awaiting_region_id = event
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.get("region_id"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
             }
         }
         EventKind::RunRenamed => {
@@ -3199,6 +3281,7 @@ fn apply_command_event(state: &mut RunState, event: &Event) {
             state.failure_reason = None;
             state.awaiting_reason = None;
             state.awaiting_reason_code = None;
+            state.awaiting_region_id = None;
             // Re-drive the interrupted work (ADR-0049 default: restart with the
             // partial artefacts, which persist in the sub-worktree). Drop each
             // `Interrupted` node from the projection — exactly like
@@ -3253,6 +3336,30 @@ fn apply_command_event(state: &mut RunState, event: &Event) {
                     state
                         .region_max_iter_overrides
                         .insert(region_id.to_string(), n);
+                }
+            }
+        }
+        // #1017 / ADR-0083: `set_region_max_cost` edits a bounded region's cost cap
+        // in flight. Absolute and last-write-wins like `set_region_max_iter`, but
+        // with NO floor (a cap under the spend is legal: the loop stops at the next
+        // re-entry) and `null` meaning « remove the cap ». A non-positive or
+        // non-numeric value is ignored (the handler refuses it before appending).
+        if cmd == Some("set_region_max_cost") {
+            if let Some(region_id) = payload.get("region_id").and_then(|v| v.as_str()) {
+                match payload.get("max_cost_usd") {
+                    Some(serde_json::Value::Null) => {
+                        state
+                            .region_max_cost_overrides
+                            .insert(region_id.to_string(), None);
+                    }
+                    Some(v) => {
+                        if let Some(usd) = v.as_f64().filter(|u| u.is_finite() && *u > 0.0) {
+                            state
+                                .region_max_cost_overrides
+                                .insert(region_id.to_string(), Some(usd));
+                        }
+                    }
+                    None => {}
                 }
             }
         }
@@ -4553,6 +4660,26 @@ mod tests {
             state.awaiting_reason.as_deref(),
             Some("unrouted: no live branch reaches End")
         );
+    }
+
+    #[test]
+    fn a_budget_park_projects_its_region_and_a_resume_clears_it() {
+        // #1016: `region_budget_exhausted` parks AwaitingUser (never Failed) and
+        // names its region; a resume clears both.
+        let mut payload = interrupt_payload("region_budget_exhausted", "budget reached: …");
+        payload["region_id"] = serde_json::json!("review_loop");
+        let mut events = vec![
+            make_event(EventKind::RunStarted, None, None),
+            make_event_with_payload(EventKind::RunInterrupted, None, payload),
+        ];
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::AwaitingUser);
+        assert_eq!(state.awaiting_reason_code.as_deref(), Some("region_budget_exhausted"));
+        assert_eq!(state.awaiting_region_id.as_deref(), Some("review_loop"));
+        events.push(make_event(EventKind::RunResumed, None, None));
+        let state = project(&events).unwrap();
+        assert_eq!(state.awaiting_region_id, None);
+        assert_eq!(state.awaiting_reason_code, None);
     }
 
     #[test]
@@ -8280,6 +8407,67 @@ mod tests {
             ),
         );
         assert!(state.region_max_iter_overrides.is_empty());
+    }
+
+    fn set_cost(state: &mut RunState, value: serde_json::Value) {
+        apply_command_event(
+            state,
+            &make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "set_region_max_cost", "region_id": "R", "max_cost_usd": value }),
+            ),
+        );
+    }
+
+    #[test]
+    fn set_region_max_cost_folds_an_absolute_override_last_write_wins_and_null_removes() {
+        // #1017: absolute, last-write-wins, `null` = the cap is removed.
+        let mut state = RunState::new("r".into(), String::new());
+        set_cost(&mut state, serde_json::json!(5));
+        assert_eq!(state.region_max_cost_overrides.get("R"), Some(&Some(5.0)));
+        set_cost(&mut state, serde_json::json!(0.25));
+        assert_eq!(state.region_max_cost_overrides.get("R"), Some(&Some(0.25)));
+        set_cost(&mut state, serde_json::Value::Null);
+        assert_eq!(state.region_max_cost_overrides.get("R"), Some(&None));
+    }
+
+    #[test]
+    fn set_region_max_cost_ignores_a_non_positive_cap() {
+        let mut state = RunState::new("r".into(), String::new());
+        set_cost(&mut state, serde_json::json!(0));
+        set_cost(&mut state, serde_json::json!(-1.5));
+        set_cost(&mut state, serde_json::json!("lots"));
+        assert!(state.region_max_cost_overrides.is_empty());
+    }
+
+    #[test]
+    fn set_region_max_cost_override_survives_a_reprojection_and_rides_the_wire() {
+        // The override lives in the log, so a fresh projection (reopen) keeps it;
+        // a removal is serialized as an explicit `null`.
+        let events = vec![
+            make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "set_region_max_cost", "region_id": "R", "max_cost_usd": 5 }),
+            ),
+            make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "set_region_max_cost", "region_id": "S", "max_cost_usd": null }),
+            ),
+        ];
+        let mut state = RunState::new("r".into(), String::new());
+        for e in &events {
+            apply_command_event(&mut state, e);
+        }
+        let wire = serde_json::to_value(&state).unwrap();
+        assert_eq!(wire["region_max_cost_overrides"]["R"], serde_json::json!(5.0));
+        assert!(wire["region_max_cost_overrides"]["S"].is_null());
+        assert!(wire["region_max_cost_overrides"].as_object().unwrap().contains_key("S"));
+        let fresh = RunState::new("r".into(), String::new());
+        let fresh_wire = serde_json::to_value(&fresh).unwrap();
+        assert!(fresh_wire.get("region_max_cost_overrides").is_none(), "absent when never set");
     }
 
     #[test]

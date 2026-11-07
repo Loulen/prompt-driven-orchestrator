@@ -9016,6 +9016,76 @@ pub(crate) fn panic_payload_message(panic: &(dyn std::any::Any + Send)) -> Strin
     }
 }
 
+/// Where a Run's cost is read from (ADR-0058): the Claude transcripts root (the
+/// sandboxed Run's staged home while it lives), the other harnesses' stores,
+/// and the price table — resolved ONCE at the edge, never cached on `AppState`
+/// (ADR-0034: a price change must not need a daemon restart). HOME absent →
+/// degrade to the host root; never fail a read.
+fn run_cost_sources(
+    state: &AppState,
+    run_state: &event_log::RunState,
+) -> (
+    std::path::PathBuf,
+    sandbox_run::HarnessStores,
+    price_table::PriceTable,
+) {
+    let (home_root, sandbox_root) = sandbox_run::sandbox_home_roots(state).unwrap_or_else(|_| {
+        let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
+        let sandbox = home.join(".pdo").join("sandbox");
+        (home, sandbox)
+    });
+    let sandboxed = !run_state.sandbox.is_off();
+    let projects_root =
+        sandbox_run::transcripts_root(sandboxed, &run_state.run_id, &home_root, &sandbox_root);
+    // Prices come from the HOST home (an instance concept); transcripts move with
+    // a sandboxed Run.
+    let prices = price_table::PriceTable::load(&home_root);
+    let stores =
+        sandbox_run::HarnessStores::for_run(sandboxed, &run_state.run_id, &home_root, &sandbox_root);
+    (projects_root, stores, prices)
+}
+
+/// #1016 / ADR-0083: the scheduler's **cost input**. When the pipeline caps at
+/// least one bounded region (`max_cost_usd`, or a live `set_region_max_cost`
+/// override — #1017), fold the **Coût de boucle** of each
+/// region from the SAME attributed breakdown as the Run total (ADR-0058) onto a
+/// copy of the Run state, so the pure scheduler reads it at re-entry
+/// (`scheduler::budget_exhausted`). Never persisted (ADR-0022/0029); a pipeline
+/// with no cap pays nothing and borrows the snapshot as is.
+pub(crate) fn with_loop_costs_for_caps<'a>(
+    state: &AppState,
+    run_state: &'a event_log::RunState,
+    events: &[event_log::Event],
+    pipeline: &pipeline::PipelineDef,
+    repo_root: &std::path::Path,
+) -> std::borrow::Cow<'a, event_log::RunState> {
+    // #1017: a live `set_region_max_cost` override caps a region too, even one
+    // whose YAML declares none.
+    let capped = pipeline.loops.iter().any(|r| {
+        r.kind == pipeline::LoopKind::Bounded
+            && (r.max_cost_usd.is_some()
+                || run_state
+                    .region_max_cost_overrides
+                    .get(r.id.as_str())
+                    .is_some_and(|o| o.is_some()))
+    });
+    if !capped {
+        return std::borrow::Cow::Borrowed(run_state);
+    }
+    let (projects_root, stores, prices) = run_cost_sources(state, run_state);
+    let breakdown = run_cost::compute_run_cost_breakdown_cached(
+        events,
+        &projects_root,
+        &stores,
+        repo_root,
+        &run_state.run_id,
+        &prices,
+    );
+    let mut with_costs = run_state.clone();
+    with_costs.loop_costs = run_cost::loop_costs(&breakdown, events, &pipeline.loops);
+    std::borrow::Cow::Owned(with_costs)
+}
+
 pub(crate) async fn handle_node_completion(
     state: &AppState,
     run_state: &event_log::RunState,
@@ -9059,9 +9129,12 @@ pub(crate) async fn handle_node_completion(
     // edges and avoid a silent stall at a `Merge` fed by a suppressed branch.
     let frontmatter_by_node = resolve_completed_frontmatter(&pipeline, run_state, &artifacts_dir);
 
+    // #1016: the Coût de boucle is the scheduler's input for a capped region.
+    let scheduler_state =
+        with_loop_costs_for_caps(state, run_state, events, &pipeline, &repo_root);
     let actions = scheduler::evaluate_outgoing_edges_full(
         &pipeline,
-        run_state,
+        &scheduler_state,
         completed_node_id,
         &resolved_vars,
         &frontmatter_fields,
@@ -10524,6 +10597,21 @@ async fn create_run_inner(
         ));
     }
 
+    // #1016 / ADR-0083: a `$var` cost cap is resolved against the Run's variables
+    // HERE, at launch — a cap that does not resolve to a positive amount would
+    // otherwise silently leave the loop uncapped.
+    let mut launch_vars = pipeline.variable_defaults();
+    launch_vars.extend(req.variables.clone());
+    let cap_errors = loop_region::cap_errors_at_launch(&pipeline, &launch_vars);
+    if !cap_errors.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({
+                "error": format!("cannot launch run: {}", cap_errors.join("; ")),
+            }),
+        ));
+    }
+
     // A `script` node runs `bash <body>`, and an empty body exits 0 — a silent
     // no-op masquerading as success. Fail loud at launch, before any run exists.
     let empty_scripts: Vec<String> = pipeline
@@ -11743,6 +11831,9 @@ fn harness_catalogue_entry(
         "model_efforts": cached.catalogue.model_efforts,
         "efforts": cached.catalogue.efforts,
         "has_effort": has_effort,
+        // #1016: whether PDO can read this harness's cost — the RegionInspector
+        // warns that a capped loop cannot count a member running on it.
+        "can_cost": harness_probes::can_cost(name),
     })
 }
 
@@ -15088,37 +15179,8 @@ async fn get_run(
             // computed on read (like `stalled`) and never written.
             apply_child_awaiting_overlay(&state, &mut run_state).await;
             let repo_root = effective_repo_root(&state, &run_state);
-            // Read the cost transcripts from the sandboxed Run's staged home while
-            // it is live, `~/.claude/projects/` otherwise. HOME absent → degrade to
-            // the host root; never fail a read.
-            let (home_root, sandbox_root) =
-                sandbox_run::sandbox_home_roots(&state).unwrap_or_else(|_| {
-                    let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
-                    let sandbox = home.join(".pdo").join("sandbox");
-                    (home, sandbox)
-                });
-            let projects_root = sandbox_run::transcripts_root(
-                !run_state.sandbox.is_off(),
-                &run_state.run_id,
-                &home_root,
-                &sandbox_root,
-            );
-            // Resolve the three price tiers ONCE, here at the edge. Deliberately NOT
-            // an `AppState` cache and never a `OnceLock`: either would make a daemon
-            // restart mandatory to change a price, annulling ADR-0034. Note the seam
-            // asymmetry — prices come from `home_root` (the HOST home, since prices
-            // are an instance concept) while transcripts come from `projects_root`,
-            // which moves for a sandboxed Run.
-            let prices = price_table::PriceTable::load(&home_root);
-            // `copilot`'s journal is on the host; `pi`'s moves per Run (#708) — the
-            // staged sink while this sandboxed Run lives, the host store after
-            // merge-back — mirroring the Claude root's sandbox-aware seam above.
-            let stores = sandbox_run::HarnessStores::for_run(
-                !run_state.sandbox.is_off(),
-                &run_state.run_id,
-                &home_root,
-                &sandbox_root,
-            );
+            // Cost sources resolved once, at the edge (ADR-0034, #708).
+            let (projects_root, stores, prices) = run_cost_sources(&state, &run_state);
             augment_run_state_from_disk(
                 &mut run_state,
                 &events,
@@ -23993,7 +24055,7 @@ fn augment_run_state_from_disk(
         &run_state.run_id,
         prices,
     );
-    run_state.cost = breakdown.cost;
+    run_state.cost = breakdown.cost.clone();
 
     let mut node_costs: std::collections::HashMap<String, (event_log::NodeCost, bool)> =
         std::collections::HashMap::new();
@@ -24067,6 +24129,27 @@ fn augment_run_state_from_disk(
 
     run_state.node_defs = pipe.nodes.iter().map(node_def_from_pipeline).collect();
     run_state.edges = pipe.edges.iter().map(edge_info_from_pipeline).collect();
+    // #1015: the Coût de boucle of each region, folded from the SAME breakdown
+    // the Run total and the node costs above were read from (ADR-0058).
+    run_state.loop_costs = run_cost::loop_costs(&breakdown, events, &pipe.loops);
+    // #1016: the effective cap rides each loop cost — the same resolution the
+    // scheduler applies at re-entry (`$var` against the Run's variables).
+    let vars = resolve_run_variables(&pipe, events);
+    let caps: Vec<(String, Option<f64>)> = pipe
+        .loops
+        .iter()
+        .map(|r| {
+            (
+                r.id.clone(),
+                scheduler::effective_region_max_cost(run_state, r, &vars),
+            )
+        })
+        .collect();
+    for (region_id, cap) in caps {
+        if let Some(cost) = run_state.loop_costs.get_mut(&region_id) {
+            cost.cap_usd = cap;
+        }
+    }
 }
 
 fn port_brief(p: &pipeline::Port) -> event_log::PortBrief {
@@ -32951,6 +33034,89 @@ mod tests {
         assert!((node_cost.usd.unwrap() - 5.0).abs() < 1e-9);
         assert_eq!(node_cost.executions, 1);
         assert_eq!(run_state.cost.as_ref().unwrap().usd, node_cost.usd.unwrap());
+    }
+
+    #[test]
+    fn run_detail_projects_the_loop_cost_of_each_region_from_the_same_fold() {
+        // #1015: the Coût de boucle rides the Run state, folded from the same
+        // breakdown as the node cost and the Run total.
+        let home = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        let projects = home.path().join(".claude/projects");
+        let run_id = "loop-cost";
+        let working_dir = worktree_ops::worktree_dir_for_run(repo.path(), run_id);
+        let project = projects.join(run_cost::cc_project_dirname(&working_dir));
+        std::fs::create_dir_all(&project).unwrap();
+        for sid in ["w", "o"] {
+            std::fs::write(
+                project.join(format!("{sid}.jsonl")),
+                format!("{{\"type\":\"assistant\",\"requestId\":\"{sid}\",\"message\":{{\"id\":\"{sid}\",\"model\":\"claude-opus-4-8\",\"usage\":{{\"input_tokens\":1000000}}}}}}\n"),
+            )
+            .unwrap();
+        }
+        let run_dir = repo.path().join(".pdo/runs").join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("pipeline.yaml"),
+            "name: test\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\n  - id: worker\n    name: worker\n    type: agent\n  - id: outer\n    name: outer\n    type: agent\nloops:\n  - id: L\n    kind: bounded\n    members: [worker]\n    max_iter: 3\n    max_cost_usd: 7\n",
+        )
+        .unwrap();
+        let event = |kind, node: Option<&str>, payload: serde_json::Value| event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: event_log::now_iso(),
+            kind,
+            node_id: node.map(str::to_string),
+            iter: node.map(|_| 1),
+            payload: Some(payload),
+        };
+        let started = |node: &str, sid: &str| {
+            event(
+                event_log::EventKind::NodeStarted,
+                Some(node),
+                serde_json::json!({
+                    "node_type": "agent", "isolated_worktree": false,
+                    "harness": "claude", "session_id": sid
+                }),
+            )
+        };
+        let events = vec![
+            event(
+                event_log::EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "test" }),
+            ),
+            started("outer", "o"),
+            event(
+                event_log::EventKind::LoopIterStarted,
+                None,
+                serde_json::json!({ "loop_node_id": "L", "iter": 1, "max_iter": 3 }),
+            ),
+            started("worker", "w"),
+        ];
+        let mut run_state = event_log::project(&events).unwrap();
+
+        augment_run_state_from_disk(
+            &mut run_state,
+            &events,
+            &projects,
+            &sandbox_run::HarnessStores::from_home(home.path()),
+            repo.path(),
+            &price_table::PriceTable::load(home.path()),
+        );
+
+        let loop_cost = &run_state.loop_costs["L"];
+        let node_cost = run_state.nodes["worker"].cost.as_ref().unwrap();
+        assert!((loop_cost.usd.unwrap() - node_cost.usd.unwrap()).abs() < 1e-9);
+        assert!((loop_cost.usd.unwrap() - 5.0).abs() < 1e-9);
+        assert!(
+            (run_state.cost.as_ref().unwrap().usd - 10.0).abs() < 1e-9,
+            "outer excluded"
+        );
+        let wire = serde_json::to_value(&run_state).unwrap();
+        assert_eq!(wire["loop_costs"]["L"]["members"][0]["node_id"], "worker");
+        // #1016: the effective cap rides the loop cost for the header's `/ $cap`.
+        assert_eq!(loop_cost.cap_usd, Some(7.0));
     }
 
     #[tokio::test]
@@ -50370,6 +50536,49 @@ edges:
         )
         .unwrap();
         assert!(runs.is_empty(), "no run must be created on refusal");
+    }
+
+    #[tokio::test]
+    async fn create_run_refuses_a_var_cost_cap_that_does_not_resolve_to_a_positive_amount() {
+        // #1016: a `$var` cost cap is resolved at LAUNCH against the Run's
+        // variables (overrides included); a non-positive value refuses the Run.
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let pipelines_dir = tmp.path().join(".pdo").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
+        let yaml = format!(
+            "name: capped-pipe\nversion: \"1.0\"\nvariables:\n  budget: {{ type: float, default: 2.5 }}\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: agent\n    isolated_worktree: false\n    outputs:\n      - name: out\nedges:\n  - source: {{ node: worker, port: out }}\n    target: {{ node: end, port: result }}\nloops:\n  - id: L\n    kind: bounded\n    members: [worker]\n    max_iter: 3\n    max_cost_usd: $budget\n"
+        );
+        std::fs::write(pipelines_dir.join("capped-pipe.yaml"), yaml).unwrap();
+        init_test_repo(tmp.path());
+        let state = test_state_with_dir(tmp.path()).await;
+
+        let resp = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"pipeline": "capped-pipe", "input": "x", "variables": {{"budget": 0}}, "target_repo": "{}"}}"#,
+                        tmp.path().display()
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let error = body["error"].as_str().unwrap();
+        assert!(
+            error.contains("'L'") && error.contains("max_cost_usd") && error.contains("$budget"),
+            "names the region, the field and the variable: {error}"
+        );
     }
 
     /// Assert that a `POST /runs` body was refused *for the target-repo reason*, and

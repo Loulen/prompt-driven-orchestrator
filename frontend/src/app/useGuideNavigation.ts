@@ -1,3 +1,4 @@
+import { useNodeLinkFocus } from "../run/store/nodeLinkFocus";
 import { useCallback, useMemo } from "react";
 import { useEditStore } from "../pipeline/store/editStore";
 import type { GuideNavigation } from "../platform/components/GuidePanel";
@@ -27,6 +28,12 @@ export function useGuideNavigation(
           void onSelectRun(target.runId);
           return;
         case "node":
+          // CORE-203: the iteration the link names, as a deep link shows it.
+          void onSelectRun(target.runId).then(() => {
+            setSelection({ kind: "node", id: target.nodeId });
+            useNodeLinkFocus.getState().open(target.runId, target.nodeId, target.iter);
+          });
+          return;
         case "artifact":
           void onSelectRun(target.runId).then(() => setSelection({ kind: "node", id: target.nodeId }));
           return;

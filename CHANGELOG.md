@@ -24,6 +24,19 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   daemon pings every connection of `/ws` and drops one that answered nothing for 10 s.
 - Extension API: the life of a `/ws` connection (`tab`, the close code `4000` of a replaced
   connection, Ping and the 10 s delay), see the reference's Presences.
+### A link toward a Node, and an answer typed on someone's behalf
+
+- A deep link toward a Node opens the Run with that Node selected and its detail shown, its
+  terminal included, Pipeline info giving way: `#/runs/<run>/nodes/<node>`, and
+  `#/runs/<run>/nodes/<node>/iter/<n>` for one of its iterations. A Node the Run does not hold
+  opens the Run alone. A page's reading guide (`pdo page mount --guide`) accepts the iteration form.
+- New seam (extension API 0.23, a minor): `Host::write_to_node(actor, NodeWrite)` types a text into
+  the session of a Node that waits for a person and presses Enter, on behalf of the Actor, who must
+  be allowed to take control of that session (`session` × `take_control`). The Node resumes, its
+  resumption names the Actor, and the Actor is announced as taking control (`session_taken_over`).
+  A Node that no longer waits refuses with the stable reason `not_waiting` ("the node no longer
+  waits"), and nothing is written. `node_link` and `run_link` write the deep links;
+  `@pdo/extension-ui` writes them too (`nodeLink`, `runLink`).
 
 ## 2.72.0
 

@@ -120,6 +120,10 @@ mod extension_sessions;
 #[path = "hosted_sessions.rs"]
 mod hosted_sessions;
 
+// API 0.23: an extension answers a Node that waits for a person.
+#[path = "extension_node_write.rs"]
+mod extension_node_write;
+
 // CORE-43: the delivery of a Node signed by the identity an extension gives it.
 #[path = "delivery_identity.rs"]
 mod delivery_identity;

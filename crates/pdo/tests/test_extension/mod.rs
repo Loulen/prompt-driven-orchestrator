@@ -121,6 +121,10 @@
 //!   while one waits. A Session hébergée gets a `PDO_TOKEN`
 //!   naming who started it, which `identify` recognises, so a `pdo` typed in
 //!   a hosted shell acts as that Actor.
+//! - **`Host::write_to_node`** / **`node_link`** (API 0.23,
+//!   `node_write.rs`): `POST /ext/test/runs/<id>/nodes/<node>/write`
+//!   (`{"text", "iter"?}`) answers a Node that waits for a person on behalf
+//!   of the caller, and names the Node's deep link.
 //! - [`SecondTestExtension`] (`test2`): a second extension with a section at
 //!   `project/edit`, a tab at `session/detail` and a global action of
 //!   `palette` ranked 1, so two extensions share a location, and its group
@@ -145,6 +149,7 @@ pub mod hosted;
 pub mod interop;
 pub mod launch;
 pub mod messages;
+pub mod node_write;
 pub mod palette;
 pub mod projets;
 mod routes;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { formatDeepLink, formatRunLink, isDeepLink, isRunLink, parseDeepLink, parseRunLink, parseRunTarget } from "./deepLink";
+import { formatDeepLink, formatNodeLink, formatRunLink, isDeepLink, isRunLink, parseDeepLink, parseRunLink, parseRunTarget } from "./deepLink";
+import { extensionUiModule } from "./uiModule";
 
 describe("a deep link", () => {
   it("names the extension, its page location and the path", () => {
@@ -48,16 +49,37 @@ describe("a link toward a Run", () => {
   });
 
   it("may name a node of the Run, or an artifact of that node", () => {
-    expect(parseRunTarget("#/runs/r1")).toEqual({ runId: "r1", nodeId: null });
-    expect(parseRunTarget("#/runs/r1/nodes/design")).toEqual({ runId: "r1", nodeId: "design" });
+    expect(parseRunTarget("#/runs/r1")).toEqual({ runId: "r1", nodeId: null, iter: null });
+    expect(parseRunTarget("#/runs/r1/nodes/design")).toEqual({ runId: "r1", nodeId: "design", iter: null });
     expect(parseRunTarget("https://pdo.example.net/#/runs/r1/nodes/design/artifacts/out")).toEqual({
       runId: "r1",
       nodeId: "design",
+      iter: null,
     });
     expect(parseRunLink("#/runs/r1/nodes/design")).toBe("r1");
     expect(parseRunTarget("#/runs/r1/nodes")).toBeNull();
     expect(parseRunTarget("#/runs/r1/nodes/design/artifacts")).toBeNull();
     expect(parseRunTarget("#/runs/r1//design")).toBeNull();
+  });
+
+  it("may name the iteration of the node", () => {
+    expect(parseRunTarget("#/runs/r1/nodes/design/iter/2")).toEqual({ runId: "r1", nodeId: "design", iter: 2 });
+    expect(parseRunLink("#/runs/r1/nodes/design/iter/2")).toBe("r1");
+    expect(parseRunTarget("#/runs/r1/nodes/design/iter/0")).toBeNull();
+    expect(parseRunTarget("#/runs/r1/nodes/design/iter/two")).toBeNull();
+    expect(parseRunTarget("#/runs/r1/nodes/design/iter")).toBeNull();
+  });
+
+  it("toward a node is handed to the extensions by the shared module", () => {
+    expect(extensionUiModule.nodeLink).toBe(formatNodeLink);
+    expect(extensionUiModule.runLink).toBe(formatRunLink);
+  });
+
+  it("toward a node is written as the daemon writes it", () => {
+    expect(formatNodeLink("r1", "design")).toBe("#/runs/r1/nodes/design");
+    expect(formatNodeLink("r1", "design", 3)).toBe("#/runs/r1/nodes/design/iter/3");
+    expect(formatNodeLink("r 1", "a/b")).toBe("#/runs/r%201/nodes/a%2Fb");
+    expect(parseRunTarget(formatNodeLink("r 1", "x y", 2))).toEqual({ runId: "r 1", nodeId: "x y", iter: 2 });
   });
 
   it("is a link of its own, not an extension's", () => {

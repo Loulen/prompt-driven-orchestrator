@@ -97,6 +97,10 @@ impl Tmux for TmuxCli {
         text::paste_without_enter(&self.socket, name, text)
     }
 
+    fn press_enter(&self, name: &str) -> bool {
+        text::press_enter(&self.socket, name)
+    }
+
     fn attach_argv(&self, name: &str, ignore_size: bool) -> Vec<String> {
         clients::attach_argv(&self.socket, name, ignore_size)
     }

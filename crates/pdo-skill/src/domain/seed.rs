@@ -86,10 +86,11 @@ mod tests {
             assert_eq!(validate_skill_md(skill.content).unwrap().name, skill.id);
         }
         assert!(INTERACTIVE_SKILL_MD.contains("pdo wait-user --message"));
-        assert!(INTERACTIVE_SKILL_MD.contains("Mark ready for completion"));
+        assert!(INTERACTIVE_SKILL_MD.contains("Auto-approve when ready"));
+        assert!(!INTERACTIVE_SKILL_MD.contains("Mark ready for completion"));
         // v2: the banner is a notification; the full question or result is
         // written in the conversation before the call.
-        assert!(INTERACTIVE_SKILL_MD.contains("skill_version: 2"));
+        assert!(INTERACTIVE_SKILL_MD.contains("skill_version: 3"));
         assert!(INTERACTIVE_SKILL_MD.contains("The banner is a notification, not the message"));
         assert!(INTERACTIVE_SKILL_MD.contains("Never refer the user to « my previous message »"));
         // The orchestrate skill's v4 guidance is the blocking pull with no

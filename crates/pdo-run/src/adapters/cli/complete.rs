@@ -104,9 +104,9 @@ pub fn run_complete(auto: bool) -> std::process::ExitCode {
     out.push_str(match (slug, recoverable) {
         ("completion_not_released", Some(true)) => {
             "The node and its run are now awaiting the user (the daemon declared the \
-             wait for you). Ask the user to click **Mark ready for completion** (or \
-             **Mark complete** to force completion). After release, run `pdo complete` \
-             again. For any later question, declare it with \
+             wait for you). Ask the user to choose **Auto-approve when ready** in the \
+             **Approve** menu (or to click **Approve** to take the artifacts as they are). \
+             After release, run `pdo complete` again. For any later question, declare it with \
              `pdo wait-user --message \"<question>\"`.\n\
              Do NOT run `pdo fail`."
         }

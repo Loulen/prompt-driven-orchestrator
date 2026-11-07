@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { ScopedProvisioningRules } from "../../shared/generated/ScopedProvisioningRules";
 import type { NodeState } from "../../shared/generated/NodeState";
 import type { RunStatus } from "../../shared/generated/RunStatus";
@@ -23,6 +23,7 @@ import DetailsPane from "./nodeDetail/DetailsPane";
 import TerminalSection from "./nodeDetail/TerminalSection";
 import RetryConfirmDialog from "./nodeDetail/RetryConfirmDialog";
 import ApproveButton from "./nodeDetail/ApproveButton";
+import { useShowApprove } from "./nodeDetail/useShowApprove";
 import { isMarkCompletable, nodeSessionEnded } from "../model/nodeStatus";
 import type { ModalState, TerminalView } from "./nodeDetail/types";
 import { useNodeGestureRefusals } from "../store/useNodeGestureRefusals";
@@ -193,22 +194,7 @@ export default function NodeDetailPanel({
   const awaitsApproval =
     nodeAwaitsOnLatestIter && node.awaiting?.cause === "completion_not_released";
 
-  // #588 (A3): « Show Approve » of the waiting banner brings Approve ▾ to the
-  // screen and rings it, until the wait ends.
-  const approveRef = useRef<HTMLButtonElement>(null);
-  // The iteration « Show Approve » rang Approve for: the ring holds while that
-  // iteration awaits approval, and goes with the wait.
-  const [ringedIter, setRingedIter] = useState<number | null>(null);
-  const approveRinged = awaitsApproval && ringedIter === node.iter;
-  const latestIter = node.iter;
-  const showApprove = useCallback(() => {
-    setTerminalView((v) => (v === "expanded" ? "split" : v));
-    setRingedIter(latestIter);
-    requestAnimationFrame(() => {
-      approveRef.current?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-      approveRef.current?.focus({ preventScroll: true });
-    });
-  }, [latestIter, setTerminalView]);
+  const { approveRef, approveRinged, showApprove } = useShowApprove(node.iter, awaitsApproval, setTerminalView);
   // #369: the I/O poll (`setInputs`/`setOutputs`) re-renders this panel every
   // tick (1s live, 5s settled). Building the modal's `source` prop as an inline
   // object literal handed the child a fresh reference on every one of those

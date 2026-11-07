@@ -179,11 +179,14 @@
     border-left-color: color-mix(in oklch, var(--primary-ink) 35%, transparent);
   }
   /* Pending: the main action cannot run yet — a lighter ruby, not the
-     greyed opacity of a refusal; the chevron stays full. */
+     greyed opacity of a refusal; the chevron stays full. Mixed in sRGB: an
+     oklch mix of the ruby with the near-neutral surface walks the hue round
+     through violet. The label takes the page's text, tinted, so it reads in
+     both modes (the ink is made for the full ruby, not this lighter one). */
   .d-btn--primary[data-pending] {
-    border-color: color-mix(in oklch, var(--primary) 45%, var(--surface-1));
-    background: color-mix(in oklch, var(--primary) 45%, var(--surface-1));
-    color: color-mix(in oklch, var(--primary-ink) 55%, var(--primary));
+    border-color: color-mix(in srgb, var(--primary) 45%, var(--surface-1));
+    background: color-mix(in srgb, var(--primary) 45%, var(--surface-1));
+    color: color-mix(in srgb, var(--text) 78%, var(--primary));
     opacity: 1;
     cursor: not-allowed;
   }

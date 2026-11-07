@@ -5,6 +5,8 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Check } from "lucide-react";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { SplitButton } from "./index";
 
@@ -147,5 +149,19 @@ describe("SplitButton", () => {
     expect(screen.queryByTestId("approve-menu")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Approve" }));
     expect(approve).toHaveBeenCalledOnce();
+  });
+});
+
+describe("SplitButton — the pending look (kit.css)", () => {
+  const css = readFileSync(join(import.meta.dirname, "kit.css"), "utf8");
+  const rule = css.match(/\.d-btn--primary\[data-pending\]\s*\{([^}]*)\}/)?.[1] ?? "";
+
+  it("is a lighter ruby mixed in sRGB, with a label taken from the page's text", () => {
+    // An oklch mix of the ruby with the near-neutral surface walks the hue
+    // round through violet, and the ink lands on the background's lightness.
+    expect(rule).not.toBe("");
+    expect(rule).not.toMatch(/in oklch/);
+    expect(rule).toMatch(/background:\s*color-mix\(in srgb, var\(--primary\) \d+%, var\(--surface-1\)\)/);
+    expect(rule).toMatch(/color:\s*color-mix\(in srgb, var\(--text\)/);
   });
 });

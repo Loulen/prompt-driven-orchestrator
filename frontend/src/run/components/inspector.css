@@ -293,6 +293,8 @@
 .ri-port[data-pending] .ri-port__name { color: var(--text-3); }
 button.ri-port__name { border: 0; background: none; padding: 0; cursor: pointer; text-align: left; }
 button.ri-port__name:hover { text-decoration: underline; }
+/* An output the completion guard still waits for (CORE-211). */
+.ri-port__missing { flex: none; font-family: var(--font-code); font-size: var(--fs-sm); color: var(--color-st-await); }
 .ri-port__where {
   flex: 1 1 0;
   min-width: 48px;

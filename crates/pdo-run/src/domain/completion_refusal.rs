@@ -142,7 +142,7 @@ impl CompletionRefusal {
             Self::Internal { error } => serde_json::json!({ "message": error }),
             Self::CompletionRejected { message } => serde_json::json!({ "message": message }),
             Self::CompletionNotReleased => serde_json::json!({
-                "message": "this interactive node has not been released; ask the user to click \"Mark ready for completion\" (or \"Mark complete\"), then retry"
+                "message": "this interactive node has not been released; ask the user to choose \"Auto-approve when ready\" in the Approve menu (or to click \"Approve\"), then retry"
             }),
             Self::AppendFailed { error } => serde_json::json!({ "message": error }),
             Self::DeliveryFailed { node_id, error } => serde_json::json!({

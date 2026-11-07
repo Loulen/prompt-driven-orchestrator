@@ -42,9 +42,9 @@ pub fn truncate_message(raw: &str) -> String {
 }
 
 /// The daemon's sentence when a refused `pdo complete` declares the wait. The
-/// banner (A3) renders it with the two buttons as inline links.
+/// banner (A3) shows its own words and a « Show Approve » action instead.
 pub const COMPLETION_NOT_RELEASED_MESSAGE: &str =
-    "Completion not released. Click Mark ready for completion so the agent can finish, or Mark complete to take the artifacts as they are.";
+    "Completion not released. Choose Auto-approve when ready in the Approve menu so the agent can finish, or click Approve to take the artifacts as they are.";
 
 /// Why a wait could not be declared. Every variant is a named refusal; the CLI
 /// maps them to exit 3 (refused, still your turn — nothing terminal happened).

@@ -25,6 +25,11 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - Approve says what is missing before the click: while a declared output is not written, it is
   inert, in a lighter ruby, and its tooltip lists the missing outputs. It turns clickable within
   seconds once the agent writes them. A refusal of your rights still greys it, with its sentence.
+  Each output card the guard still waits for reads "missing" next to its type, at rest (it
+  replaces the "not produced yet" shown on hover).
+- When the user has not released an interactive node, the refused `pdo complete` tells the agent
+  to ask for "Auto-approve when ready" in the Approve menu, or Approve; the seeded
+  `pdo-interactive` skill (version 3) says the same.
 - Once "Auto-approve when ready" is armed, its entry is checked and a blue dot sits on the chevron.
   No banner says "Completion released" or "Approved" any more; a refusal is still shown.
 - "Done, awaiting approval" loses its buttons: its "Show Approve" brings Approve ▾ to the screen

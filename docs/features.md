@@ -183,7 +183,8 @@ Turn **Interactive** on and a human talks to the node. When its agent needs you 
 choice, a review), it declares the wait with `pdo wait-user --message "<question>"`: the node and its
 run turn **awaiting you**, with the question on the banner. You reply in the node's terminal, and
 your Enter lifts the wait. PDO never infers a wait from a silence. The node's completion is guarded
-until you release it (« Mark ready for completion ») or force it (« Mark complete »).
+until you release it (« Auto-approve when ready », in the menu of **Approve ▾**) or approve it
+(**Approve**, greyed while a declared output is missing).
 
 Turn **Orchestrator** on and its session learns to launch runs itself: `pdo run create` starts a
 child pipeline (the same one, or another), so pipelines run pipelines, and `pdo run wait` blocks

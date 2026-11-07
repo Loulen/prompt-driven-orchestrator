@@ -1,0 +1,17 @@
+# Les alertes d'attente sont émises par le navigateur, réglées par navigateur, bornées par une Portée d'alerte, et un seul onglet émet
+
+> Statut : accepted (grilling CORE-213). Vocabulaire : CONTEXT.md « Alerte d'attente », « Portée d'alerte ». S'appuie sur ADR-0069 (l'attente est déclarée, jamais inférée) et sur le filtrage du flux par les Droits.
+
+Quand un nœud passe en attente humaine, seule la pastille le signale : l'utilisateur qui n'a pas l'onglet PDO sous les yeux perd du temps à aller vérifier.
+
+1. **L'alerte est calculée et émise par le navigateur, à partir du flux d'événements live.** Le flux porte déjà les événements des Runs que l'Acteur peut voir. Le navigateur réagit aux transitions vers une attente humaine (attente déclarée, complétion non libérée, parking d'incident) par une notification et/ou un son synthétisé. Le daemon n'apprend rien de nouveau.
+2. **Le réglage est une préférence du navigateur, opt-in**, dans Settings › Notifications : deux bascules indépendantes (notification, son), désactivées par défaut, et la Portée d'alerte. Il n'est ni dans la configuration d'instance ni dans une préférence par Acteur : la permission de notification est accordée par navigateur, et un son n'a de sens que sur la machine qui l'émet. Hors contexte sécurisé (accès en http par une IP du réseau local), la notification est indisponible et le réglage le dit.
+3. **La Portée d'alerte restreint, jamais n'élargit.** Runs I launched (défaut), Projects cochés, ou All I can see : toujours à l'intérieur de ce que les Droits de l'Acteur laissent passer. Un descendant suit la portée de sa racine, pour qu'un Run lancé par une orchestration que j'ai démarrée m'alerte.
+4. **On n'alerte que sur une transition live, et seulement quand aucun onglet PDO n'est visible.** Une attente déjà en cours au chargement, ou rattrapée après une reconnexion, n'alerte pas : un rechargement ne doit pas déclencher une avalanche. `children_pending` n'est pas une attente humaine, et l'attente dérivée d'un parent n'émet pas d'événement : l'enfant alerte pour lui-même.
+5. **Un seul onglet émet par navigateur.** Les onglets se coordonnent localement ; la notification est étiquetée par `(run, node, iter)` pour que le navigateur remplace les doublons, et le son est limité à un par fenêtre de quelques secondes.
+
+## Considered Options
+
+- **Notification OS émise par le daemon** : ne vaut que pour la machine du daemon, alors que PDO tourne couramment sur une machine distante consultée depuis un autre poste ; demande une dépendance par OS ; ignore si un onglet PDO est sous les yeux, ce qui est la condition même de l'alerte.
+- **Préférence par Acteur, gardée par le daemon** (comme l'Apparence, ADR-0096) : écartée. La permission et le son sont propres au poste ; une préférence suivie partout ferait sonner chaque poste où l'Acteur a laissé un onglet ouvert.
+- **Alerte sur tous les Runs visibles, sans portée** : sur une instance partagée, chacun serait alerté pour les Runs des autres.

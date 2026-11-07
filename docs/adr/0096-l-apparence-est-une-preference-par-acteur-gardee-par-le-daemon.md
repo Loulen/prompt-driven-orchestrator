@@ -15,7 +15,7 @@ connecte.
 ## Décision
 
 1. Le daemon garde l'**Apparence** de chaque Acteur, dans le contexte des réglages : Thème, Mode
-   sombre, Nodes compactes et la table des écarts des Éléments masquables (`élément → visible`).
+   sombre, Palette daltonienne, Nodes compactes et la table des écarts des Éléments masquables (`élément → visible`).
    `GET` et `PUT /actors/me/appearance` lisent et remplacent celle de l'Acteur de la requête ;
    aucune route n'atteint celle d'un autre. Sans Extension d'identité, tous les appels viennent de
    l'Opérateur local : un seul document pour l'instance.

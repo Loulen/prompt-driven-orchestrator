@@ -17,7 +17,7 @@ import StatusIcon from "./StatusIcon";
 import { statusSpec } from "../lib/statusTable";
 import { shortAge } from "../lib/branchSelect";
 import { formatDuration, useRunDuration } from "../lib/runDuration";
-import { formatCostStat, formatEstCost, formatTreeCost } from "../lib/costLabel";
+import { formatCostStat, formatTreeCost } from "../lib/costLabel";
 import type { CostLabel } from "../lib/costLabel";
 import { budgetReason } from "../lib/budgetReason";
 import { serializePipeline } from "../lib/serializePipeline";

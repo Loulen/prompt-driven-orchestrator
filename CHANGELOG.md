@@ -24,6 +24,7 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   daemon pings every connection of `/ws` and drops one that answered nothing for 10 s.
 - Extension API: the life of a `/ws` connection (`tab`, the close code `4000` of a replaced
   connection, Ping and the 10 s delay), see the reference's Presences.
+
 ### A link toward a Node, and an answer typed on someone's behalf
 
 - A deep link toward a Node opens the Run with that Node selected and its detail shown, its

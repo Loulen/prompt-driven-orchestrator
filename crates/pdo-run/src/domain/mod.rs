@@ -45,6 +45,7 @@ pub mod run_stall;
 pub mod run_summary;
 pub mod scheduler;
 pub mod state;
+pub mod stream_liveness;
 pub mod switch_router;
 pub mod transition_guard;
 pub mod variable_resolver;

@@ -13,6 +13,18 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+### A Presence falls within seconds, behind a proxy too
+
+- A person who leaves a Run, closes a tab or loses the network no longer stays on the Run's row:
+  behind a proxy or a tunnel, a connection the browser lost could stay open on the daemon's side
+  and keep the person on the previous Run until a reload. Each tab now names itself on `/ws`
+  (`/ws?tab=<id>`): its new connection replaces the old one, whose Presence falls at once. The
+  daemon pings every connection of `/ws` and drops one that answered nothing for 10 s.
+- Extension API: the life of a `/ws` connection (`tab`, the close code `4000` of a replaced
+  connection, Ping and the 10 s delay), see the reference's Presences.
+
 ## 2.72.0
 
 ### Settings, Stats and extension pages open under the top bar

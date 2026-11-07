@@ -30,6 +30,11 @@ pub enum Closing {
     ByDaemon,
     /// The connection dropped without a Close frame (the browser's 1006).
     Dropped,
+    /// The daemon closed it: a newer connection of its tab replaced it.
+    Replaced,
+    /// The daemon dropped it: it heard nothing from it (no Pong, no message)
+    /// for longer than this delay, or could not write to it that long.
+    Mute(Duration),
 }
 
 impl Closing {
@@ -38,6 +43,13 @@ impl Closing {
             Closing::ByClient(code) => format!("by the client, code {code}, clean"),
             Closing::ByDaemon => "by the daemon, clean".to_string(),
             Closing::Dropped => "dropped without a Close frame (1006), unclean".to_string(),
+            Closing::Replaced => {
+                "by the daemon, replaced by a newer connection of its tab".to_string()
+            }
+            Closing::Mute(delay) => format!(
+                "dropped by the daemon, mute for over {:.1} s (no answer to its Pings), unclean",
+                delay.as_secs_f64()
+            ),
         }
     }
 }
@@ -91,6 +103,10 @@ mod tests {
         );
         assert_eq!(Closing::ByDaemon.describe(), "by the daemon, clean");
         assert!(Closing::Dropped.describe().contains("1006"));
+        assert!(Closing::Replaced.describe().contains("replaced"));
+        assert!(Closing::Mute(Duration::from_secs(10))
+            .describe()
+            .contains("mute for over 10.0 s"));
     }
 
     #[test]

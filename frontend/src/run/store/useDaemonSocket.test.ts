@@ -1,6 +1,13 @@
 import { renderHook, act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { STREAM_OPEN_MARK, STREAM_SILENCE_MS, showRun, useDaemonSocket } from "./useDaemonSocket";
+import {
+  STREAM_OPEN_MARK,
+  STREAM_SILENCE_MS,
+  STREAM_TAB,
+  newTabId,
+  showRun,
+  useDaemonSocket,
+} from "./useDaemonSocket";
 import { useReviewLive } from "../../review/store/useReviewLive";
 import type { WsMessage } from "../model/liveStream";
 
@@ -63,7 +70,8 @@ describe("useDaemonSocket", () => {
     await settle();
     expect(fetchMock).toHaveBeenCalledWith("/actors/me", expect.anything());
     expect(FakeSocket.instances).toHaveLength(1);
-    expect(FakeSocket.instances[0].url).toMatch(/\/ws$/);
+    expect(FakeSocket.instances[0].url).toMatch(/\/ws\?tab=[0-9a-f-]{36}$/);
+    expect(FakeSocket.instances[0].url.endsWith(`/ws?tab=${STREAM_TAB}`)).toBe(true);
     act(() => FakeSocket.instances[0].fire("open"));
     expect(result.current.status).toBe("connected");
     expect(mark).toHaveBeenCalledWith(STREAM_OPEN_MARK);
@@ -130,6 +138,9 @@ describe("useDaemonSocket", () => {
     });
     act(() => FakeSocket.instances[1].fire("open"));
     expect(shown(FakeSocket.instances[1])).toEqual([{ type: "show_run", run_id: "r1" }]);
+    expect(FakeSocket.instances[1].url, "the same tab names itself again (API 0.23)").toBe(
+      FakeSocket.instances[0].url,
+    );
     showRun(null);
     expect(shown(FakeSocket.instances[1]).at(-1)).toEqual({ type: "show_run", run_id: null });
     unmount();
@@ -286,5 +297,19 @@ describe("useDaemonSocket", () => {
       });
       expect(seen).toEqual([]);
     });
+  });
+});
+
+describe("newTabId", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("names the tab with a UUID, or without one outside a secure context", () => {
+    vi.restoreAllMocks();
+    expect(newTabId()).toMatch(/^[0-9a-f-]{36}$/);
+    vi.stubGlobal("crypto", {});
+    const id = newTabId();
+    expect(id).toMatch(/^tab-[a-z0-9]+-[a-z0-9]+$/);
+    expect(id.length).toBeLessThanOrEqual(64);
+    expect(newTabId()).not.toBe(id);
   });
 });

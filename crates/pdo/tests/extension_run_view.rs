@@ -7,6 +7,10 @@
 //!   Each arrival and departure reaches the extension's `on_event` and `/ws`.
 //!   Two tabs of one Actor are one Presence; a Run the caller may not read,
 //!   or that does not exist, is no Presence.
+//! - **Life of a connection** (0.23): a tab that reconnects (`/ws?tab=<id>`)
+//!   replaces its old connection, whose Presence falls at once; two tabs of
+//!   one Actor keep a Presence each; a connection that answers no Ping is
+//!   dropped once mute, and its Presence falls (the delay shortened here).
 //! - **Cost**: `Host::run_cost` answers the cost `GET /runs/<id>` gives the
 //!   Info tab, a lower bound and an unknown amount included.
 
@@ -88,8 +92,8 @@ fn show(run_id: Option<&str>) -> Message {
     )
 }
 
-/// The `(type, actor id)` of each Presence message `/ws` carried within
-/// `window`.
+/// The `(type, actor id)` of each Presence message on [`RUN`] `/ws` carried
+/// within `window`.
 async fn presence_messages<S>(ws: &mut S, window: Duration) -> Vec<(String, String)>
 where
     S: StreamExt<
@@ -107,8 +111,7 @@ where
         };
         let message: Value = serde_json::from_str(text).unwrap();
         let kind = message["type"].as_str().unwrap_or_default();
-        if kind.starts_with("presence_") {
-            assert_eq!(message["run_id"], RUN);
+        if kind.starts_with("presence_") && message["run_id"] == RUN {
             seen.push((
                 kind.to_string(),
                 message["actor"]["id"].as_str().unwrap().to_string(),
@@ -222,6 +225,119 @@ async fn a_run_the_caller_may_not_read_or_that_does_not_exist_is_no_presence() {
             .is_empty(),
         "nor its Presences on /ws"
     );
+}
+
+const OTHER_RUN: &str = "20261009-100500-presence";
+
+/// Read `ws` until its Close frame; its code.
+async fn close_code<S>(ws: &mut S) -> Option<u16>
+where
+    S: StreamExt<
+            Item = Result<
+                tokio_tungstenite::tungstenite::Message,
+                tokio_tungstenite::tungstenite::Error,
+            >,
+        > + Unpin,
+{
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while let Ok(Some(Ok(message))) = tokio::time::timeout_at(deadline, ws.next()).await {
+        if let Message::Close(frame) = message {
+            return frame.map(|frame| u16::from(frame.code));
+        }
+    }
+    None
+}
+
+#[tokio::test]
+async fn a_tab_that_reconnects_replaces_its_old_connection_whose_presence_falls_at_once() {
+    let (daemon, _control) = daemon_with_a_run().await;
+    daemon
+        .seed_run_in(OTHER_RUN, "solo", &daemon.target_repo())
+        .await;
+    let mut watcher = daemon.connect_ws_as("carol").await.unwrap();
+    let mut old = daemon.connect_ws_from_tab("alice", "tab-1").await.unwrap();
+    old.send(show(Some(RUN))).await.unwrap();
+    wait_present(&daemon, RUN, &["alice"]).await;
+
+    // The old connection is still open on the daemon's side, as behind a
+    // proxy that kept it half-open.
+    let mut new = daemon.connect_ws_from_tab("alice", "tab-1").await.unwrap();
+    let started = tokio::time::Instant::now();
+    wait_present(&daemon, RUN, &[]).await;
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the old Presence falls at once, not after {:?}",
+        started.elapsed()
+    );
+    new.send(show(Some(OTHER_RUN))).await.unwrap();
+    wait_present(&daemon, OTHER_RUN, &["alice"]).await;
+    assert!(present(&daemon, RUN).await.is_empty(), "never on both Runs");
+    assert_eq!(
+        close_code(&mut old).await,
+        Some(4000),
+        "the replaced connection is closed with 4000"
+    );
+
+    let messages = presence_messages(&mut watcher, Duration::from_millis(300)).await;
+    assert_eq!(
+        messages,
+        [
+            ("presence_arrived".to_string(), "alice".to_string()),
+            ("presence_left".to_string(), "alice".to_string()),
+        ],
+        "/ws announces the departure from the first Run"
+    );
+    let open = open_runs(&daemon, "carol").await;
+    assert_eq!(open["runs"].as_array().unwrap().len(), 1, "{open}");
+    assert_eq!(open["runs"][0]["run_id"], OTHER_RUN);
+}
+
+#[tokio::test]
+async fn two_tabs_of_one_actor_on_two_runs_keep_their_presence_each() {
+    let (daemon, _control) = daemon_with_a_run().await;
+    daemon
+        .seed_run_in(OTHER_RUN, "solo", &daemon.target_repo())
+        .await;
+    let mut first = daemon.connect_ws_from_tab("alice", "tab-1").await.unwrap();
+    let mut second = daemon.connect_ws_from_tab("alice", "tab-2").await.unwrap();
+    first.send(show(Some(RUN))).await.unwrap();
+    second.send(show(Some(OTHER_RUN))).await.unwrap();
+    wait_present(&daemon, RUN, &["alice"]).await;
+    wait_present(&daemon, OTHER_RUN, &["alice"]).await;
+    // Bob reusing Alice's tab identity replaces none of her connections.
+    let mut bob = daemon.connect_ws_from_tab("bob", "tab-1").await.unwrap();
+    bob.send(show(Some(RUN))).await.unwrap();
+    wait_present(&daemon, RUN, &["alice", "bob"]).await;
+    assert_eq!(present(&daemon, OTHER_RUN).await, ["alice"]);
+}
+
+#[tokio::test]
+async fn a_connection_that_answers_no_ping_is_dropped_and_its_presence_falls() {
+    let (daemon, _control) = daemon_with_a_run().await;
+    let mute_after = Duration::from_millis(1500);
+    daemon.set_stream_liveness(Duration::from_millis(200), mute_after);
+    // Bob's client reads its stream, so it answers each Ping with a Pong.
+    let mut bob = daemon.connect_ws_as("bob").await.unwrap();
+    bob.send(show(Some(RUN))).await.unwrap();
+    let reader = tokio::spawn(async move { while let Some(Ok(_)) = bob.next().await {} });
+    wait_present(&daemon, RUN, &["bob"]).await;
+    // Alice's never reads again after saying which Run it shows: no Pong.
+    let mut alice = daemon.connect_ws_from_tab("alice", "tab-1").await.unwrap();
+    let started = tokio::time::Instant::now();
+    alice.send(show(Some(RUN))).await.unwrap();
+    wait_present(&daemon, RUN, &["bob", "alice"]).await;
+
+    wait_present(&daemon, RUN, &["bob"]).await;
+    let fell = started.elapsed();
+    assert!(fell >= mute_after, "not before the delay: {fell:?}");
+    tokio::time::sleep(mute_after).await;
+    assert_eq!(
+        present(&daemon, RUN).await,
+        ["bob"],
+        "a connection that answers stays, well past the delay"
+    );
+    reader.abort();
+    drop(alice);
 }
 
 /// Plant a Claude Code transcript of `model` for the Run's worktree, under

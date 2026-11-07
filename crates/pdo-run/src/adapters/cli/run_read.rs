@@ -6,12 +6,17 @@ use clap::Subcommand;
 use pdo_platform::adapters::cli::daemon::{print_json, segment, Daemon};
 
 use super::run_gesture::shown;
-use super::run_render::{cost_lines, event_lines, ref_lines, search_lines, write_bytes};
+use super::run_render::{
+    actor_names, cost_lines, event_actors, event_lines, ref_lines, search_lines, write_bytes,
+    ActorNames,
+};
 
 /// What a Run shows. Exits **4** when the daemon knows no such Run.
 #[derive(Subcommand, Debug)]
 pub enum RunRead {
-    /// The Run's event log, one line per event: when, kind, node, iteration.
+    /// The Run's event log, one line per event: when, kind, node, iteration,
+    /// and who made it (its display name, else its id; empty when no Actor
+    /// did).
     Events {
         run_id: String,
         #[arg(long)]
@@ -72,6 +77,23 @@ pub enum RunRead {
     },
 }
 
+/// The display names of the Actors `events` name, by the seam the interface
+/// uses (`POST /actors/display`); none when it does not answer, and the
+/// lines show the ids.
+fn names_of(daemon: &Daemon, events: &serde_json::Value) -> ActorNames {
+    let actors = event_actors(events);
+    if actors.is_empty() {
+        return ActorNames::new();
+    }
+    let body = serde_json::json!({ "actors": actors });
+    daemon
+        .post("/actors/display", Some(&body))
+        .and_then(|answer| answer.ok())
+        .and_then(|answer| answer.json())
+        .map(|displays| actor_names(&actors, &displays))
+        .unwrap_or_default()
+}
+
 pub fn run_run_read(read: RunRead) -> Result<()> {
     let daemon = Daemon::from_env();
     match read {
@@ -80,7 +102,11 @@ pub fn run_run_read(read: RunRead) -> Result<()> {
                 .get(&format!("/runs/{}/events", segment(&run_id)))?
                 .ok()?
                 .json()?;
-            shown(&events, json, event_lines);
+            if json {
+                print_json(&events);
+            } else {
+                print!("{}", event_lines(&events, &names_of(&daemon, &events)));
+            }
         }
         RunRead::Costs { run_ids, json } => {
             let ids = run_ids.join(",");

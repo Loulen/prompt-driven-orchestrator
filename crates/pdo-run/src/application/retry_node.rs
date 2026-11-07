@@ -11,6 +11,7 @@ use tracing::{error, info};
 use crate::application::events::append_event;
 use crate::application::events::load_events;
 use crate::application::events::reload_run_state;
+use crate::application::gesture;
 use crate::application::node::{primitives as node_primitives, spawn as node_spawn};
 use crate::application::node_known::unknown_node;
 use crate::application::operations::on_node;
@@ -54,6 +55,11 @@ impl Runs {
     ///    than answering an unconditional `200`. The success body keeps the historical
     ///    `{iter, invalidated}` root contract the canvas reads.
     pub async fn retry_node(self: &Arc<Self>, actor: &Actor, command: RetryNode) -> Response {
+        let run_id = command.run_id.clone();
+        gesture::by(actor, &run_id, self.retry_node_gesture(actor, command)).await
+    }
+
+    async fn retry_node_gesture(self: &Arc<Self>, actor: &Actor, command: RetryNode) -> Response {
         let RetryNode { run_id, node_id } = command;
         if let Err(denied) = self
             .authorize(actor, &on_node("retry", &run_id, &node_id))

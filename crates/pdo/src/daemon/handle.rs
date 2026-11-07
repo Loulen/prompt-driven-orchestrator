@@ -81,6 +81,20 @@ impl DaemonHandle {
         self.run.arm_stale_panic();
     }
 
+    /// Shorten the event stream's liveness for the connections opened from
+    /// now: a Ping every `ping_every`, mute after `mute_after` of silence.
+    pub fn set_stream_liveness(
+        &self,
+        ping_every: std::time::Duration,
+        mute_after: std::time::Duration,
+    ) {
+        self.run
+            .set_stream_liveness(pdo_run::domain::stream_liveness::StreamLiveness {
+                ping_every,
+                mute_after,
+            });
+    }
+
     /// Arm the one-shot spawn poison: the next [`spawn_node`] panics inside its
     /// post-worktree span, then disarms itself. Arm it *after* boot so the run's
     /// entry-node spawn can be targeted.

@@ -3,51 +3,48 @@
 //! [`HEARTBEAT_INTERVAL`]. A connection that lagged behind the bus (messages
 //! lost) receives [`RESYNC`] (ADR-0083 §6).
 //!
-//! Filtered per connection (CORE-5): a message about a Run reaches a
-//! connection only if its Actor (the one `identify` set on the upgrade
-//! request) may read that Run. Each decision is kept
-//! [`READ_DECISION_TTL`], so a busy Run asks once per few seconds, not once
-//! per event; a change of rights shows within that delay. A `trigger_fired`
-//! still reaches the connection, without the `run_id` of a Run it may not
-//! read. A message guarded by a read ([`READ_GUARD`]: what a Trigger
-//! announces, in its Projets; an extension's event its extension guarded)
-//! and an `operation_applied` on a Trigger, a session or an extension's
-//! Ressource reach a connection only if its Actor may run that read (the read of the
-//! entity, in the Operation's Projets); the guard never leaves the daemon.
-//! The other messages (pipelines, Projets, the extensions' unguarded
-//! events…) pass as before.
+//! Filtered per connection (CORE-5, `ws_visibility`): a message about a Run
+//! reaches a connection only if its Actor (the one `identify` set on the
+//! upgrade request) may read that Run; a message guarded by a read only if it
+//! may run that read. The other messages pass as before.
 //!
 //! The client says which Run its tab shows (`{"type": "show_run", "run_id":
 //! <id> | null}`, [`SHOW_RUN`]): the Presences on the Runs (API 0.12). The
 //! connection's end is its departure.
+//!
+//! The life of a connection (API 0.23): the client names its tab on the
+//! upgrade (`/ws?tab=<id>`), and a new connection of that tab replaces the
+//! one it still had open, closed with [`REPLACED`]. The daemon pings every
+//! connection ([`StreamLiveness`]); one it heard nothing from (no Pong, no
+//! message) beyond the delay is mute and dropped, as is one whose writes
+//! stay stuck that long. Either way its Presence falls.
 //!
 //! The client's Close frame is answered before the connection ends (ADR-0083
 //! §3): a closing without it counts as a failure for the browser. Every
 //! opening, closing and refused upgrade has its line in the journal
 //! ([`ws_log`]).
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{State, WebSocketUpgrade};
+use axum::extract::ws::{CloseFrame, Message, WebSocket};
+use axum::extract::{Query, State, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use futures_util::SinkExt;
-use pdo_extension_api::{PRESENCE_ARRIVED, PRESENCE_LEFT};
-use pdo_kernel::authorization::authorize_read;
-use pdo_kernel::event_bus::READ_GUARD;
-use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
+use pdo_kernel::Actor;
 use pdo_session::adapters::http::origin::check_origin;
 use pdo_session::adapters::http::ws_log::{self, Closing, NO_STATUS};
+use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::broadcast;
 use tokio::time;
 use tracing::warn;
 
-use crate::domain::presence::ConnectionId;
+use super::ws_visibility::Visibility;
+use crate::application::presence::StreamConnection;
+use crate::domain::stream_liveness::{Liveness, StreamLiveness};
 use crate::Runs;
 
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
@@ -55,22 +52,29 @@ pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 /// What a client that lagged behind the bus receives: re-read the whole state.
 pub const RESYNC: &str = r#"{"type":"resync"}"#;
 
-/// How long a connection keeps the answer to « may I read this Run? ».
-pub const READ_DECISION_TTL: Duration = Duration::from_secs(5);
-
-/// How long a decision is kept at all: a `run_forgotten` (whose Run, gone,
-/// has no Projet any more) is judged by the last decision about its Run.
-const FORGET_DECISIONS_AFTER: Duration = Duration::from_secs(600);
-
 /// What a client sends when its tab shows another Run, or none.
 pub const SHOW_RUN: &str = "show_run";
+
+/// The close code of a connection a newer connection of its tab replaced
+/// (a private code, RFC 6455 §7.4.2).
+pub const REPLACED: u16 = 4000;
+
+/// How long the Close of a replaced connection may take: it is likely dead.
+const CLOSE_GRACE: Duration = Duration::from_secs(1);
 
 /// The path of the stream, as the journal names it.
 const PATH: &str = "/ws";
 
+/// The upgrade's query: the tab the connection comes from.
+#[derive(Debug, Default, Deserialize)]
+pub(super) struct StreamQuery {
+    tab: Option<String>,
+}
+
 pub(super) async fn upgrade(
     State(runs): State<Arc<Runs>>,
     Extension(actor): Extension<Actor>,
+    Query(query): Query<StreamQuery>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
@@ -87,46 +91,67 @@ pub(super) async fn upgrade(
     ws.on_upgrade(move |socket| async move {
         ws_log::opened(PATH, requested.elapsed());
         let opened = Instant::now();
-        let connection = runs.open_connection();
-        let closing = relay(socket, runs.clone(), actor, connection).await;
-        runs.close_connection(connection);
+        let connection = runs.open_connection(&actor, query.tab.as_deref());
+        let liveness = runs.stream_liveness();
+        let closing = relay(socket, runs.clone(), actor, &connection, liveness).await;
+        runs.close_connection(connection.id);
         ws_log::closed(PATH, closing, opened.elapsed());
     })
 }
 
-/// Relay the bus to `socket` until either side ends it; how it ended.
+/// Relay the bus to `socket` until either side ends it, `replaced` tells it a
+/// newer connection of its tab took over, or it goes mute; how it ended.
 async fn relay(
     mut socket: WebSocket,
     runs: Arc<Runs>,
     actor: Actor,
-    connection: ConnectionId,
+    connection: &StreamConnection,
+    timings: StreamLiveness,
 ) -> Closing {
+    let limit = timings.mute_after;
     let ready = serde_json::json!({ "type": "ready" });
-    if socket
-        .send(Message::Text(ready.to_string().into()))
-        .await
-        .is_err()
-    {
-        return Closing::Dropped;
+    if let Err(closing) = send(&mut socket, text(&ready), limit).await {
+        return closing;
     }
 
     let mut bus = runs.bus().subscribe();
     let mut heartbeat = time::interval(HEARTBEAT_INTERVAL);
-    let mut visible = Visibility::new(&runs, actor);
+    let mut ping = time::interval_at(
+        time::Instant::now() + timings.ping_every,
+        timings.ping_every,
+    );
+    let mut liveness = Liveness::new(timings.mute_after, Instant::now());
+    let mut visible = Visibility::new(&runs, actor.clone());
 
     loop {
         tokio::select! {
+            _ = connection.replaced.notified() => {
+                let frame = CloseFrame { code: REPLACED, reason: "replaced".into() };
+                let _ = time::timeout(CLOSE_GRACE, socket.send(Message::Close(Some(frame)))).await;
+                return Closing::Replaced;
+            }
+            _ = ping.tick() => {
+                if liveness.is_mute(Instant::now()) {
+                    return Closing::Mute(timings.mute_after);
+                }
+                if let Err(closing) = send(&mut socket, Message::Ping(Default::default()), limit).await {
+                    return closing;
+                }
+            }
             _ = heartbeat.tick() => {
                 visible.forget_old();
                 let msg = serde_json::json!({
                     "type": "heartbeat",
                     "ts": unix_timestamp_secs(),
                 });
-                if socket.send(Message::Text(msg.to_string().into())).await.is_err() {
-                    return Closing::Dropped;
+                if let Err(closing) = send(&mut socket, text(&msg), limit).await {
+                    return closing;
                 }
             }
             incoming = socket.recv() => {
+                if matches!(incoming, Some(Ok(_))) {
+                    liveness.heard(Instant::now());
+                }
                 match incoming {
                     Some(Ok(Message::Close(frame))) => {
                         // The answer is queued by the protocol; flushing sends
@@ -136,10 +161,11 @@ async fn relay(
                     }
                     Some(Ok(Message::Text(text))) => {
                         if let Some(run_id) = shown_run(&text) {
-                            runs.show_run(connection, &visible.actor, run_id.as_deref()).await;
+                            runs.show_run(connection.id, &actor, run_id.as_deref()).await;
                         }
                     }
-                    // Pings are answered by the protocol itself.
+                    // Pings are answered by the protocol itself; a Pong only
+                    // says the connection lives.
                     Some(Ok(_)) => {}
                     None | Some(Err(_)) => return Closing::Dropped,
                 }
@@ -150,8 +176,8 @@ async fn relay(
                         let Some(msg) = visible.filter(msg).await else {
                             continue;
                         };
-                        if socket.send(Message::Text(msg.to_string().into())).await.is_err() {
-                            return Closing::Dropped;
+                        if let Err(closing) = send(&mut socket, text(&msg), limit).await {
+                            return closing;
                         }
                     }
                     // ADR-0083 §6: the bus dropped messages this client never
@@ -159,8 +185,8 @@ async fn relay(
                     // replayed: the client is told to re-read everything.
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         warn!("WebSocket client lagged by {n} events, asking it to resync");
-                        if socket.send(Message::Text(RESYNC.into())).await.is_err() {
-                            return Closing::Dropped;
+                        if let Err(closing) = send(&mut socket, Message::Text(RESYNC.into()), limit).await {
+                            return closing;
                         }
                     }
                     Err(broadcast::error::RecvError::Closed) => {
@@ -173,162 +199,18 @@ async fn relay(
     }
 }
 
-/// What one connection may see of the Runs, with the decisions it got.
-struct Visibility<'a> {
-    runs: &'a Runs,
-    actor: Actor,
-    decisions: HashMap<String, (bool, Instant)>,
-    /// The decisions on the guarded reads, by the read's JSON.
-    guards: HashMap<String, (bool, Instant)>,
+/// `message` as a text frame.
+fn text(message: &Value) -> Message {
+    Message::Text(message.to_string().into())
 }
 
-impl<'a> Visibility<'a> {
-    fn new(runs: &'a Runs, actor: Actor) -> Self {
-        Self {
-            runs,
-            actor,
-            decisions: HashMap::new(),
-            guards: HashMap::new(),
-        }
-    }
-
-    /// What of `message` reaches the connection: all of it, the message
-    /// without the Run it may not read, or nothing. Never its guard.
-    async fn filter(&mut self, mut message: Value) -> Option<Value> {
-        let guard = message
-            .as_object_mut()
-            .and_then(|fields| fields.remove(READ_GUARD));
-        if self.runs.extensions().allows_everything() {
-            return Some(message);
-        }
-        if let Some(read) = guard.or_else(|| entity_read_of(&message)) {
-            if !self.may_run(read) {
-                return None;
-            }
-        }
-        if let Some((run_id, gone)) = run_of_message(&message) {
-            let run_id = run_id.to_string();
-            return self.may_read(&run_id, gone).await.then_some(message);
-        }
-        if let Some(run_id) = run_mentioned_by(&message).map(str::to_string) {
-            if !self.may_read(&run_id, false).await {
-                if let Some(fields) = message.as_object_mut() {
-                    fields.remove("run_id");
-                }
-            }
-        }
-        Some(message)
-    }
-
-    /// Whether the connection may read `run_id`, `gone` or not.
-    async fn may_read(&mut self, run_id: &str, gone: bool) -> bool {
-        if let Some((readable, at)) = self.decisions.get(run_id) {
-            if gone || at.elapsed() < READ_DECISION_TTL {
-                return *readable;
-            }
-        }
-        let readable = self.runs.authorize_read(&self.actor, run_id).await.is_ok();
-        self.decisions
-            .insert(run_id.to_string(), (readable, Instant::now()));
-        readable
-    }
-
-    /// Whether the connection may run the guarded `read` (an Operation's
-    /// JSON). A guard that is no read Operation refuses.
-    fn may_run(&mut self, read: Value) -> bool {
-        let key = read.to_string();
-        if let Some((allowed, at)) = self.guards.get(&key) {
-            if at.elapsed() < READ_DECISION_TTL {
-                return *allowed;
-            }
-        }
-        let allowed = match serde_json::from_value::<Operation>(read) {
-            Ok(read) if read.is_read() => {
-                authorize_read(self.runs.extensions(), &self.actor, &read).is_ok()
-            }
-            _ => false,
-        };
-        self.guards.insert(key, (allowed, Instant::now()));
-        allowed
-    }
-
-    /// Drop the decisions nobody needs any more.
-    fn forget_old(&mut self) {
-        self.decisions
-            .retain(|_, (_, at)| at.elapsed() < FORGET_DECISIONS_AFTER);
-        self.guards
-            .retain(|_, (_, at)| at.elapsed() < READ_DECISION_TTL);
-    }
-}
-
-/// The Run a message of the bus is about, and whether that Run is gone: a
-/// Run's event (`{"type": "event", "event": {"run_id"…}}`), its
-/// `run_forgotten`, an arrival or a departure on it, an event of one of its
-/// sessions (`session_started`, `session_taken_over`, `session_ended`), an
-/// `operation_applied` on a Run or one of its nodes (the creation of a Run has
-/// no target: the Run is the entity it produced).
-/// `None` for everything else.
-fn run_of_message(message: &Value) -> Option<(&str, bool)> {
-    match message["type"].as_str()? {
-        "event" => Some((message["event"]["run_id"].as_str()?, false)),
-        "run_forgotten" => Some((message["run_id"].as_str()?, true)),
-        PRESENCE_ARRIVED | PRESENCE_LEFT => Some((message["run_id"].as_str()?, false)),
-        // CORE-61: a session of a Run (the library assistant's has none).
-        "session_started" | "session_taken_over" | "session_ended" => {
-            Some((message["session"]["run_id"].as_str()?, false))
-        }
-        "operation_applied" => {
-            let operation = &message["operation"];
-            match operation["resource"].as_str()? {
-                "run" => match operation["target"].as_str() {
-                    Some(target) => Some((target, false)),
-                    None => Some((message["entity"]["id"].as_str()?, false)),
-                },
-                "node" => Some((operation["target"].as_str()?.split('/').next()?, false)),
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
-/// The read guarding an `operation_applied` on a Trigger, a session or an
-/// extension's Ressource: the read of the entity it is about (its target, or
-/// the entity it created), on the same Ressource, in the Projets of its
-/// Operation. A session's Operation without a target (the opening of a
-/// Session hébergée) is guarded by the read of the sessions of its Projets,
-/// as its `hosted_session_changed` is reached by those who may read it.
-/// `None` for the other messages, and for a creation whose entity nobody
-/// knows.
-fn entity_read_of(message: &Value) -> Option<Value> {
-    if message["type"] != "operation_applied" {
-        return None;
-    }
-    let operation: Operation = serde_json::from_value(message["operation"].clone()).ok()?;
-    if !matches!(
-        operation.resource,
-        ResourceKind::Trigger | ResourceKind::Session | ResourceKind::Extension { .. }
-    ) {
-        return None;
-    }
-    let target = operation
-        .target
-        .or_else(|| message["entity"]["id"].as_str().map(str::to_string));
-    let read = Operation::new(operation.resource.clone(), Verb::Read);
-    let read = match target {
-        Some(target) => read.on(target),
-        None if operation.resource == ResourceKind::Session => read,
-        None => return None,
-    };
-    serde_json::to_value(read.in_projects(operation.projects)).ok()
-}
-
-/// The Run a message about something else names in passing: the Run a
-/// Trigger's fire created.
-fn run_mentioned_by(message: &Value) -> Option<&str> {
-    match message["type"].as_str()? {
-        "trigger_fired" => message["run_id"].as_str(),
-        _ => None,
+/// Send `message`, within `limit`: a write stuck that long (a peer that reads
+/// nothing any more) is a mute connection.
+async fn send(socket: &mut WebSocket, message: Message, limit: Duration) -> Result<(), Closing> {
+    match time::timeout(limit, socket.send(message)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) => Err(Closing::Dropped),
+        Err(_) => Err(Closing::Mute(limit)),
     }
 }
 
@@ -355,72 +237,6 @@ fn unix_timestamp_secs() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn a_message_names_the_run_it_is_about() {
-        assert_eq!(
-            run_of_message(
-                &json!({ "type": "event", "event": { "run_id": "r1", "kind": "node_started" } })
-            ),
-            Some(("r1", false))
-        );
-        assert_eq!(
-            run_of_message(&json!({ "type": "run_forgotten", "run_id": "r2" })),
-            Some(("r2", true))
-        );
-        assert_eq!(
-            run_of_message(&json!({
-                "type": "session_taken_over",
-                "actor": { "kind": "local_operator" },
-                "session": { "id": "pdo-mgr-r3", "kind": "manager", "run_id": "r3" },
-            })),
-            Some(("r3", false))
-        );
-        assert_eq!(
-            run_of_message(&json!({
-                "type": "session_ended",
-                "actor": null,
-                "session": { "id": "pdo-libassist-shared", "kind": "library_assistant", "run_id": null },
-            })),
-            None
-        );
-        assert_eq!(
-            run_of_message(&json!({
-                "type": "operation_applied",
-                "operation": { "resource": "node", "verb": { "action": "retry" }, "target": "r3/n1" },
-            })),
-            Some(("r3", false))
-        );
-        assert_eq!(
-            run_of_message(&json!({
-                "type": "operation_applied",
-                "operation": { "resource": "run", "verb": "delete", "target": "r4" },
-            })),
-            Some(("r4", false))
-        );
-        assert_eq!(
-            run_of_message(&json!({
-                "type": "operation_applied",
-                "operation": { "resource": "run", "verb": "create", "target": null },
-                "entity": { "kind": "run", "id": "r5" },
-            })),
-            Some(("r5", false)),
-            "a creation is about the Run it produced"
-        );
-    }
-
-    #[test]
-    fn a_presence_is_about_its_run() {
-        for kind in [PRESENCE_ARRIVED, PRESENCE_LEFT] {
-            assert_eq!(
-                run_of_message(
-                    &json!({ "type": kind, "run_id": "r1", "actor": {}, "presences": [] })
-                ),
-                Some(("r1", false))
-            );
-        }
-    }
 
     #[test]
     fn a_client_says_which_run_its_tab_shows() {
@@ -435,134 +251,5 @@ mod tests {
         assert_eq!(shown_run(r#"{"type":"show_run"}"#), Some(None));
         assert_eq!(shown_run(r#"{"type":"hello"}"#), None);
         assert_eq!(shown_run("not json"), None);
-    }
-
-    #[test]
-    fn a_triggers_fire_names_the_run_it_created() {
-        assert_eq!(
-            run_mentioned_by(
-                &json!({ "type": "trigger_fired", "trigger_id": "t1", "run_id": "r1" })
-            ),
-            Some("r1")
-        );
-        assert_eq!(
-            run_mentioned_by(
-                &json!({ "type": "trigger_fired", "trigger_id": "t1", "outcome": "skipped" })
-            ),
-            None
-        );
-        assert_eq!(
-            run_mentioned_by(&json!({ "type": "event", "event": { "run_id": "r1" } })),
-            None
-        );
-    }
-
-    #[test]
-    fn an_operation_on_a_trigger_is_guarded_by_its_read_in_its_projets() {
-        let applied = |target: Value| {
-            json!({
-                "type": "operation_applied",
-                "operation": {
-                    "resource": "trigger", "verb": "update", "target": target, "projects": ["p2"],
-                },
-                "entity": { "kind": "trigger", "id": "t9" },
-            })
-        };
-        let read = |id: &str| json!({ "resource": "trigger", "verb": "read", "target": id, "projects": ["p2"] });
-        assert_eq!(entity_read_of(&applied(json!("t1"))), Some(read("t1")));
-        assert_eq!(
-            entity_read_of(&applied(Value::Null)),
-            Some(read("t9")),
-            "a creation is about the Trigger it produced"
-        );
-        assert_eq!(
-            entity_read_of(&json!({
-                "type": "operation_applied",
-                "operation": { "resource": "run", "verb": "delete", "target": "r1" },
-            })),
-            None
-        );
-        assert_eq!(
-            entity_read_of(&json!({ "type": "trigger_updated", "trigger_id": "t1" })),
-            None
-        );
-    }
-
-    #[test]
-    fn an_operation_on_a_session_is_guarded_by_the_read_of_the_session_in_its_projets() {
-        let applied = |verb: &str, target: Value| {
-            json!({
-                "type": "operation_applied",
-                "operation": {
-                    "resource": "session", "verb": { "action": verb }, "target": target,
-                    "projects": ["p2"],
-                },
-            })
-        };
-        assert_eq!(
-            entity_read_of(&applied("terminate", json!("pdo-hosted-1"))),
-            Some(json!({
-                "resource": "session", "verb": "read", "target": "pdo-hosted-1",
-                "projects": ["p2"],
-            }))
-        );
-        let opened = entity_read_of(&applied("open", Value::Null)).unwrap();
-        assert_eq!(opened["resource"], "session");
-        assert_eq!(opened["verb"], "read");
-        assert!(opened["target"].is_null(), "{opened}");
-        assert_eq!(opened["projects"], json!(["p2"]));
-    }
-
-    #[test]
-    fn an_operation_on_an_extensions_ressource_is_guarded_by_the_read_of_its_entity() {
-        let applied = |target: Value| {
-            json!({
-                "type": "operation_applied",
-                "operation": {
-                    "resource": "test/note", "verb": { "action": "pin" }, "target": target,
-                    "projects": ["p2"],
-                },
-                "entity": { "kind": "test/note", "id": "n9" },
-            })
-        };
-        let read = |id: &str| json!({ "resource": "test/note", "verb": "read", "target": id, "projects": ["p2"] });
-        assert_eq!(entity_read_of(&applied(json!("n1"))), Some(read("n1")));
-        assert_eq!(
-            entity_read_of(&applied(Value::Null)),
-            Some(read("n9")),
-            "a creation is about the entity it produced"
-        );
-        assert_eq!(
-            entity_read_of(&json!({
-                "type": "operation_applied",
-                "operation": { "resource": "test/note", "verb": "create", "target": null },
-                "entity": null,
-            })),
-            None,
-            "nothing to read: the message passes as before"
-        );
-        assert_eq!(
-            entity_read_of(&json!({
-                "type": "operation_applied",
-                "operation": { "resource": "project", "verb": "update", "target": "p1" },
-            })),
-            None
-        );
-    }
-
-    #[test]
-    fn the_other_messages_are_about_no_run() {
-        for message in [
-            json!({ "type": "pipeline_changed" }),
-            json!({ "type": "trigger_fired", "trigger_id": "t1", "run_id": "r1" }),
-            json!({ "type": "project_changed" }),
-            json!({
-                "type": "operation_applied",
-                "operation": { "resource": "trigger", "verb": "update", "target": "t1" },
-            }),
-            json!({ "type": "extension_event", "extension": "test", "name": "x", "payload": {} }),
-        ] {
-            assert_eq!(run_of_message(&message), None, "{message}");
-        }
     }
 }

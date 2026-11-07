@@ -194,7 +194,7 @@ async fn an_agent_reads_the_extension_preamble_first_and_carries_its_variables()
         *seen.lock().unwrap() = file.clone();
         // Written aside then renamed: never read half written.
         format!(
-            "env > '{0}.part' && mv '{0}.part' '{0}'; exec sleep 600",
+            "env > '{0}.part' && mv '{0}.part' '{0}'; sleep 600",
             file.display()
         )
     };
@@ -400,4 +400,93 @@ async fn a_suspended_trigger_shows_why_and_fires_neither_by_cron_nor_by_run_now(
     assert!(trigger.get("suspension").is_none(), "{trigger}");
     let (status, _) = post_json(&daemon, &format!("/triggers/{id}/fire"), json!({})).await;
     assert_eq!(status, 200);
+}
+
+/// Every process's argv (`/proc/<pid>/cmdline`, tmux and the session's shells
+/// included) that carries `needle`.
+fn argvs_carrying(needle: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir("/proc").unwrap().flatten() {
+        let is_pid = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit()));
+        if !is_pid {
+            continue;
+        }
+        if let Ok(raw) = std::fs::read(entry.path().join("cmdline")) {
+            let argv = String::from_utf8_lossy(&raw).replace('\0', " ");
+            if argv.contains(needle) {
+                found.push(argv);
+            }
+        }
+    }
+    found
+}
+
+/// The variables of a Node never sit in the argv of a process: `ps` shows
+/// neither the extension's secret nor the core's identity values, at launch
+/// and at a Retry, while the harness reads them in its environment.
+#[tokio::test]
+async fn a_node_secret_is_in_its_environment_never_in_an_argv() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let secret = format!("witness-value-{}-{nanos}", std::process::id());
+    let dir = tempfile::tempdir().unwrap();
+    let seen = dir.path().join("seen");
+    // The harness writes what it reads, then stays alive for the scan, without
+    // `exec`: the session's shell lives on, so its argv is scanned too.
+    let tail = format!(
+        "printf %s \"$SECRET_DE_TEST\" > '{0}.part' && mv '{0}.part' '{0}'; sleep 600",
+        seen.display()
+    );
+    let (daemon, control) =
+        daemon_with(|repo| seed_solo(repo, &[("solo", false)]), Some(tail)).await;
+    control
+        .launch
+        .set_env(env(&[("SECRET_DE_TEST", secret.as_str())]));
+
+    let run_id = create_run(&daemon, "solo").await;
+    assert_eq!(read_when_written(&seen).await, secret);
+    assert_eq!(
+        argvs_carrying(&secret),
+        Vec::<String>::new(),
+        "the value is in no argv"
+    );
+    std::fs::remove_file(&seen).unwrap();
+
+    // A Retry launches the node again, the same way.
+    let retry = reqwest::Client::new()
+        .post(format!("{}/runs/{run_id}/nodes/worker/retry", daemon.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(retry.status(), 200, "{}", retry.text().await.unwrap());
+    assert_eq!(read_when_written(&seen).await, secret);
+    assert_eq!(
+        argvs_carrying(&secret),
+        Vec::<String>::new(),
+        "the value is in no argv after a Retry"
+    );
+    // Wherever the private folder is, no launch file holds the value.
+    let launch_files: Vec<_> = [std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)]
+        .into_iter()
+        .flatten()
+        .chain([std::env::temp_dir()])
+        .filter_map(|dir| std::fs::read_dir(dir).ok())
+        .flat_map(|entries| entries.flatten())
+        .filter(|e| {
+            e.file_name().to_string_lossy().starts_with("pdo-launch-")
+                && std::fs::read_to_string(e.path()).is_ok_and(|text| text.contains(&secret))
+        })
+        .collect();
+    assert!(
+        launch_files.is_empty(),
+        "no launch file outlives the launch"
+    );
 }

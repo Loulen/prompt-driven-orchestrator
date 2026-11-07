@@ -112,6 +112,10 @@ pub fn project(events: &[Event]) -> Option<RunState> {
             // Informational only: the node stays Running, no node/run state touched.
             EventKind::NodeBlockedOnLimit | EventKind::NodeAutoCompleteObserved => {}
 
+            // The audit of a node's terminal (who took the hand, who spoke):
+            // a trace, never a transition.
+            EventKind::NodeTakenOver | EventKind::NodeTyped => {}
+
             // Informational only (manager on demand): the manager's existence is
             // an observed tmux fact, never projected — see the variants' docs.
             EventKind::ManagerStarted | EventKind::ManagerStopped => {}

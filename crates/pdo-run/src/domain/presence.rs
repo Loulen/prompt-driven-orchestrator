@@ -5,8 +5,13 @@
 //! of its connections at least shows it: it **arrives** when its first one
 //! does, and **leaves** when its last one stops (shows another Run, nothing,
 //! or closes). Nothing here does I/O: the clock is handed in.
+//!
+//! A connection may name the tab it comes from (API 0.23): a new connection of
+//! an Actor's tab **replaces** the one that tab still has open, which a proxy
+//! may keep half-open long after the tab lost it. The replaced connection
+//! shows nothing any more, at once.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use pdo_extension_api::Presence;
 use pdo_kernel::Actor;
@@ -36,11 +41,24 @@ struct Seat {
     run_id: String,
 }
 
+/// What opening a connection changed: the connection of the same tab it
+/// replaced, to close, and the departure that replacement caused.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Opening {
+    pub replaced: Option<ConnectionId>,
+    pub changes: Vec<PresenceChange>,
+}
+
 /// The Presences of every Run.
 #[derive(Debug, Default)]
 pub struct PresenceBook {
     /// The connections showing a Run.
     seats: HashMap<ConnectionId, Seat>,
+    /// The open connection of each tab, by its Actor and the tab's identity.
+    tabs: HashMap<(Actor, String), ConnectionId>,
+    /// The connections a newer one of their tab replaced, until they end:
+    /// a late `show` of theirs shows nothing.
+    replaced: HashSet<ConnectionId>,
     /// Per Run, the Actors present and when each arrived, by order of
     /// arrival.
     runs: HashMap<String, Vec<Presence>>,
@@ -69,10 +87,10 @@ impl PresenceBook {
         run_id: Option<&str>,
         now: &str,
     ) -> Vec<PresenceChange> {
-        if self.shows(connection, actor, run_id) {
+        if self.shows(connection, actor, run_id) || self.replaced.contains(&connection) {
             return Vec::new();
         }
-        let mut changes = self.close(connection);
+        let mut changes = self.leave(connection);
         if let Some(run_id) = run_id {
             let arrives = !self.shown_by(actor, run_id);
             self.seats.insert(
@@ -96,9 +114,39 @@ impl PresenceBook {
         changes
     }
 
+    /// The connection `connection` of `actor` opens, from the tab `tab` (none:
+    /// a client that names no tab). It replaces the connection that tab of
+    /// that Actor still has open: that one is closed here, its departure
+    /// returned. A tab of another Actor is never replaced.
+    pub fn open(&mut self, connection: ConnectionId, actor: &Actor, tab: Option<&str>) -> Opening {
+        let Some(tab) = tab else {
+            return Opening::default();
+        };
+        let replaced = self
+            .tabs
+            .insert((actor.clone(), tab.to_string()), connection)
+            .filter(|previous| *previous != connection);
+        let changes = match replaced {
+            Some(previous) => {
+                self.replaced.insert(previous);
+                self.leave(previous)
+            }
+            None => Vec::new(),
+        };
+        Opening { replaced, changes }
+    }
+
     /// The connection `connection` ended (or shows nothing any more): the
     /// departure it causes, if any.
     pub fn close(&mut self, connection: ConnectionId) -> Vec<PresenceChange> {
+        self.tabs.retain(|_, open| *open != connection);
+        self.replaced.remove(&connection);
+        self.leave(connection)
+    }
+
+    /// The connection `connection` shows no Run any more: the departure it
+    /// causes, if any.
+    fn leave(&mut self, connection: ConnectionId) -> Vec<PresenceChange> {
         let Some(seat) = self.seats.remove(&connection) else {
             return Vec::new();
         };
@@ -245,6 +293,76 @@ mod tests {
         assert!(book.presences("r1").is_empty());
         assert!(book.shows(1, &alice, None));
         assert_eq!(book.close(1), []);
+    }
+
+    #[test]
+    fn a_tab_that_reconnects_replaces_its_connection_and_leaves_at_once() {
+        let alice = person("alice");
+        let mut book = PresenceBook::new();
+        assert_eq!(book.open(1, &alice, Some("tab-a")), Opening::default());
+        book.show(1, &alice, Some("r1"), "t1");
+        assert_eq!(
+            book.open(2, &alice, Some("tab-a")),
+            Opening {
+                replaced: Some(1),
+                changes: vec![left("r1", &alice)],
+            },
+            "the old connection is closed, its Presence falls"
+        );
+        assert!(book.presences("r1").is_empty());
+        assert_eq!(
+            book.show(2, &alice, Some("r2"), "t2"),
+            [arrived("r2", &alice)]
+        );
+        assert_eq!(
+            book.show(1, &alice, Some("r1"), "t3"),
+            [],
+            "a late show of the replaced connection shows nothing"
+        );
+        assert!(book.presences("r1").is_empty());
+        assert_eq!(
+            book.close(1),
+            [],
+            "the replaced connection's late end changes nothing"
+        );
+        assert_eq!(actors(&book, "r2"), std::slice::from_ref(&alice));
+        assert_eq!(
+            book.open(3, &alice, Some("tab-a")).replaced,
+            Some(2),
+            "its replacement is replaced in turn"
+        );
+    }
+
+    #[test]
+    fn two_tabs_of_one_actor_keep_their_presence_each() {
+        let alice = person("alice");
+        let mut book = PresenceBook::new();
+        book.open(1, &alice, Some("tab-a"));
+        book.open(2, &alice, Some("tab-b"));
+        book.show(1, &alice, Some("r1"), "t1");
+        book.show(2, &alice, Some("r2"), "t2");
+        assert_eq!(book.open(3, &alice, None), Opening::default());
+        assert_eq!(actors(&book, "r1"), std::slice::from_ref(&alice));
+        assert_eq!(actors(&book, "r2"), [alice]);
+    }
+
+    #[test]
+    fn a_tab_of_another_actor_is_never_replaced() {
+        let (alice, bob) = (person("alice"), person("bob"));
+        let mut book = PresenceBook::new();
+        book.open(1, &alice, Some("same"));
+        book.show(1, &alice, Some("r1"), "t1");
+        assert_eq!(book.open(2, &bob, Some("same")), Opening::default());
+        assert_eq!(actors(&book, "r1"), [alice]);
+    }
+
+    #[test]
+    fn a_closed_tab_is_forgotten_and_its_next_connection_replaces_nothing() {
+        let alice = person("alice");
+        let mut book = PresenceBook::new();
+        book.open(1, &alice, Some("tab-a"));
+        book.close(1);
+        assert_eq!(book.open(2, &alice, Some("tab-a")), Opening::default());
     }
 
     #[test]

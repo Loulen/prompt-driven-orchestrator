@@ -35,8 +35,10 @@ pub trait Tmux: Send + Sync {
     /// the harness preflight resolved the binary on (#661, ADR-0055).
     fn session_path(&self) -> String;
 
-    /// `new-session -d -s <name> -c <working_dir> <script>`, then mouse mode on.
-    /// `what` names the session kind in the error (`shell`, `resume`…).
+    /// A new session running the bash `script`, then mouse mode on. The script
+    /// never reaches an argv (it may export secrets): the adapter hands it to
+    /// `bash` through a private file. `what` names the session kind in the
+    /// error (`shell`, `resume`…).
     fn new_session(
         &self,
         name: &str,
@@ -137,6 +139,26 @@ pub trait NodeWaits: Send + Sync {
         iter: i64,
         payload: serde_json::Value,
     ) -> BoxFuture<'a, Result<(), String>>;
+
+    /// Append the event of `gesture` on the node's terminal, with `payload`
+    /// (`{source, actor}`).
+    fn record_terminal_gesture<'a>(
+        &'a self,
+        run_id: &'a str,
+        node_id: &'a str,
+        iter: i64,
+        gesture: TerminalGesture,
+        payload: serde_json::Value,
+    ) -> BoxFuture<'a, Result<(), String>>;
+}
+
+/// What an Actor did on a node's terminal that the Run's log keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalGesture {
+    /// It took the hand: the pilot of the terminal changed to it.
+    TakenOver,
+    /// It took the floor: its first input after a take-over or a wait.
+    Typed,
 }
 
 /// The Run facts behind a node's pane, and the in-place re-attach of its

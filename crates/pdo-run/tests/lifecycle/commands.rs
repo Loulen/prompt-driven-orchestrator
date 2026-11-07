@@ -1263,7 +1263,7 @@ async fn parse_rejects_are_ordered_and_field_defaults_are_lenient() {
     }
 
     // A stray `additional_iter` on `end_region` is accepted and dropped —
-    // the recorded payload carries only the region.
+    // the recorded payload carries only the region and who issued it.
     let (status, ct, _) = command_triplet(
         &state,
         run_id,
@@ -1280,7 +1280,11 @@ async fn parse_rejects_are_ordered_and_field_defaults_are_lenient() {
         .unwrap();
     assert_eq!(
         payload,
-        serde_json::json!({ "command": "end_region", "region_id": "r1" })
+        serde_json::json!({
+            "command": "end_region",
+            "region_id": "r1",
+            "actor": { "kind": "local_operator" },
+        })
     );
 
     // A missing `name` renames to the empty string — 200, not a reject.
@@ -1295,7 +1299,10 @@ async fn parse_rejects_are_ordered_and_field_defaults_are_lenient() {
         .find(|e| e.kind == event_log::EventKind::RunRenamed)
         .and_then(|e| e.payload.clone())
         .unwrap();
-    assert_eq!(payload, serde_json::json!({ "name": "" }));
+    assert_eq!(
+        payload,
+        serde_json::json!({ "name": "", "actor": { "kind": "local_operator" } })
+    );
 }
 
 #[tokio::test]

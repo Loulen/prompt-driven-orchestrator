@@ -2,8 +2,8 @@
 //!
 //! **Session death is the only verdict of death (#469, ADR-0032).** For an agent
 //! node the death of the agent *is* the death of the tmux session by
-//! construction: `pdo_session::domain::launch::wrap_with_env` emits
-//! `exec bash -c '<exports> && <tail>'` and `build_agent_tail` emits
+//! construction: `pdo_session::domain::launch::wrap_with_env` emits the bash
+//! script `<exports> && <tail>` the session runs and `build_agent_tail` emits
 //! `exec claude …`, so the `claude` process **is** the pane leader of the
 //! session's only window. It exits → the pane dies → the session dies →
 //! `session_alive == false`. Same in a sandbox: the pane carries the

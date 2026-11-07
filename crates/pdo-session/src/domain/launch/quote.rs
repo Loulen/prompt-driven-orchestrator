@@ -18,7 +18,7 @@ pub fn sh_single_quote(s: &str) -> String {
 /// bare. Keeps the emitted `docker exec …` argv readable (and its golden stable):
 /// simple tokens (`docker`, `exec`, `-i`, `PDO_OUTPUT_out=/a/b`, `1000:1000`) stay
 /// bare; anything with a space / quote / `$` / glob char is quoted. Used only to
-/// splice the `docker exec` argv into the `bash -c` tail string.
+/// splice the `docker exec` argv into the script a session runs.
 pub fn sh_quote_arg(s: &str) -> String {
     let safe = !s.is_empty()
         && s.bytes().all(|b| {

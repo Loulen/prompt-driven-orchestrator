@@ -44,19 +44,66 @@ pub(super) fn node_lines(run: &Value) -> String {
 }
 
 /// A Run's event log: `ts  kind  node  iter`.
-pub(super) fn event_lines(events: &Value) -> String {
+pub(super) fn event_lines(events: &Value, names: &ActorNames) -> String {
     items(events)
         .iter()
         .map(|e| {
             format!(
-                "{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{}\n",
                 text(e, "ts"),
                 text(e, "kind"),
                 text(e, "node_id"),
-                text(e, "iter")
+                text(e, "iter"),
+                actor_label(&e["payload"]["actor"], names)
             )
         })
         .collect()
+}
+
+/// The display names of Actors, keyed by the Actor's JSON.
+pub(super) type ActorNames = std::collections::HashMap<String, String>;
+
+/// The distinct Actors the events name (`payload.actor`), in order of first
+/// appearance: what to ask the display names of.
+pub(super) fn event_actors(events: &Value) -> Vec<Value> {
+    let mut actors: Vec<Value> = Vec::new();
+    for actor in items(events).iter().map(|e| &e["payload"]["actor"]) {
+        if actor.is_object() && !actors.contains(actor) {
+            actors.push(actor.clone());
+        }
+    }
+    actors
+}
+
+/// `actors` with the names `displays` gives them (the answer of `POST
+/// /actors/display`, one entry per Actor, `null` when none names it).
+pub(super) fn actor_names(actors: &[Value], displays: &Value) -> ActorNames {
+    actors
+        .iter()
+        .zip(items(&displays["displays"]))
+        .filter_map(|(actor, display)| {
+            let name = display["name"].as_str()?;
+            Some((actor.to_string(), name.to_string()))
+        })
+        .collect()
+}
+
+/// Who made an event: its Actor's display name, else its id (an Agent by its
+/// node, a Trigger by its id); empty for an event no Actor made.
+fn actor_label(actor: &Value, names: &ActorNames) -> String {
+    if !actor.is_object() {
+        return String::new();
+    }
+    if let Some(name) = names.get(&actor.to_string()) {
+        return name.clone();
+    }
+    match actor["kind"].as_str() {
+        Some("identified") => text(actor, "id"),
+        Some("agent") => format!("agent:{}", text(actor, "node_id")),
+        Some("trigger") => format!("trigger:{}", text(actor, "trigger_id")),
+        Some(kind) => kind.to_string(),
+        None => String::new(),
+    }
 }
 
 /// The cost of Runs: `run_id  usd` (`?` unknown, `≥` a lower bound).
@@ -198,8 +245,41 @@ mod tests {
             { "ts": "t1", "kind": "node_started", "node_id": "a", "iter": 1 }
         ]);
         assert_eq!(
-            event_lines(&events),
-            "t0\trun_started\t\t\nt1\tnode_started\ta\t1\n"
+            event_lines(&events, &ActorNames::new()),
+            "t0\trun_started\t\t\t\nt1\tnode_started\ta\t1\t\n"
+        );
+    }
+
+    #[test]
+    fn an_event_shows_who_made_it_by_name_else_by_id() {
+        let alice = json!({ "kind": "identified", "namespace": "test", "id": "alice" });
+        let bob = json!({ "kind": "identified", "namespace": "test", "id": "bob" });
+        let events = json!([
+            { "ts": "t0", "kind": "node_taken_over", "node_id": "a", "iter": 1,
+              "payload": { "source": "pty", "actor": bob } },
+            { "ts": "t1", "kind": "command_issued", "node_id": "a", "iter": 1,
+              "payload": { "command": "retry", "actor": alice } },
+            { "ts": "t2", "kind": "node_stopped", "node_id": "a", "iter": 1,
+              "payload": { "actor": { "kind": "agent", "run_id": "r", "node_id": "boss" } } },
+            { "ts": "t3", "kind": "node_resumed", "node_id": "a", "iter": 1,
+              "payload": { "actor": alice } },
+            { "ts": "t4", "kind": "node_completed", "node_id": "a", "iter": 1,
+              "payload": { "actor": { "kind": "local_operator" } } }
+        ]);
+        let actors = event_actors(&events);
+        assert_eq!(actors.len(), 4, "each Actor asked once: {actors:?}");
+        assert_eq!(actors[0], bob);
+        let names = actor_names(
+            &actors,
+            &json!({ "displays": [null, { "name": "Alice", "avatar_url": null }, null, null] }),
+        );
+        let actors_shown: Vec<String> = event_lines(&events, &names)
+            .lines()
+            .map(|line| line.rsplit('\t').next().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            actors_shown,
+            ["bob", "Alice", "agent:boss", "Alice", "local_operator"]
         );
     }
 

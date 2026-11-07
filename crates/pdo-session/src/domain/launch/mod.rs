@@ -80,22 +80,23 @@ pub enum SessionTail<'a> {
 /// a `docker exec … pdo-sbx-<run_id> bash -lc '<tail>'` so it runs **inside** the
 /// Run's long-lived container instead of on the host.
 ///
-/// The base `PDO_*` env exports still run on the *host* side of the wrapper
-/// (harmless), so `off` byte-identity is preserved when this is `None`.
-/// `PDO_DAEMON_URL=localhost` is therefore **not** re-forwarded into the container
-/// (the create posted `host.docker.internal`); the dynamic per-node catalogue (a
-/// `script` node's `PDO_INPUT_*`/`PDO_OUTPUT_*`/…) is forwarded as explicit
-/// `-e K=V` on the exec, since a bare host export wouldn't cross the exec.
+/// The base `PDO_*` env exports run on the *host* side of the wrapper, so `off`
+/// byte-identity is preserved when this is `None`. `PDO_DAEMON_URL=localhost` is
+/// **not** re-forwarded into the container (the create posted
+/// `host.docker.internal`); the per-node variables (a `script` node's
+/// `PDO_INPUT_*`/`PDO_OUTPUT_*`/…, the extensions' variables, a staging set's
+/// env) are exported host-side too and forwarded **by name** (`-e K`) on the
+/// exec, so their values never sit in the `docker` client's argv.
 pub struct SandboxWrap<'a> {
     /// How the session enters its Run's container. The sandbox context builds
     /// the `docker exec` argv; the session only splices its tail after it.
     pub exec: &'a dyn ContainerExec,
     /// The env of the resolved harness's **staging set** (#708, ADR-0063 §1 —
-    /// `pi`: `PI_SKIP_VERSION_CHECK=1`, `PI_TELEMETRY=0`), forwarded on the exec as
-    /// explicit `-e K=V` **before** the per-node catalogue. The descriptor's own
-    /// `env` block is exported host-side and never crosses the exec, so this is the
-    /// only way a set's env reaches the container. Empty for `claude` (no env) ⇒ its
-    /// exec argv is byte-identical to before.
+    /// `pi`: `PI_SKIP_VERSION_CHECK=1`, `PI_TELEMETRY=0`), exported host-side and
+    /// forwarded on the exec by name **before** the per-node catalogue. The
+    /// descriptor's own `env` block is exported host-side but never crosses the
+    /// exec, so this is the only way a set's env reaches the container. Empty for
+    /// `claude` (no env) ⇒ its exec argv is byte-identical to before.
     pub set_env: &'a [(String, String)],
 }
 
@@ -105,6 +106,7 @@ pub struct SandboxWrap<'a> {
 /// kill misses its tree.
 pub trait ContainerExec: Send + Sync {
     /// The whole argv, from the `docker` binary to the container name, with
-    /// `env` forwarded as valued `-e K=V` pairs.
-    fn exec_argv(&self, env: &[(String, String)]) -> Vec<String>;
+    /// each of `names` forwarded as a bare `-e K`: `docker` reads its value from
+    /// its own environment, so no value appears in the argv.
+    fn exec_argv(&self, names: &[String]) -> Vec<String>;
 }

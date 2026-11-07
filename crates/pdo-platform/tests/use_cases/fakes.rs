@@ -149,6 +149,8 @@ pub struct FakeRuns {
     pub live: usize,
     /// The Runs that exist, with their nodes.
     pub nodes: BTreeMap<String, Vec<String>>,
+    /// The Projets each Run was launched in.
+    pub projects: BTreeMap<String, Vec<String>>,
 }
 
 impl Runs for FakeRuns {
@@ -192,6 +194,9 @@ impl Runs for FakeRuns {
     }
     fn node_ids<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Option<Vec<String>>> {
         Box::pin(async move { self.nodes.get(run_id).cloned() })
+    }
+    fn projects_of_run<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Vec<String>> {
+        Box::pin(async move { self.projects.get(run_id).cloned().unwrap_or_default() })
     }
 }
 

@@ -232,7 +232,7 @@ impl SandboxExec {
 }
 
 impl ContainerExec for SandboxExec {
-    fn exec_argv(&self, env: &[(String, String)]) -> Vec<String> {
+    fn exec_argv(&self, names: &[String]) -> Vec<String> {
         let mut argv = vec![self.docker_bin.clone()];
         argv.extend(pdo_sandbox::domain::container::exec_prefix_with_env(
             &self.run_id,
@@ -240,7 +240,7 @@ impl ContainerExec for SandboxExec {
             pdo_sandbox::adapters::host::host_gid(),
             &self.workdir,
             &self.marker,
-            env,
+            names,
         ));
         argv
     }

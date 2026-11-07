@@ -10,6 +10,7 @@ pub mod install_service;
 pub mod list_audit;
 pub mod mount_page;
 pub mod page_journal;
+pub mod place_page_mount;
 pub mod ports;
 pub mod read_attempt_log;
 pub mod read_pages;

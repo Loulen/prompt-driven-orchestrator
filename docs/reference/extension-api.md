@@ -91,6 +91,7 @@ The core fills `projects` for its own Operations:
 | `project` (targeted) | that Projet |
 | `repository` (`fetch`, `fast_forward`) | every Projet the repository is a member of |
 | `trigger` (0.11) | the Projet the Trigger launches its Runs in (`project_id`); none without one. An edit moving it to another Projet is asked, and announced applied, in each |
+| `page_mount` | a mount asked from a node session: the Projet of that session's Run; an unmount (targeted by the page's name): the Projet of the Run the mount belongs to, whoever asks. A mount outside any Run, or its unmount, is in none |
 | everything else | none |
 
 A Run, its nodes, sessions and review comments are in one Projet at most: the one recorded at
@@ -155,7 +156,9 @@ POST /authorize
 
 Whether the caller may run each Operation, in order, **without running any**: nothing changes,
 nothing is announced. An Operation that names no Projet is placed where the core places its own: a
-targeted `run` or `node` in the Projet of its Run, a targeted `project` in itself. At most 500
+targeted `run` or `node` in the Projet of its Run, a targeted `project` in itself, a `page_mount`
+creation asked from a node session in the Projet of its Run and a targeted `page_mount` deletion in
+the Projet of the mount's Run. At most 500
 Operations per question; an unreadable one answers `400` `invalid_question`. Without extension,
 every decision is `allow`. The core's UI asks it to grey the gestures the caller may not make,
 their tooltip saying the refusal's `sentence`, and to leave out of the New Run form the Projets a
@@ -342,8 +345,15 @@ or `{"kind": "trigger", …}` for a fired Run), `trigger` (`{id, editor}`: the T
 the Run and its last editor then), `repository` (the Run's primary repository) and `project`
 (the id of the Projet owning it).
 
-- **Variables** (`node_env`): exported before the Node's command on the host, passed as
-  `-e NAME=value` on the `docker exec` in a sandbox. A name the core sets is **never
+- **Variables** (`node_env`): exported before the Node's command on the host, forwarded by
+  name (`-e NAME`) on the `docker exec` in a sandbox. Their values never sit in the argv of a
+  process (`ps` shows none): the session's script reaches `bash` through a `0600` file in the
+  user's private folder (`$XDG_RUNTIME_DIR`, else the temporary folder), deleted before the
+  harness starts and whatever the launch's outcome; only its path goes to `tmux`. The same holds
+  for every session the core launches (a Node, its Retry and its resume, a Session hébergée, the
+  Pipeline Manager, the library assistant). The values do stay in the harness's environment
+  (`/proc/<pid>/environ`, readable by the same user only). In a sandbox they are also in the
+  environment of the host's `docker` client, so a `DOCKER_*` name steers it. A name the core sets is **never
   overwritten**: dropped with a warning (`PATH`, `HOME`, `PDO_RUN_ID`, `PDO_NODE_ID`,
   `PDO_NODE_ITER`, `PDO_DAEMON_URL`, `PDO_SBX_SESSION`, `PDO_SESSION_ID`, the harness's variables, a script's
   `PDO_INPUT_*`/`PDO_OUTPUT_*`/…, the sandbox profile's env). A name that is no shell identifier
@@ -691,6 +701,19 @@ tab, and leaves when its last one shows another Run, none, or closes (its connec
 
   `presence_left` has the same shape; `presences` is the Run's Presences once the change
   happened. The front hands them to `run/item/people` ([extension-ui.md](extension-ui.md#runitempeople)).
+
+The life of a connection (0.23): a Presence falls within seconds whatever happens to its
+connection, a half-open one behind a proxy or a tunnel included.
+
+- Each tab names itself when it opens `/ws` (`/ws?tab=<id>`, 1 to 64 characters among
+  `[A-Za-z0-9_-]`, anything else counts as no name). A new connection of an Actor's tab
+  **replaces** the connection that tab still has open: the old one is closed with the code `4000`
+  and its Presence falls at once (`presence_left`), before the new one shows its Run. A tab of
+  another Actor is never replaced; two tabs of one Actor (two names) keep a Presence each. The
+  interface draws the name once per page load.
+- The daemon sends a WebSocket Ping on `/ws` every 2 s. A connection it heard nothing from (no
+  Pong, no message) for over 10 s is dropped, as is one whose writes stay stuck that long; its
+  Presence falls. A browser answers the Pings by itself.
 
 Without extension every tab is the local operator's: one Presence at most per Run.
 

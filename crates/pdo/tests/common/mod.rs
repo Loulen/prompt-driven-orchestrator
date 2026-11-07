@@ -27,6 +27,7 @@ pub struct TestDaemon {
 impl TestDaemon {
     pub async fn spawn_at(repo_root: &Path) -> Result<Self> {
         std::fs::create_dir_all(repo_root)?;
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             repo_root.to_path_buf(),
@@ -123,6 +124,7 @@ impl TestDaemon {
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -183,6 +185,7 @@ impl TestDaemon {
         };
         configure(tempdir.path(), &mut config);
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -218,6 +221,7 @@ impl TestDaemon {
         };
         pdo::compose(&mut config, extensions, None)?;
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -245,6 +249,7 @@ impl TestDaemon {
             ..DaemonConfig::default()
         };
         pdo::compose(&mut config, extensions, None)?;
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             repo_root.to_path_buf(),
@@ -274,6 +279,7 @@ impl TestDaemon {
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -335,6 +341,7 @@ impl TestDaemon {
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -397,6 +404,7 @@ impl TestDaemon {
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -448,6 +456,7 @@ impl TestDaemon {
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -508,6 +517,7 @@ impl TestDaemon {
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -563,6 +573,7 @@ impl TestDaemon {
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -614,6 +625,7 @@ impl TestDaemon {
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -669,6 +681,7 @@ impl TestDaemon {
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -1051,6 +1064,13 @@ impl Drop for TestDaemon {
             }
         }
     }
+}
+
+/// A suite run from a node session inherits that instance's settings through
+/// the environment; the daemon under test must start from none of them. No
+/// test sets these variables (nextest runs one process per test).
+fn scrub_host_env() {
+    std::env::remove_var(pdo_kernel::public_url::PUBLIC_URL_ENV);
 }
 
 #[allow(dead_code)]

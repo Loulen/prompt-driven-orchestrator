@@ -994,6 +994,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         getDropPosition={computeDropPosition}
         infoOpen={infoOpen}
         onToggleInfo={onToggleInfo}
+        infoLabel={tab != null && tab.runId != null ? "Run info" : "Pipeline info"}
         // #302 / ADR-0048: the Assistant is a template-only affordance — a
         // library template tab has no `runId`. On a run canvas the Bot is absent;
         // the Manager tab is reached via `(i)` there.

@@ -1,5 +1,12 @@
 import { Fragment, useMemo, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Combine, Info } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Combine,
+  GitFork,
+  Info,
+} from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -14,6 +21,7 @@ import type {
   PerformanceEffortEntity,
   StatsCost,
   StatsCostAggregate,
+  StatsCostDepth,
   StatsCostEntity,
   StatsCostPeriod,
   StatsEffortCostEntity,
@@ -129,19 +137,30 @@ function EmptyNote({ children }: { children: React.ReactNode }) {
  *  otherwise, and explicit about what was left out. */
 function CohortLine({
   completedOnly,
+  rolledUp = false,
   note,
 }: {
   completedOnly: boolean;
+  /** « Roll up child runs » (ADR-0081): the cohort is the root runs, each
+   *  with its tree — amber, like any cohort that is not the default one. */
+  rolledUp?: boolean;
   /** An extra clause for a tab the cohort does not govern. */
   note?: string;
 }) {
   return (
     <div
       data-testid="stats-cohort-line"
-      className={completedOnly ? "text-st-await" : "text-fg-4"}
+      className={completedOnly || rolledUp ? "text-st-await" : "text-fg-4"}
       style={{ fontSize: "10.5px" }}
     >
-      Cohort: runs started in the period
+      {rolledUp ? (
+        <>
+          Cohort: <span className="font-medium">root runs</span> started in the
+          period · child runs counted under their root run
+        </>
+      ) : (
+        "Cohort: runs started in the period"
+      )}
       {completedOnly ? (
         <>
           {" · "}
@@ -336,6 +355,7 @@ function MasterList<T extends AbsorbableRow>({
   ariaLabel = "Spenders",
   monoName = false,
   selection,
+  badge,
 }: {
   rows: T[];
   selected: string | null;
@@ -351,6 +371,9 @@ function MasterList<T extends AbsorbableRow>({
    *  Ctrl/Cmd-click, Shift-click and Space select. Absent where the rows do not
    *  combine (« By project »). */
   selection?: MasterSelection;
+  /** A discreet mark after a row's name — the « ⑂ N » of a root Pipeline
+   *  under « roll up child runs » (ADR-0081). */
+  badge?: (row: T) => React.ReactNode;
 }) {
   const options = [{ id: "__total__", name: "Total" } as T, ...rows];
   const order = rows.map((row) => row.id);
@@ -442,6 +465,7 @@ function MasterList<T extends AbsorbableRow>({
               <span className={`truncate ${monoName ? "font-mono" : ""}`}>
                 {row.name}
               </span>
+              {!isTotal && badge?.(row)}
               {selection && absorbed > 0 && (
                 <CombinedIcon
                   count={absorbed}
@@ -1287,20 +1311,70 @@ function CostTable({
   );
 }
 
-type CostAxis = "pipeline" | "project" | "model";
+export type CostAxis = "pipeline" | "project" | "model";
+
+/** A small uppercase tag after a roll-up row's name (« this run's own nodes »,
+ *  « 3 runs · 2 levels »). */
+function RollUpTag({ children }: { children: React.ReactNode }) {
+  return (
+    <span
+      className="ml-2 rounded border border-line-strong px-1 uppercase tracking-wide text-fg-4"
+      style={{ fontSize: "8.5px" }}
+      data-testid="stats-roll-up-tag"
+    >
+      {children}
+    </span>
+  );
+}
+
+const plural = (count: number, word: string) =>
+  `${count} ${word}${count === 1 ? "" : "s"}`;
+
+/** « ⑂ N » after a root Pipeline that orchestrated N child runs (roll-up on). */
+function RollUpBadge({ row }: { row: StatsCostEntity }) {
+  const childRuns = row.roll_up?.children.runs ?? 0;
+  if (!row.roll_up || childRuns === 0) return null;
+  return (
+    <span
+      role="img"
+      aria-label={`Orchestrated ${plural(childRuns, "child run")}`}
+      data-testid="stats-roll-up-badge"
+      className="inline-flex shrink-0 items-center gap-0.5 text-fg-4"
+      style={{ fontSize: "9.5px" }}
+    >
+      <GitFork size={9} aria-hidden="true" />
+      {childRuns}
+    </span>
+  );
+}
+
+/** Where the drill stands inside a root Pipeline's roll-up (ADR-0081). */
+interface RollUpPath {
+  branch: "parent" | "children" | null;
+  depth: number | null;
+  pipelineId: string | null;
+}
+
+const ROLL_UP_ROOT: RollUpPath = { branch: null, depth: null, pipelineId: null };
 
 function CostTab({
   cost,
   error,
   uncombined,
   onAbsorptionsChanged,
+  axis,
+  onAxisChange,
 }: {
   cost: StatsCost | null;
   error: string | null;
   uncombined: boolean;
   onAbsorptionsChanged: () => void;
+  /** The grouping, owned by the host: the band shows « roll up child runs »
+   *  on By pipeline and By project only. */
+  axis: CostAxis;
+  onAxisChange: (axis: CostAxis) => void;
 }) {
-  const [axis, setAxis] = useState<CostAxis>("pipeline");
+  const setAxis = onAxisChange;
   // #890 / #892: Pipelines on « By pipeline », Models on « By model », the Nodes
   // of the Pipeline on screen on every axis — never the Projects. #906: the
   // efforts of one model, and the couples of one Node. Switching the grouping
@@ -1326,6 +1400,8 @@ function CostTab({
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(
     null,
   );
+  // ADR-0081: inside a root Pipeline whose row carries a roll-up.
+  const [rollUpPath, setRollUpPath] = useState<RollUpPath>(ROLL_UP_ROOT);
 
   if (error) {
     return (
@@ -1342,6 +1418,7 @@ function CostTab({
     setSelectedModelId(null);
     setSelectedEffortId(null);
     setSelectedPipelineId(null);
+    setRollUpPath(ROLL_UP_ROOT);
   };
 
   // Model axis: resolve the drill path.
@@ -1375,28 +1452,65 @@ function CostTab({
         ) ?? null)
       : null;
 
+  // ADR-0081: the Pipeline row on screen (By pipeline: the selected row; By
+  // project: the drilled one) and, when it carries one, its roll-up path.
+  const pipelineRow =
+    axis === "pipeline" ? selected : axis === "project" ? drilledPipeline : null;
+  const rollUp = pipelineRow?.roll_up ?? null;
+  const rollUpDepth =
+    rollUp && rollUpPath.branch === "children" && rollUpPath.depth !== null
+      ? (rollUp.depths.find((depth) => depth.depth === rollUpPath.depth) ??
+        null)
+      : null;
+  const rollUpPipeline =
+    rollUpDepth && rollUpPath.pipelineId !== null
+      ? (rollUpDepth.pipelines.find(
+          (pipeline) => pipeline.id === rollUpPath.pipelineId,
+        ) ?? null)
+      : null;
+  const rollUpBranch: StatsCostEntity | null = !rollUp
+    ? null
+    : rollUpPath.branch === "parent"
+      ? rollUp.parent
+      : rollUpPath.branch === "children"
+        ? (rollUpPipeline ?? rollUpDepth ?? rollUp.children)
+        : null;
+
   const aggregate =
     axis === "model"
       ? (modelPipeline ?? effort ?? model ?? cost.total)
-      : (drilledPipeline ?? selected ?? cost.total);
+      : (rollUpBranch ?? drilledPipeline ?? selected ?? cost.total);
   const periods =
     axis === "model"
       ? ((modelPipeline ?? effort ?? model)?.by_period ?? cost.by_period)
-      : drilledPipeline
-        ? drilledPipeline.by_period
-        : selected
-          ? selected.by_period
-          : cost.by_period;
+      : rollUpBranch
+        ? rollUpBranch.by_period
+        : drilledPipeline
+          ? drilledPipeline.by_period
+          : selected
+            ? selected.by_period
+            : cost.by_period;
+
+  // The Pipeline whose Nodes the table shows, on whichever axis it was reached,
+  // with those Nodes — under a roll-up, the root's own (Parent run) or a child
+  // Pipeline's.
+  const nodeLevel: { pipeline: StatsCostEntity; nodes: StatsCostEntity[] } | null =
+    axis === "model"
+      ? modelPipeline && { pipeline: modelPipeline, nodes: modelPipeline.nodes }
+      : !pipelineRow
+        ? null
+        : !rollUp
+          ? { pipeline: pipelineRow, nodes: pipelineRow.nodes }
+          : rollUpPath.branch === "parent"
+            ? { pipeline: pipelineRow, nodes: rollUp.parent.nodes }
+            : rollUpPipeline
+              ? { pipeline: rollUpPipeline, nodes: rollUpPipeline.nodes }
+              : null;
 
   // The denominator the headline names (ADR-0065 §3): a model bucket counts
   // executions — the whole model axis reads "per execution" — and so does the
   // Node level of the other axes.
-  const atNodeLevel =
-    axis === "model"
-      ? true
-      : axis === "pipeline"
-        ? selected !== null
-        : drilledPipeline !== null;
+  const atNodeLevel = axis === "model" ? true : nodeLevel !== null;
   const detailUnit: "Run" | "execution" = atNodeLevel ? "execution" : "Run";
 
   const masterSelection =
@@ -1413,18 +1527,11 @@ function CostTab({
             count: RUNS_COUNT,
           })
         : undefined;
-  // The Pipeline whose Nodes the table shows, on whichever axis it was reached.
-  const nodePipeline =
-    axis === "model"
-      ? modelPipeline
-      : axis === "project"
-        ? drilledPipeline
-        : selected;
-  const nodeSelection = nodePipeline
+  const nodeSelection = nodeLevel
     ? absorption.selectionFor({
         dimension: "node",
-        scope: { key: nodePipeline.id, name: nodePipeline.name },
-        rows: nodePipeline.nodes,
+        scope: { key: nodeLevel.pipeline.id, name: nodeLevel.pipeline.name },
+        rows: nodeLevel.nodes,
         count: RUNS_COUNT,
         selectable: isCostNodeRow,
       })
@@ -1440,17 +1547,16 @@ function CostTab({
           preferred: hasExplicitEffort,
         })
       : undefined;
-  const coupleSelection: CoupleSelection | undefined = nodePipeline
+  const coupleSelection: CoupleSelection | undefined = nodeLevel
     ? (node) =>
         absorption.selectionFor({
           dimension: "couple",
           scope: {
-            key: coupleScope(nodePipeline.id, node.id),
-            name: `${node.name} (${nodePipeline.name})`,
+            key: coupleScope(nodeLevel.pipeline.id, node.id),
+            name: `${node.name} (${nodeLevel.pipeline.name})`,
           },
           rows: coupleRows(
-            nodePipeline.nodes.find((item) => item.id === node.id)?.models ??
-              [],
+            nodeLevel.nodes.find((item) => item.id === node.id)?.models ?? [],
           ),
           count: RUNS_COUNT,
           // Infrastructure and Unassigned are no Node: their couples show the
@@ -1459,6 +1565,15 @@ function CostTab({
           preferred: hasExplicitEffort,
         })
     : undefined;
+
+  // A Pipeline's name in a table of Pipelines: its combined members, and its
+  // « ⑂ N » under the roll-up.
+  const pipelineName = (row: StatsCostEntity) => (
+    <span className="inline-flex items-center gap-1.5">
+      <PipelineName row={row} onOpenMembers={masterSelection?.onOpenMembers} />
+      <RollUpBadge row={row} />
+    </span>
+  );
 
   let detailRows: StatsCostEntity[];
   let detailRenderName: ((row: StatsCostEntity) => React.ReactNode) | undefined;
@@ -1489,21 +1604,56 @@ function CostTab({
       );
       onOpen = (row) => setSelectedModelId(row.id);
     }
+  } else if (rollUp && nodeLevel) {
+    detailRows = nodeLevel.nodes;
+  } else if (rollUp && rollUpDepth) {
+    detailRows = rollUpDepth.pipelines;
+    detailRenderName = pipelineName;
+    onOpen = (row) => setRollUpPath({ ...rollUpPath, pipelineId: row.id });
+  } else if (rollUp && rollUpPath.branch === "children") {
+    detailRows = rollUp.depths;
+    detailRenderName = (row) => (
+      <>
+        {row.name}
+        <RollUpTag>{plural(row.runs ?? 0, "run")}</RollUpTag>
+      </>
+    );
+    onOpen = (row) =>
+      setRollUpPath({
+        branch: "children",
+        depth: (row as StatsCostDepth).depth,
+        pipelineId: null,
+      });
+  } else if (rollUp) {
+    detailRows = [rollUp.parent, rollUp.children];
+    detailRenderName = (row) => (
+      <>
+        {row.name}
+        <RollUpTag>
+          {row.id === rollUp.parent.id
+            ? "this run's own nodes"
+            : `${plural(rollUp.children.runs ?? 0, "run")} · ${plural(rollUp.levels, "level")}`}
+        </RollUpTag>
+      </>
+    );
+    onOpen = (row) =>
+      setRollUpPath({
+        branch: row.id === rollUp.parent.id ? "parent" : "children",
+        depth: null,
+        pipelineId: null,
+      });
   } else if (drilledPipeline) {
     detailRows = drilledPipeline.nodes;
   } else if (!selected) {
     detailRows = rows;
-    if (axis === "pipeline") {
-      detailRenderName = (row) => (
-        <PipelineName
-          row={row}
-          onOpenMembers={masterSelection?.onOpenMembers}
-        />
-      );
-    }
+    if (axis === "pipeline") detailRenderName = pipelineName;
   } else if (axis === "project") {
     detailRows = (selected as StatsProjectCostEntity).pipelines;
-    onOpen = (pipeline) => setDrilledPipelineId(pipeline.id);
+    detailRenderName = pipelineName;
+    onOpen = (pipeline) => {
+      setDrilledPipelineId(pipeline.id);
+      setRollUpPath(ROLL_UP_ROOT);
+    };
   } else {
     detailRows = selected.nodes;
   }
@@ -1544,9 +1694,30 @@ function CostTab({
     if (selected)
       crumbs.push({
         label: selected.name,
-        onClick: () => setDrilledPipelineId(null),
+        onClick: () => {
+          setDrilledPipelineId(null);
+          setRollUpPath(ROLL_UP_ROOT);
+        },
       });
-    if (drilledPipeline) crumbs.push({ label: drilledPipeline.name });
+    if (drilledPipeline)
+      crumbs.push({
+        label: drilledPipeline.name,
+        onClick: () => setRollUpPath(ROLL_UP_ROOT),
+      });
+    if (rollUp && rollUpPath.branch === "parent")
+      crumbs.push({ label: rollUp.parent.name });
+    if (rollUp && rollUpPath.branch === "children")
+      crumbs.push({
+        label: rollUp.children.name,
+        onClick: () =>
+          setRollUpPath({ branch: "children", depth: null, pipelineId: null }),
+      });
+    if (rollUpDepth)
+      crumbs.push({
+        label: rollUpDepth.name,
+        onClick: () => setRollUpPath({ ...rollUpPath, pipelineId: null }),
+      });
+    if (rollUpPipeline) crumbs.push({ label: rollUpPipeline.name });
   }
   // Every crumb but the last pops the levels it shadows (design: clickable
   // breadcrumb for all three axes once there are four levels).
@@ -1586,6 +1757,7 @@ function CostTab({
           valueLabel={(row) =>
             formatCostAmount(row.usd, row.partial, row.estimated)
           }
+          badge={axis === "pipeline" ? (row) => <RollUpBadge row={row} /> : undefined}
           selection={masterSelection}
           onSelect={(id) => {
             if (axis === "model") {
@@ -1595,6 +1767,7 @@ function CostTab({
             } else {
               setSelectedId(id);
               setDrilledPipelineId(null);
+              setRollUpPath(ROLL_UP_ROOT);
             }
           }}
         />
@@ -1650,7 +1823,7 @@ function CostTab({
         </div>
         <div className="mt-4 min-h-[240px]">
           <CostTable
-            key={`${axis}-${selectedId ?? ""}-${drilledPipelineId ?? ""}-${selectedModelId ?? ""}-${selectedEffortId ?? "total"}-${selectedPipelineId ?? ""}`}
+            key={`${axis}-${selectedId ?? ""}-${drilledPipelineId ?? ""}-${selectedModelId ?? ""}-${selectedEffortId ?? "total"}-${selectedPipelineId ?? ""}-${rollUpPath.branch ?? ""}-${rollUpPath.depth ?? ""}-${rollUpPath.pipelineId ?? ""}`}
             rows={detailRows}
             harnesses={tableHarnesses}
             unit={detailUnit}
@@ -1658,14 +1831,14 @@ function CostTab({
             renderName={detailRenderName}
             expandablePairs={axis !== "model"}
             selection={
-              detailRows === nodePipeline?.nodes
+              detailRows === nodeLevel?.nodes
                 ? nodeSelection
                 : detailRows === model?.efforts
                   ? effortSelection
                   : undefined
             }
             coupleSelection={
-              detailRows === nodePipeline?.nodes ? coupleSelection : undefined
+              detailRows === nodeLevel?.nodes ? coupleSelection : undefined
             }
           />
         </div>
@@ -2935,6 +3108,57 @@ function UncombinedChip({
   );
 }
 
+/** What « roll up child runs » does, said in words (no decision number). */
+export const ROLL_UP_COPY =
+  "Child runs count under the pipeline, the project and the period of their root run. A pipeline's cost then includes everything it orchestrated, and a child pipeline keeps only the runs nobody orchestrated. Resets each time Stats opens.";
+
+/** « Roll up child runs » (pdo-issues#3, ADR-0081): file every descendant's
+ *  cost under its root's Pipeline and Project. Same anatomy as the other
+ *  chips; off at each open (« Réglages de Stats éphémères »); By pipeline and
+ *  By project only. The (i) beside it says the rule. */
+function RollUpChip({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <button
+        type="button"
+        role="checkbox"
+        aria-checked={checked}
+        data-testid="stats-roll-up-children"
+        onClick={() => onChange(!checked)}
+        className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${
+          checked
+            ? "border-st-done bg-st-done/15 text-fg"
+            : "border-line-strong bg-bg-3 text-fg-2"
+        }`}
+      >
+        {checked ? (
+          <Check size={10} strokeWidth={3} aria-hidden="true" />
+        ) : (
+          <GitFork size={10} aria-hidden="true" />
+        )}
+        roll up child runs
+      </button>
+      <Tooltip content={ROLL_UP_COPY} side="bottom">
+        <span
+          role="img"
+          tabIndex={0}
+          aria-label={ROLL_UP_COPY}
+          data-testid="stats-roll-up-info"
+          className="inline-flex text-fg-4 hover:text-fg-2"
+        >
+          <Info size={12} />
+        </span>
+      </Tooltip>
+    </span>
+  );
+}
+
 const DURATION_MODE_LABEL: Record<DurationMode, string> = {
   total: "Total",
   active: "Active",
@@ -3084,12 +3308,15 @@ function CohortOnlyBand({
   completedOnly,
   onCompletedOnlyChange,
   uncombined,
+  rollUp,
 }: {
   label: string;
   completedOnly: boolean;
   onCompletedOnlyChange: (value: boolean) => void;
   /** The « Uncombined » chip, on the tabs that show Pipelines (not Overview). */
   uncombined?: { checked: boolean; onChange: (value: boolean) => void };
+  /** « Roll up child runs » — Cost, By pipeline and By project only. */
+  rollUp?: { checked: boolean; onChange: (value: boolean) => void };
 }) {
   return (
     <StatsFilterBand label={label} testid="stats-filter-band">
@@ -3100,6 +3327,12 @@ function CohortOnlyBand({
           checked={uncombined.checked}
           onChange={uncombined.onChange}
         />
+      )}
+      {rollUp && (
+        <>
+          <BandDivider />
+          <RollUpChip checked={rollUp.checked} onChange={rollUp.onChange} />
+        </>
       )}
     </StatsFilterBand>
   );
@@ -3688,6 +3921,14 @@ export interface StatsChartsProps {
   uncombined?: boolean;
   onUncombinedChange?: (value: boolean) => void;
   showUncombined?: boolean;
+  /** The Cost grouping (By pipeline / By project / By model). Owned by the
+   *  shell when given — the roll-up it gates feeds the fetch —, else kept here. */
+  costAxis?: CostAxis;
+  onCostAxisChange?: (axis: CostAxis) => void;
+  /** « Roll up child runs » (ADR-0081): Cost only, off at each open, shown on
+   *  By pipeline and By project. The roll-up itself happened in the daemon. */
+  rollUp?: boolean;
+  onRollUpChange?: (value: boolean) => void;
 }
 
 /** The legend each tab's band carries — it names the tab, not the endpoint. */
@@ -3714,11 +3955,25 @@ export default function StatsCharts({
   uncombined = false,
   onUncombinedChange = () => {},
   showUncombined = false,
+  costAxis,
+  onCostAxisChange = () => {},
+  rollUp = false,
+  onRollUpChange = () => {},
 }: StatsChartsProps) {
   // #759: subscribing here re-renders the whole chart subtree on a theme switch,
   // so every `CHART.*` / `harnessColor()` read below resolves against the new
   // palette. Recharts bakes colours into props; nothing re-themes on its own.
   useTheme();
+  const [localCostAxis, setLocalCostAxis] = useState<CostAxis>("pipeline");
+  const axis = costAxis ?? localCostAxis;
+  const setAxis = (next: CostAxis) => {
+    setLocalCostAxis(next);
+    onCostAxisChange(next);
+  };
+  // « By model » has no root Pipeline to file a child under: no chip there,
+  // and nothing rolled up.
+  const rollUpOffered = tab === "cost" && axis !== "model";
+  const rolledUp = rollUpOffered && rollUp;
 
   if (tab === "performance") {
     // Performance places its band and its cohort line itself — the band above
@@ -3747,6 +4002,8 @@ export default function StatsCharts({
           error={costError}
           uncombined={uncombined}
           onAbsorptionsChanged={onAbsorptionsChanged}
+          axis={axis}
+          onAxisChange={setAxis}
         />
       );
     if (!overview) return <EmptyNote>Loading…</EmptyNote>;
@@ -3775,9 +4032,15 @@ export default function StatsCharts({
               ? { checked: uncombined, onChange: onUncombinedChange }
               : undefined
           }
+          rollUp={
+            rollUpOffered
+              ? { checked: rollUp, onChange: onRollUpChange }
+              : undefined
+          }
         />
         <CohortLine
           completedOnly={completedOnly}
+          rolledUp={rolledUp}
           note={
             // Trigger fires are not Runs: the cohort selects which Runs are
             // counted, and says so rather than implying it filtered the fires.

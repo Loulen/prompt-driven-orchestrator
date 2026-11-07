@@ -139,3 +139,100 @@ describe("OrchestrationTab child Status icons (#999)", () => {
     expect(icons[0]).toHaveAccessibleName("Failed");
   });
 });
+
+// pdo-issues#3 (ADR-0081): each child shows its tree cost; a child that has
+// descendants wears a « ⑂ N » badge whose tooltip splits it; Σ sums tree costs.
+describe("OrchestrationTab tree cost", () => {
+  const claude = (usd: number, partial = false) => ({
+    usd,
+    partial,
+    unpriced_models: partial ? ["mystery"] : [],
+    by_harness: [
+      { harness: "claude", usd, form: "derived" as const, partial, unpriced_models: partial ? ["mystery"] : [] },
+    ],
+  });
+  const orchestrating = child("a", {
+    status: "completed",
+    cost: claude(2.41),
+    tree_cost: {
+      total: claude(3.76),
+      parent: claude(2.41),
+      children: claude(1.35),
+      descendants: 1,
+      by_depth: [{ depth: 1, runs: 1, cost: claude(1.35) }],
+      unavailable_runs: 0,
+    },
+  });
+  const leaf = child("b", { status: "completed", cost: claude(1.21) });
+
+  it("shows the child's tree cost, a fork badge only on a child with descendants, and Σ of tree costs", () => {
+    const children = [orchestrating, leaf];
+    render(
+      <OrchestrationTab
+        childRuns={children}
+        counts={countChildren(children)}
+        nodeLive={false}
+        nodeAwaiting={false}
+        onOpenChild={() => {}}
+      />,
+    );
+    const rows = screen.getAllByTestId("orchestration-child");
+    expect(rows[0].querySelector('[data-testid="orchestration-child-cost"]')).toHaveTextContent("~$3.76");
+    expect(rows[0].querySelector('[data-testid="orchestration-child-tree-badge"]')).toHaveTextContent("1");
+    expect(rows[1].querySelector('[data-testid="orchestration-child-cost"]')).toHaveTextContent("~$1.21");
+    expect(rows[1].querySelector('[data-testid="orchestration-child-tree-badge"]')).toBeNull();
+    const sum = screen.getByTestId("orchestration-sum");
+    expect(sum).toHaveTextContent("Σ ~$4.97");
+    expect(sum).toHaveAttribute("title", "Sum of the children's tree costs (grandchildren included)");
+  });
+
+  it("splits the tree cost into Parent run / Child runs (N) in the badge's tooltip", async () => {
+    render(
+      <OrchestrationTab
+        childRuns={[orchestrating]}
+        counts={countChildren([orchestrating])}
+        nodeLive={false}
+        nodeAwaiting={false}
+        onOpenChild={() => {}}
+      />,
+    );
+    const badge = screen.getByTestId("orchestration-child-tree-badge");
+    expect(badge).toHaveAttribute("aria-label", "Tree cost: parent run ~$2.41, 1 child run ~$1.35");
+    fireEvent.pointerMove(badge);
+    fireEvent.focus(badge);
+    const tip = await screen.findAllByTestId("orchestration-child-tree-tooltip");
+    expect(tip[0]).toHaveTextContent("Parent run");
+    expect(tip[0]).toHaveTextContent("~$2.41");
+    expect(tip[0]).toHaveTextContent("Child runs (1)");
+    expect(tip[0]).toHaveTextContent("~$1.35");
+    expect(tip[0]).toHaveTextContent("Tree cost: this child run and its descendants.");
+  });
+
+  it("renders '—' for a child whose tree total is unavailable, and Σ marks itself partial", () => {
+    const broken = child("c", {
+      status: "completed",
+      cost: claude(1),
+      tree_cost: {
+        total: null,
+        parent: claude(1),
+        children: null,
+        descendants: 1,
+        by_depth: [{ depth: 1, runs: 1, cost: null }],
+        unavailable_runs: 1,
+      },
+    });
+    const children = [broken, leaf];
+    render(
+      <OrchestrationTab
+        childRuns={children}
+        counts={countChildren(children)}
+        nodeLive={false}
+        nodeAwaiting={false}
+        onOpenChild={() => {}}
+      />,
+    );
+    const rows = screen.getAllByTestId("orchestration-child");
+    expect(rows[0].querySelector('[data-testid="orchestration-child-cost"]')).toHaveTextContent("—");
+    expect(screen.getByTestId("orchestration-sum")).toHaveTextContent("Σ ~$1.21†");
+  });
+});

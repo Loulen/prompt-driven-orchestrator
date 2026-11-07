@@ -41,6 +41,9 @@ mod run_create_upload_errors;
 #[path = "stats_cost_by_model.rs"]
 mod stats_cost_by_model;
 
+#[path = "run_tree_cost.rs"]
+mod run_tree_cost;
+
 #[path = "update_apply.rs"]
 mod update_apply;
 #[path = "update_check.rs"]

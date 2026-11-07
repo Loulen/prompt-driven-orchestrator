@@ -7,7 +7,7 @@
 // The vocabulary lives here ONCE so the per-run row and the charts stay
 // byte-identical.
 
-import type { HarnessCost, NodeCost } from "../types";
+import type { CostStat, HarnessCost, NodeCost, TreeCost } from "../types";
 
 /** Adaptive precision: sub-dollar estimates show 4 decimals, else 2 (#272). */
 export function costPrecision(usd: number): number {
@@ -239,4 +239,47 @@ export function formatEstCost(
     dagger: partial,
     title: COST_ESTIMATE_NOTE + (partial ? lowerBoundClause(unpricedModels) : ""),
   };
+}
+
+/**
+ * A daemon `CostStat` through {@link formatEstCost}; `null`/absent ⇒ "—" (the
+ * cost could not be computed), never `$0`.
+ */
+export function formatCostStat(cost: CostStat | null | undefined): CostLabel {
+  if (!cost) return { text: "—", dagger: false, title: COST_ESTIMATE_NOTE };
+  return formatEstCost(
+    cost.usd,
+    cost.partial,
+    cost.unpriced_models ?? [],
+    cost.uncosted_harnesses ?? [],
+    cost.by_harness ?? [],
+  );
+}
+
+/** « Includes this run and its N child runs. » — the tree-cost tooltip clause. */
+export function treeIncludesClause(descendants: number): string {
+  return ` Includes this run and its ${descendants} child run${descendants === 1 ? "" : "s"}.`;
+}
+
+/**
+ * The **Coût de l'arbre** of a Run (pdo-issues#3): its total through the shared
+ * honesty vocabulary, plus a tooltip that says what the figure covers. A total
+ * the daemon refused (a member's cost cannot be computed) renders "—" and says
+ * how many runs are missing; a member with no cost source keeps the existing
+ * "—" + harness reason; a lower-bound member makes the total `†`.
+ */
+export function formatTreeCost(tree: TreeCost): CostLabel {
+  const includes = treeIncludesClause(tree.descendants);
+  if (!tree.total) {
+    const n = Math.max(tree.unavailable_runs, 1);
+    return {
+      text: "—",
+      dagger: false,
+      title: `${COST_ESTIMATE_NOTE} Cost unavailable: the cost of ${n} run${
+        n === 1 ? "" : "s"
+      } in this tree cannot be computed.${includes}`,
+    };
+  }
+  const label = formatCostStat(tree.total);
+  return { ...label, title: `${label.title}${includes}` };
 }

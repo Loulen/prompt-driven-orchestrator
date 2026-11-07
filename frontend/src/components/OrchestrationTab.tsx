@@ -5,10 +5,13 @@ import { isLiveRun } from "../types";
 import { formatDuration } from "../lib/runDuration";
 import { runStatusKey, type StatusKey } from "../lib/statusTable";
 import StatusIcon from "./StatusIcon";
-import { formatCostAmount } from "../lib/costLabel";
+import { formatCostAmount, formatCostStat } from "../lib/costLabel";
+import { Tooltip, TooltipProvider } from "./ui/tooltip";
+import type { TreeCost } from "../types";
 import {
   childCostKnown,
   childCostText,
+  childTreeCost,
   type ChildCounts,
   type RunChildEntry,
   totalChildren,
@@ -106,6 +109,46 @@ function useNow(live: boolean): number | null {
   return live ? now : null;
 }
 
+/**
+ * « ⑂ N » before a child's amount when that child orchestrated runs of its own
+ * (pdo-issues#3): the amount is then its tree cost, and the tooltip splits it
+ * into Parent run / Child runs (N).
+ */
+function TreeCostBadge({ tree }: { tree: TreeCost }) {
+  const parent = formatCostStat(tree.parent);
+  const children = formatCostStat(tree.children);
+  const amount = (label: typeof parent) => `${label.text}${label.dagger ? "†" : ""}`;
+  const content = (
+    <div className="flex flex-col gap-0.5" data-testid="orchestration-child-tree-tooltip">
+      <div className="grid grid-cols-[1fr_auto] gap-x-4 font-mono">
+        <span>Parent run</span>
+        <span className="text-right">{amount(parent)}</span>
+        <span>Child runs ({tree.descendants})</span>
+        <span className="text-right">{amount(children)}</span>
+      </div>
+      <span className="text-fg-3">Tree cost: this child run and its descendants.</span>
+    </div>
+  );
+  return (
+    <TooltipProvider>
+      <Tooltip content={content}>
+        <span
+          data-testid="orchestration-child-tree-badge"
+          aria-label={`Tree cost: parent run ${amount(parent)}, ${tree.descendants} child run${
+            tree.descendants === 1 ? "" : "s"
+          } ${amount(children)}`}
+          role="img"
+          className="inline-flex items-center gap-0.5 rounded border border-line-strong px-1 text-fg-3"
+          style={{ fontSize: "9px", lineHeight: "12px" }}
+        >
+          <GitFork size={8} aria-hidden />
+          {tree.descendants}
+        </span>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 function ChildRow({
   child,
   onOpen,
@@ -180,8 +223,9 @@ function ChildRow({
             {live ? "…" : ""}
           </span>
         )}
-        <span data-testid="orchestration-child-cost" className="ml-auto">
-          {childCostText(child.cost)}
+        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          {child.tree_cost && <TreeCostBadge tree={child.tree_cost} />}
+          <span data-testid="orchestration-child-cost">{childCostText(childTreeCost(child))}</span>
         </span>
       </div>
     </li>
@@ -252,10 +296,10 @@ export function OrchestrationTab({
         <span>
           {childRuns.length} child run{childRuns.length > 1 ? "s" : ""}
         </span>
-        <span title="Sum of the children's estimated costs">
+        <span title="Sum of the children's tree costs (grandchildren included)" data-testid="orchestration-sum">
           Σ{" "}
           {(() => {
-            const known = childRuns.map((c) => childCostKnown(c.cost));
+            const known = childRuns.map((c) => childCostKnown(childTreeCost(c)));
             const summable = known.filter((v): v is number => v != null);
             if (summable.length === 0) return "—";
             const sum = summable.reduce((acc, v) => acc + v, 0);

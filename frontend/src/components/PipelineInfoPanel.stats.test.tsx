@@ -275,3 +275,182 @@ describe("PipelineInfoPanel — Stats block (#100)", () => {
     expect(screen.getByTestId("stat-cost")).toHaveTextContent("~$1.50 via claude");
   });
 });
+
+// pdo-issues#3 (ADR-0081): « Est. cost » of a Run that has child runs is its
+// tree cost, always expanded into Parent run / Child runs (N), with a Depth N
+// level only when the tree is deeper than one level.
+describe("PipelineInfoPanel — tree cost (Run with child runs)", () => {
+  const claude = (usd: number, partial = false) => ({
+    usd,
+    partial,
+    unpriced_models: partial ? ["mystery-model"] : [],
+    by_harness: [
+      {
+        harness: "claude",
+        usd,
+        form: "derived" as const,
+        partial,
+        unpriced_models: partial ? ["mystery-model"] : [],
+      },
+    ],
+  });
+
+  it("shows the tree cost with Parent run and Child runs (N) on a one-level tree", () => {
+    renderPanel(
+      makeRun({
+        cost: claude(1.84),
+        tree_cost: {
+          total: claude(6.81),
+          parent: claude(1.84),
+          children: claude(4.97),
+          descendants: 3,
+          by_depth: [{ depth: 1, runs: 3, cost: claude(4.97) }],
+          unavailable_runs: 0,
+        },
+      }),
+    );
+    expect(screen.getByTestId("stat-cost-total")).toHaveTextContent("~$6.81");
+    expect(screen.getByTestId("stat-cost-parent")).toHaveTextContent("Parent run");
+    expect(screen.getByTestId("stat-cost-parent")).toHaveTextContent("~$1.84");
+    expect(screen.getByTestId("stat-cost-children")).toHaveTextContent("Child runs (3)");
+    expect(screen.getByTestId("stat-cost-children")).toHaveTextContent("~$4.97");
+    // One level only: no Depth breakdown.
+    expect(screen.queryByTestId("stat-cost-depths")).toBeNull();
+    const title = screen.getByTestId("stat-cost-total").parentElement?.getAttribute("title") ?? "";
+    expect(title).toMatch(/estimate/i);
+    expect(title).toContain("Includes this run and its 3 child runs.");
+    // No decision reference in a visible string.
+    expect(screen.getByTestId("stat-cost").textContent).not.toMatch(/ADR|#\d/);
+    expect(title).not.toMatch(/ADR|#\d/);
+  });
+
+  it("adds a Depth N (k runs) level when the tree is deeper than one level", () => {
+    renderPanel(
+      makeRun({
+        tree_cost: {
+          total: claude(6.81),
+          parent: claude(1.84),
+          children: claude(4.97),
+          descendants: 3,
+          by_depth: [
+            { depth: 1, runs: 2, cost: claude(3.62) },
+            { depth: 2, runs: 1, cost: claude(1.35) },
+          ],
+          unavailable_runs: 0,
+        },
+      }),
+    );
+    expect(screen.getByTestId("stat-cost-depth-1")).toHaveTextContent("Depth 1 (2 runs)");
+    expect(screen.getByTestId("stat-cost-depth-1")).toHaveTextContent("~$3.62");
+    expect(screen.getByTestId("stat-cost-depth-2")).toHaveTextContent("Depth 2 (1 run)");
+    expect(screen.getByTestId("stat-cost-depth-2")).toHaveTextContent("~$1.35");
+  });
+
+  it("keeps the per-harness ventilation of the tree total", () => {
+    const mixed = {
+      usd: 6.81,
+      partial: false,
+      unpriced_models: [],
+      by_harness: [
+        { harness: "claude", usd: 5.9, form: "derived" as const, partial: false, unpriced_models: [] },
+        { harness: "codex", usd: 0.91, form: "derived" as const, partial: false, unpriced_models: [] },
+      ],
+    };
+    renderPanel(
+      makeRun({
+        tree_cost: {
+          total: mixed,
+          parent: claude(1.84),
+          children: claude(4.97),
+          descendants: 1,
+          by_depth: [{ depth: 1, runs: 1, cost: claude(4.97) }],
+          unavailable_runs: 0,
+        },
+      }),
+    );
+    expect(screen.getByTestId("stat-cost-ventilation")).toHaveTextContent(
+      "~$5.90 via claude · ~$0.9100 via codex",
+    );
+  });
+
+  it("puts † on the total and on Child runs when a child is a lower bound", () => {
+    renderPanel(
+      makeRun({
+        tree_cost: {
+          total: claude(3.2, true),
+          parent: claude(0.95),
+          children: claude(2.25, true),
+          descendants: 2,
+          by_depth: [{ depth: 1, runs: 2, cost: claude(2.25, true) }],
+          unavailable_runs: 0,
+        },
+      }),
+    );
+    expect(screen.getByTestId("stat-cost-total")).toHaveTextContent("~$3.20†");
+    expect(screen.getByTestId("stat-cost-children")).toHaveTextContent("~$2.25†");
+    expect(screen.getByTestId("stat-cost-parent")).not.toHaveTextContent("†");
+  });
+
+  it("renders '—' on the total when a child has no cost source, Parent run staying readable", () => {
+    const uncosted = { usd: 0, partial: false, unpriced_models: [], uncosted_harnesses: ["opencode"] };
+    renderPanel(
+      makeRun({
+        tree_cost: {
+          total: { ...uncosted, by_harness: claude(0.95).by_harness },
+          parent: claude(0.95),
+          children: uncosted,
+          descendants: 2,
+          by_depth: [{ depth: 1, runs: 2, cost: uncosted }],
+          unavailable_runs: 0,
+        },
+      }),
+    );
+    expect(screen.getByTestId("stat-cost-total")).toHaveTextContent("—");
+    expect(screen.getByTestId("stat-cost-total")).not.toHaveTextContent("$");
+    expect(screen.getByTestId("stat-cost-parent")).toHaveTextContent("~$0.9500");
+    expect(screen.getByTestId("stat-cost-children")).toHaveTextContent("—");
+    const title = screen.getByTestId("stat-cost-total").parentElement?.getAttribute("title") ?? "";
+    expect(title).toMatch(/cost unavailable/i);
+    expect(title).toContain("opencode");
+  });
+
+  it("renders '—' with a reason when a child's cost cannot be computed", () => {
+    renderPanel(
+      makeRun({
+        tree_cost: {
+          total: null,
+          parent: claude(0.95),
+          children: null,
+          descendants: 1,
+          by_depth: [{ depth: 1, runs: 1, cost: null }],
+          unavailable_runs: 1,
+        },
+      }),
+    );
+    expect(screen.getByTestId("stat-cost-total")).toHaveTextContent("—");
+    expect(screen.getByTestId("stat-cost-parent")).toHaveTextContent("~$0.9500");
+    const title = screen.getByTestId("stat-cost-total").parentElement?.getAttribute("title") ?? "";
+    expect(title).toMatch(/cannot be computed/i);
+  });
+
+  it("leaves a Run without children strictly unchanged (single line)", () => {
+    renderPanel(makeRun({ tree_cost: null }));
+    expect(screen.getByTestId("stat-cost")).toHaveTextContent("~$1.23");
+    expect(screen.queryByTestId("stat-cost-tree")).toBeNull();
+    expect(screen.queryByText(/Parent run/)).toBeNull();
+  });
+});
+
+describe("PipelineInfoPanel — contextual title", () => {
+  it("says « Run info » when a Run is selected", () => {
+    renderPanel(makeRun());
+    expect(screen.getByTestId("info-panel-title")).toHaveTextContent("Run info");
+    expect(screen.getByTestId("info-panel-close")).toHaveAttribute("aria-label", "Close run info");
+  });
+
+  it("says « Pipeline info » in the editor without a Run", () => {
+    renderPanel(null);
+    expect(screen.getByTestId("info-panel-title")).toHaveTextContent("Pipeline info");
+    expect(screen.getByTestId("info-panel-close")).toHaveAttribute("aria-label", "Close pipeline info");
+  });
+});

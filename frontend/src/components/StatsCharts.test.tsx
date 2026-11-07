@@ -12,6 +12,7 @@ import {
 import type {
   PerformanceModelEffortPair,
   StatsCost,
+  StatsCostEntity,
   StatsDistribution,
   StatsHarnessCost,
   StatsModelEffortPair,
@@ -2617,5 +2618,231 @@ describe("StatsCharts — Performance zoom, median and axes (#811)", () => {
     await user.click(screen.getByRole("option", { name: /Spiky/ }));
     expect(screen.getByRole("radio", { name: "Box" })).toHaveAttribute("aria-checked", "true");
     expect(durationPlots()[0]).toHaveAttribute("data-scale-max", "40000");
+  });
+});
+
+// --- « Roll up child runs » (#1033, ADR-0081) ---------------------------------
+
+const costRow = (
+  id: string,
+  name: string,
+  usd: number,
+  extra: Partial<StatsCostEntity> = {},
+): StatsCostEntity => ({
+  id,
+  name,
+  ...EMPTY_COST.total,
+  usd,
+  median_usd: usd,
+  executions: 1,
+  readable: 1,
+  by_period: [],
+  nodes: [],
+  ...extra,
+});
+
+const ORCH_WORKER = costRow("worker", "Orchestrate", 1.84, { runs: 1 });
+const CHILD_WORKER = costRow("impl-worker", "Implement", 4.2, { runs: 2 });
+const GRAND_WORKER = costRow("review-worker", "Review", 0.77, { runs: 1 });
+const ROLLED_COST: StatsCost = {
+  ...EMPTY_COST,
+  harnesses: ["claude"],
+  total: { ...EMPTY_COST.total, usd: 11.4, executions: 6, readable: 6 },
+  by_pipeline: [
+    costRow("grill-orchestrate", "grill-orchestrate", 6.81, {
+      runs: 1,
+      nodes: [ORCH_WORKER],
+      roll_up: {
+        parent: costRow("parent_run", "Parent run", 1.84, { runs: 1, nodes: [ORCH_WORKER] }),
+        children: costRow("child_runs", "Child runs", 4.97, { runs: 3 }),
+        levels: 2,
+        depths: [
+          {
+            ...costRow("depth:1", "Depth 1", 4.2, { runs: 2 }),
+            depth: 1,
+            pipelines: [
+              costRow("implement-ticket", "implement-ticket", 4.2, {
+                runs: 2,
+                nodes: [CHILD_WORKER],
+              }),
+            ],
+          },
+          {
+            ...costRow("depth:2", "Depth 2", 0.77, { runs: 1 }),
+            depth: 2,
+            pipelines: [
+              costRow("code-review", "code-review", 0.77, { runs: 1, nodes: [GRAND_WORKER] }),
+            ],
+          },
+        ],
+      },
+    }),
+    costRow("triage", "triage", 3.5, { runs: 2 }),
+  ],
+};
+ROLLED_COST.by_project = [
+  {
+    ...costRow("prj", "PDO", 10.31),
+    pipelines: ROLLED_COST.by_pipeline,
+  },
+];
+
+describe("StatsCharts — « Roll up child runs » (#1033)", () => {
+  it("offers the chip on By pipeline and By project only, with its rule in the (i)", async () => {
+    const user = userEvent.setup();
+    const onRollUpChange = vi.fn();
+    render(
+      <StatsCharts
+        tab="cost"
+        overview={null}
+        cost={COST}
+        costError={null}
+        onRollUpChange={onRollUpChange}
+      />,
+    );
+
+    const chip = screen.getByTestId("stats-roll-up-children");
+    expect(chip).toHaveAttribute("role", "checkbox");
+    expect(chip).toHaveAttribute("aria-checked", "false");
+    expect(chip).toHaveTextContent("roll up child runs");
+    expect(within(screen.getByTestId("stats-filter-band")).getByTestId("stats-roll-up-children")).toBe(
+      chip,
+    );
+    const info = screen.getByTestId("stats-roll-up-info");
+    await user.hover(info);
+    const tooltip = await screen.findByTestId("tooltip-content");
+    expect(tooltip).toHaveTextContent(
+      "Child runs count under the pipeline, the project and the period of their root run.",
+    );
+    expect(tooltip).toHaveTextContent("Resets each time Stats opens.");
+    expect(tooltip.textContent).not.toMatch(/ADR|#\d/);
+
+    await user.click(chip);
+    expect(onRollUpChange).toHaveBeenCalledWith(true);
+
+    const grouping = screen.getByRole("combobox", { name: "Cost grouping" });
+    await user.selectOptions(grouping, "project");
+    expect(screen.getByTestId("stats-roll-up-children")).toBeInTheDocument();
+    await user.selectOptions(grouping, "model");
+    expect(screen.queryByTestId("stats-roll-up-children")).not.toBeInTheDocument();
+    await user.selectOptions(grouping, "pipeline");
+    expect(screen.getByTestId("stats-roll-up-children")).toBeInTheDocument();
+  });
+
+  it("is a Cost control: no chip on the other tabs", () => {
+    render(<StatsCharts tab="sessions" overview={OVERVIEW} cost={null} costError={null} />);
+    expect(screen.queryByTestId("stats-roll-up-children")).not.toBeInTheDocument();
+  });
+
+  it("turns the cohort line amber and names the root-run cohort when on", () => {
+    const { rerender } = render(
+      <StatsCharts tab="cost" overview={null} cost={COST} costError={null} />,
+    );
+    expect(screen.getByTestId("stats-cohort-line")).toHaveClass("text-fg-4");
+    expect(screen.getByTestId("stats-cohort-line")).toHaveTextContent(
+      "Cohort: runs started in the period",
+    );
+
+    rerender(<StatsCharts tab="cost" overview={null} cost={ROLLED_COST} costError={null} rollUp />);
+    const line = screen.getByTestId("stats-cohort-line");
+    expect(line).toHaveClass("text-st-await");
+    expect(line).toHaveTextContent(
+      "Cohort: root runs started in the period · child runs counted under their root run",
+    );
+    expect(screen.getByTestId("stats-roll-up-children")).toHaveAttribute("aria-checked", "true");
+
+    // « By model » is never rolled up: the line says the plain cohort there.
+    rerender(
+      <StatsCharts
+        tab="cost"
+        overview={null}
+        cost={ROLLED_COST}
+        costError={null}
+        rollUp
+        costAxis="model"
+      />,
+    );
+    expect(screen.getByTestId("stats-cohort-line")).toHaveTextContent(
+      "Cohort: runs started in the period",
+    );
+    expect(screen.getByTestId("stats-cohort-line")).toHaveClass("text-fg-4");
+  });
+
+  it("marks a root pipeline « ⑂ N » and drills Parent run | Child runs › Depth N › child pipeline › Nodes", async () => {
+    const user = userEvent.setup();
+    render(<StatsCharts tab="cost" overview={null} cost={ROLLED_COST} costError={null} rollUp />);
+
+    const root = screen.getByRole("option", { name: /grill-orchestrate/ });
+    expect(within(root).getByTestId("stats-roll-up-badge")).toHaveTextContent("3");
+    expect(
+      within(screen.getByRole("option", { name: /triage/ })).queryByTestId("stats-roll-up-badge"),
+    ).not.toBeInTheDocument();
+
+    await user.click(root);
+    let rows = screen.getAllByTestId("stats-detail-row");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("Child runs");
+    expect(rows[0]).toHaveTextContent("3 runs · 2 levels");
+    expect(rows[0]).toHaveTextContent("~$4.97");
+    expect(rows[1]).toHaveTextContent("Parent run");
+    expect(rows[1]).toHaveTextContent("this run's own nodes");
+    expect(rows[1]).toHaveTextContent("~$1.84");
+    expect(screen.getByTestId("stats-selection-headline")).toHaveTextContent(
+      "~$6.81 total · ~$6.81 median per Run",
+    );
+
+    // Parent run opens on the root's own Nodes.
+    await user.click(screen.getByRole("button", { name: "Open Parent run" }));
+    expect(screen.getByTestId("stats-cost-breadcrumb")).toHaveTextContent(
+      "Total / grill-orchestrate / Parent run",
+    );
+    expect(screen.getAllByTestId("stats-detail-row")[0]).toHaveTextContent("Orchestrate");
+    expect(screen.getByTestId("stats-selection-headline")).toHaveTextContent(
+      "median per execution",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Back to grill-orchestrate" }));
+    await user.click(screen.getByRole("button", { name: "Open Child runs" }));
+    rows = screen.getAllByTestId("stats-detail-row");
+    expect(rows[0]).toHaveTextContent("Depth 1");
+    expect(rows[0]).toHaveTextContent("2 runs");
+    expect(rows[1]).toHaveTextContent("Depth 2");
+    expect(rows[1]).toHaveTextContent("1 run");
+
+    await user.click(screen.getByRole("button", { name: "Open Depth 1" }));
+    await user.click(screen.getByRole("button", { name: "Open implement-ticket" }));
+    expect(screen.getByTestId("stats-cost-breadcrumb")).toHaveTextContent(
+      "Total / grill-orchestrate / Child runs / Depth 1 / implement-ticket",
+    );
+    expect(screen.getAllByTestId("stats-detail-row")[0]).toHaveTextContent("Implement");
+
+    // The crumbs pop back level by level.
+    await user.click(screen.getByRole("button", { name: "Back to Child runs" }));
+    expect(screen.getAllByTestId("stats-detail-row")[0]).toHaveTextContent("Depth 1");
+  });
+
+  it("drills the same levels under a Project", async () => {
+    const user = userEvent.setup();
+    render(
+      <StatsCharts
+        tab="cost"
+        overview={null}
+        cost={ROLLED_COST}
+        costError={null}
+        rollUp
+        costAxis="project"
+      />,
+    );
+    await user.click(screen.getByRole("option", { name: /PDO/ }));
+    const pipelineRow = screen.getAllByTestId("stats-detail-row")[0];
+    expect(within(pipelineRow).getByTestId("stats-roll-up-badge")).toHaveTextContent("3");
+    await user.click(screen.getByRole("button", { name: "Open grill-orchestrate" }));
+    await user.click(screen.getByRole("button", { name: "Open Child runs" }));
+    await user.click(screen.getByRole("button", { name: "Open Depth 2" }));
+    await user.click(screen.getByRole("button", { name: "Open code-review" }));
+    expect(screen.getByTestId("stats-cost-breadcrumb")).toHaveTextContent(
+      "Total / PDO / grill-orchestrate / Child runs / Depth 2 / code-review",
+    );
+    expect(screen.getAllByTestId("stats-detail-row")[0]).toHaveTextContent("Review");
   });
 });

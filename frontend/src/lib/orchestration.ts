@@ -1,7 +1,7 @@
 // #723 — Orchestration read model shared by the Orchestration tab, the tab-header
 // pastilles and the canvas pastilles, so the three surfaces can never disagree.
 import { useEffect, useState } from "react";
-import type { HarnessCost, RunStatus } from "../types";
+import type { HarnessCost, RunStatus, TreeCost } from "../types";
 import { isLiveRun } from "../types";
 import { formatEstCost } from "./costLabel";
 
@@ -33,6 +33,12 @@ export interface RunChildEntry {
     uncosted_harnesses?: string[];
     by_harness?: HarnessCost[];
   };
+  /**
+   * pdo-issues#3 (ADR-0081): the child's **tree cost** — its own cost plus every
+   * one of its descendants. Absent when the child has no child of its own: its
+   * tree cost is then `cost`.
+   */
+  tree_cost?: TreeCost | null;
 }
 
 export interface RunChildrenGroup {
@@ -105,6 +111,16 @@ export function childCostKnown(cost?: RunChildEntry["cost"]): number | null {
   if ((cost.uncosted_harnesses?.length ?? 0) > 0) return null;
   if (cost.usd === 0 && (cost.by_harness ?? []).length === 0) return null;
   return cost.usd;
+}
+
+/**
+ * The cost an Orchestration row shows for a child (pdo-issues#3): its **tree
+ * cost** when it has descendants, its own cost otherwise. A tree total the
+ * daemon refused (`null`) reads as unavailable (`undefined` ⇒ "—").
+ */
+export function childTreeCost(child: RunChildEntry): RunChildEntry["cost"] {
+  if (child.tree_cost) return child.tree_cost.total ?? undefined;
+  return child.cost;
 }
 
 /**

@@ -69,6 +69,7 @@ mod run_advance;
 mod run_command;
 mod run_cost;
 mod run_refs;
+mod run_tree;
 mod sandbox_container;
 mod sandbox_image;
 mod sandbox_profile;
@@ -94,6 +95,7 @@ mod structured_diff;
 mod switch_router;
 pub mod tmux_session_manager;
 mod transition_guard;
+mod tree_cost;
 #[allow(dead_code)]
 mod trigger_scheduler;
 #[allow(dead_code)]
@@ -15125,7 +15127,14 @@ async fn get_run(
                 &repo_root,
                 &prices,
             );
+            // ADR-0081: the Coût de l'arbre, additive — `cost` stays the Coût du
+            // Run parent; absent for a Run without descendant.
+            let tree_cost = derive_tree_cost(&state, &run_state, &events).await;
             let mut response = serde_json::to_value(run_state).expect("RunState serializes");
+            if let Some(tree_cost) = tree_cost {
+                response["tree_cost"] =
+                    serde_json::to_value(tree_cost).expect("TreeCost serializes");
+            }
             inject_frozen_node_provisioning(&mut response, &events);
             // Manager on demand: an OBSERVED fact, not a projected one — the
             // panel must know whether the session really exists, and a live tmux
@@ -15263,6 +15272,11 @@ struct RunChildEntry {
     /// "—", never `$0`.
     #[serde(skip_serializing_if = "Option::is_none")]
     cost: Option<event_log::CostStat>,
+    /// The child's **Coût de l'arbre** (ADR-0081): its own cost plus every one
+    /// of its descendants, grandchildren included. Absent for a child without
+    /// descendant — its tree cost IS `cost`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tree_cost: Option<tree_cost::TreeCost>,
 }
 
 /// One group of `GET /runs/{run_id}/children`: all children spawned by ONE
@@ -15484,11 +15498,40 @@ async fn list_run_children(
     // the Orchestration tab and the run list agree about the same child.
     let mut states: Vec<event_log::RunState> = projected.iter().map(|(_, s)| s.clone()).collect();
     child_awaiting::overlay(&mut states);
-    for ((events, _), child) in projected.into_iter().zip(states) {
+    // ADR-0081: each child shows its Coût de l'arbre. One fold per Run of the
+    // store at most, memoized for the request (a grandchild is folded once even
+    // though it belongs to no other child's tree).
+    let tree = run_tree::RunTree::from_states(&states);
+    let raw_by_id: HashMap<&str, &(Vec<event_log::Event>, event_log::RunState)> = projected
+        .iter()
+        .map(|entry| (entry.1.run_id.as_str(), entry))
+        .collect();
+    let mut member_costs: HashMap<String, Option<event_log::CostStat>> = HashMap::new();
+    let mut member_cost = |id: &str| -> Option<event_log::CostStat> {
+        if let Some(cost) = member_costs.get(id) {
+            return cost.clone();
+        }
+        let cost = raw_by_id
+            .get(id)
+            .and_then(|(events, run)| derive_run_cost(&state, run, events));
+        member_costs.insert(id.to_string(), cost.clone());
+        cost
+    };
+    let mut tree_costs: HashMap<String, tree_cost::TreeCost> = HashMap::new();
+    for child in &states {
         if child.parent_run_id.as_deref() != Some(run_id.as_str()) {
             continue;
         }
-        let cost = derive_run_cost(&state, &child, &events);
+        if let Some(tc) = tree_cost_over(&tree, &child.run_id, &mut member_cost) {
+            tree_costs.insert(child.run_id.clone(), tc);
+        }
+    }
+    for ((events, _), child) in projected.iter().zip(states) {
+        if child.parent_run_id.as_deref() != Some(run_id.as_str()) {
+            continue;
+        }
+        let cost = derive_run_cost(&state, &child, events);
+        let tree_cost = tree_costs.remove(&child.run_id);
         let stalled = event_log::is_stalled(&child);
         let entry = RunChildEntry {
             run_id: child.run_id,
@@ -15501,6 +15544,7 @@ async fn list_run_children(
             failure_reason: child.failure_reason,
             awaiting_reason: child.awaiting_reason,
             cost,
+            tree_cost,
         };
         by_node.entry(child.parent_node_id).or_default().push(entry);
     }
@@ -15546,6 +15590,83 @@ fn derive_run_cost(
     run_state: &event_log::RunState,
     events: &[event_log::Event],
 ) -> Option<event_log::CostStat> {
+    derive_run_cost_breakdown(state, run_state, events).cost
+}
+
+/// The Coût de l'arbre of `run_id` (ADR-0081) over a loaded store: the shared
+/// descendant walk gives each member its depth, `member_cost` folds each Run
+/// independently (memoized per Run). `None` for a Run without descendant.
+fn tree_cost_over(
+    tree: &run_tree::RunTree,
+    run_id: &str,
+    mut member_cost: impl FnMut(&str) -> Option<event_log::CostStat>,
+) -> Option<tree_cost::TreeCost> {
+    let members = tree.descendants(run_id);
+    if members.is_empty() {
+        return None;
+    }
+    let parent = member_cost(run_id);
+    let descendants: Vec<(usize, Option<event_log::CostStat>)> = members
+        .iter()
+        .map(|m| (m.depth, member_cost(&m.run_id)))
+        .collect();
+    tree_cost::tree_cost(parent, &descendants)
+}
+
+/// `GET /runs/{id}`'s `tree_cost`: read the store's parent links (one query
+/// over the `run_started` events, cheap), and only when the Run HAS
+/// descendants load and fold each of them. Never persisted (ADR-0081).
+async fn derive_tree_cost(
+    state: &AppState,
+    run_state: &event_log::RunState,
+    events: &[event_log::Event],
+) -> Option<tree_cost::TreeCost> {
+    // Only child runs carry a parent link: root runs are filtered out in SQL.
+    let links: Vec<(String, Option<String>)> = match sqlx::query_as(
+        "SELECT run_id, json_extract(payload, '$.parent_run_id') FROM events \
+         WHERE kind = 'run_started' AND json_extract(payload, '$.parent_run_id') IS NOT NULL",
+    )
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(links) => links,
+        Err(e) => {
+            warn!(
+                "tree cost of run {}: cannot read the run tree: {e}",
+                run_state.run_id
+            );
+            return None;
+        }
+    };
+    let tree = run_tree::RunTree::from_links(links);
+    let members = tree.descendants(&run_state.run_id);
+    if members.is_empty() {
+        return None;
+    }
+    let mut loaded: HashMap<String, (Vec<event_log::Event>, event_log::RunState)> = HashMap::new();
+    for member in &members {
+        let Ok(member_events) = load_events(&state.db, &member.run_id).await else {
+            continue;
+        };
+        if let Some(member_state) = event_log::project(&member_events) {
+            loaded.insert(member.run_id.clone(), (member_events, member_state));
+        }
+    }
+    tree_cost_over(&tree, &run_state.run_id, |id| {
+        if id == run_state.run_id {
+            return derive_run_cost(state, run_state, events);
+        }
+        let (member_events, member_state) = loaded.get(id)?;
+        derive_run_cost(state, member_state, member_events)
+    })
+}
+
+/// The cost fold of one Run (ADR-0058), through the per-Run memo.
+fn derive_run_cost_breakdown(
+    state: &AppState,
+    run_state: &event_log::RunState,
+    events: &[event_log::Event],
+) -> run_cost::RunCostBreakdown {
     let (home_root, sandbox_root) = sandbox_run::sandbox_home_roots(state).unwrap_or_else(|_| {
         let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
         let sandbox = home.join(".pdo").join("sandbox");
@@ -15572,7 +15693,6 @@ fn derive_run_cost(
         &run_state.run_id,
         &prices,
     )
-    .cost
 }
 
 async fn get_run_events(
@@ -21500,23 +21620,21 @@ fn spawn_terminal_attach(terminal: &str, socket: &str, session_name: &str) -> Re
 }
 
 /// Every descendant of `run_id` (children, grandchildren, …) resolved through
-/// the same mechanical `parent_run_id` link as `list_run_children`, in
-/// **post-order**: a run always comes after all of its own descendants, so a
-/// cascade that walks the list front to back tears grandchildren down before
-/// their parent. Pure over the projected store; `run_id` itself is not listed.
+/// the shared run-tree walk ([`run_tree::RunTree`]), in **post-order**: a run
+/// always comes after all of its own descendants, so a cascade that walks the
+/// list front to back tears grandchildren down before their parent. Pure over
+/// the projected store; `run_id` itself is not listed.
 fn descendant_runs_post_order(
     runs: &[event_log::RunState],
     run_id: &str,
 ) -> Vec<event_log::RunState> {
-    let mut out = Vec::new();
-    for child in runs {
-        if child.parent_run_id.as_deref() != Some(run_id) {
-            continue;
-        }
-        out.extend(descendant_runs_post_order(runs, &child.run_id));
-        out.push(child.clone());
-    }
-    out
+    let by_id: HashMap<&str, &event_log::RunState> =
+        runs.iter().map(|r| (r.run_id.as_str(), r)).collect();
+    run_tree::RunTree::from_states(runs)
+        .descendants_post_order(run_id)
+        .into_iter()
+        .filter_map(|m| by_id.get(m.run_id.as_str()).map(|r| (*r).clone()))
+        .collect()
 }
 
 /// Project every run of the store (the read model behind `list_run_children`).
@@ -25542,6 +25660,359 @@ mod tests {
             "script starts are excluded"
         );
         assert_eq!(pipeline["executions"], 5);
+    }
+
+    /// pdo-issues#3 (#1033, ADR-0081) — « Roll up child runs » on
+    /// `GET /stats/cost`: the cohort recomposed by root, every descendant filed
+    /// under its root's Pipeline › Child runs › Depth N, nothing counted twice,
+    /// the « By model » axis and the default response untouched.
+    #[tokio::test]
+    async fn stats_cost_roll_up_files_every_descendant_under_its_root() {
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let mut state = test_state().await;
+        let home = state
+            .repo_root
+            .join(".pdo")
+            .join("test-stats-rollup")
+            .join(uuid::Uuid::new_v4().to_string());
+        let _cleanup = Cleanup(home.clone());
+        std::fs::create_dir_all(&home).unwrap();
+        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        let repo = state.repo_root.to_string_lossy().into_owned();
+
+        async fn insert_event(
+            db: &sqlx::SqlitePool,
+            run: &str,
+            ts: &str,
+            kind: &str,
+            node: Option<&str>,
+            payload: Option<serde_json::Value>,
+        ) {
+            sqlx::query(
+                "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(run)
+            .bind(ts)
+            .bind(kind)
+            .bind(node)
+            .bind(node.map(|_| 1_i64))
+            .bind(payload.map(|p| p.to_string()))
+            .execute(db)
+            .await
+            .unwrap();
+        }
+
+        /// A Run of `pipeline` started on `day`, its `worker` session costing
+        /// `mtok` million input tokens of claude-opus-4-8 ($5/MTok).
+        #[allow(clippy::too_many_arguments)]
+        async fn seed(
+            state: &Arc<AppState>,
+            home: &std::path::Path,
+            run: &str,
+            day: &str,
+            pipeline: &str,
+            parent: Option<&str>,
+            target_repo: &str,
+            mtok: f64,
+            completed: bool,
+        ) {
+            let mut payload = serde_json::json!({
+                "pipeline_id": pipeline,
+                "pipeline_name": pipeline,
+                "target_repo": target_repo,
+                "harness": "claude",
+                "node_defs": [{"id": "worker", "name": "Worker", "node_type": "agent", "isolated_worktree": true}],
+            });
+            if let Some(parent) = parent {
+                payload["parent_run_id"] = serde_json::json!(parent);
+                payload["parent_node_id"] = serde_json::json!("worker");
+            }
+            insert_event(
+                &state.db,
+                run,
+                &format!("{day}T09:00:00Z"),
+                "run_started",
+                None,
+                Some(payload),
+            )
+            .await;
+            let session = format!("{run}-session");
+            insert_event(
+                &state.db,
+                run,
+                &format!("{day}T09:01:00Z"),
+                "node_started",
+                Some("worker"),
+                Some(serde_json::json!({"node_type": "agent", "isolated_worktree": true, "harness": "claude", "session_id": session})),
+            )
+            .await;
+            if completed {
+                insert_event(
+                    &state.db,
+                    run,
+                    &format!("{day}T09:30:00Z"),
+                    "run_completed",
+                    None,
+                    None,
+                )
+                .await;
+            }
+            let dir =
+                home.join(".claude")
+                    .join("projects")
+                    .join(stale_detector::encode_working_dir(
+                        &worktree_ops::sub_worktree_path(
+                            std::path::Path::new(target_repo),
+                            run,
+                            "worker",
+                            1,
+                        ),
+                    ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let tokens = (mtok * 1_000_000.0) as u64;
+            std::fs::write(
+                dir.join(format!("{session}.jsonl")),
+                format!(
+                    r#"{{"type":"assistant","requestId":"r-{run}","message":{{"id":"m-{run}","model":"claude-opus-4-8","usage":{{"input_tokens":{tokens},"output_tokens":0}}}}}}"#
+                ),
+            )
+            .unwrap();
+        }
+
+        // Window [07-15, 07-18). The orchestrator `root` ($5) → `child` ($2.50,
+        // started AFTER the window) → `grandchild` ($1, another repo). A lone
+        // `solo` run of the child's Pipeline ($5). `old-root` started BEFORE
+        // the window; its `late-child` ($0.50) started inside it.
+        let other_repo = "/elsewhere/other-repo";
+        seed(
+            &state,
+            &home,
+            "root",
+            "2026-07-15",
+            "orch",
+            None,
+            &repo,
+            1.0,
+            false,
+        )
+        .await;
+        seed(
+            &state,
+            &home,
+            "child",
+            "2026-07-19",
+            "impl",
+            Some("root"),
+            &repo,
+            0.5,
+            true,
+        )
+        .await;
+        seed(
+            &state,
+            &home,
+            "grandchild",
+            "2026-07-16",
+            "review",
+            Some("child"),
+            other_repo,
+            0.2,
+            true,
+        )
+        .await;
+        seed(
+            &state,
+            &home,
+            "solo",
+            "2026-07-16",
+            "impl",
+            None,
+            &repo,
+            1.0,
+            true,
+        )
+        .await;
+        seed(
+            &state,
+            &home,
+            "old-root",
+            "2026-07-10",
+            "orch",
+            None,
+            &repo,
+            1.0,
+            true,
+        )
+        .await;
+        seed(
+            &state,
+            &home,
+            "late-child",
+            "2026-07-17",
+            "review",
+            Some("old-root"),
+            &repo,
+            0.1,
+            true,
+        )
+        .await;
+
+        async fn get(state: &Arc<AppState>, uri: &str) -> serde_json::Value {
+            let response = build_router(state.clone())
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            serde_json::from_slice(
+                &axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap()
+        }
+        fn find<'a>(rows: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
+            rows.as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == id)
+                .unwrap_or_else(|| panic!("no row {id} in {rows:#}"))
+        }
+        fn ids(rows: &serde_json::Value) -> Vec<String> {
+            let mut ids: Vec<String> = rows
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["id"].as_str().unwrap().to_string())
+                .collect();
+            ids.sort();
+            ids
+        }
+        fn usd(row: &serde_json::Value) -> f64 {
+            row["usd"]
+                .as_f64()
+                .unwrap_or_else(|| panic!("a usd in {row:#}"))
+        }
+        fn approx(a: f64, b: f64) -> bool {
+            (a - b).abs() < 1e-6
+        }
+        let base = "/stats/cost?from=2026-07-15T00:00:00Z&to=2026-07-18T00:00:00Z&bucket=day";
+
+        // --- Off: the response is the one without the parameter, no roll-up.
+        let plain = get(&state, base).await;
+        let off = get(&state, &format!("{base}&roll_up_children=false")).await;
+        assert_eq!(plain, off, "roll-up off ⇒ the response is unchanged");
+        assert!(!plain.to_string().contains("roll_up"));
+        // Each Run under its own Pipeline, at its own date.
+        assert_eq!(ids(&plain["by_pipeline"]), vec!["impl", "orch", "review"]);
+        assert!(approx(usd(&plain["total"]), 5.0 + 1.0 + 5.0 + 0.5));
+
+        // --- On: the cohort is the roots started in the period, with their trees.
+        let on = get(&state, &format!("{base}&roll_up_children=true")).await;
+        assert_eq!(
+            ids(&on["by_pipeline"]),
+            vec!["impl", "orch"],
+            "the grandchild leaves its own Pipeline; old-root's tree is out"
+        );
+        let orch = find(&on["by_pipeline"], "orch");
+        assert!(approx(usd(orch), 5.0 + 2.5 + 1.0), "{orch:#}");
+        assert_eq!(orch["runs"], 1, "the Pipeline row counts its root runs");
+        let roll_up = &orch["roll_up"];
+        assert_eq!(roll_up["parent"]["id"], "parent_run");
+        assert_eq!(roll_up["parent"]["name"], "Parent run");
+        assert!(approx(usd(&roll_up["parent"]), 5.0));
+        assert_eq!(roll_up["children"]["name"], "Child runs");
+        assert!(approx(usd(&roll_up["children"]), 3.5));
+        assert_eq!(roll_up["children"]["runs"], 2);
+        assert_eq!(roll_up["levels"], 2);
+        let depths = roll_up["depths"].as_array().unwrap();
+        assert_eq!(depths[0]["depth"], 1);
+        assert_eq!(depths[0]["name"], "Depth 1");
+        assert_eq!(depths[0]["runs"], 1);
+        assert!(approx(usd(&depths[0]), 2.5));
+        assert_eq!(ids(&depths[0]["pipelines"]), vec!["impl"]);
+        assert_eq!(depths[1]["depth"], 2);
+        assert!(approx(usd(&depths[1]), 1.0));
+        let review = find(&depths[1]["pipelines"], "review");
+        assert!(approx(usd(review), 1.0));
+        assert_eq!(review["nodes"][0]["name"], "Worker");
+        // The child's own Pipeline keeps only the run nobody orchestrated.
+        let impl_row = find(&on["by_pipeline"], "impl");
+        assert!(approx(usd(impl_row), 5.0));
+        assert_eq!(impl_row["runs"], 1);
+        assert!(impl_row.get("roll_up").is_none(), "no child run, no split");
+        // Nothing counted twice: the rows sum to the total.
+        let rows_sum: f64 = on["by_pipeline"].as_array().unwrap().iter().map(usd).sum();
+        assert!(approx(rows_sum, usd(&on["total"])));
+        assert!(approx(usd(&on["total"]), 5.0 + 2.5 + 1.0 + 5.0));
+        // The whole tree sits in its root's period bucket.
+        let buckets: Vec<&str> = on["by_period"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["bucket"].as_str().unwrap())
+            .collect();
+        assert_eq!(buckets, vec!["2026-07-15", "2026-07-16"]);
+        assert!(approx(usd(&on["by_period"][0]), 8.5));
+
+        // The orchestrator Node's median stays its own executions'.
+        let own_worker = find(&find(&plain["by_pipeline"], "orch")["nodes"], "worker").clone();
+        let parent_worker = find(&roll_up["parent"]["nodes"], "worker");
+        assert_eq!(parent_worker["median_usd"], own_worker["median_usd"]);
+        assert!(approx(parent_worker["median_usd"].as_f64().unwrap(), 5.0));
+
+        // « By model » ignores the parameter.
+        assert_eq!(on["by_model"], plain["by_model"]);
+
+        // By project: the grandchild follows its root's Project.
+        assert_eq!(on["by_project"].as_array().unwrap().len(), 1);
+        let project = &on["by_project"][0];
+        assert!(approx(usd(project), 13.5));
+        let project_orch = find(&project["pipelines"], "orch");
+        assert_eq!(project_orch["roll_up"], orch["roll_up"]);
+        assert!(plain["by_project"].as_array().unwrap().len() >= 2);
+
+        // « Completed only » is judged on the root: `root` never completed, so
+        // its whole tree is out — its completed children with it.
+        let completed = get(
+            &state,
+            &format!("{base}&roll_up_children=true&completed_only=true"),
+        )
+        .await;
+        assert_eq!(ids(&completed["by_pipeline"]), vec!["impl"]);
+        assert!(approx(usd(&completed["total"]), 5.0));
+
+        // Absorptions hold on the roll-up rows: « review » absorbed into « impl »
+        // files the grandchild under « impl » at Depth 2.
+        let response = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/stats/absorptions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "dimension": "pipeline",
+                            "absorbent": {"key": "impl", "name": "impl"},
+                            "members": [{"key": "review", "name": "review"}],
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let combined = get(&state, &format!("{base}&roll_up_children=true")).await;
+        let depth2 = &find(&combined["by_pipeline"], "orch")["roll_up"]["depths"][1];
+        assert_eq!(ids(&depth2["pipelines"]), vec!["impl"]);
+        assert_eq!(depth2["pipelines"][0]["absorbed"][0]["key"], "review");
     }
 
     #[tokio::test]

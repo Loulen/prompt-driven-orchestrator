@@ -260,6 +260,12 @@ describe("EditToolbar", () => {
       for (const b of buttons) expect(b).toHaveAccessibleName(/\S/);
     });
 
+    // pdo-issues#3: on a run canvas the `(i)` button names the panel « Run info ».
+    it("names the info button after the panel it opens", () => {
+      renderToolbar({ onToggleInfo: vi.fn(), infoLabel: "Run info" });
+      expect(screen.getByTestId("toolbar-info")).toHaveAccessibleName("Run info");
+    });
+
     // #938 (story PDO-3): `(i)` exposes its pressed state like the glyph does,
     // and the two render exactly what the host lights — one at a time.
     it("exposes aria-pressed on Pipeline info", () => {

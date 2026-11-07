@@ -4,7 +4,7 @@ import FullWindowShell from "./FullWindowShell";
 import { fetchStatsAbsorptions, syncCostPrices } from "../api";
 import { useStats } from "../hooks/useStats";
 import type { PriceRow, StatsCost, SyncCostPricesReport } from "../types";
-import type { StatsTab } from "./StatsCharts";
+import type { CostAxis, StatsTab } from "./StatsCharts";
 import {
   DEFAULT_PERFORMANCE_BAND,
   TAB_COHORT_DEFAULTS,
@@ -209,6 +209,12 @@ function StatsSurface({
   // reading for Sessions, Triggers, Cost and Performance. Its chip only shows
   // once the instance has an absorption to set aside.
   const [uncombined, setUncombined] = useState(false);
+  // « Roll up child runs » (pdo-issues#3, ADR-0081): Cost only, off at each
+  // open like every Stats setting. The grouping lives here with it, because
+  // « By model » has nothing to roll up: the request only asks for the roll-up
+  // on By pipeline and By project.
+  const [costAxis, setCostAxis] = useState<CostAxis>("pipeline");
+  const [costRollUp, setCostRollUp] = useState(false);
   const [hasAbsorptions, setHasAbsorptions] = useState(false);
   useEffect(() => {
     let cancelled = false;
@@ -256,6 +262,7 @@ function StatsSurface({
     },
     absorptionsVersion,
     uncombined,
+    costRollUp && costAxis !== "model",
   );
 
   const refreshing =
@@ -475,6 +482,10 @@ function StatsSurface({
           onUncombinedChange={setUncombined}
           // Kept while on, so the reading can always be turned back off.
           showUncombined={hasAbsorptions || uncombined}
+          costAxis={costAxis}
+          onCostAxisChange={setCostAxis}
+          rollUp={costRollUp}
+          onRollUpChange={setCostRollUp}
         />
       </Suspense>
     </FullWindowShell>

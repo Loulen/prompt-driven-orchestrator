@@ -517,6 +517,9 @@ export function fetchStatsCost(
   bucket: string,
   completedOnly = false,
   uncombined = false,
+  /** « Roll up child runs » (ADR-0081): omitted when false, so the request
+   *  without the roll-up is exactly the one it always was. */
+  rollUpChildren = false,
 ): Promise<StatsCost> {
   return request<StatsCost>("GET", "/stats/cost", {
     query: {
@@ -525,6 +528,7 @@ export function fetchStatsCost(
       bucket,
       ...(completedOnly ? { completed_only: true } : {}),
       ...(uncombined ? { uncombined: true } : {}),
+      ...(rollUpChildren ? { roll_up_children: true } : {}),
     },
   });
 }

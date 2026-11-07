@@ -135,7 +135,7 @@ describe("PipelineInfoPanel — accessible names (#397)", () => {
   it("names the close button", () => {
     renderPanel(makeRun());
     expect(screen.getByTestId("info-panel-close")).toHaveAccessibleName(
-      "Close pipeline info",
+      "Close run info",
     );
   });
 
@@ -150,7 +150,7 @@ describe("PipelineInfoPanel — accessible names (#397)", () => {
         onClose={onClose}
       />,
     );
-    await userEvent.click(screen.getByRole("button", { name: "Close pipeline info" }));
+    await userEvent.click(screen.getByRole("button", { name: "Close run info" }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

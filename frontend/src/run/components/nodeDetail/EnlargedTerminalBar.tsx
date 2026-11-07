@@ -1,39 +1,27 @@
 import type { ReactNode, Ref } from "react";
-import { Check, CircleCheck, LockOpen } from "lucide-react";
 import type { NodeState } from "../../../shared/generated/NodeState";
-import { IconButton, StatusIcon } from "../../../shared/ui/kit";
+import { StatusIcon } from "../../../shared/ui/kit";
 import type { MarkVerdict, ReleaseVerdict } from "../../store/useNodeRun";
 import { MarkCompleteVerdict, ReleaseCompletionVerdict } from "./verdicts";
 import IterMark from "../IterMark";
-
-const RELEASE_LABEL = "Mark ready for completion";
-const RELEASED_LABEL = "Completion released";
-const MARK_COMPLETE_LABEL = "Approve";
 
 /** Which gesture of the enlarged bar last spoke, so its verdict shows under it. */
 export type GesturePopover = "release" | "mark" | null;
 
 /**
- * The completion gestures of the node, as the panel's « Mark ready for
- * completion » / « Mark complete » buttons hold them: the enlarged terminal
- * offers the same two, by the same path (#44).
+ * The completion gesture of the node in the enlarged terminal: the panel's
+ * Approve ▾, in the normal size, by the same path and on the same rules (#44,
+ * CORE-212).
  */
 export interface TerminalCompletion {
-  /** `awaiting_user` on a live run: the gestures belong in the enlarged bar. */
-  showGestures: boolean;
-  canRelease: boolean;
-  /** CORE-205: why the caller may not release the completion (greyed), else absent. */
-  releaseRefused?: string;
-  /** The daemon would complete the node (else hidden). */
-  canMarkComplete: boolean;
-  /** CORE-205: why the caller may not mark it complete (greyed), else absent. */
-  markCompleteRefused?: string;
+  /** Approve ▾ shows (latest iteration, the daemon would complete the node). */
+  show: boolean;
+  /** Approve ▾ of the enlarged bar; each of its gestures says which spoke, so
+   *  its verdict opens under the bar. */
+  renderApprove: (onGesture: (gesture: Exclude<GesturePopover, null>) => void) => ReactNode;
   released: boolean;
-  isReleasing: boolean;
   releaseVerdict: ({ iter: number } & ReleaseVerdict) | null;
   markVerdict: ({ iter: number } & MarkVerdict) | null;
-  release: () => void;
-  markComplete: () => void;
 }
 
 /** #44: the node's identity at the head of the enlarged terminal's toolbar. */
@@ -58,49 +46,6 @@ export function EnlargedTerminalIdentity({
         <IterMark iter={iter} />
       </span>
     </span>
-  );
-}
-
-/** #44: « Mark ready for completion » and « Mark complete », compact. */
-export function EnlargedCompletionGestures({
-  completion,
-  onGesture,
-}: {
-  completion: TerminalCompletion;
-  onGesture: (gesture: Exclude<GesturePopover, null>) => void;
-}) {
-  const releaseLabel = completion.isReleasing ? "Releasing…" : completion.released ? RELEASED_LABEL : RELEASE_LABEL;
-  return (
-    <>
-      {completion.canRelease && (
-        <IconButton
-          icon={completion.released ? CircleCheck : LockOpen}
-          size="sm"
-          label={releaseLabel}
-          pressed={completion.released}
-          disabled={completion.isReleasing}
-          disabledReason={completion.releaseRefused}
-          data-testid="term-release-completion"
-          onClick={() => {
-            onGesture("release");
-            completion.release();
-          }}
-        />
-      )}
-      {completion.canMarkComplete && (
-        <IconButton
-          icon={Check}
-          size="sm"
-          label={MARK_COMPLETE_LABEL}
-          disabledReason={completion.markCompleteRefused}
-          data-testid="term-mark-complete"
-          onClick={() => {
-            onGesture("mark");
-            completion.markComplete();
-          }}
-        />
-      )}
-    </>
   );
 }
 

@@ -128,7 +128,7 @@ run is terminal.
 - When every child is terminal and none failed, the node **completes by itself**
   the moment you give your turn back — you may simply call `pdo complete`.
 - A **failed** child parks this node `awaiting_user`: the decision is the
-  user's — retry the child, or force the node through (« Mark complete »).
+  user's — retry the child, or force the node through (« Approve »).
   Say what failed and stop; do not decide for them.
 
 Never declare completion while work you spawned is still in flight; the daemon

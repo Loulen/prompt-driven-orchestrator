@@ -23,6 +23,7 @@ import DetailsPane from "./nodeDetail/DetailsPane";
 import TerminalSection from "./nodeDetail/TerminalSection";
 import RetryConfirmDialog from "./nodeDetail/RetryConfirmDialog";
 import ApproveButton from "./nodeDetail/ApproveButton";
+import { approveShown } from "../model/approve";
 import { useShowApprove } from "./nodeDetail/useShowApprove";
 import { isMarkCompletable, nodeSessionEnded } from "../model/nodeStatus";
 import type { ModalState, TerminalView } from "./nodeDetail/types";
@@ -180,12 +181,6 @@ export default function NodeDetailPanel({
     node.iterations?.find((i) => i.iter === selectedIter)?.status ?? node.status;
   const selectedIteration = node.iterations?.find((i) => i.iter === selectedIter);
   const completionReleased = selectedIteration?.completion_released === true;
-  const isReleasing =
-    releaseVerdict?.iter === selectedIter && releaseVerdict.kind === "pending";
-  const canReleaseCompletion =
-    selectedIteration?.interactive === true &&
-    (selectedIterStatus === "running" || selectedIterStatus === "awaiting_user") &&
-    !isArchived;
   // The latest iteration awaits whenever the node rollup says so and carries
   // the `awaiting` info — even if the iteration row itself still reads
   // `running` (a derived child wait, FP #793 finding 1).
@@ -195,6 +190,16 @@ export default function NodeDetailPanel({
     nodeAwaitsOnLatestIter && node.awaiting?.cause === "completion_not_released";
 
   const { approveRef, approveRinged, showApprove } = useShowApprove(node.iter, awaitsApproval, setTerminalView);
+  // Approve ▾ reads the same in the panel and in the enlarged terminal.
+  const approveProps = {
+    node,
+    selectedIter,
+    runStatus: effectiveRunStatus,
+    outputs: outputsIter === selectedIter ? outputs : null,
+    refused,
+    markVerdict,
+    releaseVerdict,
+  };
   // #369: the I/O poll (`setInputs`/`setOutputs`) re-renders this panel every
   // tick (1s live, 5s settled). Building the modal's `source` prop as an inline
   // object literal handed the child a fresh reference on every one of those
@@ -304,21 +309,27 @@ export default function NodeDetailPanel({
         setTerminalLive={setTerminalLive}
         setTerminalSpectating={setTerminalSpectating}
         terminalSpectating={terminalSpectating}
-        // #44: the enlarged terminal carries the panel's completion gestures.
+        // #44, CORE-212: the enlarged terminal carries the panel's Approve ▾, in the normal size.
         completion={{
-          showGestures:
-            !isArchived &&
-            (selectedIterStatus === "awaiting_user" || nodeAwaitsOnLatestIter),
-          canRelease: canReleaseCompletion,
-          releaseRefused: refused.release,
-          canMarkComplete: markCompletable,
-          markCompleteRefused: refused.markComplete,
+          show: approveShown(node, selectedIter, effectiveRunStatus),
           released: completionReleased,
-          isReleasing,
           releaseVerdict,
           markVerdict,
-          release: releaseCompletion,
-          markComplete,
+          renderApprove: (onGesture) => (
+            <ApproveButton
+              {...approveProps}
+              size="md"
+              testIdBase="term-approve"
+              markComplete={() => {
+                onGesture("mark");
+                markComplete();
+              }}
+              release={() => {
+                onGesture("release");
+                releaseCompletion();
+              }}
+            />
+          ),
         }}
         detailsPane={
           <DetailsPane
@@ -348,13 +359,7 @@ export default function NodeDetailPanel({
             barEnd={
               <ApproveButton
                 ref={approveRef}
-                node={node}
-                selectedIter={selectedIter}
-                runStatus={effectiveRunStatus}
-                outputs={outputsIter === selectedIter ? outputs : null}
-                refused={refused}
-                markVerdict={markVerdict}
-                releaseVerdict={releaseVerdict}
+                {...approveProps}
                 markComplete={markComplete}
                 release={releaseCompletion}
                 ringed={approveRinged}

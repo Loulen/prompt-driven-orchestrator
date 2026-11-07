@@ -5,6 +5,7 @@ import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry
 import type { RunState } from "../../shared/generated/RunState";
 import type { Trigger } from "../../shared/generated/Trigger";
 import type { SettingsPosition } from "../../settings/components/settingsSurface/surfaceProps";
+import { approveReleasable } from "../../run/model/approve";
 import { usePaletteHost, type PaletteHost, type PaletteSelection } from "./paletteHost";
 import { whyNoRunAnywhere } from "../../run/model/runCreationRights";
 import { useRunCreationRightsStore } from "../../run/store/runCreationRightsStore";
@@ -32,10 +33,19 @@ export function paletteSelection({ selectedTrigger, selectedRun, editTab, canvas
     const node = onScreen && canvas.kind === "node" && canvas.id ? run.nodes[canvas.id] : undefined;
     if (node) {
       const def = run.node_defs.find((d) => d.id === node.node_id);
+      const latest = node.iterations?.find((i) => i.iter === node.iter);
       return {
         kind: "node",
         run: { id: run.run_id, status: run.status },
-        node: { id: node.node_id, name: def?.name ?? null, type: def?.node_type ?? null, status: node.status, iter: node.iter },
+        node: {
+          id: node.node_id,
+          name: def?.name ?? null,
+          type: def?.node_type ?? null,
+          status: node.status,
+          iter: node.iter,
+          releasable: approveReleasable(latest, node.status),
+          released: latest?.completion_released === true,
+        },
       };
     }
     return {

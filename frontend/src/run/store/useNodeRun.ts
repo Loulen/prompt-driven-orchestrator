@@ -45,7 +45,7 @@ function pollInterval(status: NodeStatus): number | null {
 }
 
 /**
- * What the last *Mark complete* click produced (#490, ADR-0035).
+ * What the last Approve click produced (#490, ADR-0035).
  *
  * `pending` exists so the verdict region always has a tenant: the handler no longer
  * clears before awaiting, so there is no window in which a previous verdict has been
@@ -70,7 +70,7 @@ export type ReleaseVerdict =
  * `409` — "resume the run first" for a terminal Run, "session cap reached" for a
  * force-spawn — arrived and rendered as nothing, so the operator clicked and saw no
  * change at all. This is the verdict the panel now renders at the gesture, exactly
- * as `markVerdict` does for Mark complete (#490). Success needs no tenant here (the
+ * as `markVerdict` does for Approve (#490). Success needs no tenant here (the
  * node flips to `running` and the terminal re-shows), so `null` is the resting
  * state; only a refusal writes one.
  */

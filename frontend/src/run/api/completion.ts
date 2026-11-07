@@ -30,7 +30,7 @@ const KNOWN_REFUSALS: readonly string[] = [
 ];
 
 /**
- * What one *Mark complete* click actually did (#490, ADR-0035).
+ * What one Approve click actually did (#490, ADR-0035).
  *
  * A discriminated union on the refusal **slug**, never on the status: a status has
  * nowhere near enough bits for nine causes, and the pre-#490 code — which read

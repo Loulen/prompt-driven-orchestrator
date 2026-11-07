@@ -144,7 +144,7 @@ export interface TourStep extends TourStepPanels {
   body: string | ((o: TourObservation) => string);
   /**
    * A second, quieter paragraph, under the body and the checklist. Two jobs, one
-   * slot: naming the look-alike control the step is NOT about ("Mark complete …
+   * slot: naming the look-alike control the step is NOT about ("Approve itself …
    * not for now"), and saying what an observed accident means once the checklist
    * has shown it (a node that failed rather than completed) — #825.
    */

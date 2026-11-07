@@ -14,7 +14,17 @@ export type PaletteSelection =
   | {
       kind: "node";
       run: { id: string; status: RunStatus };
-      node: { id: string; name: string | null; type: string | null; status: NodeStatus; iter: number };
+      node: {
+        id: string;
+        name: string | null;
+        type: string | null;
+        status: NodeStatus;
+        iter: number;
+        /** Its latest iteration is interactive and its session lives: « Auto-approve when ready » applies. */
+        releasable?: boolean;
+        /** Its latest iteration's completion is released (« Auto-approve when ready » armed). */
+        released?: boolean;
+      };
     }
   | { kind: "trigger"; trigger: Trigger }
   | { kind: "pipeline"; pipeline: { id: string; name: string; attributes: Record<string, string> } };

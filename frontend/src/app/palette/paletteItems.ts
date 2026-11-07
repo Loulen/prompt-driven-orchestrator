@@ -1,14 +1,15 @@
 /**
  * The core's rows of the command field: its commands (New run, Stats,
  * Settings, Customize appearance, the Theme, the Dark mode and Compact nodes…), its Runs, Pipelines and Triggers, and the gestures
- * on the selected item (a Run's Pause, Resume, Retry all; a node's Mark
- * complete, Retry and Stop), a refused one greyed with the refusal's sentence (CORE-42, CORE-205). And
+ * on the selected item (a Run's Pause, Resume, Retry all; a node's Approve,
+ * « Auto-approve when ready », Retry and Stop), a refused one greyed with the refusal's sentence (CORE-42, CORE-205). And
  * the extensions' Actions, as rows.
  */
 
 import {
   CircleCheck,
   Copy,
+  LockOpen,
   FoldVertical,
   History,
   MousePointerClick,
@@ -33,9 +34,10 @@ import { toast } from "../../shared/ui/toast";
 import { SettingsIcon, StatsIcon } from "../../shared/ui/brand/AccentIcons";
 import { pauseRun, resumeRun, retryAll } from "../../run/api/commands";
 import { retryNode, retryNodePreview, stopNode } from "../../run/api/nodes";
-import { markNodeDone } from "../../run/api/completion";
+import { markNodeDone, releaseNodeCompletion } from "../../run/api/completion";
 import { whyNotOnNode, whyNotOnRun, type GestureRights, type NodeGesture, type RunGesture } from "../../run/model/runGestures";
 import { isMarkCompletable } from "../../run/model/nodeStatus";
+import { APPROVE_LABEL, AUTO_APPROVE_ARMED, AUTO_APPROVE_LABEL, approveWaitReason } from "../../run/model/approve";
 import type { Icon } from "../../shared/ui/kit";
 import type { ThemeChoice, Theme } from "../../lib/theme";
 import type { BuildInput, Lead, PaletteItem } from "./paletteModel";
@@ -136,14 +138,17 @@ export function selectionEntity(selection: PaletteSelection): PaletteItem["entit
 
 /**
  * The core's gestures on the selected item the caller may make: on a node,
- * Mark complete (exactly where the Inspector offers it), Retry and Stop; on
- * its Run (or a selected Run), Pause, Resume, Retry all and Copy run id.
+ * Approve and « Auto-approve when ready » (exactly where the Inspector's
+ * Approve ▾ offers them, greyed as it greys), Retry and Stop; on its Run (or a
+ * selected Run), Pause, Resume, Retry all and Copy run id. `missing`: the
+ * outputs the selected node has not written yet, `null` until they are read.
  */
 export function selectionItems(
   selection: PaletteSelection | null,
   rights: GestureRights,
   confirm: (request: PaletteConfirm) => void,
   openRun: (runId: string) => void,
+  missing: readonly string[] | null = [],
 ): PaletteItem[] {
   if (!selection || (selection.kind !== "run" && selection.kind !== "node")) return [];
   const entity = selectionEntity(selection);
@@ -157,7 +162,19 @@ export function selectionItems(
     const { node } = selection;
     const whyNode = (gesture: NodeGesture) => ({ disabledReason: whyNotOnNode(rights, runId, node.id, gesture) });
     if (isMarkCompletable(node.status, runStatus)) {
-      add("node-done", "Mark complete", CircleCheck, () => void markComplete(runId, node.id, node.iter), whyNode("mark_node_done"));
+      // CORE-205's sentence wins over the outputs, as on the button.
+      const refusedApprove = whyNode("mark_node_done").disabledReason;
+      add("node-done", APPROVE_LABEL, CircleCheck, () => void approve(runId, node.id, node.iter), {
+        disabledReason: refusedApprove ?? approveWaitReason(missing),
+      });
+      if (node.releasable) {
+        const refusedRelease = whyNode("release_completion").disabledReason;
+        add("node-auto-approve", AUTO_APPROVE_LABEL, LockOpen, () => void autoApprove(runId, node.id, node.iter), {
+          checked: node.released === true,
+          // Armed: checked and inert, as the menu entry.
+          disabledReason: node.released ? AUTO_APPROVE_ARMED : refusedRelease,
+        });
+      }
     }
     if (NODE_RETRYABLE.has(node.status) && runStatus !== "paused" && runStatus !== "halted" && runStatus !== "archived") {
       add("node-retry", "Retry", RotateCcw, () => void retryWithPreview(runId, node.id, confirm), whyNode("retry"));
@@ -220,11 +237,22 @@ async function retryWithPreview(runId: string, nodeId: string, confirm: (request
   }
 }
 
-/** A node's Mark complete: its refusal (missing outputs…) said in a toast. */
-async function markComplete(runId: string, nodeId: string, iter: number) {
+/** A node's Approve: its refusal (missing outputs…) said in a toast. */
+async function approve(runId: string, nodeId: string, iter: number) {
   try {
     const outcome = await markNodeDone(runId, nodeId, iter);
     if (outcome.kind === "refused") toast(outcome.message, "error");
+  } catch (e) {
+    report(e);
+  }
+}
+
+/** A node's « Auto-approve when ready »: armed in a toast, its refusal too. */
+async function autoApprove(runId: string, nodeId: string, iter: number) {
+  try {
+    const outcome = await releaseNodeCompletion(runId, nodeId, iter);
+    if (outcome.kind === "refused") toast(outcome.message, "error");
+    else toast("Auto-approve armed: the agent completes when ready");
   } catch (e) {
     report(e);
   }

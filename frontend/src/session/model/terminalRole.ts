@@ -42,7 +42,7 @@ export function parseRoleFrame(text: string): TerminalRole | null {
 }
 
 export const READ_ONLY_HINT =
-  "Read-only — another browser has control. Take control with the ✋ icon.";
+  "Read-only — another browser has control. Take control from the terminal bar.";
 
 export function watchedLabel(n: number): string {
   return `Watched from ${n} other browser${n === 1 ? "" : "s"}`;

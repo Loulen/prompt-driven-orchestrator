@@ -4,48 +4,90 @@ import { coreItems, selectionItems } from "./paletteItems";
 import type { ThemeChoice } from "../../lib/theme";
 import type { PaletteSelection } from "./paletteHost";
 
-const node = (status: string): PaletteSelection =>
+const node = (status: string, over: Record<string, unknown> = {}): PaletteSelection =>
   ({
     kind: "node",
     run: { id: "r1", status: "awaiting_user" },
-    node: { id: "review", name: "Review", type: "agent", status, iter: 2 },
+    node: { id: "review", name: "Review", type: "agent", status, iter: 2, ...over },
   }) as PaletteSelection;
 
 const WHY = "You can't change Runs in Project P. Ask an administrator of P.";
 const rightsRefusing = (refused: string[]) => ({ refused: new Map(refused.map((k) => [k, WHY] as const)) });
-const labels = (selection: PaletteSelection | null, refused: string[] = []) =>
-  selectionItems(selection, rightsRefusing(refused), vi.fn(), vi.fn())
+const labels = (selection: PaletteSelection | null, refused: string[] = [], missing: readonly string[] | null = []) =>
+  selectionItems(selection, rightsRefusing(refused), vi.fn(), vi.fn(), missing)
     .filter((i) => !i.disabledReason)
     .map((i) => i.label);
+const rows = (selection: PaletteSelection, refused: string[] = [], missing: readonly string[] | null = []) =>
+  selectionItems(selection, rightsRefusing(refused), vi.fn(), vi.fn(), missing).map((i) => [i.label, i.disabledReason]);
 
 describe("the selection's gestures", () => {
-  it("offers a node waiting for a person Mark complete and Stop, then its Run's", () => {
-    expect(labels(node("awaiting_user"))).toEqual(["Mark complete", "Stop", "Pause", "Copy run id"]);
-    expect(labels(node("failed"))).toEqual(["Mark complete", "Retry", "Pause", "Copy run id"]);
+  it("offers a node waiting for a person Approve and Stop, then its Run's", () => {
+    expect(labels(node("awaiting_user"))).toEqual(["Approve", "Stop", "Pause", "Copy run id"]);
+    expect(labels(node("failed"))).toEqual(["Approve", "Retry", "Pause", "Copy run id"]);
   });
 
-  it("offers Mark complete exactly where the Inspector does: on what the daemon completes", () => {
-    const marks = (status: string) => labels(node(status)).includes("Mark complete");
+  it("no longer offers « Mark complete »", () => {
+    for (const status of ["awaiting_user", "running", "failed"]) {
+      const all = selectionItems(node(status, { releasable: true }), NOTHING_REFUSED, vi.fn(), vi.fn()).map((i) => i.label);
+      expect(all).not.toContain("Mark complete");
+      expect(all.some((l) => /Mark (complete|ready)/.test(l))).toBe(false);
+    }
+  });
+
+  it("offers Approve exactly where the Inspector does: on what the daemon completes", () => {
+    const marks = (status: string) => labels(node(status)).includes("Approve");
     expect(["awaiting_user", "running", "failed"].filter(marks)).toEqual(["awaiting_user", "running", "failed"]);
     // An interrupted node re-drives on Reopen, a stale one on Retry: the daemon refuses to complete them.
     const never = ["interrupted", "stale", "stopped", "completed", "skipped", "pending", "waiting"];
     expect(never.filter(marks)).toEqual([]);
     // A settled Run is reopened to complete the node; a paused or archived one is not.
     const inRun = (status: string) => ({ ...node("failed"), run: { id: "r1", status } }) as PaletteSelection;
-    expect(labels(inRun("failed"))).toContain("Mark complete");
-    expect(labels(inRun("halted"))).toContain("Mark complete");
-    expect(labels(inRun("paused"))).not.toContain("Mark complete");
-    expect(labels(inRun("archived"))).not.toContain("Mark complete");
+    expect(labels(inRun("failed"))).toContain("Approve");
+    expect(labels(inRun("halted"))).toContain("Approve");
+    expect(labels(inRun("paused"))).not.toContain("Approve");
+    expect(labels(inRun("archived"))).not.toContain("Approve");
   });
 
-  it("greys what the caller may not do, with the refusal's sentence (CORE-205)", () => {
+  it("greys Approve while an output is missing, naming it, and while the outputs are read", () => {
+    expect(rows(node("running"), [], ["out", "final"])[0]).toEqual(["Approve", "Missing outputs: out, final"]);
+    expect(rows(node("running"), [], null)[0]).toEqual(["Approve", "Reading the outputs…"]);
+    expect(rows(node("running"), [], [])[0]).toEqual(["Approve", undefined]);
+  });
+
+  it("offers « Auto-approve when ready » on an interactive node whose session lives, missing outputs or not", () => {
+    expect(labels(node("running", { releasable: true }), [], ["out"])).toEqual([
+      "Auto-approve when ready",
+      "Stop",
+      "Pause",
+      "Copy run id",
+    ]);
+    expect(labels(node("running", { releasable: false }))).not.toContain("Auto-approve when ready");
+    expect(labels(node("running"))).not.toContain("Auto-approve when ready");
+    // Off where Approve is off.
+    const paused = { ...node("running", { releasable: true }), run: { id: "r1", status: "paused" } } as PaletteSelection;
+    expect(selectionItems(paused, NOTHING_REFUSED, vi.fn(), vi.fn()).map((i) => i.label)).not.toContain(
+      "Auto-approve when ready",
+    );
+  });
+
+  it("checks « Auto-approve when ready » once armed, inert", () => {
+    const items = selectionItems(node("running", { releasable: true, released: true }), NOTHING_REFUSED, vi.fn(), vi.fn());
+    const entry = items.find((i) => i.label === "Auto-approve when ready")!;
+    expect(entry.checked).toBe(true);
+    expect(entry.disabledReason).toBe("Auto-approve armed");
+  });
+
+  it("greys what the caller may not do, with the refusal's sentence (CORE-205), over the missing outputs", () => {
     expect(labels(node("awaiting_user"), ["r1/review mark_node_done", "r1 pause_run"])).toEqual(["Stop", "Copy run id"]);
-    const items = selectionItems(node("awaiting_user"), rightsRefusing(["r1/review mark_node_done", "r1 pause_run"]), vi.fn(), vi.fn());
-    expect(items.map((i) => [i.label, i.disabledReason])).toEqual([
-      ["Mark complete", WHY],
+    expect(rows(node("awaiting_user"), ["r1/review mark_node_done", "r1 pause_run"], ["out"])).toEqual([
+      ["Approve", WHY],
       ["Stop", undefined],
       ["Pause", WHY],
       ["Copy run id", undefined],
+    ]);
+    expect(rows(node("running", { releasable: true }), ["r1/review release_completion"])[1]).toEqual([
+      "Auto-approve when ready",
+      WHY,
     ]);
   });
 

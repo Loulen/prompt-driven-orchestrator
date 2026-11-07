@@ -1243,7 +1243,7 @@ describe("TmuxTerminal", () => {
       const { ws } = await mountLive();
       roleFrame(ws, { role: "pilot", spectators: 1 });
       const eye = screen.getByTestId("term-watchers");
-      expect(eye.textContent).toBe("1");
+      expect(eye.textContent).toBe("1 watching");
       expect(eye.getAttribute("aria-label")).toBe("Watched from 1 other browser");
 
       roleFrame(ws, { role: "pilot", spectators: 2 });
@@ -1265,7 +1265,7 @@ describe("TmuxTerminal", () => {
 
       const container = screen.getByTestId("xterm-container");
       expect(container.parentElement?.dataset.tooltip).toBe(
-        "Read-only — another browser has control. Take control with the ✋ icon.",
+        "Read-only — another browser has control. Take control from the terminal bar.",
       );
       expect(container.dataset.role).toBe("spectator");
       expect(screen.queryByTestId("term-watchers")).toBeNull();
@@ -1352,14 +1352,17 @@ describe("TmuxTerminal", () => {
     });
 
     // #870: taking control.
-    it("a spectator sees the hand; a click sends the take-control frame", async () => {
+    it("a spectator sees « Watching » and « Take control » in the chip; a click sends the take-control frame", async () => {
       const { ws } = await mountLive();
       roleFrame(ws, { role: "solo" });
       expect(screen.queryByTestId("term-take-control")).toBeNull();
 
       roleFrame(ws, { role: "spectator", pilot: { cols: 120, rows: 30 } });
       const hand = screen.getByTestId("term-take-control");
-      expect(hand.getAttribute("aria-label")).toBe("Take control");
+      expect(hand).toHaveAccessibleName("Take control");
+      expect(hand.tagName).toBe("BUTTON");
+      expect(screen.getByTestId("term-mode")).toHaveAttribute("data-role", "spectator");
+      expect(screen.getByTestId("term-mode")).toHaveTextContent("Watching");
       // Not the one who lost the hand: no take-over notice.
       expect(screen.queryByTestId("term-taken-over")).toBeNull();
 
@@ -1390,7 +1393,7 @@ describe("TmuxTerminal", () => {
         rows: Math.floor(500 / (11 * 1.2)),
       });
       expect(screen.queryByTestId("term-take-control")).toBeNull();
-      expect(screen.getByTestId("term-watchers").textContent).toBe("1");
+      expect(screen.getByTestId("term-watchers").textContent).toBe("1 watching");
       const onData = term.onData.mock.calls[0][0] as (d: string) => void;
       const before = ws.sent.length;
       onData("x");

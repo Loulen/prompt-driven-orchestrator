@@ -17,7 +17,7 @@ function split(headline: string): { title: string; text?: string } {
 }
 
 /**
- * The verdict of a *Mark complete* click, rendered at the gesture (#490).
+ * The verdict of an Approve click, rendered at the gesture (#490).
  *
  * `data-*` attributes rather than copy are the assertion surface: a level-5 driver
  * asserts `data-recoverable="true"` for "still your turn" and `"false"` for "the node
@@ -79,17 +79,17 @@ export function ReleaseCompletionVerdict({
         : "skipped";
   const { title, text } =
     verdict.kind === "released"
-      ? { title: "Completion released", text: "the agent completes when ready" }
+      ? { title: "Auto-approve armed", text: "the agent completes when ready" }
       : verdict.kind === "pending"
-        ? { title: "Releasing completion…", text: undefined }
+        ? { title: "Arming auto-approve…", text: undefined }
         : verdict.kind === "error"
           ? { title: "Could not reach the daemon", text: verdict.message }
-          : { title: "Release refused", text: verdict.message };
+          : { title: "Auto-approve refused", text: verdict.message };
   const next =
     verdict.kind === "released"
       ? "Tell the agent in the terminal that you are done; Approve still forces it."
       : verdict.kind === "refused"
-        ? "Retry the node, then release again."
+        ? "Retry the node, then choose Auto-approve when ready again."
         : null;
   return (
     <NodeBanner

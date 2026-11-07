@@ -15,7 +15,6 @@ import { importBlockedReason, SEND_NEEDS_CONTROL } from "../../model/nodeImport"
 import ImportFilesModal from "./ImportFilesModal";
 import type { TerminalView } from "./types";
 import {
-  EnlargedCompletionGestures,
   EnlargedTerminalIdentity,
   GestureVerdictPopover,
   type TerminalCompletion,
@@ -142,12 +141,7 @@ export default function TerminalSection({
             ) : undefined
           }
           toolbarActions={
-            expanded && completion.showGestures ? (
-              <EnlargedCompletionGestures
-                completion={completion}
-                onGesture={setGesturePopover}
-              />
-            ) : undefined
+            expanded && completion.show ? completion.renderApprove(setGesturePopover) : undefined
           }
           status={selectedIterStatus}
           // #617: the iteration this panel is showing, so a terminal one can

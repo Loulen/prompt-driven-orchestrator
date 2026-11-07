@@ -77,6 +77,8 @@ const NODE_CARD = `.react-flow__node[data-id="${NODE_ID}"]`;
 const INSPECTOR_RUN = t("inspector-pane-run");
 const TERMINAL = t("tmux-terminal");
 const RELEASE = t("approve-btn-menu");
+const APPROVE_MENU = '[role="menu"][aria-label="Approve options"]';
+const AUTO_APPROVE_ENTRY = `${APPROVE_MENU} [role="menuitemcheckbox"]`;
 const OUT_ROW = `${t("port-row")}[data-kind="output"][data-port="out"]`;
 const OUT_MODAL = `${t("artifact-modal")}[data-port="out"]`;
 const LAUNCH = t("launch-button");
@@ -245,7 +247,13 @@ class FakeApp {
     this.app = { ...this.app, selection: { kind: "node", id: NODE_ID, edgeIndex: null } };
   }
 
+  /** Clicking Approve ▾'s chevron: its menu opens, in a portal. */
+  openApproveMenu() {
+    this.show(APPROVE_MENU, AUTO_APPROVE_ENTRY);
+  }
+
   releaseCompletion() {
+    this.hide(APPROVE_MENU, AUTO_APPROVE_ENTRY);
     this.patchNode({ released: true });
   }
 
@@ -300,7 +308,10 @@ function gestures(fake: FakeApp): Record<string, () => void> {
     // Nothing observable: what happens in tmux is a pane of text. The walk's
     // `Next` is the gesture.
     "talk-to-agent": () => {},
-    "release-completion": () => fake.releaseCompletion(),
+    "release-completion": () => {
+      fake.openApproveMenu();
+      fake.releaseCompletion();
+    },
     "wait-for-node": () => fake.finishNode("completed"),
     "open-output": () => fake.openOutput(),
   };
@@ -802,12 +813,38 @@ describe("the completion guard", () => {
 
     expect(step.target(fake.obs())).toEqual([RELEASE]);
     expect(step.done!(fake.obs())).toBe(false);
+    fake.openApproveMenu();
+    expect(step.done!(fake.obs())).toBe(false);
     fake.releaseCompletion();
     expect(step.done!(fake.obs())).toBe(true);
   });
 
+  it("points at Approve ▾'s chevron, then at « Auto-approve when ready » once its menu is open", () => {
+    const fake = new FakeApp();
+    const step = stepById("release-completion");
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    const soft = step.soft as (o: ReturnType<typeof fake.obs>) => boolean;
+    expect(step.target(fake.obs())).toEqual([RELEASE]);
+    expect(soft(fake.obs())).toBe(false);
+    fake.openApproveMenu();
+    expect(step.target(fake.obs())).toEqual([AUTO_APPROVE_ENTRY]);
+    // A zone, so the open menu stays clickable.
+    expect(soft(fake.obs())).toBe(true);
+  });
+
+  it("speaks of Approve ▾ and « Auto-approve when ready », never of Mark ready / Mark complete", () => {
+    const step = stepById("release-completion");
+    const obs = new FakeApp().obs();
+    const text = [stepBody(step, obs), stepNote(step, obs), step.waitingFor, step.failureHint].join(" ");
+    expect(text).toContain("Approve ▾");
+    expect(text).toContain("Auto-approve when ready");
+    expect(text).not.toMatch(/Mark (ready|complete)/);
+  });
+
   /**
-   * « Mark complete » is the other button, and it ends the node without ever
+   * Approve is the other gesture, and it ends the node without ever
    * setting the flag. Reading only the flag would strand the tour on a card about
    * a gesture whose button is no longer on screen.
    */
@@ -820,9 +857,9 @@ describe("the completion guard", () => {
     expect(stepById("release-completion").done!(fake.obs())).toBe(true);
   });
 
-  it("names the look-alike button it is NOT about", () => {
+  it("names the look-alike gesture it is NOT about", () => {
     expect(stepNote(stepById("release-completion"), new FakeApp().obs())).toContain(
-      "Mark complete",
+      "Approve itself completes the node now",
     );
   });
 });
@@ -923,7 +960,8 @@ describe("waiting for the node to finish", () => {
 
     const [released, finished] = waitStep().checklist!(fake.obs());
     expect(released).toMatchObject({ done: false });
-    expect(released.note).toContain("Mark ready for completion");
+    expect(released.note).toContain("Auto-approve when ready");
+    expect(released.note).not.toMatch(/Mark (ready|complete)/);
     expect(finished).toMatchObject({ done: false, badge: undefined });
 
     fake.releaseCompletion();

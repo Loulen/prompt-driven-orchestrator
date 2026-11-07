@@ -96,6 +96,9 @@ pub trait Runs: Send + Sync {
     fn count_live(&self) -> BoxFuture<'_, usize>;
     /// The ids of the nodes of `run_id`; `None` when there is no such Run.
     fn node_ids<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Option<Vec<String>>>;
+    /// The Projets `run_id` was launched in; none for an unknown Run or a Run
+    /// launched in no Projet.
+    fn projects_of_run<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Vec<String>>;
 }
 
 /// The out-of-Run audit journal.

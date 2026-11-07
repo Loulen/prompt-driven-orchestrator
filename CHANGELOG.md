@@ -24,6 +24,13 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   In a sandbox, the `docker exec` forwards the variables by name (`-e NAME`), their values
   exported on the host just before. Every launch is covered: a Node, its Retry and its resume, a
   Session hébergée, the Pipeline Manager, the library assistant.
+### A page mounted from a node is judged in the Projet of its Run
+
+- New seam (extension API, a minor): when a node session mounts a page (`pdo page mount`,
+  `POST /pages`), its `page_mount` Operation is in the Projet of the session's Run; the unmount of a
+  page a Run mounted is in the Projet of that Run, whoever asks. An extension that grants writing in
+  that Projet now lets an agent publish a page without any instance-wide grant. A mount outside any
+  Run still names no Projet. `POST /authorize` places a `page_mount` question the same way.
 
 ### A link toward a Node, and an answer typed on someone's behalf
 

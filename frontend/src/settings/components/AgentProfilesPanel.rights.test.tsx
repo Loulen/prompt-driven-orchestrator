@@ -59,9 +59,16 @@ describe("Agent profiles under the rights of the caller (CORE-205)", () => {
     await user.click(remove);
     expect(api.fetchAgentProfileReferents).not.toHaveBeenCalled();
     expect(await screen.findByRole("tooltip")).toHaveTextContent(`Delete worker${WHY}`);
-    // The name still opens the profile, to read: its Save is greyed with the sentence.
+    // The name still opens the profile, to read: its fields are read-only, the
+    // sentence stands in the footer, its Save is greyed with the sentence.
     await user.click(screen.getByTitle("worker"));
-    const save = await screen.findByTestId("agent-profile-save");
+    const modal = await screen.findByTestId("agent-profile-modal");
+    expect(modal).toHaveAccessibleName("worker");
+    expect(screen.getByRole("heading", { name: "Agent profile" })).toBeInTheDocument();
+    expect(screen.getByDisplayValue("worker")).toBeDisabled();
+    expect(screen.getByTestId("agent-profile-harness")).toBeDisabled();
+    expect(screen.getByTestId("agent-profile-read-only")).toHaveTextContent(WHY);
+    const save = screen.getByTestId("agent-profile-save");
     expect(save).toHaveAttribute("aria-disabled", "true");
     await user.click(save);
     expect(api.updateAgentProfile).not.toHaveBeenCalled();
@@ -73,5 +80,17 @@ describe("Agent profiles under the rights of the caller (CORE-205)", () => {
     await waitFor(() => expect(askAuthorization).toHaveBeenCalled());
     expect(screen.getByTestId("agent-profile-new")).not.toHaveAttribute("aria-disabled");
     expect(screen.getByRole("button", { name: "Edit worker" })).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("opens the editor with its fields editable for a caller allowed to change the profile", async () => {
+    answer(false);
+    const user = userEvent.setup();
+    render(<AgentProfilesPanel section={SECTION} profiles={PROFILES} onChanged={async () => {}} />);
+    await waitFor(() => expect(askAuthorization).toHaveBeenCalled());
+    await user.click(screen.getByTitle("worker"));
+    await screen.findByTestId("agent-profile-modal");
+    expect(screen.getByRole("heading", { name: "Edit agent profile" })).toBeInTheDocument();
+    expect(screen.getByDisplayValue("worker")).toBeEnabled();
+    expect(screen.queryByTestId("agent-profile-read-only")).not.toBeInTheDocument();
   });
 });

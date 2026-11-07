@@ -17,6 +17,10 @@ import { useHarnessCatalog, useRefreshModels, useRefreshModelsRefused } from "..
  *
  * Cancel, Escape and a backdrop click close it without sending anything; a
  * successful save closes it and lets the list refresh (`onSaved`).
+ *
+ * CORE-205: when the caller may not save it (`saveRefused`), it opens to read:
+ * titled « Agent profile », its fields turned off by a disabled fieldset, the
+ * refusal's sentence in the footer and on the greyed Save.
  */
 export default function AgentProfileModal({
   profile,
@@ -41,6 +45,7 @@ export default function AgentProfileModal({
     effort: profile?.effort ?? null,
   }));
   const [error, setError] = useState<string | null>(null);
+  const readOnly = Boolean(saveRefused);
   const catalog = useHarnessCatalog();
   const harnessOption = findHarnessOption(catalog, draft.harness);
   // « ↻ »: probe the harness's models again; the catalogue above reads them
@@ -114,85 +119,94 @@ export default function AgentProfileModal({
         className="d-frame w-[500px] max-w-[calc(90vw/var(--app-zoom,1))] rounded-(--radius-ui) border border-line bg-surface-0"
         role="dialog"
         aria-modal="true"
-        aria-label={profile ? `Edit ${profile.name}` : "New agent profile"}
+        aria-label={profile ? (readOnly ? profile.name : `Edit ${profile.name}`) : "New agent profile"}
         data-testid="agent-profile-modal"
         onClick={(event) => event.stopPropagation()}
       >
         <header className="d-frame__head">
-          <h2 className="d-frame__title">{profile ? "Edit agent profile" : "New agent profile"}</h2>
+          <h2 className="d-frame__title">
+            {profile ? (readOnly ? "Agent profile" : "Edit agent profile") : "New agent profile"}
+          </h2>
           <span className="d-grow" />
           <IconButton icon={X} label="Close" kbd="Esc" onClick={onClose} />
         </header>
         {/* #940: bounded to the window like New Run — only the fields scroll. */}
         <div className="d-frame__body flex flex-col gap-2" data-testid="agent-profile-body">
-          <Field label="Name">
-            <TextInput
-              autoFocus
-              value={draft.name}
-              onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-            />
-          </Field>
-          <Field label="Harness" help="Required">
-            <HarnessSelect
-              value={draft.harness}
-              onChange={(harness) => setDraft({ ...draft, harness, model: null, effort: null })}
-              catalog={catalog}
-              inheritLabel="Choose a harness…"
-              data-testid="agent-profile-harness"
-              className="d-input"
-            />
-          </Field>
-          {draft.harness && (
-            <>
-              <div className="d-field">
-                <span className="d-field__label" title="Optional">
-                  Model
-                </span>
-                <div className="d-field__ctl flex-col items-stretch gap-1">
-                  <ModelPicker
-                    value={draft.model}
-                    onChange={(model) => setDraft({ ...draft, model })}
-                    models={harnessOption?.models ?? []}
-                    contexts={harnessOption?.modelContexts}
-                    testid="agent-profile-model"
-                    subject={profile?.id ?? "new"}
-                  />
-                  <span className="set-line">
-                    {modelState}
-                    <span className="d-grow" />
-                    <IconButton
-                      icon={RefreshCw}
-                      label="Refresh models"
-                      size="sm"
-                      className={refreshing ? "[&>svg]:animate-spin" : undefined}
-                      onClick={() => void refresh(draft.harness)}
-                      disabled={!refreshRefused && (refreshing || !(harnessOption?.installed ?? false))}
-                      disabledReason={refreshRefused}
-                      data-testid="agent-profile-models-refresh"
-                    />
+          <fieldset disabled={readOnly} className="contents">
+            <Field label="Name">
+              <TextInput
+                autoFocus
+                value={draft.name}
+                onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+              />
+            </Field>
+            <Field label="Harness" help="Required">
+              <HarnessSelect
+                value={draft.harness}
+                onChange={(harness) => setDraft({ ...draft, harness, model: null, effort: null })}
+                catalog={catalog}
+                inheritLabel="Choose a harness…"
+                data-testid="agent-profile-harness"
+                className="d-input"
+              />
+            </Field>
+            {draft.harness && (
+              <>
+                <div className="d-field">
+                  <span className="d-field__label" title="Optional">
+                    Model
                   </span>
+                  <div className="d-field__ctl flex-col items-stretch gap-1">
+                    <ModelPicker
+                      value={draft.model}
+                      onChange={(model) => setDraft({ ...draft, model })}
+                      models={harnessOption?.models ?? []}
+                      contexts={harnessOption?.modelContexts}
+                      testid="agent-profile-model"
+                      subject={profile?.id ?? "new"}
+                    />
+                    <span className="set-line">
+                      {modelState}
+                      <span className="d-grow" />
+                      <IconButton
+                        icon={RefreshCw}
+                        label="Refresh models"
+                        size="sm"
+                        className={refreshing ? "[&>svg]:animate-spin" : undefined}
+                        onClick={() => void refresh(draft.harness)}
+                        disabled={!refreshRefused && (refreshing || !(harnessOption?.installed ?? false))}
+                        disabledReason={refreshRefused}
+                        data-testid="agent-profile-models-refresh"
+                      />
+                    </span>
+                  </div>
                 </div>
-              </div>
-              <div className="d-field">
-                <span className="d-field__label" title="Optional">
-                  Effort
-                </span>
-                <div className="d-field__ctl">
-                  <EffortPicker
-                    value={draft.effort}
-                    onChange={(next) => setDraft({ ...draft, effort: next })}
-                    efforts={effort.levels}
-                    strict={effort.authoritative}
-                    testid="agent-profile-effort"
-                    disabled={!(harnessOption?.hasEffort ?? true)}
-                  />
+                <div className="d-field">
+                  <span className="d-field__label" title="Optional">
+                    Effort
+                  </span>
+                  <div className="d-field__ctl">
+                    <EffortPicker
+                      value={draft.effort}
+                      onChange={(next) => setDraft({ ...draft, effort: next })}
+                      efforts={effort.levels}
+                      strict={effort.authoritative}
+                      testid="agent-profile-effort"
+                      disabled={!(harnessOption?.hasEffort ?? true)}
+                    />
+                  </div>
                 </div>
-              </div>
-            </>
-          )}
+              </>
+            )}
+          </fieldset>
         </div>
         <footer className="d-frame__foot">
           <span className="d-frame__note">
+            {readOnly && !error && (
+              <span className="set-faint set-ellipsis" title={saveRefused} data-testid="agent-profile-read-only">
+                {saveRefused}
+              </span>
+            )}
             {error && (
               <span className="d-err set-ellipsis" role="alert" title={error}>
                 {error}

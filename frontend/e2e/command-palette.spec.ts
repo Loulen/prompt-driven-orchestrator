@@ -85,12 +85,17 @@ async function playExtensions(page: Page) {
     commands.push(route.request().postDataJSON());
     return route.fulfill({ json: { recorded: true } });
   });
-  // The question of authorization: `test/note` × `delete` is refused.
+  // The question of authorization: `test/note` × `delete` is refused, with the
+  // sentence the extension gives.
   await page.route("**/authorize", (route) => {
     const { operations } = route.request().postDataJSON() as { operations: { resource: string; verb: unknown }[] };
     const decisions = operations.map((op) =>
       op.resource === "test/note" && op.verb === "delete"
-        ? { decision: "deny", reason: "the test extension refuses delete test/note" }
+        ? {
+            decision: "deny",
+            reason: "the test extension refuses delete test/note",
+            sentence: "Only an owner of the notes can purge them.",
+          }
         : { decision: "allow" },
     );
     return route.fulfill({ json: { decisions } });
@@ -103,7 +108,7 @@ async function openApp(page: Page) {
   await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 }
 
-test("a global Action shows under its extension's name and runs; a refused one is absent", async ({ page }) => {
+test("a global Action shows under its extension's name and runs; a refused one is greyed with its sentence", async ({ page }) => {
   const played = await playExtensions(page);
   await openApp(page);
 
@@ -114,7 +119,9 @@ test("a global Action shows under its extension's name and runs; a refused one i
   const group = palette.getByTestId("palette-group-ext:test");
   await expect(group.locator(".sh-pal__head")).toHaveText("Test extension");
   await expect(group.getByText("New note")).toBeVisible();
-  await expect(palette.getByText("Purge notes")).toHaveCount(0);
+  const purge = group.getByRole("option", { name: /Purge notes/ });
+  await expect(purge).toBeDisabled();
+  await expect(purge).toContainText("Only an owner of the notes can purge them.");
 
   // Tab stays in the box; Escape gives the focus to the command field.
   await page.keyboard.press("Tab");

@@ -2,8 +2,8 @@ use serde::Serialize;
 
 use crate::{
     Actor, ActorDisplay, Attributes, Authorization, EntityRef, HostedConfig, HostedGesture,
-    HostedRefusal, HostedSession, LiveArtifact, NewRun, OpenSession, OperationApplied, Presence,
-    Resource, RunCostRead, RunCreation, RunNotCreated,
+    HostedRefusal, HostedSession, LiveArtifact, NewRun, NodeNotWritten, NodeWrite, NodeWriting,
+    OpenSession, OperationApplied, Presence, Resource, RunCostRead, RunCreation, RunNotCreated,
 };
 
 /// The `type` of an event an extension publishes, on `/ws` and in the other
@@ -259,6 +259,34 @@ pub trait Host: Send + Sync {
     fn live_artifact(&self, _key: &str, _path: &str) -> Result<Vec<u8>, HostedRefusal> {
         Err(HostedRefusal::unavailable(NO_HOSTED_SESSION))
     }
+
+    /// Write `write.text` into the session of a Node that waits for a person
+    /// (API 0.23), on behalf of `actor`, as if `actor` had typed it in the
+    /// Node's terminal and pressed Enter: the text is pasted on one line, then
+    /// submitted, and the Node resumes (`running`). The answer to an agent's
+    /// question, sent from elsewhere than its terminal.
+    ///
+    /// The Operation `session` × `take_control` (on the Node's session, in
+    /// the Projets of its Run) is asked first: `actor` writes only where it
+    /// could take the hand (`403`, reason `refused`). Then the Node must wait
+    /// for a person at that iteration (a declared wait, or a completion not
+    /// released): otherwise nothing is written and the refusal is `409`
+    /// (`404` for a Run or a Node the core does not know), reason
+    /// [`NODE_NOT_WAITING`](crate::NODE_NOT_WAITING), message « the node no
+    /// longer waits ». A blank text or one over
+    /// [`NODE_WRITE_MAX_BYTES`](crate::NODE_WRITE_MAX_BYTES) is `400`.
+    ///
+    /// Once written, `actor` is announced as taking control of the session
+    /// ([`SESSION_TAKEN_OVER`](crate::SESSION_TAKEN_OVER), with `actor`), as
+    /// a person who takes the hand is, and the Node's resumption carries
+    /// `actor`. Two writes to the same Node never both land: the second finds
+    /// it running. Await it from a route or a task, not from a hook. By
+    /// default (and with the [`NeutralHost`]), `503`: nothing is written.
+    fn write_to_node(&self, _actor: &Actor, _write: NodeWrite) -> NodeWriting {
+        Box::pin(std::future::ready(Err(NodeNotWritten::unavailable(
+            "this host writes into no Node session",
+        ))))
+    }
 }
 
 const NO_HOSTED_SESSION: &str = "this host holds no hosted session";
@@ -454,6 +482,17 @@ mod tests {
             assert_eq!(gesture.await.unwrap_err().status, 503);
         }
         assert_eq!(NeutralHost.live_artifacts("s").unwrap_err().status, 503);
+        let refused = NeutralHost
+            .write_to_node(
+                &Actor::LocalOperator,
+                crate::NodeWrite::new("r1", "n1", "go"),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (refused.status, refused.reason.as_str()),
+            (503, "unavailable")
+        );
         assert_eq!(
             NeutralHost.live_artifact("s", "a.md").unwrap_err().status,
             503

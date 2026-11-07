@@ -140,6 +140,17 @@ export interface NewRunPrefill {
  *  Review page), and while one is already open. Since 0.22. */
 export function openNewRun(prefill?: NewRunPrefill): boolean;
 
+/** The deep link toward the Run `runId`: `#/runs/<run>`. Since 0.23. */
+export function runLink(runId: string): string;
+
+/** The deep link toward the Node `nodeId` of the Run `runId`, at its iteration
+ *  `iter` when given: `#/runs/<run>/nodes/<node>[/iter/<n>]`, each segment
+ *  percent-encoded, as the daemon writes it (`node_link`). Opened in PDO, it
+ *  selects the Run, then the Node at that iteration, and shows its detail with
+ *  its terminal; a Node the Run does not hold opens the Run alone. Prefix it
+ *  with the instance's address (`location.origin`) to copy it. Since 0.23. */
+export function nodeLink(runId: string, nodeId: string, iter?: number | null): string;
+
 // ---------------------------------------------------------------- the command field (since 0.18)
 // What a Source de recherche (`type: "search"` at `palette`) exports and
 // answers. Types only: the core calls the function, groups the results under
@@ -716,6 +727,8 @@ declare const ExtensionUi: {
   openProbedSocket: typeof openProbedSocket;
   copyToClipboard: typeof copyToClipboard;
   openNewRun: typeof openNewRun;
+  runLink: typeof runLink;
+  nodeLink: typeof nodeLink;
   Avatar: typeof Avatar;
   AvatarStack: typeof AvatarStack;
   personColor: typeof personColor;

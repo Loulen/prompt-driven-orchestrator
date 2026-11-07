@@ -36,6 +36,16 @@ pub(super) fn paste_text(socket: &str, session_name: &str, text: &str) {
         .output();
 }
 
+/// Press Enter in a session: what its input holds is submitted. `false` when
+/// tmux refused it (the session is gone).
+pub(super) fn press_enter(socket: &str, session_name: &str) -> bool {
+    tmux(socket)
+        .args(["send-keys", "-t", session_name, "Enter"])
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
+}
+
 /// Paste `text` verbatim into a session's input as one bracketed paste and
 /// **never** press Enter: the text waits in the agent's input for the user to
 /// complete and submit it (« Copy & send to terminal »). `false` when tmux

@@ -42,7 +42,8 @@ pub struct GuideEntry {
 pub enum GuideLink {
     /// `#/runs/<run>`
     Run { run_id: String },
-    /// `#/runs/<run>/nodes/<node>`
+    /// `#/runs/<run>/nodes/<node>`, or at an iteration
+    /// `#/runs/<run>/nodes/<node>/iter/<n>`
     Node { run_id: String, node_id: String },
     /// `#/runs/<run>/nodes/<node>/artifacts/<port>`
     Artifact {
@@ -64,11 +65,17 @@ const RUN_HASH: &str = "#/runs/";
 const EXT_HASH: &str = "#/ext/";
 const RUNS_PATH: &str = "/runs/";
 
+/// Whether `segment` is an iteration: a positive integer, written without a
+/// leading zero.
+fn is_iteration(segment: &str) -> bool {
+    !segment.starts_with('0') && !segment.is_empty() && segment.bytes().all(|b| b.is_ascii_digit())
+}
+
 /// What `link` points at, or why it can point at nothing.
 pub fn classify(link: &str) -> Result<GuideLink, String> {
     let invalid = || {
         Err(format!(
-            "link `{link}` leads nowhere: use a PDO link (#/runs/<run>[/nodes/<node>[/artifacts/<port>]], \
+            "link `{link}` leads nowhere: use a PDO link (#/runs/<run>[/nodes/<node>[/iter/<n>|/artifacts/<port>]], \
              /runs/<run>/review[?file=<path>]) or a place in the page (#anchor, a relative path)"
         ))
     };
@@ -84,6 +91,10 @@ pub fn classify(link: &str) -> Result<GuideLink, String> {
         return match segments.as_slice() {
             [_] => Ok(GuideLink::Run { run_id }),
             [_, "nodes", node] => Ok(GuideLink::Node {
+                run_id,
+                node_id: node.to_string(),
+            }),
+            [_, "nodes", node, "iter", n] if is_iteration(n) => Ok(GuideLink::Node {
                 run_id,
                 node_id: node.to_string(),
             }),
@@ -198,6 +209,13 @@ mod tests {
             }
         );
         assert_eq!(
+            classify("#/runs/r1/nodes/design/iter/2").unwrap(),
+            GuideLink::Node {
+                run_id: "r1".into(),
+                node_id: "design".into()
+            }
+        );
+        assert_eq!(
             classify("#/runs/r1/nodes/design/artifacts/out").unwrap(),
             GuideLink::Artifact {
                 run_id: "r1".into(),
@@ -247,6 +265,8 @@ mod tests {
             "#/runs/r1/review",
             "#/runs/r1/nodes",
             "#/runs/r1//x",
+            "#/runs/r1/nodes/x/iter/0",
+            "#/runs/r1/nodes/x/iter/two",
             "#/ext/",
             "/runs/r1",
             "/runs//review",

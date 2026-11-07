@@ -299,6 +299,9 @@ impl Tmux for FakeTmux {
         self.send_keys(name, text);
         true
     }
+    fn press_enter(&self, _name: &str) -> bool {
+        true
+    }
     fn attach_argv(&self, _name: &str, _ignore_size: bool) -> Vec<String> {
         Vec::new()
     }

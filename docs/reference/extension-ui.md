@@ -863,6 +863,14 @@ click on its row would; the link then leaves the address bar.
   link stay as they were.
 - Only the written form is recognised as a link: plain text `#/runs/<id>` in a markdown render is
   left as text.
+- `#/runs/<run_id>/nodes/<node_id>` also selects the Node once the Run is shown, and shows its
+  detail with its terminal (Pipeline info, if open, gives way); `…/nodes/<node_id>/iter/<n>` shows
+  its iteration `n` (an iteration the Node never ran leaves its current one);
+  `…/nodes/<node_id>/artifacts/<port>` lands on its I/O. A Node the Run does not hold opens the Run
+  alone.
+- Since 0.23 `@pdo/extension-ui` writes these links: `runLink(runId)` and `nodeLink(runId, nodeId,
+  iter?)`, each segment percent-encoded, as the daemon's `run_link` and `node_link` write them.
+  Prefix one with `location.origin` to copy it (`copyToClipboard`).
 
 ## Opening New Run prefilled
 
@@ -1037,6 +1045,7 @@ tabs.map((tab) => <button key={tab.key} onClick={() => select(tab.key)}>{tab.lab
 | `openProbedSocket(path, options?)` | A WebSocket to the daemon, opened through the probe, since 0.10; its delay of silence since 0.11 ([WebSockets](#websockets)) |
 | `copyToClipboard(text)` | Put `text` on the clipboard from a user gesture, as every Copy button of the core does: the Clipboard API, or outside a secure context (an instance served over plain http) `execCommand("copy")` on a hidden textarea. Resolves to whether the text was written, never rejects. Since 0.11 |
 | `openNewRun(prefill?)` | Open the core's New Run form, prefilled; `false` where none can open. Since 0.22 ([Opening New Run prefilled](#opening-new-run-prefilled)) |
+| `runLink(runId)`, `nodeLink(runId, nodeId, iter?)` | The deep link toward a Run, or a Node at an iteration, as the daemon writes it. Since 0.23 ([Toward a Run](#toward-a-run)) |
 | `Button`, `IconButton`, `Select`, `Menu`, `Modal`, `toast`… | The primitives of the design system, since 0.17 ([The design system](#the-design-system)) |
 | `SessionTerminal`, `TerminalZoom`, `useTerminalZoom(session)` | The core's session terminal and the Zoom du terminal, since 0.19 ([The session terminal](#the-session-terminal)) |
 | `SessionHeader`, `SessionActions`, `SessionWaiting`, `SessionTabs`, `LiveArtifacts`, `SessionInfo`, `SessionConfig`, `SessionEvents`, `useHostedSession(session)` | The bricks of a Session hébergée's detail and its live state, since 0.19 ([The detail of a Session hébergée](#the-detail-of-a-session-hébergée)) |

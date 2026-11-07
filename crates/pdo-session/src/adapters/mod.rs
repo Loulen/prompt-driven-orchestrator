@@ -5,6 +5,7 @@
 pub mod cli;
 pub mod env;
 pub mod extension_hosted;
+pub mod extension_node_write;
 pub mod hosted_store;
 pub mod http;
 pub mod instance_defaults;

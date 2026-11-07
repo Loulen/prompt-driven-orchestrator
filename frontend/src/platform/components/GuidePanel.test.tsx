@@ -53,7 +53,7 @@ describe("the reading guide", () => {
     const nav = navigation();
     render(<GuidePanel page={page} navigation={nav} />);
     fireEvent.click(screen.getByTestId("guide-link-1"));
-    expect(nav.openInPdo).toHaveBeenCalledWith({ kind: "node", runId: "r1", nodeId: "designer" });
+    expect(nav.openInPdo).toHaveBeenCalledWith({ kind: "node", runId: "r1", nodeId: "designer", iter: null });
     expect(screen.getByTestId("guide-entry-1")).toHaveAttribute("data-current", "true");
     fireEvent.click(screen.getByTestId("guide-link-0"));
     expect(nav.openInPdo).toHaveBeenCalledTimes(1);

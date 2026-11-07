@@ -116,7 +116,10 @@ async fn relay(
 
     let mut bus = runs.bus().subscribe();
     let mut heartbeat = time::interval(HEARTBEAT_INTERVAL);
-    let mut ping = time::interval(timings.ping_every);
+    let mut ping = time::interval_at(
+        time::Instant::now() + timings.ping_every,
+        timings.ping_every,
+    );
     let mut liveness = Liveness::new(timings.mute_after, Instant::now());
     let mut visible = Visibility::new(&runs, actor.clone());
 

@@ -99,6 +99,14 @@ vi.mock("@git-diff-view/react", async () => {
   return { DiffModeEnum: { Split: "split", Unified: "unified" }, SplitSide, DiffView };
 });
 
+// CORE-205: the page asks once which gestures the caller may not make; all
+// allowed unless a test says otherwise.
+vi.mock("../../shared/authorization/api", async (orig) => ({
+  ...(await orig<typeof import("../../shared/authorization/api")>()),
+  askAuthorization: vi.fn(),
+}));
+
+import { askAuthorization, type OperationQuestion } from "../../shared/authorization/api";
 import { fetchRun } from "../../run/api/runs";
 import { fetchRunFileAtRef, fetchRunRefs } from "../../run/api/artifacts";
 import { fetchReviewComments, sendReviewComments, resolveReviewComment, reopenReviewComment } from "../api/comments";
@@ -112,6 +120,8 @@ const mockedFile = vi.mocked(fetchRunFileAtRef);
 const mockedSend = vi.mocked(sendReviewComments);
 const mockedResolve = vi.mocked(resolveReviewComment);
 const mockedReopen = vi.mocked(reopenReviewComment);
+const mockedAsk = vi.mocked(askAuthorization);
+const allowAll = (ops: OperationQuestion[]) => Promise.resolve(ops.map(() => ({ decision: "allow" as const })));
 
 const RUN_ID = "20260909-125942-c7e2c65";
 
@@ -212,6 +222,7 @@ beforeEach(() => {
   mockedRefs.mockResolvedValue(REFS);
   mockedDiff.mockResolvedValue(TWO);
   mockedFile.mockResolvedValue("a\nB\nC\n");
+  mockedAsk.mockImplementation(allowAll);
   goto();
 });
 
@@ -1083,5 +1094,84 @@ describe("ReviewPage — reported / outdated comments (#752)", () => {
     // Switching the destination asks the daemon again for that pair.
     fireEvent.click(row);
     await waitFor(() => expect(mockedList).toHaveBeenCalledWith(RUN_ID, { from: "node:impl:1:before", to: "node:impl:1:after" }));
+  });
+});
+
+// --- CORE-205: a gesture the caller may not make stays, greyed ---------------
+
+describe("ReviewPage — gestures the caller may not make (CORE-205)", () => {
+  const WHY = "You can't comment on this Run. Ask an administrator of Shop.";
+  /** The tooltip a keyboard focus opens on `el`. */
+  const tooltipOf = async (el: HTMLElement) => {
+    act(() => el.focus());
+    const tip = await screen.findByRole("tooltip");
+    act(() => el.blur());
+    return tip;
+  };
+  /** Refuse the Operations `refused` picks, allow the rest. */
+  const refuse = (refused: (op: OperationQuestion) => boolean) =>
+    mockedAsk.mockImplementation((ops) =>
+      Promise.resolve(
+        ops.map((op) =>
+          refused(op) ? { decision: "deny" as const, reason: "no_role", sentence: WHY } : { decision: "allow" as const },
+        ),
+      ),
+    );
+
+  it("asks once for the send on the Run and the resolve / reopen of each comment", async () => {
+    mockedRun.mockResolvedValue(makeRun({ review_comments: [sentComment()] }));
+    render(<ReviewPage runId={RUN_ID} />);
+    await waitFor(() =>
+      expect(mockedAsk).toHaveBeenCalledWith([
+        { resource: "review_comment", verb: "create", target: RUN_ID },
+        { resource: "review_comment", verb: { action: "resolve" }, target: `${RUN_ID}/rc-001` },
+        { resource: "review_comment", verb: { action: "reopen" }, target: `${RUN_ID}/rc-001` },
+      ]),
+    );
+  });
+
+  it("a refused send greys Send to manager, Send all and Send now with the sentence; a click sends nothing", async () => {
+    refuse((op) => op.verb === "create");
+    render(<ReviewPage runId={RUN_ID} />);
+    await waitFor(() => expect(screen.getAllByTestId("review-file")).toHaveLength(2));
+    await openEditorAndSave("one");
+    await waitFor(() => expect(screen.getByTestId("review-send-all")).toHaveAttribute("aria-disabled", "true"));
+    const sendAll = screen.getByTestId("review-send-all");
+    expect(sendAll).not.toBeDisabled();
+    expect(await tooltipOf(sendAll)).toHaveTextContent(WHY);
+    const sendOne = screen.getByTestId("review-comment-send");
+    expect(sendOne).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(sendAll);
+    fireEvent.click(sendOne);
+    fireEvent.click(within(screen.getAllByTestId("review-file")[0]).getByTestId("mock-add-old-2"));
+    const editor = await screen.findByTestId("review-comment-editor");
+    fireEvent.change(within(editor).getByTestId("review-editor-text"), { target: { value: "two" } });
+    expect(within(editor).getByTestId("review-editor-send")).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(within(editor).getByTestId("review-editor-send"));
+    expect(mockedSend).not.toHaveBeenCalled();
+    expect(screen.getAllByTestId("review-comment").every((c) => c.dataset.state !== "sent")).toBe(true);
+  });
+
+  it("an allowed send leaves the Send buttons active", async () => {
+    render(<ReviewPage runId={RUN_ID} />);
+    await waitFor(() => expect(screen.getAllByTestId("review-file")).toHaveLength(2));
+    await openEditorAndSave("one");
+    await waitFor(() => expect(mockedAsk).toHaveBeenCalled());
+    expect(screen.getByTestId("review-send-all")).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByTestId("review-comment-send")).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("a refused resolution greys Resolve with the sentence and a click resolves nothing; Reopen stays active", async () => {
+    const proposed = sentComment({ replies: [REPLY_NODE_PROPOSES], proposal_pending: true });
+    mockedRun.mockResolvedValue(makeRun({ review_comments: [proposed] }));
+    refuse((op) => typeof op.verb === "object" && op.verb.action === "resolve");
+    render(<ReviewPage runId={RUN_ID} />);
+    const card = await screen.findByTestId("review-comment");
+    await waitFor(() => expect(within(card).getByTestId("review-comment-resolve")).toHaveAttribute("aria-disabled", "true"));
+    const resolve = within(card).getByTestId("review-comment-resolve");
+    expect(await tooltipOf(resolve)).toHaveTextContent(WHY);
+    fireEvent.click(resolve);
+    expect(mockedResolve).not.toHaveBeenCalled();
+    expect(within(card).getByTestId("review-comment-reopen")).not.toHaveAttribute("aria-disabled");
   });
 });

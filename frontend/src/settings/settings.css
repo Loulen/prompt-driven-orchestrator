@@ -732,6 +732,11 @@
     border-top: 1px solid var(--line-soft);
     color: var(--text-3);
   }
+  /* A gesture the caller may not make (CORE-205): greyed, its tooltip says why. */
+  .set-md__new[aria-disabled="true"] {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
   .set-md__naming {
     display: flex;
     flex-direction: column;

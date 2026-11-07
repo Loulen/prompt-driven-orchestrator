@@ -103,10 +103,12 @@ fn wait_user_verdict(
         .get("error")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
-    let detail = body
-        .get("message")
-        .and_then(|v| v.as_str())
-        .unwrap_or(raw.as_str());
+    let refused = pdo_kernel::authorization::Denied::from_body(&body).map(|d| d.for_an_agent());
+    let detail = refused.as_deref().unwrap_or_else(|| {
+        body.get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or(raw.as_str())
+    });
     eprintln!(
         "pdo wait-user REFUSED — {slug}: {detail}.\nNothing changed; it is still your turn. \
          Do NOT run `pdo fail`."

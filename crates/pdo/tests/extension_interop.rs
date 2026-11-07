@@ -197,6 +197,7 @@ async fn any_extension_refuses_an_extension_operation_and_nothing_is_left() {
             "error": "operation_refused",
             "message": format!("operation refused: {expected}"),
             "reason": expected,
+            "sentence": "You don't have the rights to do this.",
         })
     );
     assert_eq!(daemon.get_json("/ext/a/items").await, json!([]));

@@ -179,9 +179,7 @@ mod tests {
         let f = denying("administrators only");
         assert_eq!(
             f.workspace.authorize_browse(&actor),
-            Err(Denied {
-                reason: "administrators only".into()
-            })
+            Err(Denied::new("administrators only"))
         );
         let asked = f.host.asked();
         assert_eq!(asked, [browse_disk()]);

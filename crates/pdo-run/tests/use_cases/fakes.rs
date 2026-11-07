@@ -612,13 +612,9 @@ impl ExtensionHost for Host {
                 .iter()
                 .any(|p| refused_projects.contains(p))
         {
-            Authorization::Deny {
-                reason: "the test host refuses this read".into(),
-            }
+            Authorization::deny("the test host refuses this read")
         } else if *self.refuse.lock().unwrap() {
-            Authorization::Deny {
-                reason: "the test host refuses everything".into(),
-            }
+            Authorization::deny("the test host refuses everything")
         } else {
             Authorization::Allow
         }

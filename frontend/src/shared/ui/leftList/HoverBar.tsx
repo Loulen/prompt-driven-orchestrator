@@ -21,12 +21,15 @@ export function RowAction({
   onClick,
   danger,
   testId,
+  disabledReason,
 }: {
   icon: Icon;
   label: string;
   onClick: () => void;
   danger?: boolean;
   testId?: string;
+  /** Why the caller may not make it (CORE-205): greyed, its tooltip says why. */
+  disabledReason?: string;
 }) {
   return (
     <IconButton
@@ -35,6 +38,7 @@ export function RowAction({
       size="sm"
       tone={danger ? "danger" : undefined}
       data-testid={testId}
+      disabledReason={disabledReason}
       onClick={(e) => {
         e.stopPropagation();
         onClick();

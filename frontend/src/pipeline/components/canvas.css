@@ -164,7 +164,8 @@
   color: var(--primary);
   cursor: pointer;
 }
-.cv-n__play:hover { background: var(--primary); color: var(--primary-ink); }
+.cv-n__play:hover:not([aria-disabled="true"]) { background: var(--primary); color: var(--primary-ink); }
+.cv-n__play[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
 
 /* Child-run counts of an orchestrator: a dot and a number per kind. */
 .cv-kids { display: inline-flex; flex-wrap: wrap; gap: 2px; }

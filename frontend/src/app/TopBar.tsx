@@ -9,7 +9,7 @@ import { AcogniMark } from "../shared/ui/brand/AcogniMark";
 import { SettingsIcon, StatsIcon } from "../shared/ui/brand/AccentIcons";
 import { IconButton } from "../shared/ui/kit";
 import { useTheme } from "../hooks/useTheme";
-import { canCreateSomeRun, NO_RUN_ANYWHERE } from "../run/model/runCreationRights";
+import { whyNoRunAnywhere } from "../run/model/runCreationRights";
 import { useRunCreationRightsStore } from "../run/store/runCreationRightsStore";
 import CommandField from "./palette/CommandField";
 import CommandPalette from "./palette/CommandPalette";
@@ -96,16 +96,15 @@ export default function TopBar({
   );
 }
 
-/** New run, disabled with its reason when no Projet allows creating a Run (CORE-5). */
+/** New run, greyed with its reason when no Projet allows creating a Run (CORE-5, the kit's `disabledReason`: CORE-205). */
 function NewRunButton({ onNewRun }: { onNewRun: () => void }) {
-  const canCreate = useRunCreationRightsStore((s) => canCreateSomeRun(s.rights));
+  const noRunReason = useRunCreationRightsStore((s) => whyNoRunAnywhere(s.rights));
   return (
     <IconButton
       icon={Plus}
       label="New run"
-      description={canCreate ? undefined : NO_RUN_ANYWHERE}
-      aria-disabled={canCreate ? undefined : true}
-      onClick={canCreate ? onNewRun : undefined}
+      disabledReason={noRunReason}
+      onClick={onNewRun}
       data-testid="topbar-new-run"
     />
   );

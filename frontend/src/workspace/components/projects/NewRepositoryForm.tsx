@@ -13,12 +13,13 @@ import { newRepositoryTarget } from "../../model/projectsSettings";
  */
 export default function NewRepositoryForm({
   home,
-  canBrowse,
+  browseRefused,
   onCreate,
   onCancel,
 }: {
   home: string | null;
-  canBrowse: boolean;
+  /** CORE-205: why the caller may not browse the disk (the folder picker greyed), else absent. */
+  browseRefused?: string;
   /** Creates the repository and adds it; rejects with the sentence to show. */
   onCreate: (parent: string, name: string) => Promise<void>;
   onCancel: () => void;
@@ -67,15 +68,14 @@ export default function NewRepositoryForm({
           title="Created, or an empty folder; git init and a first commit"
           data-testid="project-new-repo-path"
         />
-        {canBrowse && (
-          <IconButton
-            icon={FolderOpen}
-            label="Choose the parent folder"
-            size="sm"
-            onClick={() => setExplorer(true)}
-            data-testid="project-new-repo-browse"
-          />
-        )}
+        <IconButton
+          icon={FolderOpen}
+          label="Choose the parent folder"
+          size="sm"
+          disabledReason={browseRefused}
+          onClick={() => setExplorer(true)}
+          data-testid="project-new-repo-browse"
+        />
         <Button
           size="sm"
           tone="primary"

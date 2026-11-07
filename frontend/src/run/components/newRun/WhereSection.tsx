@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useRefusal } from "../../../shared/authorization/useRefusals";
 import { Briefcase, FolderPlus, Globe, Plus } from "lucide-react";
 import RepoCombobox from "../../../workspace/components/RepoCombobox";
 import SecondaryRepoRow from "../SecondaryRepoRow";
@@ -43,8 +44,8 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
     toggleProjectSecondary, outsideProjectReason, projectId, remoteUrl, projects, loadPipelines,
   } = form;
   // CORE-5: where the caller may create a Run. Restricted, the field offers the
-  // repositories of the allowed Projets only, and the loupe goes when the disk
-  // may not be browsed.
+  // repositories of the allowed Projets only, and the loupe is greyed, with
+  // why, when the disk may not be browsed (CORE-205).
   const rights = useRunCreationRightsStore((s) => s.rights);
   const rightsProjects = useRunCreationRightsStore((s) => s.projects);
   const refreshRights = useRunCreationRightsStore((s) => s.refresh);
@@ -77,6 +78,19 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
   const alsoIn = (path: string) =>
     offeredProjects.filter((p) => p.id !== launchProject?.id && p.members.includes(path)).map((p) => p.name);
   const typedPath = targetRepo.trim() && !isRemoteUrl(targetRepo.trim()) ? [targetRepo.trim()] : [];
+  // CORE-205: the fast-forward greyed, with why, when the caller may not move the
+  // branch: asked in the Projets holding the repository, as the daemon asks it.
+  const repoPath = targetRepo.trim();
+  const fastForwardQuestion = useMemo(
+    () => ({
+      resource: "repository",
+      verb: { action: "fast_forward" },
+      target: repoPath,
+      projects: (projects ?? []).filter((p) => p.members.includes(repoPath)).map((p) => p.id),
+    }),
+    [repoPath, projects],
+  );
+  const fastForwardRefused = useRefusal(fastForwardQuestion, repoValid === true && !!repoPath);
 
   return (
     <>
@@ -92,14 +106,19 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
           />
         </FormRow>
       ) : (
-        noProjectYet &&
-        projectRightsAnswer.canCreate && (
+        noProjectYet && (
           <FormRow label="Project">
             <span className="ln-faint ln-none">
               <Briefcase size={13} strokeWidth={1.5} aria-hidden />
               No project yet
             </span>
-            <Button size="sm" icon={FolderPlus} onClick={() => setCreating(true)} data-testid="launch-new-project">
+            <Button
+              size="sm"
+              icon={FolderPlus}
+              onClick={() => setCreating(true)}
+              disabledReason={projectRightsAnswer.why.create}
+              data-testid="launch-new-project"
+            >
               New project
             </Button>
           </FormRow>
@@ -118,10 +137,9 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
             repoValidating={repoValidating}
             repoError={repoError}
             explorerStartPath={repoExplorerStartPath}
-            canBrowse={rights.canBrowse}
+            browseRefused={rights.browseRefused}
             groups={groups}
             groupsNote={!launchProject && restricted ? hiddenProjectsNote(rights) : null}
-            help={rights.canBrowse ? null : "A new repository goes through an administrator."}
             home={home}
             // CORE-97: a URL is cloned first, then launched on.
             leading={remoteUrl ? <Globe size={13} strokeWidth={1.5} className="ln-field__lead ln-field__lead--url" aria-hidden /> : undefined}
@@ -160,6 +178,7 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
               onFetch={refetchRemotes}
               onReread={rereadBranches}
               onFastForward={fastForward}
+              fastForwardRefused={fastForwardRefused}
               testIdPrefix="source-branch"
             />
           </div>

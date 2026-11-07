@@ -11,10 +11,16 @@ export default function TriggersListHeader({
   paused,
   onTogglePause,
   onNewTrigger,
+  pauseRefused,
+  createRefused,
 }: {
   paused: boolean;
   onTogglePause?: () => void;
   onNewTrigger: () => void;
+  /** CORE-205: why the caller may not pause (nor resume) all Triggers; greyed. */
+  pauseRefused?: string;
+  /** CORE-205: why the caller may not create a Trigger; greyed. */
+  createRefused?: string;
 }) {
   return (
     <>
@@ -27,9 +33,16 @@ export default function TriggersListHeader({
           role="switch"
           aria-checked={paused}
           onClick={onTogglePause}
+          disabledReason={pauseRefused}
           data-testid="triggers-pause-switch"
         />
-        <IconButton icon={Plus} label="New trigger" onClick={onNewTrigger} />
+        <IconButton
+          icon={Plus}
+          label="New trigger"
+          onClick={onNewTrigger}
+          disabledReason={createRefused}
+          data-testid="triggers-new"
+        />
       </LeftPaneBar>
 
       {paused && (
@@ -40,7 +53,7 @@ export default function TriggersListHeader({
             text="Scheduled fires are suppressed; Run now still works."
             actions={
               onTogglePause && (
-                <Button size="sm" tone="ghost" onClick={onTogglePause}>
+                <Button size="sm" tone="ghost" onClick={onTogglePause} disabledReason={pauseRefused}>
                   Resume
                 </Button>
               )

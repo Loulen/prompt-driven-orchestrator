@@ -13,7 +13,7 @@ import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 export default function RunsBulkActions({ pane }: { pane: RunsPaneState }) {
   const {
     runSelIds, runningWillStop, cleanupItems, retryItems, pauseItems, setRunBulkKind, clearSel,
-    runBulkKind, cleanupCascade, handleRunsSettled, bulkShown,
+    runBulkKind, cleanupCascade, handleRunsSettled, bulkRefused,
   } = pane;
   const extra = useMemo(() => ({ selection: { kind: "run" as const, ids: runSelIds } }), [runSelIds]);
   const extensionActions = useExtensionBulkActions("runs/bulk", extra);
@@ -25,14 +25,14 @@ export default function RunsBulkActions({ pane }: { pane: RunsPaneState }) {
           count={runSelIds.length}
           live={runningWillStop > 0 ? { count: runningWillStop, note: `${runningWillStop} running will stop` } : null}
           actions={[
-            // CORE-42: an action no selected Run allows the caller is hidden.
-            ...[
+            // CORE-205: an action no selected Run allows the caller is greyed, with why.
             {
               key: "cleanup" as const,
               label: "Cleanup",
               icon: <Trash2 size={14} strokeWidth={1.5} aria-hidden />,
               destructive: true,
               disabled: cleanupItems.length === 0,
+              disabledReason: bulkRefused.cleanup,
               onClick: () => setRunBulkKind("cleanup"),
             },
             {
@@ -40,6 +40,7 @@ export default function RunsBulkActions({ pane }: { pane: RunsPaneState }) {
               label: "Retry",
               icon: <RotateCcw size={14} strokeWidth={1.5} aria-hidden />,
               disabled: retryItems.length === 0,
+              disabledReason: bulkRefused.retry,
               onClick: () => setRunBulkKind("retry"),
             },
             {
@@ -47,9 +48,9 @@ export default function RunsBulkActions({ pane }: { pane: RunsPaneState }) {
               label: "Pause",
               icon: <Pause size={14} strokeWidth={1.5} aria-hidden />,
               disabled: pauseItems.length === 0,
+              disabledReason: bulkRefused.pause,
               onClick: () => setRunBulkKind("pause"),
             },
-            ].filter((action) => bulkShown[action.key]),
             ...extensionActions,
           ]}
           onClear={() => clearSel("runs")}

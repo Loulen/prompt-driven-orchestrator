@@ -1,14 +1,16 @@
 /**
- * The Actions refused to the Actor are absent (API 0.18): an action whose
- * command declares the Operation it makes (`UiCommand.operation`) shows only
- * once the question of authorization (`POST /authorize`) allows it, aimed at
- * the entity of its location's context when it hands one over. An action
- * whose command declares none always shows. A question that fails shows the
- * action: the daemon, or the extension's route, still refuses it.
+ * The Actions refused to the Actor are greyed (API 0.18; CORE-205, greyed
+ * instead of absent): an action whose command declares the Operation it
+ * makes (`UiCommand.operation`) shows once the question of authorization
+ * (`POST /authorize`) answered it, aimed at the entity of its location's
+ * context when it hands one over — active when allowed, greyed with the
+ * refusal's sentence when refused. An action whose command declares none
+ * always shows, active. A question that fails shows the action, active: the
+ * daemon, or the extension's route, still refuses it.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { askAuthorization, isAllowed, type OperationQuestion } from "../authorization/api";
+import { askAuthorization, refusalOf, type OperationQuestion } from "../authorization/api";
 import type { ContributionElement } from "./catalogue";
 import type { LocationContext } from "./contract";
 
@@ -32,11 +34,15 @@ export function actionQuestion({ element, context }: ActionAt): OperationQuestio
 
 const questionKey = (question: OperationQuestion) => JSON.stringify(question);
 
+/** An action as its location renders it: `refused`, the sentence of its refusal, when greyed. */
+export type GuardedAction<A extends ActionAt> = A & { refused?: string };
+
 /**
- * `actions` without those refused; a guarded action is left out until its
- * answer arrives.
+ * `actions`, each refused one with the sentence of its refusal (`refused`);
+ * a guarded action is left out until its answer arrives, so nothing flickers
+ * from active to greyed.
  */
-export function useAllowedActions<A extends ActionAt>(actions: readonly A[]): A[] {
+export function useGuardedActions<A extends ActionAt>(actions: readonly A[]): GuardedAction<A>[] {
   // The questions, by their key: the same questions asked of new contexts
   // (a Run refreshed on screen) ask nothing again.
   const keys = useMemo(() => {
@@ -47,7 +53,8 @@ export function useAllowedActions<A extends ActionAt>(actions: readonly A[]): A[
     }
     return [...byKey.keys()].sort().join("\n");
   }, [actions]);
-  const [answers, setAnswers] = useState<ReadonlyMap<string, boolean>>(() => new Map());
+  /** By question: `null` when allowed, else the sentence of the refusal. */
+  const [answers, setAnswers] = useState<ReadonlyMap<string, string | null>>(() => new Map());
   const asking = useRef(new Set<string>());
 
   useEffect(() => {
@@ -61,9 +68,9 @@ export function useAllowedActions<A extends ActionAt>(actions: readonly A[]): A[
     void Promise.all(
       parts.map((part) =>
         askAuthorization(part.map(([, question]) => question)).then(
-          (decisions) => part.map(([key], i): [string, boolean] => [key, isAllowed(decisions[i])]),
-          // Unanswered: shown, the daemon still decides.
-          () => part.map(([key]): [string, boolean] => [key, true]),
+          (decisions) => part.map(([key], i): [string, string | null] => [key, refusalOf(decisions[i]) ?? null]),
+          // Unanswered: shown, active; the daemon still decides.
+          () => part.map(([key]): [string, string | null] => [key, null]),
         ),
       ),
     ).then((answered) => {
@@ -74,9 +81,12 @@ export function useAllowedActions<A extends ActionAt>(actions: readonly A[]): A[
 
   return useMemo(
     () =>
-      actions.filter((action) => {
+      actions.flatMap((action): GuardedAction<A>[] => {
         const question = actionQuestion(action);
-        return !question || answers.get(questionKey(question)) === true;
+        if (!question) return [action];
+        const answer = answers.get(questionKey(question));
+        if (answer === undefined) return [];
+        return [answer === null ? action : { ...action, refused: answer }];
       }),
     [actions, answers],
   );

@@ -65,7 +65,7 @@ mod ui;
 
 pub use actor::Actor;
 pub use admission::{Admission, UNAUTHENTICATED};
-pub use authorization::{Authorization, Denied, OPERATION_REFUSED};
+pub use authorization::{Authorization, Denied, GENERIC_REFUSAL, OPERATION_REFUSED};
 pub use catalogue::{catalogue, core_resources, Resource, ResourceDeclaration};
 pub use cli::{CliInvocation, CliOutput, CliSpec, EXIT_NO_CLI};
 pub use display::ActorDisplay;

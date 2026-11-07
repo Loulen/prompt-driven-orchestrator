@@ -16,7 +16,8 @@
 //!   everything. CORE-5: it refuses a read (`run:read`, `project:read`,
 //!   `repository:read` for the disk) when a rule says so, possibly only in
 //!   one Projet (`@<project id>`) and for one caller (`~<actor>`); `all`
-//!   refuses every mutation and never a read.
+//!   refuses every mutation and never a read. Each refusal carries a
+//!   sentence for a person ([`sentence`]), except a rule ending in `!`.
 //! - Every `(Actor, Operation)` it is asked about is recorded ([`Control::seen`]),
 //!   with the Projets the Operation is in; `GET /ext/test/operations` lists
 //!   them.
@@ -278,11 +279,19 @@ pub struct Rule {
     pub project: Option<String>,
     /// Only for the caller identified by this id (the [`ACTOR_HEADER`]).
     pub actor: Option<String>,
+    /// Refuse without a sentence for a person (a trailing `!`): the core
+    /// shows its generic one.
+    pub silent: bool,
 }
 
 impl Rule {
-    /// `<resource>:<verb>[@<project>][~<actor>]`.
+    /// `<resource>:<verb>[@<project>][~<actor>][!]`.
     fn parse(text: &str) -> Result<Self, String> {
+        let text = text.trim();
+        let (text, silent) = match text.strip_suffix('!') {
+            Some(rest) => (rest, true),
+            None => (text, false),
+        };
         let (rest, actor) = match text.split_once('~') {
             Some((rest, actor)) => (rest, Some(actor.trim().to_string())),
             None => (text, None),
@@ -308,6 +317,7 @@ impl Rule {
             verb,
             project,
             actor,
+            silent,
         })
     }
 
@@ -353,6 +363,7 @@ impl Refusal {
                         verb,
                         project: None,
                         actor: None,
+                        silent: false,
                     }] => Ok(Refusal::Only(resource.clone(), verb.clone())),
                     _ => Ok(Refusal::Rules(rules)),
                 }
@@ -370,6 +381,17 @@ impl Refusal {
             Refusal::Rules(rules) => rules.iter().any(|rule| rule.matches(actor, operation)),
         }
     }
+
+    /// Whether the rule refusing `operation` gives no sentence for a person.
+    fn silent(&self, actor: &Actor, operation: &Operation) -> bool {
+        match self {
+            Refusal::Rules(rules) => rules
+                .iter()
+                .find(|rule| rule.matches(actor, operation))
+                .is_some_and(|rule| rule.silent),
+            _ => false,
+        }
+    }
 }
 
 /// The reason the test extension gives for refusing `operation`.
@@ -377,6 +399,16 @@ pub fn reason(operation: &Operation) -> String {
     format!(
         "the test extension refuses {} {}",
         operation.verb.name(),
+        operation.resource
+    )
+}
+
+/// The sentence the test extension gives a person for refusing `operation`:
+/// what they cannot do and whom to ask, never a Role's name.
+pub fn sentence(operation: &Operation) -> String {
+    format!(
+        "You can't {} this {} here. Ask an administrator of the test extension.",
+        operation.verb.name().replace('_', " "),
         operation.resource
     )
 }
@@ -1011,7 +1043,12 @@ impl Extension for TestExtension {
             panic!("the test extension panics in authorize");
         }
         if refusal.refuses(actor, operation) {
-            Authorization::deny(reason(operation))
+            let deny = Authorization::deny(reason(operation));
+            if refusal.silent(actor, operation) {
+                deny
+            } else {
+                deny.saying(sentence(operation))
+            }
         } else {
             Authorization::Allow
         }
@@ -1117,21 +1154,30 @@ fn a_refusal_reads_from_its_text_form() {
                 verb: Verb::Read,
                 project: Some("p2".into()),
                 actor: None,
+                silent: false,
             },
             Rule {
                 resource: ResourceKind::Repository,
                 verb: Verb::Read,
                 project: None,
                 actor: None,
+                silent: false,
             },
             Rule {
                 resource: ResourceKind::Run,
                 verb: Verb::Create,
                 project: Some("p2".into()),
                 actor: Some("bob".into()),
+                silent: false,
             },
         ]))
     );
+    let silent = Refusal::parse("run:create!,repository:read").unwrap();
+    let create = Operation::new(ResourceKind::Run, Verb::Create);
+    assert!(silent.refuses(&Actor::LocalOperator, &create));
+    assert!(silent.silent(&Actor::LocalOperator, &create));
+    let read_repo = Operation::new(ResourceKind::Repository, Verb::Read);
+    assert!(!silent.silent(&Actor::LocalOperator, &read_repo));
     let outside = Refusal::parse("run:create@,repository:read").unwrap();
     let create = Operation::new(ResourceKind::Run, Verb::Create);
     let actor = Actor::LocalOperator;

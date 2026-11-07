@@ -55,6 +55,7 @@ async fn a_refusing_extension_turns_every_session_gesture_into_a_named_403() {
         "error": "operation_refused",
         "message": "operation refused: sessions are closed today",
         "reason": "sessions are closed today",
+        "sentence": "You don't have the rights to do this.",
     });
 
     let open = client

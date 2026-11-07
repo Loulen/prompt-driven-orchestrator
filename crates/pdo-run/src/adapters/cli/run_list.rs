@@ -45,6 +45,9 @@ pub(super) fn refusal_message(body: &str) -> String {
 /// is not the daemon's JSON.
 pub(super) fn daemon_sentence(body: &str) -> Option<String> {
     serde_json::from_str::<Value>(body).ok().and_then(|v| {
+        if let Some(denied) = pdo_kernel::authorization::Denied::from_body(&v) {
+            return Some(denied.for_an_agent());
+        }
         v["message"]
             .as_str()
             .or_else(|| v["error"].as_str())

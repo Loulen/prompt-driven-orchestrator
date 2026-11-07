@@ -56,7 +56,7 @@ export type RunRowPane = Pick<
   | "toggleSel"
   | "visibleRunIds"
   | "runById"
-  | "mayOnRow"
+  | "whyNotOnRow"
 > &
   RunParentLinkPane &
   RunRowMenuPane;
@@ -104,7 +104,7 @@ export default function RunRow({
   const {
     isExpanded, setExpanded, runSel, renamingRunId, renameValue, setRenameValue, renameInputRef,
     commitRename, cancelRename, startRename, handlePause, handleResume, setConfirmRetryAll,
-    setConfirmForget, runsScrollRef, selectRange, toggleSel, visibleRunIds, runById, mayOnRow,
+    setConfirmForget, runsScrollRef, selectRange, toggleSel, visibleRunIds, runById, whyNotOnRow,
   } = pane;
   const run = node.run;
   const preview = useAppearancePreview();
@@ -148,25 +148,32 @@ export default function RunRow({
   const isOpen = run.run_id === selectedRunId;
   const rowSelected = runSel.has(run.run_id);
   const isArchived = run.status === "archived";
-  // CORE-42: each gesture also needs the caller's right to make it.
-  const may = (gesture: RunGesture) => mayOnRow(run.run_id, gesture);
-  const canCleanup = !isArchived && may("cleanup_run");
-  const canRename = may("rename_run");
-  const canForget = isArchived && may("delete");
+  // CORE-42: each gesture also needs the caller's right to make it;
+  // CORE-205: a refused one stays, greyed, with the refusal's sentence.
+  const whyNot = (gesture: RunGesture) => whyNotOnRow(run.run_id, gesture);
+  const refused = {
+    cleanup: whyNot("cleanup_run"),
+    rename: whyNot("rename_run"),
+    forget: whyNot("delete"),
+    pause: whyNot("pause_run"),
+    resume: whyNot("resume_run"),
+    retryAll: whyNot("retry_all"),
+  };
+  const canCleanup = !isArchived;
+  const canForget = isArchived;
   const isRenaming = renamingRunId === run.run_id;
   const label = run.name || run.run_id.slice(0, 20);
   // #110 — gate on EXPLICIT statuses, never isLiveRun/isTerminalRun: the former
   // includes `paused` (would wrongly show Pause on a paused run → 409); the
   // latter includes `archived` (would wrongly show Retry-all on archived → 409).
   // Each set is a subset of its daemon guard's accepted statuses.
-  const canPause = (run.status === "running" || run.status === "awaiting_user") && may("pause_run");
-  const canResume = run.status === "paused" && may("resume_run");
+  const canPause = run.status === "running" || run.status === "awaiting_user";
+  const canResume = run.status === "paused";
   const canRetryAll =
-    (run.status === "completed" ||
-      run.status === "failed" ||
-      run.status === "halted" ||
-      run.status === "skipped") &&
-    may("retry_all");
+    run.status === "completed" ||
+    run.status === "failed" ||
+    run.status === "halted" ||
+    run.status === "skipped";
   // A stalled run (no node running/waiting, nothing schedulable; #180) shows
   // its own steady mark over its still-`running` canonical status — "never a
   // silent stall". `stalled` is derived per read by the daemon.
@@ -207,7 +214,7 @@ export default function RunRow({
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onSelectRun(run.run_id);
-        } else if (e.key === "F2" && canRename) {
+        } else if (e.key === "F2" && !refused.rename) {
           e.preventDefault();
           startRename(run);
         } else if (e.key === "ArrowRight" && hasChildren && !expanded) {
@@ -342,18 +349,38 @@ export default function RunRow({
       {!isRenaming && !preview && (
         <HoverBar testId="run-row-actions">
           {canPause ? (
-            <RowAction icon={Pause} label="Pause" testId="pause-run-button" onClick={() => handlePause(run.run_id)} />
+            <RowAction
+              icon={Pause}
+              label="Pause"
+              testId="pause-run-button"
+              disabledReason={refused.pause}
+              onClick={() => handlePause(run.run_id)}
+            />
           ) : canResume ? (
-            <RowAction icon={Play} label="Resume" testId="resume-run-button" onClick={() => handleResume(run.run_id)} />
+            <RowAction
+              icon={Play}
+              label="Resume"
+              testId="resume-run-button"
+              disabledReason={refused.resume}
+              onClick={() => handleResume(run.run_id)}
+            />
           ) : canRetryAll ? (
             <RowAction
               icon={RotateCcw}
               label="Retry all"
               testId="retry-all-button"
+              disabledReason={refused.retryAll}
               onClick={() => setConfirmRetryAll(run.run_id)}
             />
           ) : canForget ? (
-            <RowAction icon={Trash2} label="Forget" danger testId="forget-run-button" onClick={() => setConfirmForget(run.run_id)} />
+            <RowAction
+              icon={Trash2}
+              label="Forget"
+              danger
+              testId="forget-run-button"
+              disabledReason={refused.forget}
+              onClick={() => setConfirmForget(run.run_id)}
+            />
           ) : null}
           <RunRowMenu
             run={run}
@@ -363,8 +390,8 @@ export default function RunRow({
             canResume={canResume}
             canRetryAll={canRetryAll}
             canCleanup={canCleanup}
-            canRename={canRename}
             canForget={canForget}
+            refused={refused}
           />
         </HoverBar>
       )}

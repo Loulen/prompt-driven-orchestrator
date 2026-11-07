@@ -11,8 +11,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { isOn, rowOf, switchFor, switchOf, tipFor, tipOf } from "./settingsSurface/testing";
 
 // Every case renders the whole surface: a few seconds each on a busy machine,
-// past the suite's 20 s now and then. The file gets its own ceiling.
-vi.setConfig({ testTimeout: 60_000 });
+// past the suite's 20 s now and then. The Worktree provisioning cases take 10
+// to 30 s alone and went past 60 s during `make gate`. The file gets its own ceiling.
+vi.setConfig({ testTimeout: 120_000 });
 
 const fetchSettingsMock = vi.fn();
 const updateSettingsMock = vi.fn();
@@ -1647,9 +1648,18 @@ describe("SettingsSurface — Interface / wiring grid size (#877)", () => {
     const s = within(row).getByRole("radio", { name: "S" });
     const l = within(row).getByRole("radio", { name: "L" });
     expect(m).toHaveAttribute("aria-checked", "true");
-    expect(s).toHaveAttribute("title", "S, 20 px");
-    expect(m).toHaveAttribute("title", "M, 30 px");
-    expect(l).toHaveAttribute("title", "L, 40 px");
+    // Each choice's title shows in the kit's Tooltip (CORE-205), no longer a native `title`.
+    const user = userEvent.setup();
+    for (const [choice, tip] of [
+      [s, "S, 20 px"],
+      [m, "M, 30 px"],
+      [l, "L, 40 px"],
+    ] as const) {
+      await user.hover(choice);
+      expect(await screen.findByRole("tooltip")).toHaveTextContent(tip);
+      await user.unhover(choice);
+      await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+    }
     // No « Global » option here: this IS the global default.
     expect(within(row).getAllByRole("radio")).toHaveLength(3);
 
@@ -3140,7 +3150,7 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     await new Promise((resolve) => setTimeout(resolve, 800));
     expect(saveInstanceProvisioningMock).not.toHaveBeenCalled();
     // Two debounced writes and a full Settings render: near 20 s on a loaded machine.
-  }, 60_000);
+  });
 
   it("Worktree provisioning writes an edit still waiting when Settings closes", async () => {
     const { rerender } = render(<SettingsSurface open onClose={() => {}} />);

@@ -9,7 +9,7 @@
  * looks exactly as it did.
  */
 
-import { Fragment } from "react";
+import { Fragment, useContext, useEffect } from "react";
 import {
   DropdownMenuGroup,
   DropdownMenuItem,
@@ -17,6 +17,8 @@ import {
   DropdownMenuSeparator,
 } from "../ui/dropdown-menu";
 import { Tooltip } from "../ui/tooltip";
+import { MenuReasons } from "../ui/kit/menu";
+import { MenuReasonsContext, reasonsOf } from "../ui/menuReasons";
 import type { ContributionElement } from "./catalogue";
 import { runCommand } from "./commands";
 import type { ActionExtra, ActionLocation } from "./contract";
@@ -55,31 +57,47 @@ export function ExtensionActionButtons<L extends ActionLocation>({
   /** Rendered before the buttons when there is at least one (a separator). */
   before?: React.ReactNode;
 }) {
-  const { actions, context } = useActions(location, extra);
+  const { actions, context, refused } = useActions(location, extra);
   if (actions.length === 0) return null;
   return (
     <>
       {before}
       <span className={className} data-testid={`extension-actions-${location}`}>
-        {actions.map((element) => (
+        {actions.map((element) => {
+          const why = refused.get(element.key);
+          return (
           <ExtensionBoundary key={element.key} extensionId={element.extension.id}>
-            <Tooltip content={element.contribution.label}>
+            <Tooltip
+              content={
+                why ? (
+                  <>
+                    <span>{element.contribution.label}</span>
+                    <span className="d-tip__desc">{why}</span>
+                  </>
+                ) : (
+                  element.contribution.label
+                )
+              }
+            >
               <button
                 type="button"
                 aria-label={element.contribution.label}
+                aria-disabled={why ? true : undefined}
                 data-testid={`extension-action-${element.key}`}
-                className={buttonClassName}
+                className={why ? `${buttonClassName} opacity-45 cursor-not-allowed` : buttonClassName}
                 onClick={(event) => {
                   // A bar inside a clickable row or header: the row stays put.
                   event.stopPropagation();
-                  void runCommand(element, context);
+                  // CORE-205: a refused action is greyed, its tooltip says why.
+                  if (!why) void runCommand(element, context);
                 }}
               >
                 <ExtensionIcon url={iconOf(element)} label={element.contribution.label} size={iconSize} />
               </button>
             </Tooltip>
           </ExtensionBoundary>
-        ))}
+          );
+        })}
       </span>
     </>
   );
@@ -108,7 +126,15 @@ export function ExtensionMenuGroups<L extends ActionLocation>({
   leading?: boolean;
   trailing?: boolean;
 }) {
-  const { actions, context } = useActions(location, extra);
+  const { actions, context, refused } = useActions(location, extra);
+  // CORE-205: the reasons of the greyed entries go to the foot of the menu
+  // holding them (a `RowMenu`), or under the groups in any other menu.
+  const report = useContext(MenuReasonsContext);
+  const reasons = reasonsOf(...actions.map((element) => refused.get(element.key)));
+  const reasonsKey = reasons.join("\n");
+  useEffect(() => {
+    report?.(location, reasonsKey ? reasonsKey.split("\n") : []);
+  }, [report, location, reasonsKey]);
   if (actions.length === 0) return null;
   return (
     <>
@@ -127,6 +153,7 @@ export function ExtensionMenuGroups<L extends ActionLocation>({
                     data-testid={`extension-action-${element.key}`}
                     className={itemClassName}
                     style={itemStyle}
+                    disabled={refused.has(element.key)}
                     onClick={() => void runCommand(element, context)}
                   >
                     <ExtensionIcon url={iconOf(element)} label={element.contribution.label} size={13} />
@@ -138,6 +165,7 @@ export function ExtensionMenuGroups<L extends ActionLocation>({
           </Fragment>
         );
       })}
+      {!report && <MenuReasons reasons={reasons} />}
       {trailing && <DropdownMenuSeparator />}
     </>
   );

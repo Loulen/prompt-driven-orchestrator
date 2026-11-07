@@ -1,7 +1,8 @@
 /**
  * The gestures on a Run and on its nodes the caller may make (CORE-42), as
  * the view of a Run, the row of the Runs list and its bulk actions read them
- * to hide what the daemon would refuse.
+ * to grey what the daemon would refuse, with the refusal's sentence
+ * (CORE-205: greyed, no longer hidden).
  *
  * Asked with the question of authorization (`POST /authorize`): each gesture
  * is the Operation the daemon asks before running it — `run` × the command
@@ -9,11 +10,11 @@
  * at the Run; `node` × the action (`stop`, `retry`, `mark_node_done`…),
  * targeted at `<run>/<node>`. Without the Projets: the daemon places them in
  * the Projet of the Run. Without extension every answer is « allow », and
- * nothing is hidden. The daemon still refuses what the UI shows.
+ * nothing is greyed. The daemon still refuses what the UI shows.
  */
 
 import type { Decision, OperationQuestion } from "../../shared/authorization/api";
-import { isAllowed } from "../../shared/authorization/api";
+import { refusalOf } from "../../shared/authorization/api";
 
 /** A gesture on a Run the UI offers: the action the daemon asks about, or `delete` (Forget). */
 export type RunGesture =
@@ -76,14 +77,14 @@ function key(target: string, gesture: string): string {
 /**
  * The gestures refused, by Run. A Run nobody asked about, or a gesture not
  * asked about, is allowed: before the answer, and without it, everything
- * shows (the daemon decides).
+ * is active (the daemon decides).
  */
 export interface GestureRights {
-  /** `<target> <gesture>` of each refusal. */
-  refused: ReadonlySet<string>;
+  /** The sentence of each refusal, by `<target> <gesture>`. */
+  refused: ReadonlyMap<string, string>;
 }
 
-export const NOTHING_REFUSED: GestureRights = { refused: new Set() };
+export const NOTHING_REFUSED: GestureRights = { refused: new Map() };
 
 /** What one Run asks about: the gestures on it, and on each of `nodeIds`. */
 export interface GestureQuestion {
@@ -123,11 +124,12 @@ export function withDecisions(
   questions: readonly GestureQuestion[],
   decisions: readonly Decision[],
 ): GestureRights {
-  const refused = new Set(rights.refused);
+  const refused = new Map(rights.refused);
   let i = 0;
   const answer = (k: string) => {
-    if (isAllowed(decisions[i++])) refused.delete(k);
-    else refused.add(k);
+    const why = refusalOf(decisions[i++]);
+    if (why === undefined) refused.delete(k);
+    else refused.set(k, why);
   };
   for (const { runId, runGestures, nodeIds } of questions) {
     for (const gesture of runGestures) answer(key(runId, gesture));
@@ -143,6 +145,11 @@ export function mayOnRun(rights: GestureRights, runId: string, gesture: RunGestu
   return !rights.refused.has(key(runId, gesture));
 }
 
+/** Why the caller may not make `gesture` on the Run `runId`: the refusal's sentence, or `undefined`. */
+export function whyNotOnRun(rights: GestureRights, runId: string, gesture: RunGesture): string | undefined {
+  return rights.refused.get(key(runId, gesture));
+}
+
 /** Whether the caller may make `gesture` on the node `nodeId` of `runId`. */
 export function mayOnNode(
   rights: GestureRights,
@@ -151,6 +158,16 @@ export function mayOnNode(
   gesture: NodeGesture,
 ): boolean {
   return !rights.refused.has(key(`${runId}/${nodeId}`, gesture));
+}
+
+/** Why the caller may not make `gesture` on the node `nodeId` of `runId`, or `undefined`. */
+export function whyNotOnNode(
+  rights: GestureRights,
+  runId: string,
+  nodeId: string,
+  gesture: NodeGesture,
+): string | undefined {
+  return rights.refused.get(key(`${runId}/${nodeId}`, gesture));
 }
 
 /** How many Operations one `POST /authorize` may hold (the daemon's cap). */

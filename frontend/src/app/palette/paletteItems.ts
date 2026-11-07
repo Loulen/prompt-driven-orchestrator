@@ -2,7 +2,7 @@
  * The core's rows of the command field: its commands (New run, Stats,
  * Settings, Customize appearance, the Theme, the Dark mode and Compact nodes…), its Runs, Pipelines and Triggers, and the gestures
  * on the selected item (a Run's Pause, Resume, Retry all; a node's Mark
- * complete, Retry and Stop) that the caller may make (CORE-42: a refused gesture is absent). And
+ * complete, Retry and Stop), a refused one greyed with the refusal's sentence (CORE-42, CORE-205). And
  * the extensions' Actions, as rows.
  */
 
@@ -34,7 +34,7 @@ import { SettingsIcon, StatsIcon } from "../../shared/ui/brand/AccentIcons";
 import { pauseRun, resumeRun, retryAll } from "../../run/api/commands";
 import { retryNode, retryNodePreview, stopNode } from "../../run/api/nodes";
 import { markNodeDone } from "../../run/api/completion";
-import { mayOnNode, mayOnRun, type GestureRights } from "../../run/model/runGestures";
+import { whyNotOnNode, whyNotOnRun, type GestureRights, type NodeGesture, type RunGesture } from "../../run/model/runGestures";
 import { isMarkCompletable } from "../../run/model/nodeStatus";
 import type { Icon } from "../../shared/ui/kit";
 import type { ThemeChoice, Theme } from "../../lib/theme";
@@ -69,7 +69,7 @@ export function coreItems({ host, pipelines, openPipeline, appearance, setTheme,
   const items: PaletteItem[] = [];
   const command = (id: string, label: string, glyph: Icon, run: () => void, extra: Partial<PaletteItem> = {}) =>
     items.push({ id: `cmd:${id}`, group: "commands", label, lead: icon(glyph), run, command: true, ...extra });
-  if (host.newRun) command("new-run", "New run", Plus, host.newRun);
+  if (host.newRun) command("new-run", "New run", Plus, host.newRun, { disabledReason: host.newRunRefused });
   if (host.newTrigger) command("new-trigger", "New trigger", Zap, host.newTrigger);
   if (host.openStats) command("stats", "Stats", StatsIcon, host.openStats);
   if (host.openSettings) command("settings", "Settings", SettingsIcon, host.openSettings);
@@ -155,35 +155,42 @@ export function selectionItems(
 
   if (selection.kind === "node") {
     const { node } = selection;
-    if (isMarkCompletable(node.status, runStatus) && mayOnNode(rights, runId, node.id, "mark_node_done")) {
-      add("node-done", "Mark complete", CircleCheck, () => void markComplete(runId, node.id, node.iter));
+    const whyNode = (gesture: NodeGesture) => ({ disabledReason: whyNotOnNode(rights, runId, node.id, gesture) });
+    if (isMarkCompletable(node.status, runStatus)) {
+      add("node-done", "Mark complete", CircleCheck, () => void markComplete(runId, node.id, node.iter), whyNode("mark_node_done"));
     }
-    if (NODE_RETRYABLE.has(node.status) && runStatus !== "paused" && runStatus !== "halted" && runStatus !== "archived" && mayOnNode(rights, runId, node.id, "retry")) {
-      add("node-retry", "Retry", RotateCcw, () => void retryWithPreview(runId, node.id, confirm));
+    if (NODE_RETRYABLE.has(node.status) && runStatus !== "paused" && runStatus !== "halted" && runStatus !== "archived") {
+      add("node-retry", "Retry", RotateCcw, () => void retryWithPreview(runId, node.id, confirm), whyNode("retry"));
     }
-    if (NODE_STOPPABLE.has(node.status) && mayOnNode(rights, runId, node.id, "stop")) {
-      add("node-stop", "Stop", Square, () => void stopNode(runId, node.id).catch(report), { danger: true });
+    if (NODE_STOPPABLE.has(node.status)) {
+      add("node-stop", "Stop", Square, () => void stopNode(runId, node.id).catch(report), { danger: true, ...whyNode("stop") });
     }
   }
-  if (LIVE.has(runStatus) && mayOnRun(rights, runId, "pause_run")) {
-    add("run-pause", "Pause", Pause, () => void pauseRun(runId).catch(report));
+  const whyRun = (gesture: RunGesture) => ({ disabledReason: whyNotOnRun(rights, runId, gesture) });
+  if (LIVE.has(runStatus)) {
+    add("run-pause", "Pause", Pause, () => void pauseRun(runId).catch(report), whyRun("pause_run"));
   }
-  if (runStatus === "paused" && mayOnRun(rights, runId, "resume_run")) {
-    add("run-resume", "Resume", Play, () => void resumeRun(runId).catch(report));
+  if (runStatus === "paused") {
+    add("run-resume", "Resume", Play, () => void resumeRun(runId).catch(report), whyRun("resume_run"));
   }
-  if ((runStatus === "failed" || runStatus === "halted") && mayOnRun(rights, runId, "retry_all")) {
-    add("run-retry-all", "Retry all", RotateCcw, () =>
-      confirm({
-        title: "Retry all nodes?",
-        consequence: "Archives this run",
-        target: runId,
-        actionLabel: "Retry all",
-        run: () =>
-          void retryAll(runId).then(
-            ({ run_id }) => openRun(run_id),
-            report,
-          ),
-      }),
+  if (runStatus === "failed" || runStatus === "halted") {
+    add(
+      "run-retry-all",
+      "Retry all",
+      RotateCcw,
+      () =>
+        confirm({
+          title: "Retry all nodes?",
+          consequence: "Archives this run",
+          target: runId,
+          actionLabel: "Retry all",
+          run: () =>
+            void retryAll(runId).then(
+              ({ run_id }) => openRun(run_id),
+              report,
+            ),
+        }),
+      whyRun("retry_all"),
     );
   }
   add("run-copy-id", "Copy run id", Copy, () =>
@@ -243,6 +250,7 @@ export function actionItem(action: PaletteAction, selection: PaletteSelection | 
     extension: { id: extension.id, name: extension.name },
     counter: (!contextual && contribution.counter) || undefined,
     command: true,
+    disabledReason: action.refused,
     run: () => void runCommand(element, context),
   };
 }

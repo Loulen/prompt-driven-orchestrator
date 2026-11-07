@@ -2,7 +2,7 @@ import { Pencil, Send, Trash2 } from "lucide-react";
 import type { ReviewEntry } from "../model/entries";
 import { relativeTime } from "../model/commentStatus";
 import { anchorLabel } from "../model/drafts";
-import { Badge, Spinner } from "./commentBits";
+import { Badge, Refusable, Spinner } from "./commentBits";
 import ReviewMarkdown from "./ReviewMarkdown";
 import SentCard from "./SentCard";
 
@@ -46,6 +46,8 @@ interface Props {
   /** Labels of the pair for the sent footer (`Fork point → Run tip`). */
   pairLabel: string;
   sendDisabledReason: string | null;
+  /** CORE-205: why the caller may not send on this Run: Send stays, greyed. */
+  sendRefused?: string;
   onEdit: () => void;
   onDelete: () => void;
   onSend: () => void;
@@ -57,6 +59,9 @@ interface Props {
   deciding?: boolean;
   onResolve?: () => void;
   onReopen?: () => void;
+  /** CORE-205 — sent cards only: why the caller may not resolve / reopen it. */
+  resolveRefused?: string;
+  reopenRefused?: string;
   /** The card was looked at (hovered, or in view for a moment): clear its unread dots. */
   onSeen?: () => void;
   /** #752 — sent cards only: the line changed on the displayed destination. `writtenOn` labels the ref it was written against. */
@@ -71,6 +76,7 @@ export default function CommentCard({
   startingManager,
   pairLabel,
   sendDisabledReason,
+  sendRefused,
   onEdit,
   onDelete,
   onSend,
@@ -79,6 +85,8 @@ export default function CommentCard({
   deciding = false,
   onResolve,
   onReopen,
+  resolveRefused,
+  reopenRefused,
   onSeen,
   outdated,
   movedFrom,
@@ -105,6 +113,8 @@ export default function CommentCard({
         deciding={deciding}
         onResolve={onResolve}
         onReopen={onReopen}
+        resolveRefused={resolveRefused}
+        reopenRefused={reopenRefused}
         onSeen={onSeen}
         outdated={outdated}
         movedFrom={movedFrom}
@@ -113,6 +123,8 @@ export default function CommentCard({
   }
 
   const d = entry.draft;
+  // A send the run itself refuses keeps its own reason; else the caller's rights'.
+  const refused = sendDisabledReason ? undefined : sendRefused;
   if (sending) {
     return (
       <div
@@ -175,16 +187,19 @@ export default function CommentCard({
       <div className="rv-ct__foot">
         <span className="rv-ct__fit" title="Only in this browser until sent.">Only in this browser until sent.</span>
         <span className="ml-auto">
-          <button
-            type="button"
-            onClick={onSend}
-            disabled={!!sendDisabledReason}
-            title={sendDisabledReason ?? "Send this comment to the manager (one message)"}
-            data-testid="review-comment-send"
-            className="d-btn d-btn--sm"
-          >
-            <Send size={11} strokeWidth={1.5} aria-hidden /> Send to manager
-          </button>
+          <Refusable reason={refused} label="Send to manager">
+            <button
+              type="button"
+              onClick={refused ? undefined : onSend}
+              disabled={!!sendDisabledReason}
+              aria-disabled={refused ? true : undefined}
+              title={refused ? undefined : (sendDisabledReason ?? "Send this comment to the manager (one message)")}
+              data-testid="review-comment-send"
+              className="d-btn d-btn--sm"
+            >
+              <Send size={11} strokeWidth={1.5} aria-hidden /> Send to manager
+            </button>
+          </Refusable>
         </span>
       </div>
     </div>

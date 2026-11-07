@@ -102,19 +102,19 @@ function renderModal() {
 }
 
 describe("New Run under the rights of the caller (CORE-5)", () => {
-  it("asks at each open, then drops the loupe and offers the allowed Projets' repositories", async () => {
+  it("asks at each open, then greys the loupe and offers the allowed Projets' repositories", async () => {
     vi.mocked(askAuthorization).mockImplementation(async (q) => answerAsBob(q));
     renderModal();
 
-    await waitFor(() => expect(screen.queryByTestId("repo-browse-trigger")).toBeNull());
+    // CORE-205: the loupe stays, greyed with the refusal's sentence.
+    await waitFor(() => expect(screen.getByTestId("repo-browse-trigger")).toHaveAttribute("aria-disabled", "true"));
     expect(askAuthorization).toHaveBeenCalledTimes(1);
     expect(vi.mocked(askAuthorization).mock.calls[0][0][0]).toEqual({
       resource: "repository",
       verb: "read",
     });
-    expect(screen.getByTestId("repo-help")).toHaveTextContent(
-      "A new repository goes through an administrator.",
-    );
+    // The greyed loupe says why: no line of help the core would make up.
+    expect(screen.queryByTestId("repo-help")).toBeNull();
     // ADR-0087: the allowed Projets head the form, « No project » is not offered
     // (no Run in no Projet), and the hidden one is said.
     fireEvent.click(screen.getByTestId("project-combobox"));

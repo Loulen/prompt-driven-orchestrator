@@ -109,10 +109,10 @@
   .d-icon svg {
     flex: none;
   }
-  .d-btn:hover:not(:disabled) {
+  .d-btn:hover:not(:disabled):not([aria-disabled="true"]) {
     background: var(--hover);
   }
-  .d-btn:active:not(:disabled) {
+  .d-btn:active:not(:disabled):not([aria-disabled="true"]) {
     background: var(--active);
   }
   .d-btn:focus-visible,
@@ -121,7 +121,9 @@
     outline-offset: 1px;
   }
   .d-btn:disabled,
-  .d-icon:disabled {
+  .d-icon:disabled,
+  .d-btn[aria-disabled="true"],
+  .d-icon[aria-disabled="true"] {
     opacity: 0.45;
     cursor: not-allowed;
   }
@@ -130,8 +132,8 @@
     background: var(--primary);
     color: var(--primary-ink);
   }
-  .d-btn--primary:hover:not(:disabled),
-  .d-btn--primary:active:not(:disabled) {
+  .d-btn--primary:hover:not(:disabled):not([aria-disabled="true"]),
+  .d-btn--primary:active:not(:disabled):not([aria-disabled="true"]) {
     background: color-mix(in oklch, var(--primary) 88%, var(--text));
   }
   .d-btn--ghost {
@@ -141,7 +143,7 @@
     border-color: color-mix(in oklch, var(--color-st-failed) 60%, transparent);
     color: var(--color-st-failed);
   }
-  .d-btn--danger:hover:not(:disabled) {
+  .d-btn--danger:hover:not(:disabled):not([aria-disabled="true"]) {
     border-color: var(--color-st-failed);
     background: var(--color-st-failed);
     color: var(--color-paper);
@@ -167,11 +169,11 @@
     color: var(--text-2);
     cursor: pointer;
   }
-  .d-icon:hover:not(:disabled) {
+  .d-icon:hover:not(:disabled):not([aria-disabled="true"]) {
     background: var(--hover);
     color: var(--text);
   }
-  .d-icon:active:not(:disabled),
+  .d-icon:active:not(:disabled):not([aria-disabled="true"]),
   .d-icon[aria-pressed="true"],
   .d-icon[aria-expanded="true"] {
     background: var(--active);
@@ -181,7 +183,7 @@
     width: var(--h-control-sm);
     height: var(--h-control-sm);
   }
-  .d-icon--danger:hover:not(:disabled) {
+  .d-icon--danger:hover:not(:disabled):not([aria-disabled="true"]) {
     color: var(--color-st-failed);
   }
   .d-icon__badge {
@@ -385,7 +387,7 @@
     padding: 0 6px;
     font-size: var(--fs-xs);
   }
-  .d-seg__btn:hover:not(:disabled) {
+  .d-seg__btn:hover:not(:disabled):not([aria-disabled="true"]) {
     background: var(--hover);
     color: var(--text);
   }
@@ -397,20 +399,24 @@
     outline: 1px solid var(--focus-ring);
     outline-offset: -1px;
   }
-  .d-seg__btn:disabled {
+  .d-seg__btn:disabled,
+  .d-seg__btn[aria-disabled="true"] {
     cursor: not-allowed;
+  }
+  .d-seg__btn[aria-disabled="true"] {
+    opacity: 0.45;
   }
   .d-seg--fill {
     display: flex;
     width: 100%;
     min-width: 0;
   }
-  .d-seg--fill > .d-seg__btn {
+  .d-seg--fill .d-seg__btn {
     flex: 1 1 0;
     justify-content: center;
     min-width: 0;
   }
-  .d-seg--fill > .d-seg__btn > span {
+  .d-seg--fill .d-seg__btn > span {
     overflow: hidden;
     text-overflow: ellipsis;
   }
@@ -644,6 +650,24 @@
   .d-pop__row[aria-disabled="true"] {
     opacity: 0.45;
     cursor: default;
+  }
+  /* The reason the greyed entries of a menu are greyed: one line at its foot (CORE-205, option B). */
+  .d-pop__why {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--g-2);
+    max-width: 360px;
+    margin-top: 2px;
+    padding: 6px var(--pad-x) 4px 8px;
+    border-top: 1px solid var(--line);
+    color: var(--text-2);
+    font-size: var(--fs-xs);
+    white-space: normal;
+  }
+  .d-pop__why svg {
+    flex: none;
+    margin-top: 1px;
+    color: var(--color-st-await);
   }
   .d-pop__row.is-danger {
     color: var(--color-st-failed);

@@ -1,11 +1,13 @@
 import { useRef } from "react";
 import { ChevronDown, ClipboardPaste, Download, FileArchive, Folder, Plus, Search } from "lucide-react";
 import type { SkillBankPanelState } from "../store/useSkillBankPanel";
-import { MenuItem } from "./BankControls";
+import { MenuReasons } from "../../shared/ui/kit/menu";
+import { reasonsOf } from "../../shared/ui/menuReasons";
+import { GREYED, MenuItem, RefusalTip } from "./BankControls";
 
 /** Above the tree: the filter, the new-folder button and the Add menu (paste, import, upload a zip). */
 export default function BankToolbar({ panel }: { panel: SkillBankPanelState }) {
-  const { selectedFolder, selectedSkill, addMenuOpen } = panel;
+  const { selectedFolder, selectedSkill, addMenuOpen, refusals } = panel;
   const zipInput = useRef<HTMLInputElement>(null);
   return (
     <div className="flex items-center gap-2 px-3 py-2.5">
@@ -20,17 +22,23 @@ export default function BankToolbar({ panel }: { panel: SkillBankPanelState }) {
           className="min-w-0 flex-1 bg-transparent text-text outline-none placeholder:text-text-3 text-xs"
         />
       </label>
-      <button
-        type="button"
-        onClick={() => void panel.newFolder(selectedFolder?.id ?? (selectedSkill?.folder_id ?? null))}
-        aria-label="New folder"
-        title="New folder"
-        data-testid="skill-new-folder"
-        className="flex shrink-0 items-center gap-1 rounded-md border border-line-strong bg-surface-2 px-2 py-1.5 text-text-2 hover:border-primary"
-      >
-        <Folder size={12} />
-        <span className="text-sm" style={{ lineHeight: 1 }}>+</span>
-      </button>
+      <RefusalTip label="New folder" reason={refusals.createFolder}>
+        <button
+          type="button"
+          onClick={() => {
+            if (refusals.createFolder) return;
+            void panel.newFolder(selectedFolder?.id ?? (selectedSkill?.folder_id ?? null));
+          }}
+          aria-label="New folder"
+          aria-disabled={refusals.createFolder ? true : undefined}
+          title={refusals.createFolder ? undefined : "New folder"}
+          data-testid="skill-new-folder"
+          className={`flex shrink-0 items-center gap-1 rounded-md border border-line-strong bg-surface-2 px-2 py-1.5 text-text-2 hover:border-primary ${GREYED}`}
+        >
+          <Folder size={12} />
+          <span className="text-sm" style={{ lineHeight: 1 }}>+</span>
+        </button>
+      </RefusalTip>
       <span className="relative">
         <button
           type="button"
@@ -59,6 +67,7 @@ export default function BankToolbar({ panel }: { panel: SkillBankPanelState }) {
               icon={<ClipboardPaste size={12} />}
               label="Paste SKILL.md…"
               testid="skill-paste"
+              disabledReason={refusals.createSkill}
               onClick={() => {
                 panel.setAddMenuOpen(false);
                 panel.setPasteOpen(true);
@@ -69,6 +78,7 @@ export default function BankToolbar({ panel }: { panel: SkillBankPanelState }) {
               label="Import from a source…"
               hint="repo · folder"
               testid="skill-import"
+              disabledReason={refusals.importFromSource}
               onClick={() => {
                 panel.setAddMenuOpen(false);
                 panel.setImportOpen(true);
@@ -79,8 +89,10 @@ export default function BankToolbar({ panel }: { panel: SkillBankPanelState }) {
               label="Upload a zip…"
               hint=".skills.zip"
               testid="skill-upload-zip"
+              disabledReason={refusals.uploadZip}
               onClick={() => zipInput.current?.click()}
             />
+            <MenuReasons reasons={reasonsOf(refusals.createSkill, refusals.importFromSource, refusals.uploadZip)} />
           </div>
         )}
         {/* Outside the menu: it stays mounted while the file picker is open. */}
@@ -93,7 +105,7 @@ export default function BankToolbar({ panel }: { panel: SkillBankPanelState }) {
           onChange={(event) => {
             const file = event.target.files?.[0];
             event.target.value = "";
-            if (file) void panel.uploadZip(file);
+            if (file && !refusals.uploadZip) void panel.uploadZip(file);
           }}
         />
       </span>

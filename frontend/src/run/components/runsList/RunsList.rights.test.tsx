@@ -1,8 +1,11 @@
 /**
  * CORE-42: the Runs list follows the same rule as the view of a Run — a row's
- * icons, its « ⋯ » menu and the bulk bar hide the gestures the caller may not
+ * icons, its « ⋯ » menu and the bulk bar know the gestures the caller may not
  * make on that Run, as `POST /authorize` answers them, asked once per Run.
- * Without an extension that restricts, nothing is hidden.
+ * CORE-205 (reverses the hiding of CORE-42): a refused gesture stays, greyed;
+ * the row's icon says why in its tooltip, the menu once at its foot (option B),
+ * the bulk bar in the action's tooltip. Without an extension that restricts,
+ * nothing is greyed.
  */
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -41,10 +44,12 @@ function runEntry(id: string, status: string): RunListEntry {
 /** `mine` is a Run of a Projet where the caller is Developer, `theirs` one where Reader. */
 const RUNS = [runEntry("mine", "running"), runEntry("theirs", "running"), runEntry("old", "archived")];
 
+const SENTENCE = "You can't change Runs in Project P. Ask an administrator of P.";
+
 /** Every gesture on `theirs` and `old` refused, everything on `mine` allowed. */
 function answerAsReaderOfTheirs(questions: OperationQuestion[]): Decision[] {
   return questions.map((q) =>
-    q.target === "mine" ? { decision: "allow" } : { decision: "deny", reason: "Reader of P" },
+    q.target === "mine" ? { decision: "allow" } : { decision: "deny", reason: "the test rules refuse it", sentence: SENTENCE },
   );
 }
 
@@ -79,15 +84,26 @@ function renderList() {
   );
 }
 
-async function menuItems(runId: string): Promise<string[]> {
+/** The entries of a row's menu, a greyed one marked `(greyed)`, and the lines at its foot. */
+async function menuOf(runId: string): Promise<{ items: string[]; reasons: string[] }> {
   fireEvent.click(within(screen.getByTestId(`row-${runId}`)).getByTestId("run-row-menu"));
   const menu = await screen.findByTestId("run-row-menu-content");
   const items = within(menu)
     .getAllByRole("menuitem")
-    .map((item) => item.getAttribute("data-testid") ?? "");
+    .map((item) => {
+      const id = item.getAttribute("data-testid") ?? "";
+      return item.getAttribute("aria-disabled") === "true" || item.hasAttribute("data-disabled") ? `${id} (greyed)` : id;
+    });
+  const reasons = within(menu)
+    .queryAllByTestId("menu-disabled-reason")
+    .map((n) => n.textContent ?? "");
   fireEvent.keyDown(menu, { key: "Escape" });
   await waitFor(() => expect(screen.queryByTestId("run-row-menu-content")).toBeNull());
-  return items;
+  return { items, reasons };
+}
+
+async function menuItems(runId: string): Promise<string[]> {
+  return (await menuOf(runId)).items;
 }
 
 beforeEach(() => {
@@ -99,7 +115,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async () => new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } })));
 });
 
-describe("the gestures of the Runs list (CORE-42)", () => {
+describe("the gestures of the Runs list (CORE-42, CORE-205)", () => {
   it("asks the gestures of a row once per Run", async () => {
     asked.mockImplementation(async (q) => answerAsReaderOfTheirs(q));
     const { rerender } = renderList();
@@ -117,32 +133,49 @@ describe("the gestures of the Runs list (CORE-42)", () => {
     expect(targets).toEqual(new Set(["mine", "theirs", "old"]));
   });
 
-  it("hides from a row and its menu the gestures refused on its Run", async () => {
+  it("greys on a row and in its menu the gestures refused on its Run, the menu saying why once at its foot", async () => {
     asked.mockImplementation(async (q) => answerAsReaderOfTheirs(q));
     renderList();
     const theirs = screen.getByTestId("row-theirs");
-    await waitFor(() => expect(within(theirs).queryByTestId("pause-run-button")).toBeNull());
-    expect(await menuItems("theirs")).toEqual(["run-menu-copy-id"]);
-    expect(await menuItems("old")).toEqual(["run-menu-copy-id"]);
+    await waitFor(() =>
+      expect(within(theirs).getByTestId("pause-run-button")).toHaveAttribute("aria-disabled", "true"),
+    );
+    expect(await menuOf("theirs")).toEqual({
+      items: [
+        "run-menu-rename (greyed)",
+        "run-menu-pause (greyed)",
+        "run-menu-copy-id",
+        "run-menu-cleanup (greyed)",
+      ],
+      reasons: [SENTENCE],
+    });
+    expect(await menuOf("old")).toEqual({
+      items: ["run-menu-rename (greyed)", "run-menu-copy-id", "run-menu-forget (greyed)"],
+      reasons: [SENTENCE],
+    });
+    // The greyed icon does nothing.
+    fireEvent.click(within(theirs).getByTestId("pause-run-button"));
+    await act(async () => {});
+    expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining("/runs/theirs/commands"), expect.anything());
 
     const mine = screen.getByTestId("row-mine");
-    expect(within(mine).getByTestId("pause-run-button")).toBeInTheDocument();
-    expect(await menuItems("mine")).toEqual([
-      "run-menu-rename",
-      "run-menu-pause",
-      "run-menu-copy-id",
-      "run-menu-cleanup",
-    ]);
+    expect(within(mine).getByTestId("pause-run-button")).not.toHaveAttribute("aria-disabled");
+    expect(await menuOf("mine")).toEqual({
+      items: ["run-menu-rename", "run-menu-pause", "run-menu-copy-id", "run-menu-cleanup"],
+      reasons: [],
+    });
   });
 
-  it("hides a bulk action no selected Run allows, and acts only on the Runs that allow it", async () => {
+  it("greys a bulk action no selected Run allows, and acts only on the Runs that allow it", async () => {
     asked.mockImplementation(async (q) => answerAsReaderOfTheirs(q));
     renderList();
     await waitFor(() => expect(asked).toHaveBeenCalled());
     act(() => useSelectionStore.getState().toggle("runs", "theirs"));
-    await waitFor(() => expect(screen.queryByTestId("bulk-action-pause")).toBeNull());
-    expect(screen.queryByTestId("bulk-action-cleanup")).toBeNull();
-    expect(screen.queryByTestId("bulk-action-retry")).toBeNull();
+    await waitFor(() => expect(screen.getByTestId("bulk-action-pause")).toHaveAttribute("aria-disabled", "true"));
+    expect(screen.getByTestId("bulk-action-cleanup")).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByTestId("bulk-action-retry")).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(screen.getByTestId("bulk-action-cleanup"));
+    expect(screen.queryByTestId("bulk-action-modal")).toBeNull();
 
     act(() => useSelectionStore.getState().toggle("runs", "mine"));
     fireEvent.click(await screen.findByTestId("bulk-action-cleanup"));
@@ -151,7 +184,7 @@ describe("the gestures of the Runs list (CORE-42)", () => {
     expect(dialog).toHaveTextContent("Cleanup 1 run?");
   });
 
-  it("hides nothing without an extension that restricts", async () => {
+  it("greys nothing without an extension that restricts", async () => {
     asked.mockImplementation(async (q) => q.map(() => ({ decision: "allow" }) as Decision));
     renderList();
     await waitFor(() => expect(asked).toHaveBeenCalled());
@@ -175,6 +208,7 @@ describe("the gestures of the Runs list (CORE-42)", () => {
                 error: "operation_refused",
                 message: "operation refused: Reader of P",
                 reason: "Reader of P",
+                sentence: SENTENCE,
               }),
               { status: 403, headers: { "Content-Type": "application/json" } },
             )
@@ -184,7 +218,7 @@ describe("the gestures of the Runs list (CORE-42)", () => {
     renderList();
     fireEvent.click(within(screen.getByTestId("row-mine")).getByTestId("pause-run-button"));
     await waitFor(() =>
-      expect(useToasts.getState().toasts.map((t) => t.message)).toEqual(["operation refused: Reader of P"]),
+      expect(useToasts.getState().toasts.map((t) => t.message)).toEqual([SENTENCE]),
     );
   });
 });

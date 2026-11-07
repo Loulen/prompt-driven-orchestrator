@@ -3,7 +3,7 @@ import { Briefcase, Plus } from "lucide-react";
 import type { Project } from "../../model/project";
 import { repoCount } from "../../model/projectsSettings";
 import { tildify } from "../../../lib/homePath";
-import { Button, TextInput } from "../../../shared/ui/kit";
+import { Button, TextInput, Tooltip } from "../../../shared/ui/kit";
 
 /** A Projet being named in the list: a fresh one, or one a group's pencil starts. */
 export interface ProjectDraft {
@@ -22,7 +22,7 @@ export default function ProjectList({
   draft,
   onDraft,
   onCreate,
-  canCreate,
+  createRefused,
   home,
 }: {
   projects: Project[];
@@ -32,7 +32,8 @@ export default function ProjectList({
   draft: ProjectDraft | null;
   onDraft: (draft: ProjectDraft | null) => void;
   onCreate: (draft: ProjectDraft) => Promise<void>;
-  canCreate: boolean;
+  /** CORE-205: why the caller may not create a Projet (New project greyed), else absent. */
+  createRefused?: string;
   home: string | null;
 }) {
   const [creating, setCreating] = useState(false);
@@ -72,7 +73,7 @@ export default function ProjectList({
       })}
 
       {/* A pencil's draft too: no naming without the right to create. */}
-      {draft && canCreate ? (
+      {draft && !createRefused ? (
         <div className="set-md__naming">
           <div className="set-line">
             <TextInput
@@ -113,17 +114,20 @@ export default function ProjectList({
           )}
         </div>
       ) : (
-        canCreate && (
+        <Tooltip label="New project" description={createRefused} disabled={!createRefused}>
           <button
             type="button"
-            onClick={() => onDraft({ name: "", members: [] })}
+            onClick={() => {
+              if (!createRefused) onDraft({ name: "", members: [] });
+            }}
+            aria-disabled={createRefused ? true : undefined}
             data-testid="projects-new"
             className="set-md__item set-md__new"
           >
             <Plus size={13} strokeWidth={1.5} aria-hidden />
             <span>New project</span>
           </button>
-        )
+        </Tooltip>
       )}
     </div>
   );

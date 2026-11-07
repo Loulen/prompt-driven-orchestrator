@@ -20,18 +20,19 @@ export interface ModalState {
 }
 
 /**
- * The gestures on the node on screen the caller may make (CORE-42), as the
- * question of authorization answered them: each one refused is hidden. All
- * `true` before the answer, and without an extension that restricts.
+ * The gestures on the node on screen the caller may not make (CORE-42), as
+ * the question of authorization answered them: each one refused stays on
+ * screen, greyed, its tooltip saying this sentence (CORE-205). All absent
+ * before the answer, and without an extension that restricts.
  */
-export interface NodeGestureRights {
-  stop: boolean;
-  retry: boolean;
-  start: boolean;
-  markComplete: boolean;
-  release: boolean;
+export interface NodeGestureRefusals {
+  stop?: string;
+  retry?: string;
+  start?: string;
+  markComplete?: string;
+  release?: string;
   /** Stop of a stale node (`kill_node`). */
-  kill: boolean;
+  kill?: string;
   /** Restart of the iteration (`restart_node`). */
-  restart: boolean;
+  restart?: string;
 }

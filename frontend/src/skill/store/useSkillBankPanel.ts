@@ -11,6 +11,7 @@ import {
 } from "../api/bank";
 import { rescanSkillFolder, updateSkillFolderFromSource } from "../api/import";
 import { useSkillBundle } from "./useSkillBundle";
+import { useSkillBankRefusals } from "./useSkillBankRefusals";
 import type { Skill } from "../../shared/generated/Skill";
 import type { SkillBank, SkillDetail, SkillReferents } from "../model/skill";
 import type { SkillFolder } from "../../shared/generated/SkillFolder";
@@ -48,6 +49,7 @@ export function isLocked(skill: Pick<Skill, "locked"> | null | undefined): boole
  */
 export function useSkillBankPanel(bank: SkillBank, home: string | null, onChanged: () => Promise<void>) {
   const { skills, folders } = bank;
+  const refusals = useSkillBankRefusals(skills, folders); // CORE-205: greyed, and inert here too
   const [selected, setSelected] = useState<TreeNodeRef | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [filter, setFilter] = useState("");
@@ -170,7 +172,7 @@ export function useSkillBankPanel(bank: SkillBank, home: string | null, onChange
   const moveSkill = async (skillId: string, folderId: string | null, withUndo = true) => {
     const skill = skillById.get(skillId);
     if (!skill) return;
-    if (isLocked(skill)) return;
+    if (isLocked(skill) || refusals.updateSkill(skillId)) return;
     if ((skill.folder_id ?? null) === folderId) return;
     const from = skill.folder_id ?? null;
     setError(null);
@@ -195,7 +197,7 @@ export function useSkillBankPanel(bank: SkillBank, home: string | null, onChange
 
   const moveFolder = async (folderId: string, parentId: string | null) => {
     const folder = folderById.get(folderId);
-    if (!folder || (folder.parent_id ?? null) === parentId) return;
+    if (!folder || (folder.parent_id ?? null) === parentId || refusals.updateFolder(folderId)) return;
     setError(null);
     try {
       await updateSkillFolder(folderId, { parent_id: parentId });
@@ -251,7 +253,7 @@ export function useSkillBankPanel(bank: SkillBank, home: string | null, onChange
   };
 
   const startRename = (ref: TreeNodeRef) => {
-    if (ref.kind === "skill" && isLocked(skillById.get(ref.id))) return;
+    if (ref.kind === "skill" ? isLocked(skillById.get(ref.id)) || refusals.updateSkill(ref.id) : refusals.updateFolder(ref.id)) return;
     setMenuFor(null);
     setRenameError(null);
     setSelected(ref);
@@ -260,6 +262,7 @@ export function useSkillBankPanel(bank: SkillBank, home: string | null, onChange
 
   const newFolder = async (parentId: string | null) => {
     setMenuFor(null);
+    if (refusals.createFolder) return; // CORE-205
     setError(null);
     try {
       const folder = await createSkillFolder({ name: "New folder", parent_id: parentId });
@@ -276,7 +279,7 @@ export function useSkillBankPanel(bank: SkillBank, home: string | null, onChange
   const askDelete = async (ref: TreeNodeRef) => {
     setMenuFor(null);
     setError(null);
-    if (ref.kind === "skill" && isLocked(skillById.get(ref.id))) return;
+    if (ref.kind === "skill" ? isLocked(skillById.get(ref.id)) || refusals.deleteSkill(ref.id) : refusals.deleteFolder(ref.id)) return;
     if (ref.kind === "skill") {
       const skill = skillById.get(ref.id);
       if (!skill) return;
@@ -321,6 +324,7 @@ export function useSkillBankPanel(bank: SkillBank, home: string | null, onChange
   };
 
   const startUpdateFromSource = async (folder: SkillFolder) => {
+    if (refusals.updateFolderFromSource(folder.id)) return;
     setError(null);
     setSelected({ kind: "folder", id: folder.id });
     setPending({ kind: "rescan-folder", folder });
@@ -380,15 +384,13 @@ export function useSkillBankPanel(bank: SkillBank, home: string | null, onChange
   });
 
   return {
-    selected, setSelected, selectedRef, selectedSkill, selectedFolder,
+    refusals, selected, setSelected, selectedRef, selectedSkill, selectedFolder,
     expanded, toggleExpanded, expandTo, filter, setFilter,
     pasteOpen, setPasteOpen, importOpen, setImportOpen, addMenuOpen, setAddMenuOpen,
-    detail, detailTab, setDetailTab, refreshDetail,
-    renaming, setRenaming, renameError, setRenameError,
+    detail, detailTab, setDetailTab, refreshDetail, renaming, setRenaming, renameError, setRenameError,
     pending, setPending, menuFor, setMenuFor, movePickerFor, setMovePickerFor,
     toast, setToast, toastTimer, showToast, error, setError, failWith, copied,
-    leaveRequest, setLeaveRequest, setFilesDirty, guarded,
-    folderById, counts, existingNames,
+    leaveRequest, setLeaveRequest, setFilesDirty, guarded, folderById, counts, existingNames,
     moveSkill, moveFolder, commitRename, startRename, newFolder, askDelete, confirmDelete, copyId,
     startUpdateFromSource, confirmUpdateFromSource, openSourceFolder,
     ...bundle,

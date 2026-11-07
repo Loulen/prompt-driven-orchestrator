@@ -81,6 +81,10 @@ interface Props {
   finishedRun?: boolean;
   onReopen?: () => void;
   onRetryAll?: () => void;
+  /** CORE-205: why the caller may not reopen the Run (the icon greyed), else absent. */
+  reopenRefused?: string;
+  /** CORE-205: why the caller may not retry it all (the icon greyed), else absent. */
+  retryAllRefused?: string;
   onOpenShell?: () => void;
   // #30: the Run of a Run's canvas: the extensions' `run/toolbar` actions sit
   // after the finished-run group. Absent on a template's canvas.
@@ -89,7 +93,7 @@ interface Props {
   view?: { fit: () => void; zoomIn: () => void; zoomOut: () => void };
 }
 
-export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, assistantAvailable = false, assistantActive = false, onOpenAssistant, reviewHref, reviewPending = 0, reviewTone = "pending", reviewTitle = "Review", readOnly = false, finishedRun = false, onReopen, onRetryAll, onOpenShell, run = null, runEdit, view }: Props) {
+export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, assistantAvailable = false, assistantActive = false, onOpenAssistant, reviewHref, reviewPending = 0, reviewTone = "pending", reviewTitle = "Review", readOnly = false, finishedRun = false, onReopen, onRetryAll, reopenRefused, retryAllRefused, onOpenShell, run = null, runEdit, view }: Props) {
   // Read undo/redo straight from the store (ADR-0014 / #226): they have no
   // component-local dependency, unlike the prop-drilled add callbacks, so
   // the point-of-use selector idiom is the right fit. `canUndo`/`canRedo` are
@@ -180,10 +184,16 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
         <>
           {(!readOnly || runEdit) && sep}
           {onReopen && (
-            <IconButton icon={Play} label="Reopen run" data-testid="toolbar-reopen" onClick={onReopen} />
+            <IconButton icon={Play} label="Reopen run" data-testid="toolbar-reopen" disabledReason={reopenRefused} onClick={onReopen} />
           )}
           {onRetryAll && (
-            <IconButton icon={RotateCcw} label="Retry all" data-testid="toolbar-retry-all" onClick={onRetryAll} />
+            <IconButton
+              icon={RotateCcw}
+              label="Retry all"
+              data-testid="toolbar-retry-all"
+              disabledReason={retryAllRefused}
+              onClick={onRetryAll}
+            />
           )}
           {onOpenShell && (
             <IconButton icon={Terminal} label="Open shell in worktree" data-testid="toolbar-open-shell" onClick={onOpenShell} />

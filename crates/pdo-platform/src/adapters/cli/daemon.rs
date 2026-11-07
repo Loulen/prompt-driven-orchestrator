@@ -226,12 +226,16 @@ impl Answer {
     }
 }
 
-/// The daemon's sentence for a refusal: its `message`, else its `error`, else
-/// the body as it is.
+/// The daemon's sentence for a refusal: for a refused Operation, the
+/// sentence a person reads followed by the technical cause in parentheses;
+/// otherwise its `message`, else its `error`, else the body as it is.
 pub fn refusal_sentence(body: &str) -> String {
     serde_json::from_str::<Value>(body)
         .ok()
         .and_then(|v| {
+            if let Some(denied) = pdo_kernel::authorization::Denied::from_body(&v) {
+                return Some(denied.for_an_agent());
+            }
             v["message"]
                 .as_str()
                 .or_else(|| v["error"].as_str())
@@ -390,6 +394,21 @@ mod tests {
             .ok()
             .unwrap_err();
         assert!(err.to_string().ends_with("you may not"), "{err}");
+    }
+
+    #[test]
+    fn a_refused_operation_reads_its_sentence_then_its_cause() {
+        let body = r#"{"error":"operation_refused","message":"operation refused: the test rules refuse stop","reason":"the test rules refuse stop","sentence":"You can't stop Runs in Project P. Ask an administrator of P."}"#;
+        assert_eq!(
+            refusal_sentence(body),
+            "You can't stop Runs in Project P. Ask an administrator of P. (the test rules refuse stop)"
+        );
+        let older =
+            r#"{"error":"operation_refused","message":"operation refused: no","reason":"no"}"#;
+        assert_eq!(
+            refusal_sentence(older),
+            "You don't have the rights to do this. (no)"
+        );
     }
 
     #[test]

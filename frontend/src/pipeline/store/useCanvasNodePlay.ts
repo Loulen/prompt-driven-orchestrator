@@ -26,18 +26,24 @@ export function useCanvasNodePlay(
     });
   }, [pipeline, runState]);
   const nodePlay = useNodePlay(runState?.run_id ?? null, candidates);
-  const { canPlay, play } = nodePlay;
+  const { whyNotPlay, play } = nodePlay;
 
   const withPlay = useCallback(
     (card: Node): Node => {
       const candidate = candidates.find((c) => c.nodeId === card.id);
-      if (!candidate || !canPlay(candidate.nodeId, candidate.kind)) return card;
+      if (!candidate) return card;
+      // CORE-205: a refused ▶ stays, greyed, with the refusal's sentence.
       return {
         ...card,
-        data: { ...card.data, play: candidate.kind, onPlay: () => void play(candidate.nodeId, candidate.kind) },
+        data: {
+          ...card.data,
+          play: candidate.kind,
+          playRefused: whyNotPlay(candidate.nodeId, candidate.kind),
+          onPlay: () => void play(candidate.nodeId, candidate.kind),
+        },
       };
     },
-    [candidates, canPlay, play],
+    [candidates, whyNotPlay, play],
   );
 
   return { withPlay, nodePlay };

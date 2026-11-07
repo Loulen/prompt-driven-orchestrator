@@ -10,6 +10,11 @@ export interface BulkAction {
   destructive?: boolean;
   /** Greyed + non-clickable when no selected item is a valid target. */
   disabled?: boolean;
+  /**
+   * Why the caller may make it on none of the selected items (CORE-205):
+   * greyed (`aria-disabled`), inert, its tooltip saying this sentence.
+   */
+  disabledReason?: string;
   onClick: () => void;
 }
 
@@ -55,23 +60,26 @@ export default function BulkActionBar({ count, live, actions, onClear, placement
       <span className="lp-bulk__acts">
         {actions.map((a) => (
           labelled ? (
-            <button
-              key={a.key}
-              type="button"
-              disabled={a.disabled}
-              onClick={a.onClick}
-              data-testid={`bulk-action-${a.key}`}
-              className={`d-btn d-btn--ghost d-btn--sm${a.destructive ? " d-btn--danger" : ""}`}
-            >
-              {a.icon}
-              {a.label}
-            </button>
-          ) : (
-            <Tooltip key={a.key} label={a.label}>
+            <Tooltip key={a.key} label={a.label} description={a.disabledReason} disabled={!a.disabledReason}>
               <button
                 type="button"
-                disabled={a.disabled}
-                onClick={a.onClick}
+                disabled={a.disabled && !a.disabledReason}
+                aria-disabled={a.disabledReason ? true : undefined}
+                onClick={a.disabledReason ? undefined : a.onClick}
+                data-testid={`bulk-action-${a.key}`}
+                className={`d-btn d-btn--ghost d-btn--sm${a.destructive ? " d-btn--danger" : ""}`}
+              >
+                {a.icon}
+                {a.label}
+              </button>
+            </Tooltip>
+          ) : (
+            <Tooltip key={a.key} label={a.label} description={a.disabledReason}>
+              <button
+                type="button"
+                disabled={a.disabled && !a.disabledReason}
+                aria-disabled={a.disabledReason ? true : undefined}
+                onClick={a.disabledReason ? undefined : a.onClick}
                 aria-label={a.label}
                 data-testid={`bulk-action-${a.key}`}
                 className={`d-icon${a.destructive ? " d-icon--danger" : ""}`}

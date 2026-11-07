@@ -24,15 +24,15 @@ const GROUPS = [
   { label: "pdo-widgets", repos: ["/home/bob/code/pdo-widgets"] },
 ];
 
-describe("RepoCombobox under the rights of the caller (CORE-5)", () => {
+describe("RepoCombobox under the rights of the caller (CORE-5, CORE-205)", () => {
   it("keeps the loupe by default", () => {
     renderCombobox();
     expect(screen.getByTestId("repo-browse-trigger")).toBeInTheDocument();
   });
 
-  it("hides the loupe when the disk may not be browsed, with a line of help", () => {
-    renderCombobox({ canBrowse: false, help: "A new repository goes through an administrator." });
-    expect(screen.queryByTestId("repo-browse-trigger")).toBeNull();
+  it("greys the loupe when the disk may not be browsed, saying why, with a line of help (CORE-205)", () => {
+    renderCombobox({ browseRefused: "You can't browse the disk. Ask an administrator.", help: "A new repository goes through an administrator." });
+    expect(screen.getByTestId("repo-browse-trigger")).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByTestId("repo-help")).toHaveTextContent(
       "A new repository goes through an administrator.",
     );
@@ -40,7 +40,7 @@ describe("RepoCombobox under the rights of the caller (CORE-5)", () => {
 
   it("offers the repositories grouped by Projet, and the hidden Projets' note", () => {
     const props = renderCombobox({
-      canBrowse: false,
+      browseRefused: "You can't browse the disk.",
       groups: GROUPS,
       groupsNote: "1 Project(s) hidden: you can't create Runs there.",
       home: "/home/bob",
@@ -64,7 +64,7 @@ describe("RepoCombobox under the rights of the caller (CORE-5)", () => {
   });
 
   it("narrows the groups to what is typed", () => {
-    renderCombobox({ value: "docs", canBrowse: false, groups: GROUPS });
+    renderCombobox({ value: "docs", browseRefused: "You can't browse the disk.", groups: GROUPS });
     fireEvent.focus(screen.getByTestId("target-repo-input"));
     expect(screen.getAllByTestId("repo-group-item").map((i) => i.getAttribute("title"))).toEqual([
       "/home/bob/code/pdo-docs",

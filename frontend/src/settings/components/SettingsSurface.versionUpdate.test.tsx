@@ -472,6 +472,10 @@ describe("Settings › General › Version & update (#697)", () => {
     expect(screen.getAllByTestId("settings-loading").length).toBeGreaterThan(0);
     expect(scrolled).not.toHaveBeenCalled();
     expect(body).not.toHaveAttribute("data-landed");
+    // The pulse lasts 2.2 s: on a loaded machine the asserts below can come later. Record it as it happens.
+    const landings: (string | null)[] = [];
+    const observer = new MutationObserver(() => landings.push(body.getAttribute("data-landed")));
+    observer.observe(body, { attributes: true, attributeFilter: ["data-landed"] });
 
     resolveSettings(settings());
     await screen.findByTestId("setting-session-cap");
@@ -479,7 +483,8 @@ describe("Settings › General › Version & update (#697)", () => {
     await waitFor(() => expect(scrolled).toHaveBeenCalled());
     expect(scrolled.mock.instances[0]).toBe(body);
     expect(scrolled.mock.calls[0][0]).toEqual({ behavior: "auto", block: "start" });
-    expect(body).toHaveAttribute("data-landed", "true");
+    await waitFor(() => expect(landings).toContain("true"));
+    observer.disconnect();
     await waitFor(() =>
       expect(screen.getByTestId("settings-section-version-update")).toHaveAttribute(
         "aria-current",

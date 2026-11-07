@@ -29,6 +29,7 @@ import PipelineItemDecorations from "./PipelineItemDecorations";
 import ExtensionListFilters from "../../shared/extensions/ExtensionListFilters";
 import LeftPaneBar from "../../shared/ui/LeftPaneBar";
 import { IconButton } from "../../shared/ui/kit";
+import { usePipelineRefusals } from "../store/usePipelineRefusals";
 import ListEmpty from "../../shared/ui/leftList/ListEmpty";
 import {
   isAttributeFilterActive,
@@ -67,6 +68,8 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
   const deselect = useSelectionStore((s) => s.deselect);
   const clearSel = useSelectionStore((s) => s.clear);
   const librarySel = useMemo(() => new Set(librarySelIds), [librarySelIds]);
+  // CORE-205: the gestures the caller may not make, greyed with why.
+  const { createRefused, renameRefused, deleteRefused } = usePipelineRefusals(pipelines);
   const [libBulkKind, setLibBulkKind] = useState<"delete" | "duplicate" | null>(null);
 
   const [showNewModal, setShowNewModal] = useState(false);
@@ -145,17 +148,30 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
   // and passive library-only rows) delete through different seams, so each row
   // registers its own `del`/`dup` keyed by the SAME id its React key uses. Bulk
   // then just dispatches per selected id — no re-deriving which list it came from.
-  interface LibTarget { selId: string; name: string; del: () => Promise<void>; dup?: () => Promise<void>; }
+  interface LibTarget {
+    selId: string;
+    name: string;
+    del: () => Promise<void>;
+    dup?: () => Promise<void>;
+    /** CORE-205: why the caller may not delete it, else absent. */
+    delRefused?: string;
+  }
   const libTargets: LibTarget[] = pipelines.map((p) => ({
       selId: `${p.scope}-${p.id}`,
       name: p.name,
       del: () => removePipeline(p.id, p.scope),
       dup: () => duplicatePipeline(p.id).then(() => {}),
+      delRefused: deleteRefused(p.id),
     }));
   const libTargetById = new Map(libTargets.map((t) => [t.selId, t]));
   const libVisibleIds = libTargets.map((t) => t.selId);
   const selectedLibTargets = libTargets.filter((t) => librarySel.has(t.selId));
-  const libDeleteItems: BulkItem[] = selectedLibTargets.map((t) => ({ id: t.selId, label: t.name }));
+  // CORE-205: only the pipelines the caller may delete; none, Delete is greyed with why.
+  const libDeleteItems: BulkItem[] = selectedLibTargets
+    .filter((t) => !t.delRefused)
+    .map((t) => ({ id: t.selId, label: t.name }));
+  const libDeleteRefused =
+    selectedLibTargets.length > 0 && libDeleteItems.length === 0 ? selectedLibTargets[0].delRefused : undefined;
   const libDupItems: BulkItem[] = selectedLibTargets
     .filter((t) => t.dup)
     .map((t) => ({ id: t.selId, label: t.name }));
@@ -183,12 +199,14 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
         <IconButton
           icon={FileUp}
           label="Import a workflow"
+          disabledReason={createRefused}
           onClick={() => setShowImportModal(true)}
           data-testid="import-workflow-button"
         />
         <IconButton
           icon={Plus}
           label="New pipeline"
+          disabledReason={createRefused}
           onClick={() => setShowNewModal(true)}
           data-testid="new-pipeline-button"
         />
@@ -232,6 +250,7 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
                 actionLabel="New pipeline"
                 actionIcon={Plus}
                 onAction={() => setShowNewModal(true)}
+                actionRefused={createRefused}
                 testId="pipelines-empty"
               />
             ))}
@@ -284,6 +303,7 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
               onDelete={() => setDeleteTarget(p)}
               deleteTitle="Delete pipeline"
               menuEntity={pipelineEntity(p)}
+              refused={{ rename: renameRefused(p.id), duplicate: createRefused, delete: deleteRefused(p.id) }}
             />
           ))}
           </div>
@@ -299,6 +319,7 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
                 label: "Delete",
                 icon: <Trash2 size={14} strokeWidth={1.5} aria-hidden />,
                 destructive: true,
+                disabledReason: libDeleteRefused,
                 onClick: () => setLibBulkKind("delete"),
               },
               {
@@ -306,6 +327,7 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
                 label: "Duplicate",
                 icon: <Copy size={14} strokeWidth={1.5} aria-hidden />,
                 disabled: libDupItems.length === 0,
+                disabledReason: createRefused,
                 onClick: () => setLibBulkKind("duplicate"),
               },
             ]}

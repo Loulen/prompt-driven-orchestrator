@@ -3,15 +3,16 @@
  * is started, a skipped node is retried — « Forcer un nœud skipped », the
  * branch then runs as if it had been taken. Both re-open a finished Run.
  *
- * The ▶ shows on a live or finished Run, never on an archived one, and only
- * when the Autorisation d'opération would allow it (`node` × `start` for an
- * on-demand node, `node` × `retry` for a skipped one).
+ * The ▶ shows on a live or finished Run, never on an archived one; greyed,
+ * with the refusal's sentence, when the Autorisation d'opération would refuse
+ * it (`node` × `start` for an on-demand node, `node` × `retry` for a skipped
+ * one; CORE-205).
  */
 
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
 import type { RunStatus } from "../../shared/generated/RunStatus";
 import type { Decision, OperationQuestion } from "../../shared/authorization/api";
-import { isAllowed } from "../../shared/authorization/api";
+import { refusalOf } from "../../shared/authorization/api";
 
 /** What the ▶ of a node does: start it (iteration 1) or retry it. */
 export type PlayKind = "start" | "retry";
@@ -40,21 +41,22 @@ export function playQuestion(runId: string, nodeId: string, kind: PlayKind): Ope
   return { resource: "node", verb: { action: kind }, target: `${runId}/${nodeId}` };
 }
 
-/** The key of a ▶ in the set of allowed ones. */
+/** The key of a ▶ in the refusals. */
 export function playKey(nodeId: string, kind: PlayKind): string {
   return `${nodeId}:${kind}`;
 }
 
-/** The ▶ the `decisions` to `questions` allow, keyed by {@link playKey}. */
-export function allowedPlays(
+/** The ▶ the `decisions` to `questions` refuse, with each refusal's sentence, keyed by {@link playKey}. */
+export function refusedPlays(
   asked: { nodeId: string; kind: PlayKind }[],
   decisions: Decision[],
-): Set<string> {
-  const allowed = new Set<string>();
+): Map<string, string> {
+  const refused = new Map<string, string>();
   asked.forEach((play, i) => {
-    if (isAllowed(decisions[i])) allowed.add(playKey(play.nodeId, play.kind));
+    const why = refusalOf(decisions[i]);
+    if (why !== undefined) refused.set(playKey(play.nodeId, play.kind), why);
   });
-  return allowed;
+  return refused;
 }
 
 /** The text of the wait of a Run past `End` (« Attente des nœuds lancés »). */

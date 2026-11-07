@@ -15,6 +15,7 @@ import { ToneIcon } from "../../shared/ui/kit/tone";
 import MidPath from "../../shared/ui/MidPath";
 import SuspendedPill from "./triggersList/SuspendedPill";
 import { suspensionTooltip } from "../model/suspension";
+import { useTriggerRefusals } from "../store/useTriggerRefusals";
 
 interface Props {
   trigger: Trigger;
@@ -70,6 +71,9 @@ export default function TriggerDetailPanel({
     [trigger.id, trigger.name, trigger.attributes],
   );
   const { tabs, context } = useDetailTabs(entity, "trigger/detail");
+  // CORE-205: Run now, Edit and the guard's Test the caller may not make stay,
+  // greyed, with the refusal's sentence.
+  const refused = useTriggerRefusals(trigger);
   const [tabKey, setTabKey] = useState<string | null>(null);
   const activeTab = tabs.find((t) => t.key === tabKey) ?? null;
 
@@ -151,11 +155,26 @@ export default function TriggerDetailPanel({
         <span className="d-grow" />
         {/* A suspended Trigger fires neither on its schedule nor by Run now. */}
         {onRunNow && !trigger.suspension && (
-          <Button size="sm" icon={Play} onClick={onRunNow} title="Run now" data-testid="trigger-detail-run-now">
+          <Button
+            size="sm"
+            icon={Play}
+            onClick={onRunNow}
+            title={refused.fire ? undefined : "Run now"}
+            disabledReason={refused.fire}
+            data-testid="trigger-detail-run-now"
+          >
             Run
           </Button>
         )}
-        {onEdit && <IconButton icon={Pencil} label="Edit trigger" onClick={onEdit} data-testid="trigger-detail-edit" />}
+        {onEdit && (
+          <IconButton
+            icon={Pencil}
+            label="Edit trigger"
+            onClick={onEdit}
+            disabledReason={refused.update}
+            data-testid="trigger-detail-edit"
+          />
+        )}
       </header>
       {/* API 0.8: an extension suspends it — it fires neither on its schedule
           nor by Run now, until the extension lifts the suspension. */}
@@ -199,7 +218,12 @@ export default function TriggerDetailPanel({
             </Section>
 
             {trigger.guard_command && (
-              <GuardSection trigger={trigger} guardCommand={trigger.guard_command} promptRequired={promptRequired} />
+              <GuardSection
+                trigger={trigger}
+                guardCommand={trigger.guard_command}
+                promptRequired={promptRequired}
+                testRefused={refused.testGuard}
+              />
             )}
 
             {trigger.input_template && (

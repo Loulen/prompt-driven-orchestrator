@@ -1,4 +1,8 @@
+import { useMemo } from "react";
 import { Combine, X } from "lucide-react";
+import { useRefusals } from "../../shared/authorization/useRefusals";
+import { uncombineQuestion } from "../model/absorptionRights";
+import { Tooltip } from "../../shared/ui/kit";
 import type { StatsAbsorbedMember } from "../../shared/generated/StatsAbsorbedMember";
 import {
   activity,
@@ -93,12 +97,30 @@ export function GlobalAbsorptionIcon({
 export function UncombineButton({
   name,
   disabled,
+  disabledReason,
   onClick,
 }: {
   name: string;
   disabled: boolean;
+  /** CORE-205: why the caller may not uncombine it (greyed, its tooltip says why), else absent. */
+  disabledReason?: string;
   onClick: () => void;
 }) {
+  if (disabledReason) {
+    return (
+      <Tooltip label={`Uncombine ${name}`} description={disabledReason}>
+        <button
+          type="button"
+          aria-label={`Uncombine ${name}`}
+          aria-disabled
+          data-testid="stats-uncombine"
+          className="d-icon d-icon--sm sx-uncombine"
+        >
+          <X size={12} strokeWidth={1.5} aria-hidden="true" />
+        </button>
+      </Tooltip>
+    );
+  }
   return (
     <button
       type="button"
@@ -113,6 +135,7 @@ export function UncombineButton({
     </button>
   );
 }
+
 
 // --- Modals ---------------------------------------------------------------------
 
@@ -198,6 +221,8 @@ export function MembersModal<T extends AbsorbableRow>({
   onUncombine: (member: StatsAbsorbedMember) => void;
   onClose: () => void;
 }) {
+  const questions = useMemo(() => members.map(uncombineQuestion), [members]);
+  const refusals = useRefusals(questions);
   return (
     <ModalFrame
       testid="stats-members-modal"
@@ -259,6 +284,7 @@ export function MembersModal<T extends AbsorbableRow>({
             <UncombineButton
               name={member.name}
               disabled={busyKey !== null}
+              disabledReason={refusals[members.indexOf(member)]}
               onClick={() => onUncombine(member)}
             />
           </li>

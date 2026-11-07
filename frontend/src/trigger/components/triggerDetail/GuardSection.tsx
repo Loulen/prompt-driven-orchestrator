@@ -13,10 +13,13 @@ export default function GuardSection({
   trigger,
   guardCommand,
   promptRequired,
+  testRefused,
 }: {
   trigger: Trigger;
   guardCommand: string;
   promptRequired?: boolean;
+  /** CORE-205: why the caller may not dry-run a guard; Test stays, greyed. */
+  testRefused?: string;
 }) {
   const dryRun = useGuardDryRun(trigger.guard_command, trigger.target_repo ?? undefined);
   const result = dryRun.result;
@@ -36,7 +39,8 @@ export default function GuardSection({
             icon={FlaskConical}
             onClick={dryRun.run}
             disabled={dryRun.testing}
-            title="Test guard (no side effect)"
+            title={testRefused ? undefined : "Test guard (no side effect)"}
+            disabledReason={testRefused}
             data-testid="guard-test-button"
           >
             {dryRun.testing ? "Testing…" : "Test"}

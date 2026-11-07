@@ -186,6 +186,50 @@ describe("primitives", () => {
     await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
   });
 
+  it("a refused Button or IconButton stays visible, greyed, inert, its tooltip saying why (CORE-205)", async () => {
+    const user = userEvent.setup();
+    const stop = vi.fn();
+    const approve = vi.fn();
+    const why = "You can't change Runs in Project P. Ask an administrator of P.";
+    render(
+      <>
+        <IconButton icon={Trash2} label="Stop" disabledReason={why} onClick={stop} />
+        <Button disabledReason={why} onClick={approve}>
+          Approve
+        </Button>
+      </>,
+    );
+    const stopButton = screen.getByRole("button", { name: "Stop" });
+    expect(stopButton).toHaveAttribute("aria-disabled", "true");
+    expect(stopButton).not.toBeDisabled();
+    await user.click(stopButton);
+    expect(stop).not.toHaveBeenCalled();
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(`Stop${why}`);
+    await user.unhover(stopButton);
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+
+    const approveButton = screen.getByRole("button", { name: "Approve" });
+    expect(approveButton).toHaveAttribute("aria-disabled", "true");
+    await user.tab();
+    expect(approveButton).toHaveFocus();
+    await user.keyboard("{Enter} ");
+    await user.click(approveButton);
+    expect(approve).not.toHaveBeenCalled();
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(why);
+  });
+
+  it("without a reason, a Button keeps no tooltip and answers its click", async () => {
+    const user = userEvent.setup();
+    const approve = vi.fn();
+    render(<Button onClick={approve}>Approve</Button>);
+    const approveButton = screen.getByRole("button", { name: "Approve" });
+    expect(approveButton).not.toHaveAttribute("aria-disabled");
+    await user.click(approveButton);
+    expect(approve).toHaveBeenCalledOnce();
+    await act(() => new Promise((r) => setTimeout(r, 400)));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
   it("Tooltip opens on keyboard focus, describes with its extra line, closes on Escape", async () => {
     const user = userEvent.setup();
     render(
@@ -293,9 +337,42 @@ describe("primitives", () => {
     const rule = (sel: string) => new RegExp(`${sel.replace(/[.*>]/g, "\\$&")}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? "";
     expect(rule(".d-seg--fill")).toMatch(/display:\s*flex/);
     expect(rule(".d-seg--fill")).toMatch(/width:\s*100%/);
-    expect(rule(".d-seg--fill > .d-seg__btn")).toMatch(/flex:\s*1 1 0/);
-    expect(rule(".d-seg--fill > .d-seg__btn")).toMatch(/min-width:\s*0/);
-    expect(rule(".d-seg--fill > .d-seg__btn > span")).toMatch(/text-overflow:\s*ellipsis/);
+    expect(rule(".d-seg--fill .d-seg__btn")).toMatch(/flex:\s*1 1 0/);
+    expect(rule(".d-seg--fill .d-seg__btn")).toMatch(/min-width:\s*0/);
+    expect(rule(".d-seg--fill .d-seg__btn > span")).toMatch(/text-overflow:\s*ellipsis/);
+  });
+
+  it("Segmented shows the kit's Tooltip on a choice with a title, a description or a reason", async () => {
+    const user = userEvent.setup();
+    const change = vi.fn();
+    render(
+      <Segmented
+        label="Scope"
+        value="here"
+        onChange={change}
+        items={[
+          { value: "here", label: "This Project", description: "Its agents act in this Project only." },
+          { value: "all", label: "All my Projects", disabledReason: "You can't widen this Run. Ask an administrator of P." },
+        ]}
+      />,
+    );
+    const group = screen.getByRole("radiogroup", { name: "Scope" });
+    const here = within(group).getByRole("radio", { name: "This Project" });
+    expect(here).not.toHaveAttribute("title");
+    await user.hover(here);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("This ProjectIts agents act in this Project only.");
+    await user.unhover(here);
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+    const all = within(group).getByRole("radio", { name: "All my Projects" });
+    expect(all).toHaveAttribute("aria-disabled", "true");
+    expect(all).not.toBeDisabled();
+    await user.click(all);
+    expect(change).not.toHaveBeenCalled();
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("You can't widen this Run. Ask an administrator of P.");
+    // The arrows skip a refused choice.
+    await user.click(here);
+    await user.keyboard("{ArrowRight}");
+    expect(change).not.toHaveBeenCalledWith("all");
   });
 
   it("Switch and Checkbox toggle and carry their state", async () => {
@@ -413,6 +490,59 @@ describe("primitives", () => {
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
     expect(deploy).not.toHaveBeenCalled();
+  });
+
+  it("Menu greys a refused entry and says why once, at its foot, with a lock (CORE-205, option B)", async () => {
+    const user = userEvent.setup();
+    const edit = vi.fn();
+    const open = vi.fn();
+    const why = "You can't edit notes in Project P. Ask an administrator of P.";
+    render(
+      <Menu
+        label="Task"
+        trigger={({ toggle }) => (
+          <button type="button" onClick={toggle}>
+            More
+          </button>
+        )}
+        entries={[
+          { label: "Open", onSelect: open },
+          { kind: "separator" },
+          { label: "Edit", onSelect: edit, disabledReason: why },
+          { label: "Delete", danger: true, onSelect: edit, disabledReason: why },
+        ]}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "More" }));
+    const menu = await screen.findByRole("menu", { name: "Task" });
+    // The arrows skip the refused entries.
+    await waitFor(() => expect(within(menu).getByRole("menuitem", { name: "Open" })).toHaveFocus());
+    await user.keyboard("{ArrowDown}");
+    expect(within(menu).getByRole("menuitem", { name: "Open" })).toHaveFocus();
+    const editItem = within(menu).getByRole("menuitem", { name: "Edit" });
+    expect(editItem).toHaveAttribute("aria-disabled", "true");
+    await user.click(editItem);
+    expect(edit).not.toHaveBeenCalled();
+    // One line for the two entries refused for the same reason.
+    expect(screen.getAllByTestId("menu-disabled-reason").map((n) => n.textContent)).toEqual([why]);
+  });
+
+  it("Menu without a refused entry has no foot", async () => {
+    const user = userEvent.setup();
+    render(
+      <Menu
+        label="Task"
+        trigger={({ toggle }) => (
+          <button type="button" onClick={toggle}>
+            More
+          </button>
+        )}
+        entries={[{ label: "Open" }, { label: "Delete", disabled: true }]}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "More" }));
+    await screen.findByRole("menu", { name: "Task" });
+    expect(screen.queryByTestId("menu-disabled-reason")).toBeNull();
   });
 
   it("Popover is a named dialog panel that focuses its first control and closes on Escape", async () => {

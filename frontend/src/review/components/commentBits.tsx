@@ -1,12 +1,27 @@
 import { Bot, CheckCircle2, Cpu, Hourglass, MessageSquare, User } from "lucide-react";
 import { useActorDisplay } from "../../shared/actors/store";
 import type { Actor } from "../../shared/generated/Actor";
-import { Avatar } from "../../shared/ui/kit";
+import { Avatar, Tooltip } from "../../shared/ui/kit";
 import type { AuthorKind, CommentState } from "../model/commentStatus";
 import { authorKind, authorLabel } from "../model/commentStatus";
 
 // The small glyphs a review comment is drawn with: its state, its author, the
 // draft / sent pill, the spinner of a send.
+
+/**
+ * A button of a gesture the caller may not make (CORE-205): with `reason`, its
+ * tooltip names it (`label`) and says the refusal's sentence; the button
+ * itself carries `aria-disabled` and skips its handler.
+ */
+export function Refusable({ reason, label, children }: { reason?: string; label: string; children: React.ReactElement }) {
+  return reason ? (
+    <Tooltip label={label} description={reason}>
+      {children}
+    </Tooltip>
+  ) : (
+    children
+  );
+}
 
 /** The state icon — message-square open, hourglass proposed, check-circle resolved. */
 export function StateIcon({ state, title, size = 12 }: { state: CommentState; title?: string; size?: number }) {

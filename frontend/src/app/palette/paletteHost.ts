@@ -31,6 +31,8 @@ export interface PaletteHost {
   openRun: (runId: string) => void;
   openTrigger: (triggerId: string) => void;
   newRun?: () => void;
+  /** Why New run is greyed (no Projet allows creating a Run, CORE-5 / CORE-205), else absent. */
+  newRunRefused?: string;
   newTrigger?: () => void;
   openSettings?: () => void;
   /** Settings › Appearance (« Customize appearance »). */

@@ -11,6 +11,7 @@ import { markSeen as markSeenIn, readSeen, unreadReplies, writeSeen } from "../m
 import type { ReviewCommentsApi } from "../model/commentsApi";
 import type { ReviewCommentState } from "./useReviewCommentState";
 import type { ReviewEntries } from "./useReviewEntries";
+import type { ReviewRefusals } from "./useReviewRefusals";
 
 interface Args {
   runId: string;
@@ -21,6 +22,8 @@ interface Args {
   entries: ReviewEntries;
   flashing: ReadonlySet<string>;
   sendDisabledReason: string | null;
+  /** CORE-205: the gestures the caller may not make, and why. */
+  refusals?: ReviewRefusals;
   jumpTo: (anchor: Anchor) => void;
 }
 
@@ -29,7 +32,8 @@ interface Args {
  * write, edit, delete and send drafts (one message per batch, the manager
  * started on demand; a refused send keeps the drafts), resolve or reopen a
  * sent comment, mark a card seen, jump to the next comment or to the first
- * unread reply.
+ * unread reply. A gesture the caller may not make does nothing (CORE-205):
+ * its button stays, greyed, with the refusal's sentence.
  */
 export function useReviewGestures({
   runId,
@@ -40,8 +44,12 @@ export function useReviewGestures({
   entries,
   flashing,
   sendDisabledReason,
+  refusals,
   jumpTo,
 }: Args) {
+  const sendRefused = refusals?.send;
+  const resolveOf = refusals?.resolveOf;
+  const reopenOf = refusals?.reopenOf;
   const { drafts, persistDrafts, showToast, deciding, setDeciding, setSeen, seen } = state;
   const { cycleEntries, unreadComments, pairLabel, writtenOnLabel } = entries;
   const { commentCursor, setCommentCursor, setEditingKey, setSendingKeys, setStartingManager } = state;
@@ -75,6 +83,11 @@ export function useReviewGestures({
   const decide = useCallback(
     async (c: ReviewComment, verb: "resolve" | "reopen") => {
       if (deciding.has(c.id)) return;
+      const refused = verb === "resolve" ? resolveOf?.(c.id) : reopenOf?.(c.id);
+      if (refused) {
+        showToast(refused, true);
+        return;
+      }
       setDeciding((d) => new Set([...d, c.id]));
       try {
         const res = await (verb === "resolve" ? resolveReviewComment(runId, c.id) : reopenReviewComment(runId, c.id));
@@ -99,14 +112,15 @@ export function useReviewGestures({
         });
       }
     },
-    [deciding, runId, markSeen, showToast, refreshRun, setDeciding],
+    [deciding, runId, markSeen, showToast, refreshRun, setDeciding, resolveOf, reopenOf],
   );
 
   /** Send `keys` out of `source` (defaults to the current drafts; `sendNew` passes the list it just grew). */
   const send = useCallback(
     async (keys: string[], source: ReviewDraft[] = drafts) => {
-      if (sendDisabledReason) {
-        showToast(sendDisabledReason, true);
+      const why = sendDisabledReason ?? sendRefused;
+      if (why) {
+        showToast(why, true);
         return;
       }
       const targets = source.filter((d) => keys.includes(d.key));
@@ -131,7 +145,7 @@ export function useReviewGestures({
         setStartingManager(false);
       }
     },
-    [drafts, runId, runRef, sendDisabledReason, showToast, persistDrafts, refreshRun, setEditingKey, setSendingKeys, setStartingManager],
+    [drafts, runId, runRef, sendDisabledReason, sendRefused, showToast, persistDrafts, refreshRun, setEditingKey, setSendingKeys, setStartingManager],
   );
 
   const { editingKey, sendingKeys, startingManager, showResolved, showOutdated } = state;
@@ -142,6 +156,7 @@ export function useReviewGestures({
       startingManager,
       pairLabel,
       sendDisabledReason,
+      sendRefused,
       saveNew: (anchor, text) => {
         persistDrafts(addDraft(drafts, anchor, pair, text));
         showToast("Draft saved — kept in this browser until you send it.");
@@ -168,6 +183,8 @@ export function useReviewGestures({
         showToast("This line already has a sent comment. The agent's replies show up under it; add a new comment on another line.", true),
       resolve: (c) => void decide(c, "resolve"),
       reopen: (c) => void decide(c, "reopen"),
+      resolveRefused: (c) => resolveOf?.(c.id),
+      reopenRefused: (c) => reopenOf?.(c.id),
       deciding,
       unreadOf: (c) => unreadReplies(c, seen),
       flashing,
@@ -182,6 +199,9 @@ export function useReviewGestures({
       startingManager,
       pairLabel,
       sendDisabledReason,
+      sendRefused,
+      resolveOf,
+      reopenOf,
       drafts,
       pair,
       persistDrafts,

@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Blocks, Coins, Cpu, Gauge, Play, Receipt, RotateCw, Timer, type LucideIcon } from "lucide-react";
 import FullWindowShell from "../../shared/ui/FullWindowShell";
-import { IconButton } from "../../shared/ui/kit";
+import { Button, IconButton } from "../../shared/ui/kit";
 import { StatsIcon } from "../../shared/ui/brand/AccentIcons";
 import { useLocationContext, useStatsTabs } from "../../shared/extensions/catalogue";
 import type { StatsTabContext } from "../../shared/extensions/contract";
@@ -18,6 +18,10 @@ import {
   TAB_COHORT_DEFAULTS,
   type PerformanceBand,
 } from "../model/statsFilters";
+import { useRefusal } from "../../shared/authorization/useRefusals";
+
+/** The Operation behind « Sync costs » (`POST /stats/prices/sync`). */
+const SYNC_PRICES = { resource: "price_table", verb: { action: "sync" } } as const;
 
 const StatsCharts = lazy(() => import("./StatsCharts"));
 
@@ -209,6 +213,8 @@ function StatsSurface({
   const railLabel = rail.find((item) => item.id === (tab ?? active))?.label;
   const days = periodDays(preset, period);
 
+  // CORE-205: Sync costs greyed, with why, when the caller may not sync the price table.
+  const syncRefused = useRefusal(SYNC_PRICES, pricingOpen);
   const onSyncPrices = async () => {
     setSyncing(true);
     setSyncError(null);
@@ -324,15 +330,15 @@ function StatsSurface({
               bodyClassName: "min-h-0 flex-1 overflow-y-auto p-4",
               onClose: () => setPricingOpen(false),
               actions: (
-                <button
-                  type="button"
+                <Button
+                  size="sm"
                   onClick={onSyncPrices}
-                  disabled={syncing}
+                  disabled={syncing && !syncRefused}
+                  disabledReason={syncRefused}
                   data-testid="stats-sync-prices"
-                  className="d-btn d-btn--sm"
                 >
                   {syncing ? "Syncing…" : "Sync costs"}
-                </button>
+                </Button>
               ),
               content: (
                 <PricingDetailsContent cost={cost} syncError={syncError} syncReport={syncReport} />

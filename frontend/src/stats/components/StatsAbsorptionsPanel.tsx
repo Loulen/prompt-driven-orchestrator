@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useRefusals } from "../../shared/authorization/useRefusals";
 import { Combine } from "lucide-react";
 import { fetchStatsAbsorptions, uncombineStatsMember } from "../api/absorptions";
 import type { StatsAbsorption } from "../../shared/generated/StatsAbsorption";
 import { day, MONO_DIMENSIONS } from "../model/statsAbsorption";
 import { UncombineButton } from "./StatsAbsorption";
+import { uncombineQuestion } from "../model/absorptionRights";
 
 type Dimension = StatsAbsorption["dimension"];
 type Member = StatsAbsorption["members"][number];
@@ -49,6 +51,11 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // CORE-205: the ✕ the caller may not use, greyed with why (`stats_absorption` × delete on the member).
+  const allMembers = useMemo(() => (absorptions ?? []).flatMap((a) => a.members), [absorptions]);
+  const questions = useMemo(() => allMembers.map(uncombineQuestion), [allMembers]);
+  const refusals = useRefusals(questions);
+  const uncombineRefused = (member: { key: string }) => refusals[allMembers.findIndex((m) => m.key === member.key)];
 
   // Read at each open of Settings: Stats or a rename may have written since.
   useEffect(() => {
@@ -186,6 +193,7 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
                     <UncombineButton
                       name={member.name}
                       disabled={busyKey !== null}
+                      disabledReason={uncombineRefused(member)}
                       onClick={() => void uncombine(absorption, member)}
                     />
                   </li>

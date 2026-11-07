@@ -1,8 +1,24 @@
 import { Folder } from "lucide-react";
+import { Tooltip } from "../../shared/ui/kit";
 import type { SkillFolder } from "../../shared/generated/SkillFolder";
 import { folderPathLabel } from "../model/skillTree";
 
 /** The small controls the bank's panes share: menu rows, action buttons, tabs, the folder picker. */
+
+/** How a gesture the caller's rights refuse looks (CORE-205): greyed, still focusable. */
+export const GREYED = "aria-disabled:cursor-not-allowed aria-disabled:opacity-45";
+
+/**
+ * A control greyed for `reason` (CORE-205): its tooltip says its name then the
+ * refusal's sentence. Without a reason, the control as is.
+ */
+export function RefusalTip({ label, reason, children }: { label: string; reason?: string; children: React.ReactElement }) {
+  return (
+    <Tooltip label={label} description={reason} disabled={!reason}>
+      {children}
+    </Tooltip>
+  );
+}
 
 export function MenuItem({
   icon,
@@ -11,6 +27,7 @@ export function MenuItem({
   danger,
   testid,
   onClick,
+  disabledReason,
 }: {
   icon: React.ReactNode;
   label: string;
@@ -18,14 +35,17 @@ export function MenuItem({
   danger?: boolean;
   testid?: string;
   onClick: () => void;
+  /** Greyed and inert; the menu says the reason once at its foot (`MenuReasons`). */
+  disabledReason?: string;
 }) {
   return (
     <button
       type="button"
       role="menuitem"
       data-testid={testid}
-      onClick={onClick}
-      className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-active ${
+      aria-disabled={disabledReason ? true : undefined}
+      onClick={disabledReason ? undefined : onClick}
+      className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-active aria-disabled:hover:bg-transparent ${GREYED} ${
         danger ? "text-st-failed" : "text-text-2"
       } text-xs`}
     >
@@ -50,27 +70,33 @@ export function ActionButton({
   onClick,
   danger,
   testid,
+  disabledReason,
 }: {
   icon: React.ReactNode;
   label: string;
   onClick: () => void;
   danger?: boolean;
   testid?: string;
+  /** Why the caller may not (CORE-205): greyed, inert, its tooltip says the sentence. */
+  disabledReason?: string;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      data-testid={testid}
-      className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 py-1.5 transition-colors ${
-        danger
-          ? "border-st-failed/40 text-st-failed hover:bg-st-failed/14"
-          : "border-line-strong bg-surface-2 text-text-2 hover:border-primary"
-      } text-xs`}
-    >
-      {icon}
-      {label}
-    </button>
+    <RefusalTip label={label} reason={disabledReason}>
+      <button
+        type="button"
+        onClick={disabledReason ? undefined : onClick}
+        aria-disabled={disabledReason ? true : undefined}
+        data-testid={testid}
+        className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 py-1.5 transition-colors ${GREYED} ${
+          danger
+            ? "border-st-failed/40 text-st-failed hover:bg-st-failed/14"
+            : "border-line-strong bg-surface-2 text-text-2 hover:border-primary"
+        } text-xs`}
+      >
+        {icon}
+        {label}
+      </button>
+    </RefusalTip>
   );
 }
 

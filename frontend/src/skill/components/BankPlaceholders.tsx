@@ -1,10 +1,22 @@
 import { ClipboardPaste, Download, FileText } from "lucide-react";
 import type { SkillFolder } from "../../shared/generated/SkillFolder";
 import { displaySourceUrl } from "../model/skillSource";
+import { GREYED, RefusalTip } from "./BankControls";
 
 /** What the bank's right pane shows when there is nothing to read yet. */
 
-export function EmptyBank({ onPaste, onImport }: { onPaste: () => void; onImport: () => void }) {
+export function EmptyBank({
+  onPaste,
+  onImport,
+  pasteRefused,
+  importRefused,
+}: {
+  onPaste: () => void;
+  onImport: () => void;
+  /** Why the caller's rights refuse each (CORE-205): greyed, the sentence in its tooltip. */
+  pasteRefused?: string;
+  importRefused?: string;
+}) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center" data-testid="skill-bank-empty">
       <div className="grid h-14 w-14 place-items-center rounded-xl border border-dashed border-line-strong text-text-3">
@@ -18,24 +30,30 @@ export function EmptyBank({ onPaste, onImport }: { onPaste: () => void; onImport
         delivered to every worktree a Run creates, never committed.
       </p>
       <div className="mt-1 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={onImport}
-          data-testid="skill-import-empty"
-          className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 font-medium text-surface-0 hover:opacity-90 text-sm"
-        >
-          <Download size={13} />
-          Import from a source
-        </button>
-        <button
-          type="button"
-          onClick={onPaste}
-          data-testid="skill-paste-empty"
-          className="flex items-center gap-1.5 rounded-md border border-line-strong bg-surface-2 px-3 py-2 font-medium text-text-2 hover:border-primary text-sm"
-        >
-          <ClipboardPaste size={13} />
-          Paste SKILL.md
-        </button>
+        <RefusalTip label="Import from a source" reason={importRefused}>
+          <button
+            type="button"
+            onClick={importRefused ? undefined : onImport}
+            aria-disabled={importRefused ? true : undefined}
+            data-testid="skill-import-empty"
+            className={`flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 font-medium text-surface-0 hover:opacity-90 ${GREYED} text-sm`}
+          >
+            <Download size={13} />
+            Import from a source
+          </button>
+        </RefusalTip>
+        <RefusalTip label="Paste SKILL.md" reason={pasteRefused}>
+          <button
+            type="button"
+            onClick={pasteRefused ? undefined : onPaste}
+            aria-disabled={pasteRefused ? true : undefined}
+            data-testid="skill-paste-empty"
+            className={`flex items-center gap-1.5 rounded-md border border-line-strong bg-surface-2 px-3 py-2 font-medium text-text-2 hover:border-primary ${GREYED} text-sm`}
+          >
+            <ClipboardPaste size={13} />
+            Paste SKILL.md
+          </button>
+        </RefusalTip>
       </div>
     </div>
   );

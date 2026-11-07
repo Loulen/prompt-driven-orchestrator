@@ -6,7 +6,7 @@ import {
   RECHECK_RIGHTS_EVERY_MS,
   useRunCreationRightsStore,
 } from "../../store/runCreationRightsStore";
-import { NO_RUN_ANYWHERE, runCreationRights, UNKNOWN_RIGHTS } from "../../model/runCreationRights";
+import { runCreationRights, UNKNOWN_RIGHTS } from "../../model/runCreationRights";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 import type { Project } from "../../../workspace/model/project";
 
@@ -51,24 +51,26 @@ describe("« New Run » under the rights of the caller (CORE-5)", () => {
     expect(onNewRun).toHaveBeenCalled();
   });
 
-  it("is disabled, with its reason, for a Reader everywhere", async () => {
+  it("is greyed, with its reason, where no Projet allows a Run (CORE-205)", async () => {
     useRunCreationRightsStore.setState({
       rights: runCreationRights(
         [P1],
         [
           { decision: "deny", reason: "x" },
-          { decision: "deny", reason: "x" },
+          { decision: "deny", reason: "x", sentence: "You can't launch Runs here. Ask an administrator." },
           { decision: "deny", reason: "x" },
         ],
       ),
     });
     const onNewRun = renderHeader();
     const button = screen.getByTestId("new-run-button");
-    expect(button).toBeDisabled();
+    // CORE-205: greyed (`aria-disabled`, still focusable), its tooltip saying why.
+    expect(button).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(button);
     expect(onNewRun).not.toHaveBeenCalled();
-    fireEvent.focus(screen.getByTestId("new-run-disabled"));
-    expect(await screen.findAllByText(NO_RUN_ANYWHERE)).not.toHaveLength(0);
+    fireEvent.focus(button);
+    // The extension's sentence, never one the core makes up.
+    expect(await screen.findAllByText("You can't launch Runs here. Ask an administrator.")).not.toHaveLength(0);
   });
 
   it("stays enabled when one Projet allows a Run", () => {

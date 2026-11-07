@@ -2,7 +2,7 @@ import { Check, CircleX, ExternalLink, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
 import { modelCount, probedAgo } from "../../../harness/model/catalog";
 import type { HarnessListItem } from "../../../harness/model/harness";
-import { useRefreshModels } from "../../../harness/store/useHarnessCatalog";
+import { useRefreshModels, useRefreshModelsRefused } from "../../../harness/store/useHarnessCatalog";
 import { IconButton } from "../../../shared/ui/kit";
 import { KeyValueRow } from "../../../shared/ui/key-value-row";
 import type { InstanceSettings } from "../../model/settings";
@@ -94,6 +94,7 @@ export function PriceTableRows({
  */
 export function HarnessDescriptorRows({ section, settings }: { section: SettingsSection; settings: InstanceSettings }) {
   const { probing, failed, refresh } = useRefreshModels();
+  const refreshRefused = useRefreshModelsRefused();
   const view = settings.harness_descriptors;
   // A daemon predating the per-harness entries only names them.
   const harnesses: HarnessListItem[] = view
@@ -125,6 +126,7 @@ export function HarnessDescriptorRows({ section, settings }: { section: Settings
                   probing={probing.has(h.name)}
                   failure={failed[h.name] ?? null}
                   onRefresh={() => void refresh(h.name)}
+                  refreshRefused={refreshRefused}
                 />
               ))}
               {(view.rejected ?? []).map((item) => (
@@ -156,11 +158,14 @@ function HarnessRow({
   probing,
   failure,
   onRefresh,
+  refreshRefused,
 }: {
   harness: HarnessListItem;
   probing: boolean;
   failure: string | null;
   onRefresh: () => void;
+  /** CORE-205: why the caller may not refresh (greyed, its tooltip says why), else absent. */
+  refreshRefused?: string;
 }) {
   const models = harness.models ?? [];
   // Installed, yet the binary answered no version: its probe failed.
@@ -214,7 +219,8 @@ function HarnessRow({
           size="sm"
           className={probing ? "[&>svg]:animate-spin" : undefined}
           onClick={onRefresh}
-          disabled={probing || !harness.installed}
+          disabled={!refreshRefused && (probing || !harness.installed)}
+          disabledReason={refreshRefused}
           description={harness.installed ? undefined : "Its binary is not installed"}
           data-testid={`setting-harness-refresh-${harness.name}`}
         />

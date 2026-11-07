@@ -3,7 +3,7 @@
  * under it.
  */
 import * as React from "react";
-import { Check, ChevronRight } from "lucide-react";
+import { Check, ChevronRight, Lock } from "lucide-react";
 import { AnchoredPanel, FOCUSABLE, Floating } from "./layer";
 import { cx } from "./util";
 import type { Icon } from "./tones";
@@ -77,6 +77,12 @@ export interface MenuItem {
   radio?: boolean;
   danger?: boolean;
   disabled?: boolean;
+  /**
+   * Why the caller may not pick it: the entry stays, greyed, and the menu
+   * says this sentence once, on a line at its foot (with a lock), rather
+   * than a tooltip per entry. Implies `disabled`.
+   */
+  disabledReason?: string;
   onSelect?: () => void;
   submenu?: MenuEntry[];
 }
@@ -84,6 +90,39 @@ export interface MenuItem {
 export type MenuEntry = MenuItem | { kind: "separator" } | { kind: "label"; label: string };
 
 const isItem = (e: MenuEntry): e is MenuItem => !e.kind || e.kind === "item";
+const isOff = (it: MenuItem) => !!it.disabled || !!it.disabledReason;
+
+/** The reasons of the greyed entries of `entries`, each once, in order. */
+function menuReasons(entries: readonly MenuEntry[]): string[] {
+  const reasons: string[] = [];
+  for (const e of entries) {
+    if (isItem(e) && e.disabledReason && !reasons.includes(e.disabledReason)) reasons.push(e.disabledReason);
+  }
+  return reasons;
+}
+
+/**
+ * The foot of a menu: why its greyed entries are greyed, a line per reason.
+ * Inside an element of role `menu`, give it `id` and point the menu's
+ * `aria-describedby` at it: it is then `presentation`, read as the menu's
+ * description.
+ */
+export function MenuReasons({ reasons, id }: { reasons: readonly string[]; id?: string }) {
+  if (reasons.length === 0) return null;
+  const lines = reasons.map((reason) => (
+    <div key={reason} className="d-pop__why" role={id ? undefined : "note"} data-testid="menu-disabled-reason">
+      <Lock size={12} strokeWidth={1.5} aria-hidden />
+      <span>{reason}</span>
+    </div>
+  ));
+  return id ? (
+    <div id={id} role="presentation">
+      {lines}
+    </div>
+  ) : (
+    <>{lines}</>
+  );
+}
 const roleOf = (it: MenuItem) => (it.radio ? "menuitemradio" : it.checked !== undefined ? "menuitemcheckbox" : "menuitem");
 
 /** The rows of a menu: a check column, the icon, the label, the shortcut. */
@@ -101,6 +140,7 @@ function MenuList({
   onSubOpen: (index: number | null, row: HTMLElement | null) => void;
 }) {
   return (
+    <>
     <div role="menu" aria-label={label} style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
       {entries.map((e, i) => {
         if (e.kind === "separator") return <div key={i} className="d-pop__sep" role="separator" />;
@@ -121,14 +161,14 @@ function MenuList({
             tabIndex={-1}
             data-menuitem=""
             aria-checked={it.checked !== undefined ? it.checked : undefined}
-            aria-disabled={it.disabled || undefined}
+            aria-disabled={isOff(it) || undefined}
             aria-haspopup={it.submenu ? "menu" : undefined}
             aria-expanded={it.submenu ? subOpen : undefined}
             className={cx("d-pop__row", it.danger && "is-danger")}
             data-hi={subOpen || undefined}
             onPointerEnter={(ev) => onSubOpen(it.submenu ? i : null, it.submenu ? ev.currentTarget : null)}
             onClick={(ev) => {
-              if (it.disabled) return;
+              if (isOff(it)) return;
               if (it.submenu) onSubOpen(subOpen ? null : i, ev.currentTarget);
               else onPick(it);
             }}
@@ -145,6 +185,8 @@ function MenuList({
         );
       })}
     </div>
+    <MenuReasons reasons={menuReasons(entries)} />
+    </>
   );
 }
 

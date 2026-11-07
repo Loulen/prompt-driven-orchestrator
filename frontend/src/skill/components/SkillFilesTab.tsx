@@ -18,6 +18,11 @@ interface Props {
   onLeaveSettled: () => void;
   /** The seeded skill (#722): files are read-only — no drop, no add, no delete, no save. */
   locked?: boolean;
+  /**
+   * Why the caller's rights refuse writing this skill (CORE-205): add, save
+   * and delete stay, greyed, the sentence in their tooltip.
+   */
+  writeRefused?: string;
 }
 
 /**
@@ -26,7 +31,7 @@ interface Props {
  * Keep / Delete on the trash, the drop bar with Browse…, and — when a row is
  * clicked — the plain-text editor beside the list.
  */
-export default function SkillFilesTab({ files, pathLabel, leaveRequest, onLeaveSettled, locked = false }: Props) {
+export default function SkillFilesTab({ files, pathLabel, leaveRequest, onLeaveSettled, locked = false, writeRefused }: Props) {
   const { detail, editor } = files;
   const skillMdSize = detail?.content ? new TextEncoder().encode(detail.content).length : null;
   const editorOpen = editor !== null;
@@ -69,6 +74,7 @@ export default function SkillFilesTab({ files, pathLabel, leaveRequest, onLeaveS
             }
             compact={editorOpen}
             deletable={!row.isSkillMd && !locked}
+            deleteRefused={writeRefused}
             confirming={files.confirmDeleteFor === row.path}
             onOpen={() => requestOpen(row.path)}
             onAskDelete={() => files.setConfirmDeleteFor(row.path)}
@@ -105,6 +111,7 @@ export default function SkillFilesTab({ files, pathLabel, leaveRequest, onLeaveS
               testId="skill-files-drop"
               onBrowse={() => files.setExplorerOpen(true)}
               onPickFiles={files.acceptPickedFiles}
+              disabledReason={writeRefused}
               label={editorOpen ? "Drop or" : "Drop files here to add them (a SKILL.md replaces the skill text), or"}
             />
           )}
@@ -128,13 +135,14 @@ export default function SkillFilesTab({ files, pathLabel, leaveRequest, onLeaveS
           leave={leave}
           onLeaveSettled={settleLeave}
           locked={locked}
+          writeRefused={writeRefused}
         />
       )}
       {!editorOpen && (
         <p className="sr-only">Switching file or skill with unsaved changes asks first · SKILL.md edits re-run the five checks before saving</p>
       )}
 
-      {files.explorerOpen && !locked && (
+      {files.explorerOpen && !locked && !writeRefused && (
         <FsExplorerModal
           mode="file"
           multiple

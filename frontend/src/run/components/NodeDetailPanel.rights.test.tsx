@@ -1,9 +1,13 @@
 /**
- * CORE-42: the view of a Run hides the gestures the caller may not make, as
+ * CORE-42: the view of a Run knows the gestures the caller may not make, as
  * `POST /authorize` answers them, asked once when the view opens (not once
- * per button). Without an extension that restricts, nothing is hidden.
+ * per button). CORE-205 (reverses the hiding of CORE-42): a refused gesture
+ * stays visible, greyed (`aria-disabled`), its tooltip saying the sentence
+ * the extension gave with the refusal. Without an extension that restricts,
+ * nothing is greyed.
  */
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Decision, OperationQuestion } from "../../shared/authorization/api";
 import type { NodeState } from "../../shared/generated/NodeState";
@@ -59,10 +63,15 @@ const { NOTHING_REFUSED } = await import("../model/runGestures");
 
 const asked = vi.mocked(askAuthorization);
 
+const SENTENCE = "You can't change Runs in Project P. Ask an administrator of P.";
+
 /** Alice, Reader of the Run's Projet: every gesture on a node or the Run refused. */
 function answerAsAlice(questions: OperationQuestion[]): Decision[] {
-  return questions.map(() => ({ decision: "deny", reason: "Reader of P" }));
+  return questions.map(() => ({ decision: "deny", reason: "the test rules refuse this gesture", sentence: SENTENCE }));
 }
+
+/** Whether `testId` is on screen, greyed. */
+const greyed = (testId: string) => screen.getByTestId(testId).getAttribute("aria-disabled") === "true";
 
 function answerAllowingAll(questions: OperationQuestion[]): Decision[] {
   return questions.map(() => ({ decision: "allow" }));
@@ -93,25 +102,35 @@ beforeEach(() => {
   useGestureRightsStore.setState({ rights: NOTHING_REFUSED, viewed: null, listed: new Set() });
 });
 
-describe("the gestures of the view of a Run (CORE-42)", () => {
-  it("hides Stop, Retry and Mark complete from a Reader", async () => {
+describe("the gestures of the view of a Run (CORE-42, CORE-205)", () => {
+  it("greys Stop, Retry and Mark complete for a caller who may only read the Run, their tooltip saying the extension's sentence", async () => {
     asked.mockImplementation(async (q) => answerAsAlice(q));
     render(<RunView state={node()} />);
-    // Before the answer, everything shows: the daemon still decides.
-    expect(screen.getByTestId("stop-btn")).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByTestId("stop-btn")).toBeNull());
-    expect(screen.queryByTestId("retry-btn")).toBeNull();
-    expect(screen.queryByTestId("mark-complete-btn")).toBeNull();
-    expect(screen.queryByTestId("node-controls")).toBeNull();
+    // Before the answer, nothing is greyed: the daemon still decides.
+    expect(greyed("stop-btn")).toBe(false);
+    await waitFor(() => expect(greyed("stop-btn")).toBe(true));
+    expect(greyed("retry-btn")).toBe(true);
+    expect(greyed("mark-complete-btn")).toBe(true);
+    expect(screen.getByTestId("node-controls")).toBeInTheDocument();
+    // Greyed, not hidden nor `disabled`: still focusable, inert.
+    expect(screen.getByTestId("stop-btn")).not.toBeDisabled();
+    const { stopNode } = await import("../api/nodes");
+    fireEvent.click(screen.getByTestId("stop-btn"));
+    expect(stopNode).not.toHaveBeenCalled();
+    // The tooltip: the gesture's name, then the sentence; never the technical reason.
+    await userEvent.setup().hover(screen.getByTestId("retry-btn"));
+    const tip = await screen.findByRole("tooltip");
+    expect(tip).toHaveTextContent(`Retry${SENTENCE}`);
+    expect(document.body.textContent).not.toContain("the test rules refuse this gesture");
   });
 
-  it("shows them to a Developer, and hides nothing without an extension", async () => {
+  it("leaves them active for a caller allowed to make them, and greys nothing without an extension", async () => {
     asked.mockImplementation(async (q) => answerAllowingAll(q));
     render(<RunView state={node()} />);
     await waitFor(() => expect(asked).toHaveBeenCalled());
-    expect(screen.getByTestId("stop-btn")).toBeInTheDocument();
-    expect(screen.getByTestId("retry-btn")).toBeInTheDocument();
-    expect(screen.getByTestId("mark-complete-btn")).toBeInTheDocument();
+    expect(greyed("stop-btn")).toBe(false);
+    expect(greyed("retry-btn")).toBe(false);
+    expect(greyed("mark-complete-btn")).toBe(false);
   });
 
   it("asks once when the view opens, for every gesture of the Run and its nodes, not once per button", async () => {
@@ -134,19 +153,19 @@ describe("the gestures of the view of a Run (CORE-42)", () => {
   it("follows a change of rights once asked again", async () => {
     asked.mockImplementation(async (q) => answerAsAlice(q));
     render(<RunView state={node()} />);
-    await waitFor(() => expect(screen.queryByTestId("stop-btn")).toBeNull());
+    await waitFor(() => expect(greyed("stop-btn")).toBe(true));
     asked.mockImplementation(async (q) => answerAllowingAll(q));
     await act(async () => refreshGestureRights());
-    await waitFor(() => expect(screen.getByTestId("stop-btn")).toBeInTheDocument());
+    await waitFor(() => expect(greyed("stop-btn")).toBe(false));
   });
 
   it("keeps the last answer when the question fails", async () => {
     asked.mockImplementation(async (q) => answerAsAlice(q));
     render(<RunView state={node()} />);
-    await waitFor(() => expect(screen.queryByTestId("stop-btn")).toBeNull());
+    await waitFor(() => expect(greyed("stop-btn")).toBe(true));
     asked.mockRejectedValue(new Error("offline"));
     await act(async () => refreshGestureRights());
-    expect(screen.queryByTestId("stop-btn")).toBeNull();
+    expect(greyed("stop-btn")).toBe(true);
   });
 });
 
@@ -161,9 +180,9 @@ describe("the answers of the gestures", () => {
     // Asked again (the rights changed): Alice is now a Reader.
     asked.mockImplementation(async (q) => answerAsAlice(q));
     await act(async () => refreshGestureRights());
-    await waitFor(() => expect(screen.queryByTestId("stop-btn")).toBeNull());
+    await waitFor(() => expect(greyed("stop-btn")).toBe(true));
     // The first, older answer arrives last: it changes nothing.
     await act(async () => pending[0]([]));
-    expect(screen.queryByTestId("stop-btn")).toBeNull();
+    expect(greyed("stop-btn")).toBe(true);
   });
 });

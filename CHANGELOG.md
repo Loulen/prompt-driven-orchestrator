@@ -15,6 +15,28 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 
 ## Unreleased
 
+### A refused gesture is greyed, with a sentence that says why
+
+- A gesture you may not make stays on screen, greyed, instead of disappearing: Stop, Retry, Mark
+  complete and the other gestures of a Run and its nodes, a row of the Runs list and its menu, the
+  bulk bar, the canvas, the command field, the extensions' actions, New Run, Projects, Settings,
+  Agent profiles, staging profiles, the Skills bank, Triggers, Review comments, Stats absorptions
+  and the Pipelines list. Its tooltip says what you cannot do and whom to ask; in a menu, one line
+  at the menu's foot says it, with a lock. Nothing is greyed without an extension that restricts.
+- A refusal from the daemon reads as that sentence, never as the extension's technical reason. Without a
+  sentence from the extension, it reads "You don't have the rights to do this.". `pdo` prints the
+  sentence followed by the technical cause in parentheses.
+- New seams (extension API 0.23): `Authorization::deny(reason).saying(sentence)`,
+  `Denied::new(reason).saying(sentence)`, `Denied::sentence()`, `Denied::for_an_agent()`,
+  `Denied::from_body()` and `GENERIC_REFUSAL`; `POST /authorize` and the `403` `operation_refused`
+  body carry `sentence` beside `reason`. In `@pdo/extension-ui`, `disabledReason` on `Button`,
+  `IconButton`, a `Menu` entry (the menu shows it at its foot) and a `Segmented` item; a `Segmented`
+  item's `title` and `description` show in the kit's `Tooltip`. An action guarded by an Operation
+  is greyed when refused, no longer left out.
+- **Breaking for extensions** (`pdo-extension-api` 0.23, Rust API): `Authorization::Deny` and
+  `Denied` gain the field `sentence`. Match
+  `Authorization::Deny { reason, .. }`, build `Denied::new(reason)` and `Authorization::deny(reason)`.
+
 ### A session's variables out of the process list
 
 - The variables of a session (a Node's, those an extension adds through `node_env` or

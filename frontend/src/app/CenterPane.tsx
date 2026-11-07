@@ -7,7 +7,7 @@ import type { LibraryEntry } from "../pipeline/model/library";
 import type { RunState } from "../shared/generated/RunState";
 import type { RunListEntry } from "../shared/generated/RunListEntry";
 import { Button, EmptyState } from "../shared/ui/kit";
-import { canCreateSomeRun } from "../run/model/runCreationRights";
+import { whyNoRunAnywhere } from "../run/model/runCreationRights";
 import { useRunCreationRightsStore } from "../run/store/runCreationRightsStore";
 import type { Project } from "../workspace/model/project";
 import type { useRunNavigation } from "./useRunNavigation";
@@ -61,15 +61,20 @@ export default function CenterPane({
 }) {
   const pageTabCount = useMountedPages((s) => s.tabs.length);
   const activePage = useActivePage();
-  // CORE-5: no New run where no Projet allows creating a Run.
-  const canCreate = useRunCreationRightsStore((s) => canCreateSomeRun(s.rights));
+  // CORE-5, CORE-205: New run greyed, with why, where no Projet allows creating a Run.
+  const noRunReason = useRunCreationRightsStore((s) => whyNoRunAnywhere(s.rights));
   const placeholder = (
     <div className="sh-center-empty" data-testid="center-empty">
       <EmptyState
         icon={Workflow}
         action={
-          onNewRun && canCreate && (
-            <Button icon={Play} onClick={onNewRun} data-testid="center-new-run">
+          onNewRun && (
+            <Button
+              icon={Play}
+              onClick={onNewRun}
+              disabledReason={noRunReason}
+              data-testid="center-new-run"
+            >
               New run
             </Button>
           )

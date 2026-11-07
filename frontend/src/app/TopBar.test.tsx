@@ -100,9 +100,9 @@ describe("the top bar", () => {
     const P1 = { id: "p1", name: "One", members: ["/r"] } as unknown as Project;
     useRunCreationRightsStore.setState({
       rights: runCreationRights([P1], [
-        { decision: "deny", reason: "x" },
-        { decision: "deny", reason: "x" },
-        { decision: "deny", reason: "x" },
+        { decision: "deny", reason: "rule r-7", sentence: "You can't create Runs here. Ask an administrator." },
+        { decision: "deny", reason: "rule r-7", sentence: "You can't create Runs here. Ask an administrator." },
+        { decision: "deny", reason: "rule r-7", sentence: "You can't create Runs here. Ask an administrator." },
       ]),
     });
     const handlers = renderBar();
@@ -110,7 +110,9 @@ describe("the top bar", () => {
     expect(button).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(button);
     expect(handlers.onNewRun).not.toHaveBeenCalled();
-    expect(await tooltipOf(button)).toContain("can't create Runs");
+    const tip = await tooltipOf(button);
+    expect(tip).toContain("You can't create Runs here. Ask an administrator.");
+    expect(tip).not.toContain("rule r-7");
   });
 
   it("switches the Dark mode only, the Theme untouched", () => {

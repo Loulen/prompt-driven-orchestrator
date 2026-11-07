@@ -5,6 +5,7 @@ import { ExtensionMenuGroups } from "../../../shared/extensions/ExtensionActions
 import type { DecorationContext, TriggerEntity } from "../../../shared/extensions/contract";
 import { DropdownMenuSeparator } from "../../../shared/ui/dropdown-menu";
 import RowMenu, { ROW_MENU_EXTENSION_ITEM, RowMenuItem } from "../../../shared/ui/RowMenu";
+import { reasonsOf } from "../../../shared/ui/menuReasons";
 import { toast } from "../../../shared/ui/toast";
 import { StatusIcon, Tooltip } from "../../../shared/ui/kit";
 import StatusMark from "../../../shared/ui/leftList/StatusMark";
@@ -21,6 +22,7 @@ import { useAppearancePreview, useElementMarks } from "../../../hooks/useElement
 import { useAppearance } from "../../../hooks/useAppearance";
 import { isVisible } from "../../../lib/appearance";
 import { hasSecondLine, isSecondLineElement, TRIGGER_ROW } from "../../model/triggerRowElements";
+import type { TriggerRefusals } from "../../store/useTriggerRefusals";
 
 interface Props {
   trigger: Trigger;
@@ -39,6 +41,11 @@ interface Props {
   onEdit?: () => void;
   onDelete: () => void;
   onToggle: () => void;
+  /**
+   * CORE-205: the gestures the caller may not make, and why: each stays,
+   * greyed, its tooltip (or the menu's foot) saying the sentence.
+   */
+  refused?: TriggerRefusals;
 }
 
 /** When it fires next: in words, or why it does not. */
@@ -79,6 +86,7 @@ export default function TriggerRow({
   onEdit,
   onDelete,
   onToggle,
+  refused = {},
 }: Props) {
   // ADR-0081 (#31): what the `trigger/item` decorations mark — with its last
   // editor and its suspension (API 0.8), for an extension that answers for it.
@@ -132,6 +140,27 @@ export default function TriggerRow({
       onSelect={(e) => onSelectControl(e.shiftKey)}
     />
   );
+  const switchButton = (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={t.enabled ? "Disable trigger" : "Enable trigger"}
+      aria-disabled={refused.update ? true : undefined}
+      title={refused.update ? undefined : toggleLabel}
+      className="d-switch aria-disabled:cursor-not-allowed aria-disabled:opacity-45"
+      data-testid="trigger-toggle"
+      onClick={(e) => {
+        e.stopPropagation();
+        if (!refused.update) onToggle();
+      }}
+      onKeyDown={(e) => e.stopPropagation()}
+    >
+      <span className="d-switch__knob" aria-hidden />
+    </button>
+  );
+  // The menu always holds Enable/Disable and Delete; Run now only when offered.
+  const menuReasons = reasonsOf(onRunNow && refused.fire, refused.update, refused.delete);
   return (
     <div
       role="button"
@@ -158,22 +187,13 @@ export default function TriggerRow({
     >
       <span className="lp-lead lp-lead--trigger">
         {/* Enable/disable — always there, so a paused state is reversible in one gesture. */}
-        <button
-          type="button"
-          role="switch"
-          aria-checked={on}
-          aria-label={t.enabled ? "Disable trigger" : "Enable trigger"}
-          title={toggleLabel}
-          className="d-switch"
-          data-testid="trigger-toggle"
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggle();
-          }}
-          onKeyDown={(e) => e.stopPropagation()}
-        >
-          <span className="d-switch__knob" aria-hidden />
-        </button>
+        {refused.update ? (
+          <Tooltip label={toggleLabel} description={refused.update}>
+            {switchButton}
+          </Tooltip>
+        ) : (
+          switchButton
+        )}
         {/* On one line, the last result sits beside the switch. */}
         {!secondLine && lastResult}
       </span>
@@ -237,23 +257,34 @@ export default function TriggerRow({
       )}
       {!preview && (
       <HoverBar testId="trigger-row-actions">
-        {onRunNow && <RowAction icon={Play} label="Run now" testId="trigger-run-now" onClick={onRunNow} />}
-        {onEdit && <RowAction icon={Pencil} label="Edit trigger" testId="trigger-edit" onClick={onEdit} />}
-        <RowAction icon={Trash2} label="Delete trigger" danger testId="trigger-delete" onClick={onDelete} />
+        {onRunNow && (
+          <RowAction icon={Play} label="Run now" testId="trigger-run-now" onClick={onRunNow} disabledReason={refused.fire} />
+        )}
+        {onEdit && (
+          <RowAction icon={Pencil} label="Edit trigger" testId="trigger-edit" onClick={onEdit} disabledReason={refused.update} />
+        )}
+        <RowAction
+          icon={Trash2}
+          label="Delete trigger"
+          danger
+          testId="trigger-delete"
+          onClick={onDelete}
+          disabledReason={refused.delete}
+        />
         {/* #30 — the « ⋯ » menu: the row's verbs, the extensions'
             `trigger/item/menu` groups, then Delete. */}
-        <RowMenu label={`More actions for ${t.name}`} testId="trigger-row-menu">
+        <RowMenu label={`More actions for ${t.name}`} testId="trigger-row-menu" reasons={menuReasons}>
           {onRunNow && (
-            <RowMenuItem data-testid="trigger-menu-run-now" onClick={onRunNow}>
+            <RowMenuItem data-testid="trigger-menu-run-now" disabledReason={refused.fire} onClick={onRunNow}>
               <Play /> Run now
             </RowMenuItem>
           )}
           {onEdit && (
-            <RowMenuItem data-testid="trigger-menu-edit" onClick={onEdit}>
+            <RowMenuItem data-testid="trigger-menu-edit" disabledReason={refused.update} onClick={onEdit}>
               <Pencil /> Edit
             </RowMenuItem>
           )}
-          <RowMenuItem data-testid="trigger-menu-toggle" onClick={onToggle}>
+          <RowMenuItem data-testid="trigger-menu-toggle" disabledReason={refused.update} onClick={onToggle}>
             <Power /> {t.enabled ? "Disable" : "Enable"}
           </RowMenuItem>
           <RowMenuItem data-testid="trigger-menu-copy-id" onClick={() => copyTriggerId(t.id)}>
@@ -261,7 +292,7 @@ export default function TriggerRow({
           </RowMenuItem>
           <ExtensionMenuGroups location="trigger/item/menu" extra={extra} itemClassName={ROW_MENU_EXTENSION_ITEM} />
           <DropdownMenuSeparator />
-          <RowMenuItem variant="destructive" data-testid="trigger-menu-delete" onClick={onDelete}>
+          <RowMenuItem variant="destructive" data-testid="trigger-menu-delete" disabledReason={refused.delete} onClick={onDelete}>
             <Trash2 /> Delete
           </RowMenuItem>
         </RowMenu>

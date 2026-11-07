@@ -170,8 +170,8 @@ function fakePane(over: Partial<RunsPaneState> = {}): RunsPaneState {
     runBulkKind: null,
     cleanupCascade: { finished: 0, live: 0 },
     handleRunsSettled: vi.fn(),
-    bulkShown: { cleanup: true, retry: true, pause: true },
-    mayOnRow: () => true,
+    bulkRefused: {},
+    whyNotOnRow: () => undefined,
     ...over,
   } as unknown as RunsPaneState;
 }
@@ -511,7 +511,9 @@ describe("the tab bar's menu (tab/menu)", () => {
 describe("the skill bank's menu (skill/menu)", () => {
   it("hands the skill or the folder over, before its delete", async () => {
     serve([extension("demo", "Demo", [action("skill/menu", "s")])]);
-    const panel = { menuFor: { kind: "skill", id: "tdd" }, setMenuFor: vi.fn(), setMovePickerFor: vi.fn() } as unknown as SkillBankPanelState;
+    const allowed = () => undefined;
+    const refusals = { updateSkill: allowed, deleteSkill: allowed, updateFolder: allowed, deleteFolder: allowed, updateFolderFromSource: allowed };
+    const panel = { menuFor: { kind: "skill", id: "tdd" }, setMenuFor: vi.fn(), setMovePickerFor: vi.fn(), refusals } as unknown as SkillBankPanelState;
     render(
       shell(
         <TreeRowActions

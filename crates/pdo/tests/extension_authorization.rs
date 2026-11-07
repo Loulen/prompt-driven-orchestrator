@@ -61,6 +61,7 @@ fn refusal_body(operation: &Operation) -> Value {
         "error": "operation_refused",
         "message": format!("operation refused: {reason}"),
         "reason": reason,
+        "sentence": test_extension::sentence(operation),
     })
 }
 

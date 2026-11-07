@@ -12,6 +12,8 @@ export interface ReviewCommentsApi {
   /** `Fork point → Run tip` for the sent card's footer. */
   pairLabel: string;
   sendDisabledReason: string | null;
+  /** CORE-205: why the caller may not send on this Run; the Send buttons stay, greyed. */
+  sendRefused?: string;
   saveNew: (anchor: Anchor, text: string) => void;
   sendNew: (anchor: Anchor, text: string) => void;
   editDraft: (key: string) => void;
@@ -24,6 +26,9 @@ export interface ReviewCommentsApi {
   /** #751: the human's decision on a sent comment. */
   resolve: (comment: ReviewComment) => void;
   reopen: (comment: ReviewComment) => void;
+  /** CORE-205: why the caller may not resolve / reopen `comment`, absent when allowed. */
+  resolveRefused: (comment: ReviewComment) => string | undefined;
+  reopenRefused: (comment: ReviewComment) => string | undefined;
   /** Comment ids with a Resolve / Reopen in flight. */
   deciding: ReadonlySet<string>;
   /** Unread replies of a comment in this browser (0 = all seen). */

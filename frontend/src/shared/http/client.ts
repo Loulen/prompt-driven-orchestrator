@@ -47,6 +47,9 @@ export class ApiError extends Error {
  */
 export function apiErrorMessage(body: unknown, fallback: string): string {
   const b = body as { message?: unknown; error?: unknown; rejections?: unknown } | null;
+  // A refused Operation reads as its sentence for a person, never the technical reason (CORE-205).
+  const refusal = refusalSentenceOf(body);
+  if (refusal !== null) return refusal;
   let message: string;
   if (typeof b?.message === "string") message = b.message;
   else if (typeof b?.error === "string") message = b.error;
@@ -58,6 +61,21 @@ export function apiErrorMessage(body: unknown, fallback: string): string {
     if (reasons.length > 0) message = `${message}: ${reasons.join("; ")}`;
   }
   return message;
+}
+
+/** The sentence a person reads when an extension refuses an Operation and gives none. */
+export const GENERIC_REFUSAL = "You don't have the rights to do this.";
+
+/**
+ * The sentence for a person of a refused Operation (`403`
+ * `{"error": "operation_refused", "reason", "sentence"}`): the extension's,
+ * else {@link GENERIC_REFUSAL}; `null` for any other body. The technical
+ * `reason` stays in the body, for a program.
+ */
+export function refusalSentenceOf(body: unknown): string | null {
+  const b = body as { error?: unknown; sentence?: unknown } | null | undefined;
+  if (b?.error !== "operation_refused") return null;
+  return typeof b.sentence === "string" && b.sentence.trim() ? b.sentence : GENERIC_REFUSAL;
 }
 
 /** The bytes an upload carries: the size of every `File`/`Blob` part of the form (#839). */

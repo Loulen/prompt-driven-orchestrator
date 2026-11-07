@@ -11,8 +11,12 @@ const node = (status: string): PaletteSelection =>
     node: { id: "review", name: "Review", type: "agent", status, iter: 2 },
   }) as PaletteSelection;
 
+const WHY = "You can't change Runs in Project P. Ask an administrator of P.";
+const rightsRefusing = (refused: string[]) => ({ refused: new Map(refused.map((k) => [k, WHY] as const)) });
 const labels = (selection: PaletteSelection | null, refused: string[] = []) =>
-  selectionItems(selection, { refused: new Set(refused) }, vi.fn(), vi.fn()).map((i) => i.label);
+  selectionItems(selection, rightsRefusing(refused), vi.fn(), vi.fn())
+    .filter((i) => !i.disabledReason)
+    .map((i) => i.label);
 
 describe("the selection's gestures", () => {
   it("offers a node waiting for a person Mark complete and Stop, then its Run's", () => {
@@ -34,8 +38,15 @@ describe("the selection's gestures", () => {
     expect(labels(inRun("archived"))).not.toContain("Mark complete");
   });
 
-  it("leaves out what the caller may not do", () => {
+  it("greys what the caller may not do, with the refusal's sentence (CORE-205)", () => {
     expect(labels(node("awaiting_user"), ["r1/review mark_node_done", "r1 pause_run"])).toEqual(["Stop", "Copy run id"]);
+    const items = selectionItems(node("awaiting_user"), rightsRefusing(["r1/review mark_node_done", "r1 pause_run"]), vi.fn(), vi.fn());
+    expect(items.map((i) => [i.label, i.disabledReason])).toEqual([
+      ["Mark complete", WHY],
+      ["Stop", undefined],
+      ["Pause", WHY],
+      ["Copy run id", undefined],
+    ]);
   });
 
   it("offers a failed Run Retry all, a paused one Resume, and nothing for a Trigger", () => {

@@ -389,7 +389,7 @@ async fn ws_tells_of_a_fire_without_the_run_a_connection_may_not_read() {
 async fn the_question_of_authorization_answers_each_operation_without_running_it() {
     let w = world().await;
     w.control
-        .set(Refusal::parse(&format!("repository:read,run:create@{}", w.p2)).unwrap());
+        .set(Refusal::parse(&format!("repository:read!,run:create@{}", w.p2)).unwrap());
     // The creations of the world are announced off the request path: let
     // them land before counting.
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -412,9 +412,13 @@ async fn the_question_of_authorization_answers_each_operation_without_running_it
     assert_eq!(
         answer,
         json!({ "decisions": [
-            { "decision": "deny", "reason": "the test extension refuses read repository" },
+            // Without a sentence from the extension, a person reads the core's.
+            { "decision": "deny", "reason": "the test extension refuses read repository",
+              "sentence": "You don't have the rights to do this." },
             { "decision": "allow" },
-            { "decision": "deny", "reason": "the test extension refuses create run" },
+            // With one, the extension's, beside the technical reason.
+            { "decision": "deny", "reason": "the test extension refuses create run",
+              "sentence": "You can't create this run here. Ask an administrator of the test extension." },
             { "decision": "allow" },
             { "decision": "allow" },
         ]})

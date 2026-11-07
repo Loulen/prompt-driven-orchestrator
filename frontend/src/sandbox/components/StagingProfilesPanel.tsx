@@ -1,5 +1,7 @@
-import { useState } from "react";
-import { Loader2, Plus, Trash2 } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Loader2, Lock, Plus, Trash2 } from "lucide-react";
+import { useListRefusals } from "../../shared/authorization/useRefusals";
+import type { OperationQuestion } from "../../shared/authorization/api";
 import Section, { SectionExtra } from "../../settings/components/settingsSurface/Section";
 import type { SettingsSection } from "../../settings/model/settingsCategories";
 import { KeyValueRow } from "../../shared/ui/key-value-row";
@@ -12,6 +14,13 @@ import DeleteProfileDialog from "./DeleteProfileDialog";
 import ProfileEntries from "./ProfileEntries";
 import ProfileEnvEditor from "./ProfileEnvEditor";
 import ProfileImageEditor from "./ProfileImageEditor";
+
+const CREATE_PROFILE: OperationQuestion[] = [{ resource: "sandbox_profile", verb: "create" }];
+const profileName = (p: { name: string }) => p.name;
+const perProfile = (p: { name: string }): OperationQuestion[] => [
+  { resource: "sandbox_profile", verb: "update", target: p.name },
+  { resource: "sandbox_profile", verb: "delete", target: p.name },
+];
 
 interface PanelProps {
   /** Settings › Sandbox & worktrees › Staging profiles. */
@@ -51,6 +60,18 @@ export default function StagingProfilesPanel({ section, home, onChanged }: Panel
   } = useStagingProfiles(onChanged);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
+  // CORE-205: the gestures the caller may not make (`sandbox_profile` × create,
+  // update, delete; editing a built-in not edited yet creates it), greyed with why.
+  const listed = useMemo(() => profiles ?? [], [profiles]);
+  const refusals = useListRefusals(listed, profileName, perProfile, CREATE_PROFILE);
+  const createRefused = refusals.global[0];
+  const deleteRefused = (name: string) => refusals.of(name)[1];
+  const currentProfile = listed.find((p) => p.name === current?.name);
+  const editRefused = current
+    ? currentProfile?.materialised
+      ? refusals.of(current.name)[0]
+      : createRefused
+    : undefined;
   const [pickerMode, setPickerMode] = useState<"file" | "dir" | null>(null);
 
   /**
@@ -101,6 +122,7 @@ export default function StagingProfilesPanel({ section, home, onChanged }: Panel
           icon={Plus}
           label="New staging profile"
           size="sm"
+          disabledReason={createRefused}
           onClick={() => setCreating(true)}
           data-testid="staging-profile-new"
         />
@@ -136,6 +158,7 @@ export default function StagingProfilesPanel({ section, home, onChanged }: Panel
                     label={`Delete ${p.name}`}
                     size="sm"
                     className="set-hover"
+                    disabledReason={deleteRefused(p.name)}
                     onClick={() => void askDelete(p.name)}
                     data-testid={`staging-profile-delete-${p.name}`}
                   />
@@ -187,9 +210,16 @@ export default function StagingProfilesPanel({ section, home, onChanged }: Panel
         {/* ── the selected profile's entries ── */}
         {current && (
           <div className="mt-3 flex flex-col gap-3 border-t border-line pt-3">
+            {/* CORE-205: a profile the caller may not change reads as such, its editors greyed. */}
+            {editRefused && (
+              <div className="set-line set-faint text-xs" role="note" data-testid="staging-profile-refused">
+                <Lock size={12} strokeWidth={1.5} aria-hidden />
+                <span>{editRefused}</span>
+              </div>
+            )}
             <ProfileEntries
               profile={current}
-              busy={busy}
+              busy={busy || !!editRefused}
               onToggleDefault={toggleDefault}
               onRemoveExtra={removeExtra}
               onPick={setPickerMode}
@@ -197,7 +227,7 @@ export default function StagingProfilesPanel({ section, home, onChanged }: Panel
 
             <ProfileEnvEditor
               profile={current}
-              busy={busy}
+              busy={busy || !!editRefused}
               onWrite={(env) => writeCurrent({ env })}
               onRefuse={setError}
             />
@@ -208,7 +238,7 @@ export default function StagingProfilesPanel({ section, home, onChanged }: Panel
             <ProfileImageEditor
               key={current.name}
               profile={current}
-              busy={busy}
+              busy={busy || !!editRefused}
               onWrite={(image) => writeCurrent({ image })}
             />
 

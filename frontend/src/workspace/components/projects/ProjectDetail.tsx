@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { CloneJob } from "../../../shared/generated/CloneJob";
 import { cancelClone } from "../../api/repos";
 import { useClones } from "../../store/useClones";
-import { FolderGit2, Pencil, SlidersHorizontal, Trash2 } from "lucide-react";
+import { FolderGit2, Pencil, Plus, SlidersHorizontal, Trash2 } from "lucide-react";
 import { Button, EmptyState, IconButton, TextInput } from "../../../shared/ui/kit";
 import type { Project } from "../../model/project";
 import { alsoIn, recentToAdd, runCount } from "../../model/projectsSettings";
@@ -44,10 +44,10 @@ export default function ProjectDetail({
   remotes,
   recent,
   home,
-  editable,
-  deletable,
-  canBrowse,
-  canCreateRepository,
+  editRefused,
+  deleteRefused,
+  browseRefused,
+  createRepositoryRefused,
   gestures,
 }: {
   project: Project;
@@ -56,12 +56,17 @@ export default function ProjectDetail({
   remotes: Map<string, string | null>;
   recent: string[];
   home: string | null;
-  editable: boolean;
-  deletable: boolean;
-  canBrowse: boolean;
-  canCreateRepository: boolean;
+  /** CORE-205: why the caller may not change it (its gestures greyed), else absent. */
+  editRefused?: string;
+  /** CORE-205: why the caller may not delete it (Delete greyed), else absent. */
+  deleteRefused?: string;
+  /** CORE-205: why the caller may not browse the disk, else absent. */
+  browseRefused?: string;
+  /** CORE-205: why the caller may not create a repository, else absent. */
+  createRepositoryRefused?: string;
   gestures: ProjectGestures;
 }) {
+  const editable = !editRefused;
   const [renaming, setRenaming] = useState<string | null>(null);
   const [adding, setAdding] = useState<"local" | "new" | "clone" | null>(null);
   const [cloneUrl, setCloneUrl] = useState("");
@@ -141,11 +146,12 @@ export default function ProjectDetail({
             {project.name}
           </span>
         )}
-        {editable && renaming === null && (
+        {renaming === null && (
           <IconButton
             icon={Pencil}
             label="Rename project"
             size="sm"
+            disabledReason={editRefused}
             onClick={() => setRenaming(project.name)}
             data-testid="project-rename"
           />
@@ -154,31 +160,29 @@ export default function ProjectDetail({
           {runCount(runs)}
         </span>
         {!editable && (
-          <span className="d-chip" title="You may read this project, not change it" data-testid="project-read-only">
+          <span className="d-chip" title={editRefused} data-testid="project-read-only">
             read-only
           </span>
         )}
         <span className="d-grow" />
-        {editable && (
-          <Button
-            size="sm"
-            icon={SlidersHorizontal}
-            onClick={gestures.openSettings}
-            title="Agent, skills, worktree provisioning and extension settings of this project"
-            data-testid="project-more-settings"
-          >
-            Edit
-          </Button>
-        )}
-        {deletable && (
-          <IconButton
-            icon={Trash2}
-            label={`Delete ${project.name}`}
-            tone="danger"
-            onClick={gestures.askDelete}
-            data-testid="project-delete"
-          />
-        )}
+        <Button
+          size="sm"
+          icon={SlidersHorizontal}
+          onClick={gestures.openSettings}
+          title={editRefused ? undefined : "Agent, skills, worktree provisioning and extension settings of this project"}
+          disabledReason={editRefused}
+          data-testid="project-more-settings"
+        >
+          Edit
+        </Button>
+        <IconButton
+          icon={Trash2}
+          label={`Delete ${project.name}`}
+          tone="danger"
+          disabledReason={deleteRefused}
+          onClick={gestures.askDelete}
+          data-testid="project-delete"
+        />
       </div>
 
       <div className="set-pdet__repos" data-testid="project-detail-repos">
@@ -195,7 +199,7 @@ export default function ProjectDetail({
             remote={remotes.get(path)}
             alsoIn={alsoIn(projects, project.id, path)}
             primary={project.primary_repo === path}
-            editable={editable}
+            editRefused={editRefused}
             onMakePrimary={() => void attempt(() => gestures.makePrimary(path))}
             onRemove={() => void attempt(() => gestures.removeRepository(path))}
           />
@@ -226,8 +230,13 @@ export default function ProjectDetail({
         />
       ))}
 
-      {editable &&
-        (adding === "clone" ? (
+      {editRefused ? (
+        <span className="self-start">
+          <Button size="sm" icon={Plus} disabledReason={editRefused} data-testid="project-add-repo">
+            Add repository
+          </Button>
+        </span>
+      ) : adding === "clone" ? (
           <CloneRepositoryForm
             // A retry fills the form again.
             key={cloneUrl}
@@ -246,7 +255,7 @@ export default function ProjectDetail({
         ) : adding === "new" ? (
           <NewRepositoryForm
             home={home}
-            canBrowse={canBrowse}
+            browseRefused={browseRefused}
             onCreate={async (parent, name) => {
               await gestures.createRepository(parent, name);
               setAdding(null);
@@ -257,11 +266,11 @@ export default function ProjectDetail({
           <AddRepositoryMenu
             recent={recentToAdd(recent, project)}
             home={home}
-            canBrowse={canBrowse}
-            canCreateRepository={canCreateRepository}
+            browseRefused={browseRefused}
+            createRepositoryRefused={createRepositoryRefused}
             onChoose={choose}
           />
-        ))}
+        )}
 
       {adding === "local" && (
         <FsExplorerModal

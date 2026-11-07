@@ -29,15 +29,17 @@ beforeEach(() => {
 });
 
 describe("useNodePlay (ADR-0086)", () => {
-  it("hides the ▶ the Autorisation d'opération refuses, and shows it before the answer", async () => {
+  it("greys the ▶ the Autorisation d'opération refuses, with its sentence, and nothing before the answer", async () => {
     vi.mocked(askAuthorization).mockResolvedValue([
-      { decision: "deny", reason: "reader" },
+      { decision: "deny", reason: "reader", sentence: "You can't start nodes in Project P." },
       { decision: "allow" },
     ]);
     const { result } = renderHook(() => useNodePlay("r1", CANDIDATES));
     expect(result.current.canPlay("review", "start")).toBe(true);
     await waitFor(() => expect(result.current.canPlay("review", "start")).toBe(false));
+    expect(result.current.whyNotPlay("review", "start")).toBe("You can't start nodes in Project P.");
     expect(result.current.canPlay("branch", "retry")).toBe(true);
+    expect(result.current.whyNotPlay("branch", "retry")).toBeUndefined();
     expect(askAuthorization).toHaveBeenCalledWith([
       { resource: "node", verb: { action: "start" }, target: "r1/review" },
       { resource: "node", verb: { action: "retry" }, target: "r1/branch" },

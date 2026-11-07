@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import TriggerDetailPanel from "./TriggerDetailPanel";
 import type { Trigger } from "../../shared/generated/Trigger";
 import type { TriggerFire } from "../../shared/generated/TriggerFire";
@@ -19,6 +19,26 @@ vi.mock("../../settings/api/settings", () => ({
 }));
 // The agentic profiles' API answers with the mock of `../../settings/api/settings` too.
 vi.mock("../../settings/api/agentProfiles", async () => await import("../../settings/api/settings"));
+
+// CORE-205: the gestures the caller may not make, asked once; all allowed
+// unless a test says otherwise.
+vi.mock("../../shared/authorization/api", async (orig) => ({
+  ...(await orig<typeof import("../../shared/authorization/api")>()),
+  askAuthorization: vi.fn(),
+}));
+import { askAuthorization, type OperationQuestion } from "../../shared/authorization/api";
+
+const WHY = "You can't change Triggers in Shop. Ask an administrator of Shop.";
+const mockedAsk = vi.mocked(askAuthorization);
+/** Refuse the Operations `refused` picks, allow the rest. */
+function refuse(refused: (op: OperationQuestion) => boolean) {
+  mockedAsk.mockImplementation((ops) =>
+    Promise.resolve(
+      ops.map((op) => (refused(op) ? { decision: "deny" as const, reason: "no_role", sentence: WHY } : { decision: "allow" as const })),
+    ),
+  );
+}
+const actionOf = (op: OperationQuestion) => (typeof op.verb === "object" ? op.verb.action : op.verb);
 
 function trigger(overrides: Partial<Trigger> = {}): Trigger {
   return {
@@ -66,6 +86,7 @@ describe("TriggerDetailPanel", () => {
     testGuard.mockReset();
     fetchSettings.mockReset();
     fetchSettings.mockResolvedValue({ home: "/home/me" });
+    refuse(() => false);
   });
 
   it("says the time zone of the schedule and of the next fire", () => {
@@ -392,6 +413,7 @@ describe("TriggerDetailPanel — sections and the fires table (CORE-116)", () =>
     fetchTriggerFires.mockReset();
     fetchSettings.mockReset();
     fetchSettings.mockResolvedValue({ home: "/home/me" });
+    refuse(() => false);
   });
 
   it("lists the fires in a table: outcome icon, time, source, outcome, run, exit", async () => {
@@ -433,6 +455,26 @@ describe("TriggerDetailPanel — sections and the fires table (CORE-116)", () =>
     fireEvent.click(screen.getByTestId("trigger-detail-run-now"));
     fireEvent.click(screen.getByTestId("trigger-detail-edit"));
     expect(onRunNow).toHaveBeenCalledTimes(1);
+    expect(onEdit).toHaveBeenCalledTimes(1);
+  });
+
+  it("greys a refused Run now with the sentence; a click does nothing; Edit stays active (CORE-205)", async () => {
+    const onRunNow = vi.fn();
+    const onEdit = vi.fn();
+    fetchTriggerFires.mockResolvedValue([]);
+    refuse((op) => actionOf(op) === "fire");
+    render(<TriggerDetailPanel trigger={trigger({ project_id: "p1" })} onSelectRun={noop} onRunNow={onRunNow} onEdit={onEdit} />);
+    await waitFor(() => expect(screen.getByTestId("trigger-detail-run-now")).toHaveAttribute("aria-disabled", "true"));
+    expect(mockedAsk).toHaveBeenCalledWith(
+      expect.arrayContaining([{ resource: "trigger", verb: { action: "fire" }, target: "trg-1", projects: ["p1"] }]),
+    );
+    const run = screen.getByTestId("trigger-detail-run-now");
+    fireEvent.click(run);
+    expect(onRunNow).not.toHaveBeenCalled();
+    act(() => run.focus());
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(WHY);
+    expect(screen.getByTestId("trigger-detail-edit")).not.toHaveAttribute("aria-disabled");
+    fireEvent.click(screen.getByTestId("trigger-detail-edit"));
     expect(onEdit).toHaveBeenCalledTimes(1);
   });
 

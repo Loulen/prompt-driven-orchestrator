@@ -133,8 +133,9 @@ describe("the Actions of the command field", () => {
     expect(result.current.context.selected).toBe(RUN);
   });
 
-  it("leaves out an Action whose Operation is refused, asked on the entity it acts on", async () => {
-    decide = (op) => (op.verb === "delete" ? { decision: "deny", reason: "no" } : { decision: "allow" });
+  it("greys an Action whose Operation is refused, with its sentence, asked on the entity it acts on (CORE-205)", async () => {
+    decide = (op) =>
+      op.verb === "delete" ? { decision: "deny", reason: "no", sentence: "You can't delete notes." } : { decision: "allow" };
     await load([
       extension(
         "a",
@@ -149,7 +150,13 @@ describe("the Actions of the command field", () => {
       ),
     ]);
     const { result } = renderHook(() => usePaletteActions(RUN));
-    await waitFor(() => expect(result.current.global.map((a) => a.element.key)).toEqual(["a:create", "a:free"]));
+    await waitFor(() =>
+      expect(result.current.global.map((a) => [a.element.key, a.refused])).toEqual([
+        ["a:create", undefined],
+        ["a:delete", "You can't delete notes."],
+        ["a:free", undefined],
+      ]),
+    );
     expect(result.current.contextual.map((a) => a.element.key)).toEqual(["a:archive"]);
     expect(asked).toContainEqual({ resource: "a/note", verb: "create", target: null });
     expect(asked).toContainEqual({ resource: "run", verb: { action: "archive" }, target: "r1" });

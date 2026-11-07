@@ -460,14 +460,10 @@ impl ExtensionHost for Host {
             .push((actor.clone(), operation.clone()));
         let refused_projet = self.refuse_reads_in.lock().unwrap().clone();
         if operation.is_read() && refused_projet.is_some_and(|p| operation.projects.contains(&p)) {
-            return Authorization::Deny {
-                reason: "the test host refuses this read".into(),
-            };
+            return Authorization::deny("the test host refuses this read");
         }
         if *self.refuse.lock().unwrap() && !operation.is_read() {
-            Authorization::Deny {
-                reason: "the test host refuses everything".into(),
-            }
+            Authorization::deny("the test host refuses everything")
         } else {
             Authorization::Allow
         }

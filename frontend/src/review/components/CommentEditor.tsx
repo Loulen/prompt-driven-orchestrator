@@ -7,6 +7,7 @@ import type { Anchor } from "../model/drafts";
 import { anchorLabel, sideLabel } from "../model/drafts";
 import CompletionList from "./CompletionList";
 import ReviewMarkdown from "./ReviewMarkdown";
+import { Refusable } from "./commentBits";
 
 /**
  * The inline comment editor of the Review page (#750), opened under a diff line
@@ -33,6 +34,8 @@ interface Props {
   wipKey: string;
   /** Null when sending is allowed; else the reason shown as the button's title. */
   sendDisabledReason: string | null;
+  /** CORE-205: why the caller may not send on this Run: Send now stays, greyed. */
+  sendRefused?: string;
   onSave: (text: string) => void;
   onSend: (text: string) => void;
   onCancel: () => void;
@@ -55,7 +58,8 @@ function writeWip(key: string, text: string): void {
   }
 }
 
-export default function CommentEditor({ anchor, pair, initial, wipKey, sendDisabledReason, onSave, onSend, onCancel }: Props) {
+export default function CommentEditor({ anchor, pair, initial, wipKey, sendDisabledReason, sendRefused, onSave, onSend, onCancel }: Props) {
+  const refused = sendDisabledReason ? undefined : sendRefused;
   const [text, setText] = useState<string>(() => initial ?? readWip(wipKey));
   const [tab, setTab] = useState<"write" | "preview">("write");
   const ref = useRef<HTMLTextAreaElement | null>(null);
@@ -94,7 +98,7 @@ export default function CommentEditor({ anchor, pair, initial, wipKey, sendDisab
     onSave(text);
   };
   const send = () => {
-    if (!canSubmit || sendDisabledReason) return;
+    if (!canSubmit || sendDisabledReason || refused) return;
     clearWip();
     onSend(text);
   };
@@ -197,16 +201,19 @@ export default function CommentEditor({ anchor, pair, initial, wipKey, sendDisab
           >
             Cancel
           </button>
-          <button
-            type="button"
-            onClick={send}
-            disabled={!canSubmit || !!sendDisabledReason}
-            title={sendDisabledReason ?? "Save as draft and send this one comment now"}
-            data-testid="review-editor-send"
-            className="d-btn d-btn--sm"
-          >
-            Send now
-          </button>
+          <Refusable reason={refused} label="Send now">
+            <button
+              type="button"
+              onClick={refused ? undefined : send}
+              disabled={!refused && (!canSubmit || !!sendDisabledReason)}
+              aria-disabled={refused ? true : undefined}
+              title={refused ? undefined : (sendDisabledReason ?? "Save as draft and send this one comment now")}
+              data-testid="review-editor-send"
+              className="d-btn d-btn--sm"
+            >
+              Send now
+            </button>
+          </Refusable>
           <button
             type="button"
             onClick={save}

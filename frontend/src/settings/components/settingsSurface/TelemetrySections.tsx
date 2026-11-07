@@ -13,6 +13,10 @@ import type { SettingsSection, SettingsSectionId } from "../../model/settingsCat
 import { telemetryEndpointSourceNote, telemetryOtlpSourceNote } from "../../model/sourceNotes";
 import type { TelemetryHeaderDraft } from "../../model/telemetryDraft";
 import { ago, useTelemetryStatus } from "../../store/useTelemetryStatus";
+import { useRefusal } from "../../../shared/authorization/useRefusals";
+
+/** The Operation behind « Test » (`POST /telemetry/test`). */
+const TEST_EXPORT = { resource: "instance_settings", verb: { action: "test_telemetry_export" } } as const;
 import { SettingRow, SwitchRow } from "./fields";
 import type { FormSectionProps } from "./GeneralSections";
 import Section, { SectionExtra } from "./Section";
@@ -177,6 +181,8 @@ function ExportStatus({
 }) {
   const last = status?.last_export ?? null;
   const exporting = status?.exporting ?? false;
+  // CORE-205: why the caller may not send a test export (Test greyed, saying it), else absent.
+  const testRefused = useRefusal(TEST_EXPORT);
   const [st, text, tip] = !exporting
     ? ["skipped", "Export off", "Nothing leaves this instance"]
     : last
@@ -195,8 +201,9 @@ function ExportStatus({
           size="sm"
           icon={Play}
           data-testid="telemetry-test-export"
-          disabled={!exporting || testing}
-          title={exporting ? "Send a test export" : "Turn the export on and save first"}
+          disabled={!testRefused && (!exporting || testing)}
+          disabledReason={testRefused}
+          title={testRefused ? undefined : exporting ? "Send a test export" : "Turn the export on and save first"}
           onClick={() => void onTest()}
         >
           {testing ? "Sending…" : "Test"}

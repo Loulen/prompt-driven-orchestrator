@@ -6,7 +6,16 @@ import { timeAgo } from "../model/skillMd";
 import { shortCommit } from "../model/skillSource";
 import { descendantFolderIds, folderPathLabel } from "../model/skillTree";
 import { tildify } from "../../lib/homePath";
-import { ActionButton, FolderPicker } from "./BankControls";
+import { ActionButton, FolderPicker, GREYED, RefusalTip } from "./BankControls";
+
+/** Why the caller may not make each gesture (CORE-205); absent = allowed. */
+export interface FolderRefusals {
+  newSubfolder?: string;
+  /** Rename, move. */
+  update?: string;
+  delete?: string;
+  updateFromSource?: string;
+}
 
 /** A folder of the bank: its actions and, for a Source folder, its provenance (#670). */
 export default function FolderDetailView({
@@ -21,6 +30,7 @@ export default function FolderDetailView({
   onUpdateFromSource,
   onExport,
   home,
+  refused = {},
 }: {
   folder: SkillFolder;
   folders: SkillFolder[];
@@ -35,6 +45,8 @@ export default function FolderDetailView({
   onExport: () => void;
   /** The daemon's home: a local source reads `~/…`. */
   home: string | null;
+  /** The gestures the caller's rights refuse: greyed, the sentence in their tooltip. */
+  refused?: FolderRefusals;
 }) {
   const [picker, setPicker] = useState(false);
   const exclude = useMemo(() => descendantFolderIds(folder.id, folders), [folder.id, folders]);
@@ -79,10 +91,10 @@ export default function FolderDetailView({
         « + Add › Upload a zip » reads back on another instance.
       </p>
       <div className="mt-3 flex items-center gap-2">
-        <ActionButton icon={<FolderPlus size={11} />} label="New subfolder" onClick={onNewSubfolder} testid="folder-detail-new" />
-        <ActionButton icon={<Pencil size={11} />} label="Rename" onClick={onRename} testid="folder-detail-rename" />
+        <ActionButton icon={<FolderPlus size={11} />} label="New subfolder" onClick={onNewSubfolder} testid="folder-detail-new" disabledReason={refused.newSubfolder} />
+        <ActionButton icon={<Pencil size={11} />} label="Rename" onClick={onRename} testid="folder-detail-rename" disabledReason={refused.update} />
         <span className="relative">
-          <ActionButton icon={<FolderInput size={11} />} label="Move to…" onClick={() => setPicker((p) => !p)} />
+          <ActionButton icon={<FolderInput size={11} />} label="Move to…" onClick={() => setPicker((p) => !p)} testid="folder-detail-move" disabledReason={refused.update} />
           {picker && (
             <FolderPicker
               folders={folders}
@@ -97,7 +109,7 @@ export default function FolderDetailView({
           )}
         </span>
         <span className="flex-1" />
-        <ActionButton icon={<Trash2 size={11} />} label="Delete folder" onClick={onDelete} danger testid="folder-detail-delete" />
+        <ActionButton icon={<Trash2 size={11} />} label="Delete folder" onClick={onDelete} danger testid="folder-detail-delete" disabledReason={refused.delete} />
       </div>
 
       {source && (
@@ -107,15 +119,18 @@ export default function FolderDetailView({
               <span className="text-text-3 uppercase tracking-wide text-2xs">
                 Provenance
               </span>
-              <button
-                type="button"
-                onClick={onUpdateFromSource}
-                data-testid="folder-update-from-source"
-                className="flex items-center gap-1 text-primary hover:underline text-xs"
-              >
-                <RefreshCw size={10} />
-                Update from source…
-              </button>
+              <RefusalTip label="Update from source" reason={refused.updateFromSource}>
+                <button
+                  type="button"
+                  onClick={refused.updateFromSource ? undefined : onUpdateFromSource}
+                  aria-disabled={refused.updateFromSource ? true : undefined}
+                  data-testid="folder-update-from-source"
+                  className={`flex items-center gap-1 text-primary hover:underline aria-disabled:no-underline ${GREYED} text-xs`}
+                >
+                  <RefreshCw size={10} />
+                  Update from source…
+                </button>
+              </RefusalTip>
             </div>
             <table className="w-full text-xs">
               <tbody>

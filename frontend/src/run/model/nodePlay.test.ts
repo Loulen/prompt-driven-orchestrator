@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allowedPlays, nodePlayKind, playQuestion } from "./nodePlay";
+import { nodePlayKind, playQuestion, refusedPlays } from "./nodePlay";
 
 describe("the ▶ of a node of a Run (ADR-0086)", () => {
   it("starts an on-demand node the Run never launched, live or finished", () => {
@@ -21,19 +21,19 @@ describe("the ▶ of a node of a Run (ADR-0086)", () => {
     expect(nodePlayKind({ onDemand: false, status: "pending", runStatus: "running" })).toBeNull();
   });
 
-  it("asks the Operation the daemon checks, and keeps only the allowed ones", () => {
+  it("asks the Operation the daemon checks, and keeps the sentence of each refusal", () => {
     expect(playQuestion("r1", "review", "start")).toEqual({
       resource: "node",
       verb: { action: "start" },
       target: "r1/review",
     });
-    const allowed = allowedPlays(
+    const refused = refusedPlays(
       [
         { nodeId: "review", kind: "start" },
         { nodeId: "branch", kind: "retry" },
       ],
-      [{ decision: "deny", reason: "reader" }, { decision: "allow" }],
+      [{ decision: "deny", reason: "reader", sentence: "You can't start nodes here." }, { decision: "allow" }],
     );
-    expect([...allowed]).toEqual(["branch:retry"]);
+    expect([...refused]).toEqual([["review:start", "You can't start nodes here."]]);
   });
 });

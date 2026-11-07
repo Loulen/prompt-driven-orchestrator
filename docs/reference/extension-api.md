@@ -148,7 +148,8 @@ POST /authorize
 
 ```json
 { "decisions": [
-    { "decision": "deny", "reason": "only an administrator browses the disk" },
+    { "decision": "deny", "reason": "only an administrator browses the disk",
+      "sentence": "You can't browse the disk. Ask an administrator." },
     { "decision": "allow" },
     { "decision": "allow" } ] }
 ```
@@ -159,8 +160,45 @@ targeted `run` or `node` in the Projet of its Run, a targeted `project` in itsel
 creation asked from a node session in the Projet of its Run and a targeted `page_mount` deletion in
 the Projet of the mount's Run. At most 500
 Operations per question; an unreadable one answers `400` `invalid_question`. Without extension,
-every decision is `allow`. The core's UI asks it to hide the loupe and the Projets a Run may not be
-created in (`extension-ui.md`, `run/new`); an extension's UI may ask it too.
+every decision is `allow`. The core's UI asks it to grey the gestures the caller may not make,
+their tooltip saying the refusal's `sentence`, and to leave out of the New Run form the Projets a
+Run may not be created in (`extension-ui.md`, `run/new`); an extension's UI may ask it too.
+
+### A refusal a person can read (0.23)
+
+A refusal carries two texts. `reason` is the technical cause, for a caller that is not a person: a
+log line, an agent's diagnosis. `sentence` is what a person reads: what they cannot do and who can
+grant it, never the extension's own vocabulary (« You can't change Runs in Project Checkout. Ask an
+administrator of Checkout. »). The extension that refuses gives the sentence; without one, the core
+says `GENERIC_REFUSAL` (« You don't have the rights to do this. »).
+
+```rust
+use pdo_extension_api::{Authorization, Denied};
+
+fn authorize(&self, actor: &Actor, operation: &Operation) -> Authorization {
+    Authorization::deny("the test rules refuse this gesture")
+        .saying("You can't change Runs in Project Checkout. Ask an administrator of Checkout.")
+}
+```
+
+- `Authorization::Deny { reason, sentence: Option<String> }`; `Authorization::deny(reason)` refuses
+  without a sentence, `.saying(sentence)` adds one. `Denied` carries the same two fields
+  (`Denied::new(reason).saying(sentence)`), and `Authorization` and `Denied` convert into each
+  other.
+- `Denied::sentence()` is the sentence a person reads (the extension's, else `GENERIC_REFUSAL`);
+  `Denied::for_an_agent()` is that sentence followed by the reason in parentheses, what an agent
+  or a command line prints.
+- The `403` body of every refusal holds both: `{"error": "operation_refused", "message":
+  "operation refused: <reason>", "reason", "sentence"}`, and each decision of `POST /authorize`
+  that refuses holds `reason` and `sentence`. `Denied::from_body(&json)` reads a refusal back
+  from a body, `None` for any other.
+- The core's UI shows only the sentence: a greyed gesture's tooltip, a refusal's toast or error
+  line. `pdo` prints `<sentence> (<reason>)` on stderr.
+
+**Breaking (0.23).** `Authorization::Deny` and `Denied` gain the field `sentence`: a pattern
+`Authorization::Deny { reason }` becomes `Authorization::Deny { reason, .. }`, a literal
+`Denied { reason }` becomes `Denied::new(reason)`, a literal `Authorization::Deny { reason }`
+becomes `Authorization::deny(reason)`.
 
 ## The Host
 
@@ -168,7 +206,8 @@ created in (`extension-ui.md`, `run/new`); an extension's UI may ask it too.
 core's mechanisms (amendment #34):
 
 - `authorize(actor, operation)`: every extension's `authorize`, the caller's included; answer a
-  refusal with `Authorization::into_result()?`, a `403` `operation_refused`.
+  refusal with `Authorization::into_result()?`, a `403` `operation_refused` that keeps the
+  refusing extension's sentence.
 - `on_create(actor, entity)`: the attributes the other extensions stamp; the extension stores them.
 - `publish(ExtensionEvent)`: broadcast on `/ws` and to the other extensions. An event
   `guarded_by(read)` (0.11) reaches only the `/ws` connections whose Actor may run that read

@@ -134,6 +134,7 @@ export default function ReviewDiffBody({
             sending={sendingKeys.size > 0}
             managerRunning={managerRunning}
             sendDisabledReason={sendDisabledReason}
+            sendRefused={commentsApi.sendRefused}
             onJump={(d) => jumpTo(d)}
             onSendAll={() => void send(pairDrafts.map((d) => d.key))}
           />

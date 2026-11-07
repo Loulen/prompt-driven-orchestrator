@@ -4,6 +4,7 @@ import { ExtensionMenuGroups } from "../../shared/extensions/ExtensionActions";
 import type { PipelineEntity } from "../../shared/extensions/contract";
 import { DropdownMenuSeparator } from "../../shared/ui/dropdown-menu";
 import RowMenu, { ROW_MENU_EXTENSION_ITEM, RowMenuItem } from "../../shared/ui/RowMenu";
+import { reasonsOf } from "../../shared/ui/menuReasons";
 import { Tooltip } from "../../shared/ui/kit";
 import StatusMark from "../../shared/ui/leftList/StatusMark";
 import HoverBar, { RowAction } from "../../shared/ui/leftList/HoverBar";
@@ -16,7 +17,16 @@ import { isVisible } from "../../lib/appearance";
 import { useHideableContributions } from "../../shared/extensions/hideableContributions";
 import { hasSecondLine, isSecondLineElement, PIPELINE_ROW, PIPELINE_ROW_LOCATIONS } from "../model/pipelineRowElements";
 
+/** Why the caller may not make each gesture of a row (CORE-205), absent when allowed. */
+export interface LibraryRowRefusals {
+  rename?: string;
+  duplicate?: string;
+  delete?: string;
+}
+
 interface Props {
+  /** CORE-205: the gestures the caller may not make, greyed with why. */
+  refused?: LibraryRowRefusals;
   name: string;
   modified?: string | null;
   /** Highlighted as the open editor tab. */
@@ -108,6 +118,7 @@ export default function LibraryRow({
   menuEntity,
   draft,
   version,
+  refused = {},
 }: Props) {
   const lead = <Workflow size={14} strokeWidth={1.5} className="lp-dim" aria-hidden />;
   const preview = useAppearancePreview();
@@ -149,7 +160,7 @@ export default function LibraryRow({
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onOpen();
-        } else if (e.key === "F2" && onRenameStart) {
+        } else if (e.key === "F2" && onRenameStart && !refused.rename) {
           e.preventDefault();
           onRenameStart();
         }
@@ -248,12 +259,31 @@ export default function LibraryRow({
       {!renaming && !preview && (
         <HoverBar testId="library-row-actions">
           {onRenameStart && (
-            <RowAction icon={Pencil} label="Rename pipeline" testId="library-rename-button" onClick={onRenameStart} />
+            <RowAction
+              icon={Pencil}
+              label="Rename pipeline"
+              testId="library-rename-button"
+              disabledReason={refused.rename}
+              onClick={onRenameStart}
+            />
           )}
           {showDuplicate && onDuplicate && (
-            <RowAction icon={Copy} label="Duplicate pipeline" testId="library-duplicate-button" onClick={onDuplicate} />
+            <RowAction
+              icon={Copy}
+              label="Duplicate pipeline"
+              testId="library-duplicate-button"
+              disabledReason={refused.duplicate}
+              onClick={onDuplicate}
+            />
           )}
-          <RowAction icon={Trash2} label={deleteTitle} danger testId="library-delete-button" onClick={onDelete} />
+          <RowAction
+            icon={Trash2}
+            label={deleteTitle}
+            danger
+            testId="library-delete-button"
+            disabledReason={refused.delete}
+            onClick={onDelete}
+          />
           {menuEntity && (
             <PipelineRowMenu
               entity={menuEntity}
@@ -262,6 +292,7 @@ export default function LibraryRow({
               onDuplicate={showDuplicate ? onDuplicate : undefined}
               onDelete={onDelete}
               deleteTitle={deleteTitle}
+              refused={refused}
             />
           )}
         </HoverBar>
@@ -278,6 +309,7 @@ function PipelineRowMenu({
   onDuplicate,
   onDelete,
   deleteTitle,
+  refused,
 }: {
   entity: PipelineEntity;
   onOpen: () => void;
@@ -285,26 +317,33 @@ function PipelineRowMenu({
   onDuplicate?: () => void;
   onDelete: () => void;
   deleteTitle: string;
+  refused: LibraryRowRefusals;
 }) {
   const extra = useMemo(() => ({ entity }), [entity]);
+  const reasons = reasonsOf(onRenameStart && refused.rename, onDuplicate && refused.duplicate, refused.delete);
   return (
-    <RowMenu label={`More actions for ${entity.name}`} testId="pipeline-row-menu">
+    <RowMenu label={`More actions for ${entity.name}`} testId="pipeline-row-menu" reasons={reasons}>
       <RowMenuItem data-testid="pipeline-menu-open" onClick={onOpen}>
         <FolderOpen /> Open
       </RowMenuItem>
       {onRenameStart && (
-        <RowMenuItem data-testid="pipeline-menu-rename" onClick={onRenameStart}>
+        <RowMenuItem data-testid="pipeline-menu-rename" disabledReason={refused.rename} onClick={onRenameStart}>
           <Pencil /> Rename
         </RowMenuItem>
       )}
       {onDuplicate && (
-        <RowMenuItem data-testid="pipeline-menu-duplicate" onClick={onDuplicate}>
+        <RowMenuItem data-testid="pipeline-menu-duplicate" disabledReason={refused.duplicate} onClick={onDuplicate}>
           <Copy /> Duplicate
         </RowMenuItem>
       )}
       <ExtensionMenuGroups location="pipeline/item/menu" extra={extra} itemClassName={ROW_MENU_EXTENSION_ITEM} />
       <DropdownMenuSeparator />
-      <RowMenuItem variant="destructive" data-testid="pipeline-menu-delete" onClick={onDelete}>
+      <RowMenuItem
+        variant="destructive"
+        data-testid="pipeline-menu-delete"
+        disabledReason={refused.delete}
+        onClick={onDelete}
+      >
         <Trash2 /> {deleteTitle}
       </RowMenuItem>
     </RowMenu>

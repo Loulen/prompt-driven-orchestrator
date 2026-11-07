@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect } from "react";
 import { create } from "zustand";
 import { askAuthorization } from "../../shared/authorization/api";
 import type { RunState } from "../../shared/generated/RunState";
 import {
   batches,
   gestureQuestions,
-  mayOnNode,
-  mayOnRun,
+  whyNotOnNode,
+  whyNotOnRun,
   NOTHING_REFUSED,
   RUN_ROW_GESTURES,
   RUN_VIEW_GESTURES,
@@ -31,7 +31,7 @@ import {
  *
  * A failed question keeps the last answer, and an answer older than the
  * last question about the same Run is dropped; before any answer nothing is
- * hidden. The daemon still refuses what the UI shows.
+ * greyed. The daemon still refuses what the UI shows.
  */
 interface GestureRightsState {
   rights: GestureRights;
@@ -164,29 +164,24 @@ export function useListedRunGestures(runIds: readonly string[]): void {
   }, [key, askRows]);
 }
 
-/** Whether the caller may make a gesture on the Run `runId`. */
-export function useMayOnRun(runId: string | null | undefined): (gesture: RunGesture) => boolean {
+/**
+ * Why the caller may not make a gesture on the Run `runId`: the sentence a
+ * greyed gesture's tooltip says (`disabledReason`), `undefined` when allowed.
+ */
+export function useWhyNotOnRun(runId: string | null | undefined): (gesture: RunGesture) => string | undefined {
   const rights = useGestureRightsStore((s) => s.rights);
   return useCallback(
-    (gesture: RunGesture) => (runId ? mayOnRun(rights, runId, gesture) : true),
+    (gesture: RunGesture) => (runId ? whyNotOnRun(rights, runId, gesture) : undefined),
     [rights, runId],
   );
 }
 
-/** Whether the caller may make each gesture on the node `nodeId` of `runId`. */
-export function useMayOnNode(runId: string, nodeId: string): (gesture: NodeGesture) => boolean {
+/** Why the caller may not make each gesture on the node `nodeId` of `runId`, or `undefined`. */
+export function useWhyNotOnNode(runId: string, nodeId: string): (gesture: NodeGesture) => string | undefined {
   const rights = useGestureRightsStore((s) => s.rights);
   return useCallback(
-    (gesture: NodeGesture) => mayOnNode(rights, runId, nodeId, gesture),
+    (gesture: NodeGesture) => whyNotOnNode(rights, runId, nodeId, gesture),
     [rights, runId, nodeId],
   );
 }
 
-/** Of `runIds`, those the caller may make `gesture` on. */
-export function useRunsAllowing(runIds: readonly string[], gesture: RunGesture): string[] {
-  const rights = useGestureRightsStore((s) => s.rights);
-  return useMemo(
-    () => runIds.filter((id) => mayOnRun(rights, id, gesture)),
-    [rights, runIds, gesture],
-  );
-}

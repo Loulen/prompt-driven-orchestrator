@@ -11,6 +11,10 @@ import {
 import type { InstanceSettings } from "../model/settings";
 import { rollupDirty, type DirtyRollup } from "../model/settingsCategories";
 import { announceSettingsChanged } from "./useSettings";
+import { useRefusal } from "../../shared/authorization/useRefusals";
+
+/** The Operation behind Save (`PUT /settings`). */
+const UPDATE_SETTINGS = { resource: "instance_settings", verb: "update" } as const;
 
 export type SaveState =
   | { status: "idle" }
@@ -61,10 +65,17 @@ export function useSettingsForm({
   }, []);
 
   const missingDefaultProfile = !!values && !!settings && isDefaultProfileMissing(values, settings);
+  // CORE-205: why the caller may not save the instance settings (Save greyed, saying it), else absent.
+  const saveRefused = useRefusal(UPDATE_SETTINGS, settings !== null);
 
   /** PUT the changed fields. Resolves `true` when the draft is clean afterwards. */
   const handleSave = async (): Promise<boolean> => {
     if (saveState.status === "saving") return false;
+    // A refused Save sends nothing: the button says why (Ctrl+S included).
+    if (saveRefused) {
+      saveButtonRef.current?.focus();
+      return false;
+    }
     const built = values && settings ? buildPatch(values, settings, rollup.fields) : { patch: {} };
     if ("error" in built) {
       setSaveState({ status: "error", message: built.error });
@@ -108,6 +119,7 @@ export function useSettingsForm({
     setField,
     missingDefaultProfile,
     saveState,
+    saveRefused,
     handleSave,
     reset,
     saveButtonRef,

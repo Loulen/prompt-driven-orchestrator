@@ -9,7 +9,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../../shared/ui/dropdown-menu";
+import { MenuReasons } from "../../shared/ui/kit/menu";
+import { reasonsOf } from "../../shared/ui/menuReasons";
 import { sameRef, type TreeRow } from "../model/skillTree";
+import { GREYED, RefusalTip } from "./BankControls";
 import type { SkillBankPanelState } from "../store/useSkillBankPanel";
 
 /** The panel closes its menus on any click that reaches `window`: the menu's own clicks never do. */
@@ -28,6 +31,12 @@ export default function TreeRowActions({ row, panel }: { row: TreeRow; panel: Sk
   const isMenuOpen = sameRef(panel.menuFor, ref);
   const lockedSkill = row.skill?.locked ?? false;
   const name = row.folder?.name ?? row.skill?.name ?? "";
+  const { refusals } = panel;
+  // CORE-205: what the caller's rights refuse on this row, greyed with the sentence.
+  const isFolder = ref.kind === "folder";
+  const updateRefused = isFolder ? refusals.updateFolder(ref.id) : refusals.updateSkill(ref.id);
+  const deleteRefused = isFolder ? refusals.deleteFolder(ref.id) : refusals.deleteSkill(ref.id);
+  const createRefused = isFolder ? refusals.createFolder : undefined;
   const extra = useMemo(() => {
     const entity: SkillEntity = {
       kind: ref.kind === "folder" ? "skill_folder" : "skill",
@@ -54,14 +63,19 @@ export default function TreeRowActions({ row, panel }: { row: TreeRow; panel: Sk
   return (
     <>
       {!lockedSkill && (
-        <button
-          type="button"
-          aria-label={`Rename ${name}`}
-          onClick={() => panel.startRename(ref)}
-          className="grid h-5 w-5 place-items-center rounded text-text-3 hover:bg-hover hover:text-text"
-        >
-          <Pencil size={11} />
-        </button>
+        <RefusalTip label={`Rename ${name}`} reason={updateRefused}>
+          <button
+            type="button"
+            aria-label={`Rename ${name}`}
+            aria-disabled={updateRefused ? true : undefined}
+            onClick={() => {
+              if (!updateRefused) panel.startRename(ref);
+            }}
+            className={`grid h-5 w-5 place-items-center rounded text-text-3 hover:bg-hover hover:text-text ${GREYED}`}
+          >
+            <Pencil size={11} />
+          </button>
+        </RefusalTip>
       )}
       <DropdownMenu
         open={isMenuOpen}
@@ -89,12 +103,13 @@ export default function TreeRowActions({ row, panel }: { row: TreeRow; panel: Sk
         >
           {ref.kind === "folder" ? (
             <>
-              <TreeMenuItem icon={<FolderPlus size={12} />} label="New subfolder" onClick={() => void panel.newFolder(ref.id)} />
-              <TreeMenuItem icon={<Pencil size={12} />} label="Rename" hint="F2" onClick={() => panel.startRename(ref)} />
+              <TreeMenuItem icon={<FolderPlus size={12} />} label="New subfolder" disabledReason={createRefused} onClick={() => void panel.newFolder(ref.id)} />
+              <TreeMenuItem icon={<Pencil size={12} />} label="Rename" hint="F2" disabledReason={updateRefused} onClick={() => panel.startRename(ref)} />
               {exportItem}
               {extensions}
               <DropdownMenuSeparator />
-              <TreeMenuItem icon={<Trash2 size={12} />} label="Delete folder" hint="⌫" danger onClick={() => void panel.askDelete(ref)} />
+              <TreeMenuItem icon={<Trash2 size={12} />} label="Delete folder" hint="⌫" danger disabledReason={deleteRefused} onClick={() => void panel.askDelete(ref)} />
+              <MenuReasons reasons={reasonsOf(createRefused, updateRefused, deleteRefused)} />
             </>
           ) : lockedSkill ? (
             <>
@@ -112,10 +127,11 @@ export default function TreeRowActions({ row, panel }: { row: TreeRow; panel: Sk
             </>
           ) : (
             <>
-              <TreeMenuItem icon={<Pencil size={12} />} label="Rename" hint="F2" onClick={() => panel.startRename(ref)} />
+              <TreeMenuItem icon={<Pencil size={12} />} label="Rename" hint="F2" disabledReason={updateRefused} onClick={() => panel.startRename(ref)} />
               <TreeMenuItem
                 icon={<FolderInput size={12} />}
                 label="Move to…"
+                disabledReason={updateRefused}
                 onClick={() => {
                   panel.setMenuFor(null);
                   panel.setSelected(ref);
@@ -126,7 +142,8 @@ export default function TreeRowActions({ row, panel }: { row: TreeRow; panel: Sk
               {exportItem}
               {extensions}
               <DropdownMenuSeparator />
-              <TreeMenuItem icon={<Trash2 size={12} />} label="Delete…" hint="⌫" danger onClick={() => void panel.askDelete(ref)} />
+              <TreeMenuItem icon={<Trash2 size={12} />} label="Delete…" hint="⌫" danger disabledReason={deleteRefused} onClick={() => void panel.askDelete(ref)} />
+              <MenuReasons reasons={reasonsOf(updateRefused, deleteRefused)} />
             </>
           )}
         </DropdownMenuContent>
@@ -143,6 +160,7 @@ function TreeMenuItem({
   danger,
   testid,
   onClick,
+  disabledReason,
 }: {
   icon: React.ReactNode;
   label: string;
@@ -150,12 +168,15 @@ function TreeMenuItem({
   danger?: boolean;
   testid?: string;
   onClick: () => void;
+  /** Greyed and inert (CORE-205); the menu says the reason once at its foot. */
+  disabledReason?: string;
 }) {
   return (
     <DropdownMenuItem
       variant={danger ? "destructive" : "default"}
       data-testid={testid}
-      onClick={onClick}
+      disabled={!!disabledReason}
+      onClick={disabledReason ? undefined : onClick}
       className="cursor-pointer gap-2 px-2 py-1.5 text-sm text-text-2"
     >
       <span className="shrink-0">{icon}</span>

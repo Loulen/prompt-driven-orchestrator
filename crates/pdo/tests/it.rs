@@ -124,6 +124,10 @@ mod hosted_sessions;
 #[path = "extension_node_write.rs"]
 mod extension_node_write;
 
+// A page mounted from a node session is judged in the Projet of its Run.
+#[path = "extension_page_mounts.rs"]
+mod extension_page_mounts;
+
 // CORE-43: the delivery of a Node signed by the identity an extension gives it.
 #[path = "delivery_identity.rs"]
 mod delivery_identity;

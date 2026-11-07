@@ -9,6 +9,7 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 
 use super::page_journal::{journal, PageMountLock, SessionClaim};
+use super::place_page_mount::PlacePageMount;
 use super::ports::{InsertError, PageFiles, PageMountRepository, Runs, StorageError};
 use super::record_audit::RecordAudit;
 use crate::domain::audit::ActorHint;
@@ -43,6 +44,7 @@ pub struct MountPage {
     audit: RecordAudit,
     host: Arc<dyn ExtensionHost>,
     lock: PageMountLock,
+    place: Arc<PlacePageMount>,
 }
 
 impl MountPage {
@@ -53,6 +55,7 @@ impl MountPage {
         audit: RecordAudit,
         host: Arc<dyn ExtensionHost>,
         lock: PageMountLock,
+        place: Arc<PlacePageMount>,
     ) -> Self {
         Self {
             pages,
@@ -61,17 +64,20 @@ impl MountPage {
             audit,
             host,
             lock,
+            place,
         }
     }
 
     /// Mount for `actor`. An agent's mount belongs to its Run (archived with
-    /// it) and is journaled in the Run's log; anyone else's is audited.
+    /// it), is judged in the Projet of that Run and journaled in its log;
+    /// anyone else's is judged in no Projet and audited.
     pub async fn execute(
         &self,
         actor: &Actor,
         command: MountPageCommand,
     ) -> Result<PageMount, MountPageError> {
         let operation = Operation::new(ResourceKind::PageMount, Verb::Create);
+        let operation = self.place.execute(actor, operation).await;
         authorize(self.host.as_ref(), actor, &operation).map_err(MountPageError::Refused)?;
         let _guard = self.lock.lock().await;
         let session = SessionClaim::of(actor);

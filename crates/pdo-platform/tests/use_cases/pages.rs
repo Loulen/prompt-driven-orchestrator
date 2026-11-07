@@ -2,9 +2,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use pdo_kernel::extension_host::ExtensionHost;
-use pdo_kernel::{Actor, ResourceKind, Verb};
+use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use pdo_platform::application::mount_page::{MountPage, MountPageCommand, MountPageError};
 use pdo_platform::application::page_journal::PageMountLock;
+use pdo_platform::application::place_page_mount::PlacePageMount;
 use pdo_platform::application::read_pages::ReadPages;
 use pdo_platform::application::record_audit::RecordAudit;
 use pdo_platform::application::release_run_pages::ReleaseRunPages;
@@ -49,7 +50,12 @@ impl World {
             RecordAudit::new(self.audit.clone()),
             self.host.clone() as Arc<dyn ExtensionHost>,
             self.lock.clone(),
+            Arc::new(self.place()),
         )
+    }
+
+    fn place(&self) -> PlacePageMount {
+        PlacePageMount::new(self.pages.clone(), self.runs.clone())
     }
 
     fn unmount(&self) -> UnmountPage {
@@ -59,6 +65,7 @@ impl World {
             RecordAudit::new(self.audit.clone()),
             self.host.clone() as Arc<dyn ExtensionHost>,
             self.lock.clone(),
+            Arc::new(self.place()),
         )
     }
 }
@@ -159,6 +166,115 @@ async fn an_agent_mount_belongs_to_its_run_and_is_journaled_there() {
         ("r1", "n1", "page_mount.mounted")
     );
     assert_eq!(commands[0].3["name"], "demo");
+}
+
+/// A world where the session `n1` of Run `r1` is live, `r1` in Projet `p1`.
+fn world_in_p1() -> World {
+    let runs = FakeRuns {
+        live_sessions: vec![("r1".into(), "n1".into())],
+        projects: [("r1".to_string(), vec!["p1".to_string()])]
+            .into_iter()
+            .collect(),
+        ..FakeRuns::default()
+    };
+    World::new(runs, Host::allowing())
+}
+
+fn asked(w: &World, verb: Verb) -> Operation {
+    w.host
+        .asked
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|o| o.verb == verb)
+        .cloned()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn an_agent_mount_is_asked_in_the_projet_of_its_run() {
+    let w = world_in_p1();
+    w.mount()
+        .execute(&agent(), command("demo", "/srv/demo"))
+        .await
+        .unwrap();
+    assert_eq!(asked(&w, Verb::Create).projects, ["p1"]);
+}
+
+#[tokio::test]
+async fn a_mount_outside_any_run_is_asked_in_no_projet() {
+    let w = world_in_p1();
+    w.mount()
+        .execute(&Actor::LocalOperator, command("demo", "/srv/demo"))
+        .await
+        .unwrap();
+    assert!(asked(&w, Verb::Create).is_outside_projects());
+}
+
+#[tokio::test]
+async fn the_unmount_of_a_runs_mount_is_asked_in_the_projet_of_that_run() {
+    let w = world_in_p1();
+    w.mount()
+        .execute(&agent(), command("demo", "/srv/demo"))
+        .await
+        .unwrap();
+    w.unmount()
+        .execute(&Actor::LocalOperator, "demo", ActorHint::Cli)
+        .await
+        .unwrap();
+    let delete = asked(&w, Verb::Delete);
+    assert_eq!(delete.target.as_deref(), Some("demo"));
+    assert_eq!(delete.projects, ["p1"]);
+}
+
+#[tokio::test]
+async fn the_unmount_of_a_mount_outside_any_run_is_asked_in_no_projet() {
+    let w = world_in_p1();
+    w.mount()
+        .execute(&Actor::LocalOperator, command("demo", "/srv/demo"))
+        .await
+        .unwrap();
+    w.unmount()
+        .execute(&agent(), "demo", ActorHint::Cli)
+        .await
+        .unwrap();
+    assert!(asked(&w, Verb::Delete).is_outside_projects());
+}
+
+#[tokio::test]
+async fn a_page_mount_question_is_placed_where_the_gesture_would_be() {
+    let w = world_in_p1();
+    w.mount()
+        .execute(&agent(), command("demo", "/srv/demo"))
+        .await
+        .unwrap();
+    let place = w.place();
+    let create = Operation::new(ResourceKind::PageMount, Verb::Create);
+    assert_eq!(
+        place.execute(&agent(), create.clone()).await.projects,
+        ["p1"]
+    );
+    assert!(place
+        .execute(&Actor::LocalOperator, create)
+        .await
+        .is_outside_projects());
+    let delete = Operation::new(ResourceKind::PageMount, Verb::Delete);
+    assert_eq!(
+        place
+            .execute(&Actor::LocalOperator, delete.clone().on("demo"))
+            .await
+            .projects,
+        ["p1"]
+    );
+    assert!(place
+        .execute(&Actor::LocalOperator, delete.on("ghost"))
+        .await
+        .is_outside_projects());
+    // An Operation that names its Projets, or is on another resource, is left alone.
+    let named = Operation::new(ResourceKind::PageMount, Verb::Create).in_projects(["p9"]);
+    assert_eq!(place.execute(&agent(), named).await.projects, ["p9"]);
+    let other = Operation::new(ResourceKind::Project, Verb::Create);
+    assert!(place.execute(&agent(), other).await.is_outside_projects());
 }
 
 #[tokio::test]

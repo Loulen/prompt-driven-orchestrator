@@ -197,7 +197,11 @@ pub(crate) fn wire_over(
         .merge(pdo_trigger::router(triggers.clone()))
         .merge(pdo_settings::router(settings.clone()))
         .merge(pdo_telemetry::router(telemetry.clone()))
-        .merge(crate::authorize::router(host, run.clone()));
+        .merge(crate::authorize::router(
+            host,
+            run.clone(),
+            platform.clone(),
+        ));
     // CORE-5: every read of one Run, whichever context serves it, asks first.
     let router = pdo_run::adapters::http::read_guard::guard_run_reads(router, run.clone());
     // ADR-0090: every request measured while the export runs, by its route.

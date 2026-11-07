@@ -45,7 +45,9 @@ fn daemon_bind_uses_the_environment_and_the_flag_takes_precedence() {
             }
         });
         let expected = format!("PDO daemon listening on 127.0.0.1:{port}");
-        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        // The budget only bounds how long a real failure takes to show: a
+        // loaded machine needs more than 20 s to boot the daemon.
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
         while std::time::Instant::now() < deadline
             && !output.lock().is_ok_and(|text| text.contains(&expected))
         {

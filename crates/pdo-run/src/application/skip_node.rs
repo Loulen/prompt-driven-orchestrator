@@ -11,6 +11,7 @@ use tracing::{error, info};
 use crate::application::complete_node::completion_head_gate;
 use crate::application::events::append_event;
 use crate::application::events::load_projected;
+use crate::application::gesture;
 use crate::application::node::reap::reap_node_session;
 use crate::application::operations::on_node;
 use crate::application::paths::effective_repo_root;
@@ -37,6 +38,11 @@ impl Runs {
     /// `Skipped`, short-circuiting downstream so no bogus input propagates and the
     /// failure signal stays honest.
     pub async fn skip_node(self: &Arc<Self>, actor: &Actor, command: SkipNode) -> Response {
+        let run_id = command.run_id.clone();
+        gesture::by(actor, &run_id, self.skip_node_gesture(actor, command)).await
+    }
+
+    async fn skip_node_gesture(self: &Arc<Self>, actor: &Actor, command: SkipNode) -> Response {
         let SkipNode {
             run_id,
             node_id,

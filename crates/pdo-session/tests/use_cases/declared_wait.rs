@@ -13,6 +13,8 @@ use pdo_session::domain::declared_wait::{
 };
 use pdo_session::domain::names::{manager_session_name, node_session_name};
 
+use pdo_session::application::ports::TerminalGesture;
+
 use crate::fakes::{FakeTmux, Host, Waits};
 
 const RUN: &str = "20260912-100000-a11ce01";
@@ -296,4 +298,148 @@ async fn a_refused_resume_lifts_nothing() {
         .await;
     assert!(lifted.unwrap_err().contains("admins only"));
     assert!(world.waits.resumed.lock().unwrap().is_empty());
+}
+
+fn person(id: &str) -> Actor {
+    Actor::Identified {
+        namespace: "test".into(),
+        id: id.into(),
+    }
+}
+
+/// The terminal gestures recorded so far: (gesture, who).
+fn gestures(world: &World) -> Vec<(TerminalGesture, String)> {
+    world
+        .waits
+        .gestures
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, _, _, gesture, payload)| {
+            assert_eq!(payload["source"], "pty");
+            (
+                *gesture,
+                payload["actor"]["id"].as_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn ten_keystrokes_after_a_take_over_are_one_turn_of_speech() {
+    let world = World::new(running(None), Host::allowing());
+    let lift = world.lift();
+    let session = node_session_name(RUN, "griller", 1);
+
+    lift.taken_over(&person("bob"), &session).await;
+    for key in b"ten  keys!" {
+        lift.note_input(&person("bob"), &session, &[*key]).await;
+    }
+    lift.note_input(&person("bob"), &session, b"\r").await;
+    // Arrows and mouse reports are no speech.
+    lift.note_input(&person("bob"), &session, b"\x1b[A").await;
+
+    assert_eq!(
+        gestures(&world),
+        [
+            (TerminalGesture::TakenOver, "bob".to_string()),
+            (TerminalGesture::Typed, "bob".to_string()),
+        ]
+    );
+    assert!(world.waits.resumed.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_same_pilot_attaching_again_takes_nothing() {
+    let world = World::new(running(None), Host::allowing());
+    let lift = world.lift();
+    let session = node_session_name(RUN, "griller", 1);
+
+    lift.taken_over(&person("alice"), &session).await;
+    lift.taken_over(&person("alice"), &session).await;
+    lift.taken_over(&person("bob"), &session).await;
+    lift.taken_over(&person("alice"), &session).await;
+    // Neither the manager's terminal nor a name PDO does not give.
+    lift.taken_over(&person("bob"), &manager_session_name(RUN))
+        .await;
+    lift.taken_over(&person("bob"), "not-a-pdo-session").await;
+
+    let who: Vec<String> = gestures(&world).into_iter().map(|(_, who)| who).collect();
+    assert_eq!(who, ["alice", "bob", "alice"]);
+}
+
+#[tokio::test]
+async fn a_take_over_gives_the_floor_back() {
+    let world = World::new(running(None), Host::allowing());
+    let lift = world.lift();
+    let session = node_session_name(RUN, "griller", 1);
+
+    lift.taken_over(&person("alice"), &session).await;
+    lift.note_input(&person("alice"), &session, b"a").await;
+    lift.taken_over(&person("bob"), &session).await;
+    lift.note_input(&person("bob"), &session, b"b").await;
+    lift.taken_over(&person("alice"), &session).await;
+    lift.note_input(&person("alice"), &session, b"c").await;
+
+    let typed: Vec<String> = gestures(&world)
+        .into_iter()
+        .filter(|(gesture, _)| *gesture == TerminalGesture::Typed)
+        .map(|(_, who)| who)
+        .collect();
+    assert_eq!(typed, ["alice", "bob", "alice"]);
+}
+
+#[tokio::test]
+async fn an_answer_to_a_wait_is_its_resumption_alone() {
+    let marker = AwaitingMarker {
+        cause: "declared".into(),
+        message: Some("Which?".into()),
+    };
+    let world = World::new(running(Some(marker)), Host::allowing());
+    let lift = world.lift();
+    let session = node_session_name(RUN, "griller", 1);
+
+    for key in b"the strip" {
+        lift.note_input(&person("bob"), &session, &[*key]).await;
+    }
+    lift.note_input(&person("bob"), &session, b"\r").await;
+    // The node runs again: Bob's next keystrokes are the same turn.
+    lift.note_input(&person("bob"), &session, b"more").await;
+
+    assert!(gestures(&world).is_empty(), "{:?}", gestures(&world));
+    let resumed = world.waits.resumed.lock().unwrap().clone();
+    assert_eq!(resumed.len(), 1);
+    assert_eq!(resumed[0].3["actor"]["id"], "bob");
+}
+
+#[tokio::test]
+async fn a_new_wait_opens_a_new_turn() {
+    let world = World::new(running(None), Host::allowing());
+    let lift = world.lift();
+    let session = node_session_name(RUN, "griller", 1);
+
+    lift.note_input(&person("bob"), &session, b"first").await;
+    world
+        .declare()
+        .execute(&Actor::LocalOperator, command(Some("q?")))
+        .await
+        .unwrap();
+    // The wait was declared, then lifted elsewhere: the node runs.
+    lift.note_input(&person("bob"), &session, b"second").await;
+
+    let typed = gestures(&world).len();
+    assert_eq!(typed, 2, "{:?}", gestures(&world));
+}
+
+#[tokio::test]
+async fn input_into_an_ended_run_records_nothing() {
+    let mut facts = running(None);
+    facts.run_live = false;
+    let world = World::new(facts, Host::allowing());
+    let session = node_session_name(RUN, "griller", 1);
+    world
+        .lift()
+        .note_input(&person("bob"), &session, b"hello")
+        .await;
+    assert!(gestures(&world).is_empty());
 }

@@ -617,7 +617,8 @@ async fn mark_node_done_completion_carries_source_payload() {
 #[tokio::test]
 async fn node_done_completion_has_no_source_payload() {
     // The complement of the source-payload test: `node_done`'s `NodeCompleted`
-    // carries no payload, so the two callers stay distinguishable in the log.
+    // carries no source, so the two callers stay distinguishable in the log;
+    // it names only who marked the node done.
     let state = test_state().await;
     let run_id = "c275-node-done-nosrc";
     for ev in [
@@ -659,10 +660,10 @@ async fn node_done_completion_has_no_source_payload() {
             e.kind == event_log::EventKind::NodeCompleted && e.node_id.as_deref() == Some("worker")
         })
         .expect("worker NodeCompleted present");
-    assert!(
-        nc.payload.is_none(),
-        "node_done's NodeCompleted must carry no source payload, got: {:?}",
-        nc.payload
+    assert_eq!(
+        nc.payload,
+        Some(serde_json::json!({ "actor": { "kind": "local_operator" } })),
+        "node_done's NodeCompleted carries no source payload, only who marked it done"
     );
 }
 

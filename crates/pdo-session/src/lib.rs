@@ -186,6 +186,7 @@ impl Session {
                     extensions.clone(),
                     ledger.clone(),
                 )
+                .with_typed(typed.clone())
                 .with_projects(projects.clone()),
             ),
             terminals: Terminals::new(

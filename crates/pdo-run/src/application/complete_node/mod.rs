@@ -21,6 +21,7 @@ pub use outcome::*;
 use crate::application::events::append_event;
 use crate::application::events::load_events;
 use crate::application::events::run_is_forgotten;
+use crate::application::gesture;
 use crate::application::node::launch::node_run_isolation;
 use crate::application::node::output_validation::check_output_validation_with_retry;
 use crate::application::node::reap::reap_dead_node_after_run_failure;
@@ -57,6 +58,15 @@ impl Runs {
     /// commit+merge, the non-isolated cleanliness check, output validation, the
     /// terminal append, then the detached reap+advance tail (#304/ADR-0023).
     pub async fn complete_node(self: &Arc<Self>, actor: &Actor, command: CompleteNode) -> Response {
+        let run_id = command.run_id.clone();
+        gesture::by(actor, &run_id, self.complete_node_gesture(actor, command)).await
+    }
+
+    async fn complete_node_gesture(
+        self: &Arc<Self>,
+        actor: &Actor,
+        command: CompleteNode,
+    ) -> Response {
         let CompleteNode {
             run_id,
             node_id,

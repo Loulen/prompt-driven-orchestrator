@@ -5,7 +5,8 @@
 //! The text is typed as the Actor would type it in the terminal, then
 //! submitted: one bracketed paste on one line, then Enter. The Node resumes,
 //! with the Actor as who answered, and the Actor is announced as taking
-//! control of the session (CORE-61), as when it takes the hand. Only a Node
+//! control of the session (CORE-61), as when it takes the hand; the Run's log
+//! keeps that take-over when the pilot changes (`NodeTakenOver`). Only a Node
 //! that waits for a person receives it: running, ended, waiting on its
 //! children or unknown, it is refused with the stable reason `not_waiting`,
 //! and nothing is written.
@@ -22,6 +23,7 @@ use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
+use crate::application::declared_wait::{record_take_over, TypedInput};
 use crate::application::ports::{NoRunProjects, NodeWaits, RunProjects, Tmux};
 use crate::application::session_ledger::SessionLedger;
 use crate::application::terminal_text::one_line;
@@ -38,6 +40,8 @@ pub struct WriteToNode {
     host: Arc<dyn ExtensionHost>,
     projects: Arc<dyn RunProjects>,
     ledger: Arc<SessionLedger>,
+    /// Who pilots each terminal, so the take-over is written once per change.
+    typed: Arc<TypedInput>,
     /// One write at a time: of two answers to the same wait, the second finds
     /// the Node running.
     one_at_a_time: Mutex<()>,
@@ -56,8 +60,16 @@ impl WriteToNode {
             host,
             projects: Arc::new(NoRunProjects),
             ledger,
+            typed: Arc::default(),
             one_at_a_time: Mutex::new(()),
         }
+    }
+
+    /// The same use case, sharing with the terminals' bridge who pilots each
+    /// terminal.
+    pub fn with_typed(mut self, typed: Arc<TypedInput>) -> Self {
+        self.typed = typed;
+        self
     }
 
     /// The same use case, its Operations in the Projets `projects` gives.
@@ -122,6 +134,9 @@ impl WriteToNode {
         if !self.tmux.press_enter(&session) {
             return Err(write_failed(&session, "Enter"));
         }
+        // The Actor takes the hand, as the live announcement below says,
+        // then its answer resumes the Node.
+        record_take_over(self.waits.as_ref(), &self.typed, actor, &session).await;
         let resumed = self
             .waits
             .record_resumed(

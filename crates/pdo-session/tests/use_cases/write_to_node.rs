@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use pdo_extension_api::{NodeWrite, NodeWritten, NODE_WRITE_MAX_BYTES};
 use pdo_kernel::{Actor, ResourceKind, Verb};
+use pdo_session::application::ports::TerminalGesture;
 use pdo_session::application::session_ledger::SessionLedger;
 use pdo_session::application::write_to_node::WriteToNode;
 use pdo_session::domain::declared_wait::{
@@ -136,6 +137,11 @@ async fn the_text_is_typed_and_submitted_and_the_node_resumes_with_the_actor() {
             })
         )]
     );
+    // The Run's log keeps Bob's take-over, as the announcement says.
+    let gestures = world.waits.gestures.lock().unwrap().clone();
+    assert_eq!(gestures.len(), 1, "{gestures:?}");
+    assert_eq!(gestures[0].3, TerminalGesture::TakenOver);
+    assert_eq!(gestures[0].4["actor"]["id"], "bob");
     // Bob is announced as taking control, as when he takes the hand.
     let events = world.host.events();
     assert_eq!(events.len(), 1, "{events:#?}");

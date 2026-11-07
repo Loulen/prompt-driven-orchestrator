@@ -15,6 +15,15 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 
 ## Unreleased
 
+### A Presence falls within seconds, behind a proxy too
+
+- A person who leaves a Run, closes a tab or loses the network no longer stays on the Run's row:
+  behind a proxy or a tunnel, a connection the browser lost could stay open on the daemon's side
+  and keep the person on the previous Run until a reload. Each tab now names itself on `/ws`
+  (`/ws?tab=<id>`): its new connection replaces the old one, whose Presence falls at once. The
+  daemon pings every connection of `/ws` and drops one that answered nothing for 10 s.
+- Extension API: the life of a `/ws` connection (`tab`, the close code `4000` of a replaced
+  connection, Ping and the 10 s delay), see the reference's Presences.
 ### Who made each gesture on a Run
 
 - The events of a gesture on a Run name the Actor who made it, as `payload.actor` (the shape

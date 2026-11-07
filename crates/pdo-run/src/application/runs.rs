@@ -23,6 +23,8 @@ use super::ports::{
     PipelineTriggers, Projects, RunDirWatch, RunPages, SourcePipelines,
 };
 use super::read_run::ReadRun;
+use crate::domain::presence::ConnectionId;
+use crate::domain::stream_liveness::StreamLiveness;
 
 /// Every port the context needs, as the composition root plugs them in.
 pub struct RunsPorts {
@@ -154,6 +156,12 @@ pub struct Runs {
     pub(crate) presences: std::sync::Mutex<crate::domain::presence::PresenceBook>,
     /// The id of the next connection of the event stream.
     pub(crate) next_connection: AtomicU64,
+    /// What ends each open connection of the event stream when a newer
+    /// connection of its tab replaces it.
+    pub(crate) stream_ends:
+        std::sync::Mutex<std::collections::HashMap<ConnectionId, Arc<tokio::sync::Notify>>>,
+    /// How the event stream pings its connections (a test shortens it).
+    pub(crate) stream_liveness: std::sync::RwLock<StreamLiveness>,
 }
 
 impl Runs {
@@ -213,6 +221,8 @@ impl Runs {
             node_done_tail_gate_armed: Arc::new(AtomicBool::new(false)),
             presences: std::sync::Mutex::new(Default::default()),
             next_connection: AtomicU64::new(1),
+            stream_ends: Default::default(),
+            stream_liveness: Default::default(),
             options,
         })
     }

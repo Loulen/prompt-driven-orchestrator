@@ -789,7 +789,10 @@ async fn save_tells_the_lists_the_draft_changed() {
     let found = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let msg = ws.next().await?.ok()?;
-            let text = crate::common::ws_text(&msg)?.to_string();
+            // The daemon pings the socket: skip the frames that carry no message.
+            let Some(text) = crate::common::ws_text(&msg).map(str::to_string) else {
+                continue;
+            };
             let value: serde_json::Value = serde_json::from_str(&text).ok()?;
             if value["type"] == serde_json::json!("pipeline_draft_changed")
                 && value["pipeline_id"] == serde_json::json!("alpha")

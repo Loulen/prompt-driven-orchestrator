@@ -11,6 +11,23 @@ export const STREAM_OPEN_MARK = "ws:ouvert";
  *  5 s, so three missed beats make a dead socket, closed and probed again. */
 export const STREAM_SILENCE_MS = 15_000;
 
+/** This tab's identity on the event stream (API 0.23), drawn once per page
+ *  load: each reopening of `/ws` names it, so the daemon replaces the tab's
+ *  previous connection (a proxy may keep it half-open) and its Presence falls
+ *  at once. Not kept in `sessionStorage`: a duplicated tab would copy it, and
+ *  the two tabs would replace each other. */
+export const STREAM_TAB: string = newTabId();
+
+/** A random tab identity. `crypto.randomUUID` exists only in a secure
+ *  context: a page served over plain HTTP from another host than localhost
+ *  falls back on the clock and `Math.random`. */
+export function newTabId(): string {
+  const c = globalThis.crypto as Crypto | undefined;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  const random = Math.floor(Math.random() * 36 ** 8).toString(36);
+  return `tab-${Date.now().toString(36)}-${random}`;
+}
+
 /** The signal to re-read everything (ADR-0083 §6): nothing missed while away
  *  is replayed, so a full re-read is the only way back to the real state. */
 export const RESYNC: WsMessage = { type: "resync" };
@@ -102,7 +119,7 @@ function wake() {
 function acquire() {
   users += 1;
   if (stream) return;
-  const socket = openProbedSocket("/ws", { silenceMs: STREAM_SILENCE_MS });
+  const socket = openProbedSocket(`/ws?tab=${STREAM_TAB}`, { silenceMs: STREAM_SILENCE_MS });
   stream = socket;
   socket.onState((state) => {
     if (state === "ouvert") performance.mark?.(STREAM_OPEN_MARK);

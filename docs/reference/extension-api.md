@@ -656,6 +656,19 @@ tab, and leaves when its last one shows another Run, none, or closes (its connec
   `presence_left` has the same shape; `presences` is the Run's Presences once the change
   happened. The front hands them to `run/item/people` ([extension-ui.md](extension-ui.md#runitempeople)).
 
+The life of a connection (0.23): a Presence falls within seconds whatever happens to its
+connection, a half-open one behind a proxy or a tunnel included.
+
+- Each tab names itself when it opens `/ws` (`/ws?tab=<id>`, 1 to 64 characters among
+  `[A-Za-z0-9_-]`, anything else counts as no name). A new connection of an Actor's tab
+  **replaces** the connection that tab still has open: the old one is closed with the code `4000`
+  and its Presence falls at once (`presence_left`), before the new one shows its Run. A tab of
+  another Actor is never replaced; two tabs of one Actor (two names) keep a Presence each. The
+  interface draws the name once per page load.
+- The daemon sends a WebSocket Ping on `/ws` every 2 s. A connection it heard nothing from (no
+  Pong, no message) for over 10 s is dropped, as is one whose writes stay stuck that long; its
+  Presence falls. A browser answers the Pings by itself.
+
 Without extension every tab is the local operator's: one Presence at most per Run.
 
 ## A suspended Trigger (0.8)

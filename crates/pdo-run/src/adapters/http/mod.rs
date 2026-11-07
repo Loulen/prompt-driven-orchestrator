@@ -20,6 +20,7 @@ pub mod runs;
 mod stale;
 pub mod verdicts;
 mod ws;
+mod ws_visibility;
 
 use std::sync::Arc;
 

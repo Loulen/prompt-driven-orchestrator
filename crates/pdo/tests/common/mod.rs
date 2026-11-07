@@ -27,6 +27,7 @@ pub struct TestDaemon {
 impl TestDaemon {
     pub async fn spawn_at(repo_root: &Path) -> Result<Self> {
         std::fs::create_dir_all(repo_root)?;
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             repo_root.to_path_buf(),
@@ -123,6 +124,7 @@ impl TestDaemon {
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -183,6 +185,7 @@ impl TestDaemon {
         };
         configure(tempdir.path(), &mut config);
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -218,6 +221,7 @@ impl TestDaemon {
         };
         pdo::compose(&mut config, extensions, None)?;
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -245,6 +249,7 @@ impl TestDaemon {
             ..DaemonConfig::default()
         };
         pdo::compose(&mut config, extensions, None)?;
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             repo_root.to_path_buf(),
@@ -274,6 +279,7 @@ impl TestDaemon {
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -335,6 +341,7 @@ impl TestDaemon {
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -397,6 +404,7 @@ impl TestDaemon {
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -448,6 +456,7 @@ impl TestDaemon {
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -508,6 +517,7 @@ impl TestDaemon {
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -563,6 +573,7 @@ impl TestDaemon {
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -614,6 +625,7 @@ impl TestDaemon {
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -669,6 +681,7 @@ impl TestDaemon {
         let tempdir = tempfile::tempdir()?;
         setup(tempdir.path())?;
 
+        scrub_host_env();
         let handle = serve_with_config(
             SocketAddr::from(([127, 0, 0, 1], 0)),
             tempdir.path().to_path_buf(),
@@ -864,6 +877,35 @@ impl TestDaemon {
         }
     }
 
+    /// Shorten `/ws`'s liveness for the connections opened from now: a Ping
+    /// every `ping_every`, mute after `mute_after` of silence.
+    pub fn set_stream_liveness(
+        &self,
+        ping_every: std::time::Duration,
+        mute_after: std::time::Duration,
+    ) {
+        self.handle
+            .as_ref()
+            .expect("daemon handle")
+            .set_stream_liveness(ping_every, mute_after);
+    }
+
+    /// Open a WebSocket connection to `/ws` from the tab `tab`, as the caller
+    /// the test extension identifies by `actor`.
+    pub async fn connect_ws_from_tab(
+        &self,
+        actor: &str,
+        tab: &str,
+    ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>> {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut request = format!("ws://{}/ws?tab={tab}", self.addr).into_client_request()?;
+        request
+            .headers_mut()
+            .insert("x-pdo-test-actor", actor.parse()?);
+        let (ws, _) = tokio_tungstenite::connect_async(request).await?;
+        Ok(ws)
+    }
+
     /// Arm the one-shot stale-sweep poison so the next stale-detection sweep
     /// panics, then disarms itself (#251 fault injection, test seam). Arm *after*
     /// boot so the immediate startup sweep doesn't consume it.
@@ -1022,6 +1064,13 @@ impl Drop for TestDaemon {
             }
         }
     }
+}
+
+/// A suite run from a node session inherits that instance's settings through
+/// the environment; the daemon under test must start from none of them. No
+/// test sets these variables (nextest runs one process per test).
+fn scrub_host_env() {
+    std::env::remove_var(pdo_kernel::public_url::PUBLIC_URL_ENV);
 }
 
 #[allow(dead_code)]

@@ -87,7 +87,8 @@ impl Terminals {
     /// A spectator takes control (#870). Only a spectator's request does
     /// anything; the registry flips the roles, the `ignore-size` of both postes'
     /// clients and the read-only filter. A take-over that changed the pilot is
-    /// announced (CORE-61); a refused one, or one with no effect, is not.
+    /// announced (CORE-61) and kept in the Run's log; a refused one, or one
+    /// with no effect, is not.
     pub async fn take_control(&self, actor: &Actor, session: &str, id: ConnId) -> bool {
         let operation = self.operation(session, "take_control").await;
         if let Err(denied) = authorize(self.host.as_ref(), actor, &operation) {
@@ -97,15 +98,18 @@ impl Terminals {
         let taken = self.registry.take_control(session, id);
         if taken {
             self.ledger.taken_over(actor, session);
+            self.lift.taken_over(actor, session).await;
         }
         taken
     }
 
     /// The connection of `actor` that just joined `session` drives it: it is
     /// the first to attach, or the hand came to its poste (CORE-61). Announced
-    /// as a take-over; a spectator who joins announces nothing.
-    pub fn joined_as_driver(&self, actor: &Actor, session: &str) {
+    /// as a take-over, and kept in the Run's log when the pilot changes; a
+    /// spectator who joins announces nothing.
+    pub async fn joined_as_driver(&self, actor: &Actor, session: &str) {
         self.ledger.taken_over(actor, session);
+        self.lift.taken_over(actor, session).await;
     }
 
     /// A binary frame reached the pane: the Enter rule of the declared wait

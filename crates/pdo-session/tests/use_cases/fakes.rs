@@ -244,6 +244,9 @@ impl Tmux for FakeTmux {
     }
 }
 
+/// A terminal gesture as recorded: (run, node, iteration, gesture, payload).
+pub type RecordedGesture = (String, String, i64, TerminalGesture, serde_json::Value);
+
 /// The Run store, as the declared wait reads and writes it.
 #[derive(Default)]
 pub struct Waits {
@@ -251,6 +254,8 @@ pub struct Waits {
     pub unreadable: Mutex<bool>,
     pub awaiting: Mutex<Vec<(String, String, i64, serde_json::Value)>>,
     pub resumed: Mutex<Vec<(String, String, i64, serde_json::Value)>>,
+    /// The take-overs and turns of speech recorded on the nodes' terminals.
+    pub gestures: Mutex<Vec<RecordedGesture>>,
     pub refuse_writes: Mutex<bool>,
 }
 
@@ -267,6 +272,26 @@ impl Waits {
 }
 
 impl NodeWaits for Waits {
+    fn record_terminal_gesture<'a>(
+        &'a self,
+        run_id: &'a str,
+        node_id: &'a str,
+        iter: i64,
+        gesture: TerminalGesture,
+        payload: serde_json::Value,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            self.gestures.lock().unwrap().push((
+                run_id.into(),
+                node_id.into(),
+                iter,
+                gesture,
+                payload,
+            ));
+            Ok(())
+        })
+    }
+
     fn wait_facts<'a>(
         &'a self,
         run_id: &'a str,

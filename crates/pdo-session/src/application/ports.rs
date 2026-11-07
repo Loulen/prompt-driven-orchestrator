@@ -139,6 +139,26 @@ pub trait NodeWaits: Send + Sync {
         iter: i64,
         payload: serde_json::Value,
     ) -> BoxFuture<'a, Result<(), String>>;
+
+    /// Append the event of `gesture` on the node's terminal, with `payload`
+    /// (`{source, actor}`).
+    fn record_terminal_gesture<'a>(
+        &'a self,
+        run_id: &'a str,
+        node_id: &'a str,
+        iter: i64,
+        gesture: TerminalGesture,
+        payload: serde_json::Value,
+    ) -> BoxFuture<'a, Result<(), String>>;
+}
+
+/// What an Actor did on a node's terminal that the Run's log keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalGesture {
+    /// It took the hand: the pilot of the terminal changed to it.
+    TakenOver,
+    /// It took the floor: its first input after a take-over or a wait.
+    Typed,
 }
 
 /// The Run facts behind a node's pane, and the in-place re-attach of its

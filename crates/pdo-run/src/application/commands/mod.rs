@@ -120,7 +120,9 @@ impl Runs {
             }
         }
 
-        dispatch(self.clone(), run_id, cmd).await
+        let gesture_run = run_id.clone();
+        crate::application::gesture::by(actor, &gesture_run, dispatch(self.clone(), run_id, cmd))
+            .await
     }
 }
 

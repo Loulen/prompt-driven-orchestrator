@@ -19,4 +19,5 @@ pub mod status;
 pub mod sweep;
 pub mod terminal;
 pub mod terminal_text;
+pub mod typed_input;
 pub mod write_to_node;

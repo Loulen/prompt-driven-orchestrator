@@ -111,6 +111,10 @@ async fn websocket_receives_events() {
             .expect("timeout waiting for event")
             .unwrap()
             .unwrap();
+        // The daemon pings the connection; only text frames carry messages.
+        if !msg.is_text() {
+            continue;
+        }
         let text = msg.into_text().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
         if parsed["type"] == "event" {

@@ -78,9 +78,8 @@ pub const EXCLUDED: &[Excluded] = &[
     },
     Excluded {
         reason: "what the UI draws its screens with: the catalogue of Ressources an \
-                 extension's role editor lists, the display names and avatars of \
-                 Actors. A command prints ids",
-        routes: &[("GET", "/resources"), ("POST", "/actors/display")],
+                 extension's role editor lists. A command prints ids",
+        routes: &[("GET", "/resources")],
     },
     Excluded {
         reason: "the question a UI asks before showing a gesture. A command asks by \

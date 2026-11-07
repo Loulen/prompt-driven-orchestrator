@@ -99,16 +99,18 @@ async fn a_take_over_is_announced_only_when_it_changes_the_pilot() {
     }
 }
 
-#[test]
-fn the_first_to_drive_a_terminal_is_announced() {
+#[tokio::test]
+async fn the_first_to_drive_a_terminal_is_announced() {
     let host = Host::allowing();
     let t = terminals(host.clone());
-    t.joined_as_driver(&Actor::LocalOperator, "pdo-mgr-20260506-143000-a3f1b2c");
+    t.joined_as_driver(&Actor::LocalOperator, "pdo-mgr-20260506-143000-a3f1b2c")
+        .await;
     let events = host.events();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].1["type"], "session_taken_over");
     assert_eq!(events[0].1["session"]["kind"], "manager");
-    t.joined_as_driver(&Actor::LocalOperator, "not-a-pdo-session");
+    t.joined_as_driver(&Actor::LocalOperator, "not-a-pdo-session")
+        .await;
     assert_eq!(
         host.events().len(),
         1,

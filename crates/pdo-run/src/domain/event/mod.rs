@@ -8,8 +8,12 @@ pub use graph::{
     edge_info_from_pipeline, node_def_from_pipeline, EdgeInfo, NodeDefInfo, PortBrief,
 };
 
+use pdo_kernel::Actor;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
+
+/// The key of a payload naming the Actor who made the event.
+pub const ACTOR: &str = "actor";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
 #[ts(export)]
@@ -34,6 +38,18 @@ pub enum EventKind {
     /// event (`NodeCompletionReleased`).
     NodeResumed,
     NodeCompletionReleased,
+    /// An Actor took the hand on the terminal of the node's session: it
+    /// attached first and drives it, or took control from the pilot. Written
+    /// when the pilot changes, never when the same Actor attaches again.
+    /// Payload: `actor`, `source` (`pty`). Informational: projects nothing.
+    /// Wire form: `"node_taken_over"`.
+    NodeTakenOver,
+    /// An Actor typed into the terminal of the node's session: one event per
+    /// turn of speech, its first input after a take-over or a wait, never one
+    /// per keystroke. An answer to a wait is the `NodeResumed` its Enter
+    /// writes, not this. Payload: `actor`, `source` (`pty`). Informational:
+    /// projects nothing. Wire form: `"node_typed"`.
+    NodeTyped,
     NodeCompleted,
     NodeFailed,
     /// An **infra** incident killed the node's session — session death, boot
@@ -210,6 +226,28 @@ pub struct Event {
 }
 
 impl Event {
+    /// This event with `actor` as who made it (`payload.actor`, the shape of
+    /// every gesture's event), unless it already names one. A payload that
+    /// is not an object is left as it is.
+    pub fn with_actor(mut self, actor: &Actor) -> Self {
+        let actor = serde_json::to_value(actor).unwrap_or(serde_json::Value::Null);
+        match self.payload.as_mut() {
+            None => self.payload = Some(serde_json::json!({ ACTOR: actor })),
+            Some(serde_json::Value::Object(payload)) => {
+                payload.entry(ACTOR).or_insert(actor);
+            }
+            Some(_) => {}
+        }
+        self
+    }
+
+    /// The Actor who made this event (`payload.actor`), `None` for an event
+    /// no gesture made, or one written before gestures named their Actor.
+    pub fn actor(&self) -> Option<Actor> {
+        let actor = self.payload.as_ref()?.get(ACTOR)?;
+        serde_json::from_value(actor.clone()).ok()
+    }
+
     /// The message that announces this event on the bus, exactly as `/ws`
     /// relays it to the front (D20): `{"type": "event", "event": …}`.
     pub fn bus_message(&self) -> serde_json::Value {
@@ -232,5 +270,76 @@ impl Event {
                 | EventKind::NodeFailed
                 | EventKind::NodeInterrupted
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(payload: Option<serde_json::Value>) -> Event {
+        Event {
+            id: None,
+            run_id: "r1".into(),
+            ts: "2026-11-07T10:00:00Z".into(),
+            kind: EventKind::NodeStopped,
+            node_id: Some("n1".into()),
+            iter: Some(1),
+            payload,
+        }
+    }
+
+    fn alice() -> Actor {
+        Actor::Identified {
+            namespace: "test".into(),
+            id: "alice".into(),
+        }
+    }
+
+    #[test]
+    fn an_event_takes_its_actor_beside_its_payload() {
+        let stamped = event(Some(serde_json::json!({ "reason": "x" }))).with_actor(&alice());
+        assert_eq!(
+            stamped.payload,
+            Some(serde_json::json!({
+                "reason": "x",
+                "actor": { "kind": "identified", "namespace": "test", "id": "alice" },
+            }))
+        );
+        assert_eq!(stamped.actor(), Some(alice()));
+    }
+
+    #[test]
+    fn an_event_without_payload_gets_one_with_its_actor() {
+        let stamped = event(None).with_actor(&Actor::LocalOperator);
+        assert_eq!(
+            stamped.payload,
+            Some(serde_json::json!({ "actor": { "kind": "local_operator" } }))
+        );
+    }
+
+    #[test]
+    fn an_actor_already_named_is_kept() {
+        let stamped = event(Some(
+            serde_json::json!({ "actor": { "kind": "local_operator" } }),
+        ))
+        .with_actor(&alice());
+        assert_eq!(stamped.actor(), Some(Actor::LocalOperator));
+    }
+
+    #[test]
+    fn an_event_written_before_actors_reads_without_one() {
+        assert_eq!(event(None).actor(), None);
+        assert_eq!(
+            event(Some(serde_json::json!({ "source": "pty_enter" }))).actor(),
+            None
+        );
+        let old: Event = serde_json::from_value(serde_json::json!({
+            "id": 7, "run_id": "r1", "ts": "2026-01-01T00:00:00Z",
+            "kind": "node_resumed", "node_id": "n1", "iter": 1,
+            "payload": { "source": "pty_enter" },
+        }))
+        .unwrap();
+        assert_eq!(old.actor(), None);
     }
 }

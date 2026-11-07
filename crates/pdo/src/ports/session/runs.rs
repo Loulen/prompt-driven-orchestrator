@@ -2,6 +2,7 @@
 
 use pdo_session::application::ports::{
     BoxFuture, NodePanes, NodeWaits, RunLookup, RunProjects, RunShells, ShellTarget,
+    TerminalGesture,
 };
 use pdo_session::domain::declared_wait::WaitFacts;
 use pdo_session::domain::launch::ContainerExec;
@@ -58,6 +59,21 @@ impl NodeWaits for RunSide {
         payload: serde_json::Value,
     ) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(self.record(run_id, node_id, iter, EventKind::NodeResumed, payload))
+    }
+
+    fn record_terminal_gesture<'a>(
+        &'a self,
+        run_id: &'a str,
+        node_id: &'a str,
+        iter: i64,
+        gesture: TerminalGesture,
+        payload: serde_json::Value,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        let kind = match gesture {
+            TerminalGesture::TakenOver => EventKind::NodeTakenOver,
+            TerminalGesture::Typed => EventKind::NodeTyped,
+        };
+        Box::pin(self.record(run_id, node_id, iter, kind, payload))
     }
 }
 

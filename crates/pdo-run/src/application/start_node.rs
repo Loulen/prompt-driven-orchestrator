@@ -12,6 +12,7 @@ use tracing::{error, info, warn};
 use crate::application::admission_count::count_global_live_sessions;
 use crate::application::events::append_event;
 use crate::application::events::load_events;
+use crate::application::gesture;
 use crate::application::node::primitives as node_primitives;
 use crate::application::operations::on_node;
 use crate::application::paths::effective_repo_root;
@@ -46,6 +47,11 @@ impl Runs {
     /// [`force_spawn_node`], which the `start_node` `/commands` kind also calls, so the
     /// two consumers cannot drift.
     pub async fn start_node(self: &Arc<Self>, actor: &Actor, command: StartNode) -> Response {
+        let run_id = command.run_id.clone();
+        gesture::by(actor, &run_id, self.start_node_gesture(actor, command)).await
+    }
+
+    async fn start_node_gesture(self: &Arc<Self>, actor: &Actor, command: StartNode) -> Response {
         let StartNode { run_id, node_id } = command;
         if let Err(denied) = self
             .authorize(actor, &on_node("start", &run_id, &node_id))

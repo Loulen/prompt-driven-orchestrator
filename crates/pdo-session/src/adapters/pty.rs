@@ -159,7 +159,7 @@ async fn bridge(
     // CORE-61: the first to drive the terminal took control of it, once its
     // `tmux attach` runs.
     if membership.took_the_hand {
-        terminals.joined_as_driver(&actor, &session_id);
+        terminals.joined_as_driver(&actor, &session_id).await;
     }
 
     // Role changes after the attach flip the client's `ignore-size` live. The

@@ -26,6 +26,7 @@ use application::get_update_status::GetUpdateStatus;
 use application::list_audit::ListAudit;
 use application::mount_page::MountPage;
 use application::page_journal::PageMountLock;
+use application::place_page_mount::PlacePageMount;
 use application::ports::{
     AuditLog, Installation, PageFiles, PageMountRepository, PublicUrlSetting, ReleaseSource, Runs,
     StorageError, UpdateCheckSetting, UpdateExecutor, UpdateJournal,
@@ -71,6 +72,7 @@ pub struct Platform {
     pub(crate) get_changelog: GetChangelog,
     pub(crate) apply_update: ApplyUpdate,
     pub(crate) read_attempt_log: ReadAttemptLog,
+    place_page_mount: Arc<PlacePageMount>,
     page_mounts: Arc<dyn PageMountRepository>,
     audit: Arc<dyn AuditLog>,
     public_url: Arc<dyn PublicUrlSetting>,
@@ -98,6 +100,7 @@ impl Platform {
             extensions,
         } = ports;
         let lock = PageMountLock::default();
+        let place_page_mount = Arc::new(PlacePageMount::new(page_mounts.clone(), runs.clone()));
         let record_audit = RecordAudit::new(audit.clone());
         let context = UpdateContext::new(
             UpdatePorts {
@@ -118,6 +121,7 @@ impl Platform {
                 record_audit.clone(),
                 extensions.clone(),
                 lock.clone(),
+                place_page_mount.clone(),
             ),
             unmount_page: UnmountPage::new(
                 page_mounts.clone(),
@@ -125,7 +129,9 @@ impl Platform {
                 record_audit.clone(),
                 extensions.clone(),
                 lock.clone(),
+                place_page_mount.clone(),
             ),
+            place_page_mount,
             read_pages: ReadPages::new(page_mounts.clone(), page_files),
             release_run_pages: ReleaseRunPages::new(page_mounts.clone(), lock),
             record_audit,
@@ -156,6 +162,12 @@ impl Platform {
     /// The page mounts of a Run being archived.
     pub fn release_run_pages(&self) -> &ReleaseRunPages {
         &self.release_run_pages
+    }
+
+    /// Where a page-mount Operation is judged: what the question of
+    /// authorization asks about a mount or an unmount.
+    pub fn place_page_mount(&self) -> &PlacePageMount {
+        &self.place_page_mount
     }
 
     /// The version check, on demand, periodic, or right after it was turned on.

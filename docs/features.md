@@ -186,12 +186,15 @@ your Enter lifts the wait. PDO never infers a wait from a silence. The node's co
 until you release it (« Auto-approve when ready », in the menu of **Approve ▾**) or approve it
 (**Approve**, greyed while a declared output is missing).
 
-Turn **Orchestrator** on and its session learns to launch runs itself: `pdo run create` starts a
-child pipeline (the same one, or another), so pipelines run pipelines, and `pdo run wait` blocks
-until a child is done. The daemon records who launched what, so the run list becomes a **run
-tree**: children fold under their parent, with counters for finished, failed, stale and running
-descendants. The node's **Orchestration** tab follows its children to the end, and a child that
-waits for you shows on its parent too.
+Any node can launch runs itself: `pdo run create` starts a child pipeline (the same one, or
+another), so pipelines run pipelines, and `pdo run wait` blocks until a child is done. The daemon
+records who launched what, so the run list becomes a **run tree**: children fold under their
+parent, with counters for finished, failed, stale and running descendants. A node that launched a
+child is a **parent node**: its card shows the counters, its **Orchestration** tab follows its
+children to the end, a child that waits for you shows on its parent too, and the node completes
+only once every child has ended (a failed child parks it awaiting you). Turn **Orchestrator** on
+and the node's agent gets the `pdo-orchestrate` skill, and its Orchestration tab shows from the
+start.
 
 Decisions: [ADR-0064](adr/0064-la-provenance-parent-enfant-est-mecanique-et-la-liaison-orchestrateur-est-forte.md),
 [ADR-0068](adr/0068-la-liberation-de-la-completion-est-une-garde-du-daemon-pas-un-message-dans-le-pane.md),

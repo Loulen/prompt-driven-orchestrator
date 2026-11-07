@@ -223,6 +223,44 @@ mod tests {
         assert!(reason.contains("3 failed"), "{reason}");
     }
 
+    /// Le refus vaut pour tout nœud parent : il ne dit jamais « orchestrator »
+    /// et indique lui-même le geste d'attente, pour un agent qui n'a pas le
+    /// skill `pdo-orchestrate`. La variante `failed` renvoie à l'utilisateur,
+    /// pas à `pdo run wait`.
+    #[test]
+    fn children_pending_message_is_generic_and_names_pdo_run_wait() {
+        let active = CompletionRefusal::ChildrenPending {
+            node_id: "worker".into(),
+            active: 2,
+            failed: 0,
+        };
+        assert_eq!(
+            active.reason(),
+            "node `worker` is held by its child runs: 2 active — wait for them with \
+             `pdo run wait --all`, then complete again"
+        );
+        // The HTTP body carries the same sentence.
+        assert_eq!(
+            active.detail()["message"],
+            serde_json::json!(active.reason())
+        );
+
+        let failed = CompletionRefusal::ChildrenPending {
+            node_id: "worker".into(),
+            active: 0,
+            failed: 1,
+        }
+        .reason();
+        assert_eq!(
+            failed,
+            "node `worker` is held by its child runs: 0 active, 1 failed — the node is \
+             awaiting the user: retry the failed child run or force-complete the node"
+        );
+        for message in [active.reason(), failed] {
+            assert!(!message.contains("orchestrator"), "{message}");
+        }
+    }
+
     /// « Jamais `2xx` » **≠** « toujours `409` ».
     #[test]
     fn non_conflict_statuses_are_preserved() {

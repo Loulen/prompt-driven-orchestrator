@@ -14,7 +14,7 @@ import type { useRunNavigation } from "./useRunNavigation";
 import ChildRunBar from "./ChildRunBar";
 
 /**
- * The center of the shell: the tab bar, the way back to an orchestrator node
+ * The center of the shell: the tab bar, the way back to a parent node
  * (#723) and the canvas of the active tab — or, with no document open, an
  * icon, three words and New run. A
  * mounted page's tab, when shown, covers the canvas, which stays mounted

@@ -177,22 +177,18 @@ pub async fn complete_node_iteration(
         return CompletionAttempt::refused(refusal);
     }
 
-    // Liaison forte orchestrateur ↔ enfants (#724 / ADR-0064): a node with the
-    // « Orchestrator » toggle does not terminate while its child runs are
-    // non-terminal. The gate sits after the transition guard but BEFORE any
-    // effect (delivery, validation): a refusal leaves the node alive and its
-    // session intact — and, with a `failed` child, parks the node
-    // `AwaitingUser` for the user's arbitration (retry the child, or force
-    // through `mark_node_done`, which is deliberately NOT gated).
-    if let Some(refusal) = run_advance::orchestrator_binding_refusal(
-        state,
-        &events,
-        &pre_run_state,
-        &run_id,
-        &node_id,
-        iter,
-    )
-    .await
+    // Liaison forte nœud parent ↔ enfants (#724 / ADR-0064): ANY node whose
+    // session created child runs (agent or `script`, Orchestrator toggle or not)
+    // does not terminate while those children are non-terminal. The gate reads
+    // the real children, never the toggle, and holds every source that reaches
+    // this body (explicit, Stop hook, turn end, end of a script). It sits after
+    // the transition guard but BEFORE any effect (delivery, validation): a
+    // refusal leaves the node alive and its session intact — and, with a
+    // `failed` child, parks the node `AwaitingUser` for the user's arbitration
+    // (retry the child, or force through `mark_node_done`, which is
+    // deliberately NOT gated).
+    if let Some(refusal) =
+        run_advance::parent_node_binding_refusal(state, &events, &run_id, &node_id, iter).await
     {
         return CompletionAttempt::refused(refusal);
     }

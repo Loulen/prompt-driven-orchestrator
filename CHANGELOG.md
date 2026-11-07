@@ -13,6 +13,29 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+### Any node that creates a child run waits for it
+
+- A node that creates a child run (`pdo run create`) waits for it, with or without the
+  Orchestrator toggle, agent or script: `pdo complete`, the end-of-turn auto-completion and the end
+  of a script are refused (`children_pending`) while a child is still live, and the node completes
+  by itself once every child has ended without failing. A failed child parks it awaiting you.
+- The refusal tells the agent to wait with `pdo run wait --all`; it no longer says
+  "orchestrator", and `pdo complete` never claims the held node failed. A script whose
+  `pdo complete` is refused this way is no longer failed by its own tail.
+- On the canvas, the card of any node with child runs shows "N runs" and the counters; its panel
+  adds the Orchestration tab next to I/O and Transcript as soon as the first child appears, live,
+  leaving I/O open. With the toggle, the tab shows from the start, on "No child run yet".
+- The "Waiting on child runs" banner gets an "Open Orchestration" button; once a child failed, it
+  turns into "N child run(s) failed" with "Open", toward that child (the Orchestration tab no
+  longer repeats it).
+- The Orchestrator toggle's tooltip says what it still does: it adds the `pdo-orchestrate` skill
+  and shows the Orchestration tab from the start. The Stats keep reading the Orchestrator node kind
+  on the toggle.
+- A node held by its child runs is no longer marked interrupted when the daemon restarts without
+  its session: it keeps waiting on its children and completes once they end.
+
 ## 2.74.0
 
 ### Approve ▾ beyond the node panel: enlarged terminal, command field, tour

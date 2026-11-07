@@ -119,8 +119,8 @@ export function WorkNodeCard({
       {lead}
       <NodeCardHead type={typeIcon} name={data.label} flags={flags} status={status} />
       <NodeMeta data={data} run={data.run} marks={marks} />
-      {/* #723 — an orchestrator's child runs: « N runs » and the Orchestration
-          tab's pastilles; omitted entirely without children. */}
+      {/* #723 — a parent node's child runs (ADR-0064, toggle or not): « N runs »
+          and the Orchestration tab's pastilles; omitted entirely without children. */}
       {runs}
       {children}
     </NodeCard>

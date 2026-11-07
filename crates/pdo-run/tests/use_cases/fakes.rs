@@ -116,6 +116,39 @@ impl EventStore for Store {
         })
     }
 
+    fn child_run_ids<'a>(
+        &'a self,
+        run_id: &'a str,
+        node_id: &'a str,
+    ) -> BoxFuture<'a, anyhow::Result<Vec<String>>> {
+        Box::pin(async move {
+            if self.broken {
+                anyhow::bail!("failed to read the children");
+            }
+            let field = |e: &Event, key: &str| {
+                e.payload
+                    .as_ref()
+                    .and_then(|p| p.get(key))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            };
+            let mut ids: Vec<String> = self
+                .events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| {
+                    e.kind == EventKind::RunStarted
+                        && field(e, "parent_run_id").as_deref() == Some(run_id)
+                        && field(e, "parent_node_id").as_deref() == Some(node_id)
+                })
+                .map(|e| e.run_id.clone())
+                .collect();
+            ids.dedup();
+            Ok(ids)
+        })
+    }
+
     fn forget<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, anyhow::Result<()>> {
         Box::pin(async move {
             self.forgotten.lock().unwrap().insert(run_id.to_string());

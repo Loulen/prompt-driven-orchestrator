@@ -70,7 +70,7 @@ function useFitZoom() {
   return { frame, zoom };
 }
 
-/** The cards of the most recent Run, as its canvas derives them, with its orchestrators' child runs. */
+/** The cards of the most recent Run, as its canvas derives them, with its parent nodes' child runs. */
 function useRecentCards(recent: RecentRun | null): EditNodeData[] | null {
   const { profiles } = useAgentProfiles(recent != null);
   const runId = recent?.run.run_id ?? null;
@@ -80,7 +80,7 @@ function useRecentCards(recent: RecentRun | null): EditNodeData[] | null {
     const ids = new Set(profiles.map((profile) => profile.id));
     return deriveEditNodes(recent.pipeline, recent.run, ids, profiles).map((node) => {
       const data = node.data as EditNodeData;
-      const kids = data.orchestrator ? childrenOfNode(children, recent.run.run_id, node.id) : [];
+      const kids = childrenOfNode(children, recent.run.run_id, node.id);
       return kids.length > 0 ? { ...data, childCounts: countChildren(kids) } : data;
     });
   }, [recent, profiles, children]);

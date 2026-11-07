@@ -46,7 +46,7 @@ function Pane({ tab, onSelectTab }: { tab: string; onSelectTab: (t: string) => v
     <DetailsPane
       node={node}
       runId="r1"
-      isOrchestratorNode={false}
+      showOrchestration={false}
       detailTab={tab}
       onSelectTab={onSelectTab}
       childCounts={{ total: 0, running: 0, awaiting: 0, failed: 0, done: 0 } as never}

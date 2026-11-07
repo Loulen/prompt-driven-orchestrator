@@ -45,9 +45,9 @@ interface Props {
   provisioningRepository?: string;
   inheritedProvisioning?: ScopedProvisioningRules[];
   provisioningGitRef?: string;
-  /** #723: the node's frozen « Orchestrator » toggle (ADR-0064) — mounts the
-   *  I/O | Orchestration tab pair and the pastilles. Absent ⇒ plain I/O pane,
-   *  byte-identical to the pre-#723 panel. */
+  /** #723: the node's frozen « Orchestrator » toggle (ADR-0064). The
+   *  Orchestration tab shows for any parent node (at least one child run); the
+   *  toggle announces one, so its tab shows from the start (empty state). */
   isOrchestratorNode?: boolean;
   /** #723: open a child run listed in the Orchestration tab (App records the way back). */
   onOpenChildRun?: (childRunId: string) => void;
@@ -80,16 +80,22 @@ export default function NodeDetailPanel({
   const [terminalLive, setTerminalLive] = useState<boolean | null>(null);
   // #870: whether this browser only watches the inline terminal.
   const [terminalSpectating, setTerminalSpectating] = useState(false);
-  // #723 — an orchestrator NodeRun splits its lower pane into I/O | Orchestration.
-  // I/O stays the default; the choice is per mounted node (remount = back to I/O).
+  // #723 — a parent node adds Orchestration to its tabs. I/O stays the
+  // default; the choice is per mounted node (remount = back to I/O).
   // `io`, `transcript`, `orchestration`, or the key of a `node/detail` tab of an
   // extension.
   const [detailTab, setDetailTab] = useState<string>(initialDetailTab);
-  // The children read polls with the run view cadence (never pushed), whether or
-  // not the tab is open — the tab-header pastilles count from the same read.
-  const childrenData = useRunChildren(runId, isOrchestratorNode);
+  // The children are read for ANY node (ADR-0064: the tab follows the real
+  // children, not the toggle), whether or not the tab is open — the tab-header
+  // pastilles count from the same read.
+  const childrenData = useRunChildren(runId, true);
   const nodeChildren = childrenOfNode(childrenData, runId, node.node_id);
   const childCounts = countChildren(nodeChildren);
+  // The tab shows on a first child or on the toggle, which announces a parent
+  // node (empty state from the start). A child appearing mid-session adds the
+  // tab quietly: the open tab stays the open one.
+  const showOrchestration = isOrchestratorNode || nodeChildren.length > 0;
+  const failedChild = nodeChildren.find((child) => child.status === "failed") ?? null;
   // #749: what the Review shortcut opens, if anything.
   const reviewTarget = nodeReviewTarget(node);
   // Seed at mount only (no reactive effect on status): the issue trigger is
@@ -288,6 +294,9 @@ export default function NodeDetailPanel({
           terminalSpectating={terminalSpectating}
           onShowApprove={awaitsApproval && markCompletable ? showApprove : undefined}
           onOpenChildRun={onOpenChildRun}
+          onOpenOrchestration={showOrchestration ? focusOrchestration : undefined}
+          failedChildren={childCounts.failed}
+          failedChildId={failedChild?.run_id ?? null}
           killStale={killStale}
           restartIteration={restartIteration}
           retry={retry}
@@ -336,7 +345,7 @@ export default function NodeDetailPanel({
             node={node}
             runId={runId}
             isArchived={isArchived}
-            isOrchestratorNode={isOrchestratorNode}
+            showOrchestration={showOrchestration}
             nodeName={nodeName ?? null}
             detailTab={detailTab}
             onSelectTab={setDetailTab}

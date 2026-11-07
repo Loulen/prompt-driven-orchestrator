@@ -1,8 +1,7 @@
 // #723 — Orchestration tab of the NodeRun detail panel + the shared count pastilles.
 import { useEffect, useState } from "react";
 import { ArrowRight, ExternalLink, GitFork } from "lucide-react";
-import { Button, EmptyState, StatusIcon } from "../../shared/ui/kit";
-import NodeBanner from "./nodeDetail/NodeBanner";
+import { EmptyState, StatusIcon } from "../../shared/ui/kit";
 import { isLiveRun } from "../model/runStatus";
 import { formatDuration } from "../model/runDuration";
 import { formatCostAmount } from "../model/costLabel";
@@ -195,17 +194,12 @@ function ChildRow({
 
 export function OrchestrationTab({
   childRuns,
-  counts,
   nodeLive,
-  nodeAwaiting,
   onOpenChild,
 }: {
   childRuns: RunChildEntry[];
-  counts: ChildCounts;
-  /** The orchestrator node's session is still live (children may still appear). */
+  /** The parent node's session is still live (children may still appear). */
   nodeLive: boolean;
-  /** The node is `awaiting_user` — with a failed child, the tab says why. */
-  nodeAwaiting: boolean;
   onOpenChild: (runId: string) => void;
 }) {
   if (childRuns.length === 0) {
@@ -217,24 +211,8 @@ export function OrchestrationTab({
       </div>
     );
   }
-  const failedChild = childRuns.find((c) => c.status === "failed");
   return (
     <div className="ri-orch" data-testid="orchestration-tab">
-      {nodeAwaiting && counts.failed > 0 && (
-        <NodeBanner
-          tone="failed"
-          title={`${counts.failed} child run${counts.failed > 1 ? "s" : ""} failed`}
-          text="the node waits for you · open the child to retry it, or Approve"
-          testId="orchestration-failed-banner"
-          actions={
-            failedChild && (
-              <Button size="sm" onClick={() => onOpenChild(failedChild.run_id)}>
-                Open
-              </Button>
-            )
-          }
-        />
-      )}
       <ul className="m-0 list-none p-0">
         {childRuns.map((child) => (
           <ChildRow key={child.run_id} child={child} onOpen={onOpenChild} />

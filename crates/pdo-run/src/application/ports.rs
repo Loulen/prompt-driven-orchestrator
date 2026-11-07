@@ -41,6 +41,15 @@ pub trait EventStore: Send + Sync {
     /// Whether a Run was started as a child of `run_id`. `true` when the log
     /// cannot tell: the caller then takes the slow, exact path.
     fn has_children<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, bool>;
+    /// The id of every Run started from the session of `node_id` in
+    /// `run_id` (its mechanical `parent_run_id` + `parent_node_id`, ADR-0064),
+    /// forgotten Runs excluded since their log is gone. An error lets the caller
+    /// fall back to a scan of every Run.
+    fn child_run_ids<'a>(
+        &'a self,
+        run_id: &'a str,
+        node_id: &'a str,
+    ) -> BoxFuture<'a, anyhow::Result<Vec<String>>>;
     /// Forget `run_id` for good (ADR-0024): tombstone it and purge its log
     /// and its Résumé in one step, so no late writer resurrects it.
     fn forget<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, anyhow::Result<()>>;

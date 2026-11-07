@@ -3251,3 +3251,83 @@ describe("NodeDetailPanel", () => {
     });
   });
 });
+
+// ADR-0064: the Orchestration tab and the waiting banner follow the node's real
+// child runs, Orchestrator toggle or not.
+describe("NodeDetailPanel of a parent node (ADR-0064)", () => {
+  function serveChildren(children: Array<{ run_id: string; status: string }>) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const body = String(url).endsWith("/children")
+          ? { run_id: "run-1", nodes: children.length > 0 ? [{ node_id: "test-node", children }] : [] }
+          : {};
+        return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+      }),
+    );
+  }
+  const waitingNode = () =>
+    makeNode({
+      status: "awaiting_user",
+      awaiting: { cause: "children_pending", since: "2026-09-12T10:00:00Z" },
+      iterations: [
+        { iter: 1, status: "awaiting_user", started_at: null, completed_at: null, interactive: false, completion_released: false },
+      ],
+    });
+
+  beforeEach(() => {
+    useGestureRightsStore.setState({ rights: NOTHING_REFUSED, viewed: null, listed: new Set() });
+    fetchNodeIOMock.mockResolvedValue({ inputs: [], outputs: [] });
+  });
+
+  it("adds the Orchestration tab on a first child, without the toggle, and keeps I/O open", async () => {
+    serveChildren([{ run_id: "child-1", status: "running" }]);
+    render(<NodeDetailPanel node={makeNode()} runId="run-1" />);
+    expect(await screen.findByTestId("detail-tab-orchestration")).toBeInTheDocument();
+    expect(screen.getByTestId("detail-tab-io")).toHaveAttribute("data-active", "true");
+    expect(screen.getByTestId("detail-tab-orchestration")).toHaveAttribute("data-active", "false");
+    expect(screen.getByTestId("tab-child-pills-running")).toHaveTextContent("1");
+    vi.unstubAllGlobals();
+  });
+
+  it("shows no Orchestration tab on a node without child nor toggle", async () => {
+    serveChildren([]);
+    render(<NodeDetailPanel node={makeNode()} runId="run-1" />);
+    await act(async () => {});
+    expect(screen.queryByTestId("detail-tab-orchestration")).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it("shows the tab from the start with the toggle, on its empty state", async () => {
+    serveChildren([]);
+    render(<NodeDetailPanel node={makeNode()} runId="run-1" isOrchestratorNode />);
+    fireEvent.click(screen.getByTestId("detail-tab-orchestration"));
+    expect(screen.getByTestId("orchestration-empty")).toHaveTextContent("No child run yet");
+    vi.unstubAllGlobals();
+  });
+
+  it("leads from the waiting banner to the Orchestration tab", async () => {
+    serveChildren([{ run_id: "child-1", status: "running" }]);
+    render(<NodeDetailPanel node={waitingNode()} runId="run-1" />);
+    expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent("Waiting on child runs");
+    fireEvent.click(await screen.findByTestId("awaiting-open-orchestration"));
+    expect(screen.getByTestId("detail-tab-orchestration")).toHaveAttribute("data-active", "true");
+    expect(screen.getAllByTestId("orchestration-child")).toHaveLength(1);
+    vi.unstubAllGlobals();
+  });
+
+  it("turns the waiting banner to the failed one once a child failed, Open leading to it", async () => {
+    serveChildren([
+      { run_id: "child-ok", status: "completed" },
+      { run_id: "child-ko", status: "failed" },
+    ]);
+    const onOpenChildRun = vi.fn();
+    render(<NodeDetailPanel node={waitingNode()} runId="run-1" onOpenChildRun={onOpenChildRun} />);
+    await waitFor(() => expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent("1 child run failed"));
+    expect(screen.getByTestId("awaiting-banner")).toHaveAttribute("data-failed-children", "1");
+    expect(screen.getByTestId("awaiting-banner-message")).toHaveTextContent("the node waits for you");
+    fireEvent.click(screen.getByTestId("awaiting-open-failed-child"));
+    expect(onOpenChildRun).toHaveBeenCalledWith("child-ko");
+    vi.unstubAllGlobals();
+  });
+});

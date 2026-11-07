@@ -28,7 +28,7 @@ export function useRunNavigation({
   const selection = useEditStore((s) => s.selection);
   const setSelection = useEditStore((s) => s.setSelection);
   // #723 — the way back from a child run opened in an Orchestration tab: parent
-  // run + orchestrator node. Declared before `handleSelectRun`, which clears
+  // run + parent node (any node with child runs). Declared before `handleSelectRun`, which clears
   // both on any navigation — the bar's visibility is derived (child run
   // selected), so no effect ever needs to reconcile them.
   const [orchestratorReturn, setOrchestratorReturn] = useState<{
@@ -39,7 +39,7 @@ export function useRunNavigation({
     childRunId: string;
   } | null>(null);
   // One-shot landing: set by the back gesture, consumed by the remount of the
-  // orchestrator's NodeDetailPanel (I/O stays the default everywhere else).
+  // parent node's NodeDetailPanel (I/O stays the default everywhere else).
   const [landOnOrchestration, setLandOnOrchestration] = useState<string | null>(null);
   // One-shot landing the other way: the child run just opened, whose node to
   // select once its state has arrived.
@@ -74,7 +74,7 @@ export function useRunNavigation({
   );
 
   // #723 — opening a child run from the Orchestration tab: record the way back
-  // (parent run + orchestrator node) AFTER the navigation, so the shared
+  // (parent run + parent node) AFTER the navigation, so the shared
   // `handleSelectRun`'s clear does not wipe it.
   const handleOpenChildRun = useCallback(
     async (childRunId: string) => {

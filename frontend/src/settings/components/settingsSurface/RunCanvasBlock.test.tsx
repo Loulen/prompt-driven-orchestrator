@@ -156,7 +156,7 @@ describe("the Run canvas block", () => {
   it("leads with Compact nodes, then a switch per element of a card at its default", () => {
     mount("canvas");
     const block = screen.getByTestId("appearance-block-run-canvas");
-    expect(block).toHaveTextContent("Always shown: Type icon, name, status, child runs of an orchestrator");
+    expect(block).toHaveTextContent("Always shown: Type icon, name, status, child runs of a parent node");
     const labels = [...block.querySelectorAll(".set-row__name")].map((name) => name.textContent);
     expect(labels).toEqual(["Compact nodes", "Model", "Iteration", "Elapsed time", "Cost", "Isolation flag", "Loop badge", "Agent profile marker"]);
     expect(isOn(switchOf("compact-nodes"))).toBe(false);

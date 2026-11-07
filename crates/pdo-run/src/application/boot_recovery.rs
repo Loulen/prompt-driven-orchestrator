@@ -11,7 +11,11 @@
 //!   - an orphaned live node whose tmux session is gone → `Failed`;
 //!   - a sub-worktree branch merged into the pipeline branch with no
 //!     `NodeCompleted` (#213 AC3) → surfaced (logged), never fabricated complete;
-//!   - a run-level stall reconciled via the shared `reconcile_run_level_stall`.
+//!   - a run-level stall reconciled via the shared `reconcile_run_level_stall`;
+//!   - a node parked by the parent-node binding (ADR-0064) is not an orphan: it
+//!     waits on its child runs, not on its session (a `script` parent's session
+//!     ends with its body). Its watcher is armed again once the pass is over,
+//!     so it completes itself once its children settle.
 //!
 //! Non-reentrancy (ADR-0009): this is a linear sequence of guarded `append_event`
 //! calls and must never call the scheduler or re-enter itself. `reconcile_run_level_stall`
@@ -25,6 +29,9 @@ use crate::application::events::append_event;
 use crate::application::events::load_all_run_ids;
 use crate::application::events::load_events;
 use crate::application::paths::effective_repo_root;
+use crate::application::scheduler::advance::{
+    binding_marker_present, spawn_children_settled_watcher, BINDING_MARKER_REASON,
+};
 use crate::application::scheduler::node_completion::retry_waiting_nodes;
 use crate::application::scheduler::stall::reconcile_run_level_stall;
 use crate::domain::admission;
@@ -35,7 +42,7 @@ use pdo_workspace::adapters::git::worktrees::sub_worktree_branch;
 ///
 /// Posture: fail-fast, never silent auto-repair — every reconciliation routes
 /// through the transition guard (#212, via [`append_event`]).
-pub async fn run_boot_recovery(state: &Runs) {
+pub async fn run_boot_recovery(state: &std::sync::Arc<Runs>) {
     let run_ids = match load_all_run_ids(state).await {
         Ok(ids) => ids,
         Err(e) => {
@@ -45,6 +52,10 @@ pub async fn run_boot_recovery(state: &Runs) {
     };
 
     let tmux = state.tmux();
+    // The nodes the binding holds, whose watcher is armed again once the
+    // reconciliation is over (it completes through the scheduler, which this
+    // pass never calls itself).
+    let mut held_by_children: Vec<(String, String, i64)> = Vec::new();
 
     for run_id in &run_ids {
         let events = match load_events(state, run_id).await {
@@ -175,8 +186,11 @@ pub async fn run_boot_recovery(state: &Runs) {
             }
         }
 
-        // (1) Orphaned live nodes: live status, no tmux session.
-        let orphaned: Vec<(String, i64)> = run_state
+        // (1) Orphaned live nodes: live status, no tmux session. A node the
+        // binding parked waits on its child runs, whatever its session: the
+        // watcher that completes it died with the previous daemon, so it is
+        // armed again here (it re-reads the children itself).
+        let (held, live): (Vec<_>, Vec<_>) = run_state
             .nodes
             .iter()
             .filter(|(_, ns)| {
@@ -185,6 +199,20 @@ pub async fn run_boot_recovery(state: &Runs) {
                     state::NodeStatus::Running | state::NodeStatus::AwaitingUser
                 )
             })
+            .partition(|(id, ns)| {
+                ns.status == state::NodeStatus::AwaitingUser
+                    && ns
+                        .awaiting
+                        .as_ref()
+                        .is_some_and(|a| a.cause == BINDING_MARKER_REASON)
+                    && binding_marker_present(&events, id, ns.iter)
+            });
+        held_by_children.extend(
+            held.into_iter()
+                .map(|(node_id, ns)| (run_id.clone(), node_id.clone(), ns.iter)),
+        );
+        let orphaned: Vec<(String, i64)> = live
+            .into_iter()
             .filter_map(|(id, ns)| {
                 let session = pdo_session::domain::names::node_session_name(run_id, id, ns.iter);
                 (!tmux.session_exists(&session)).then(|| (id.clone(), ns.iter))
@@ -242,6 +270,13 @@ pub async fn run_boot_recovery(state: &Runs) {
     // #159), so this one restart-time sweep is what closes the gap. Global and
     // idempotent: once, after the whole loop.
     retry_waiting_nodes(state).await;
+
+    // (5) ADR-0064: the watchers of the nodes held by their child runs died with
+    // the previous daemon. Detached, after the pass: each re-reads the children
+    // and completes its node once they have all settled.
+    for (run_id, node_id, iter) in held_by_children {
+        spawn_children_settled_watcher(std::sync::Arc::clone(state), run_id, node_id, iter);
+    }
 }
 
 /// Detect sub-worktree branches whose work was merged into the pipeline branch

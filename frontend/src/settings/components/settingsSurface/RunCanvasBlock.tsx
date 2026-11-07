@@ -21,7 +21,7 @@ export default function RunCanvasBlock({ recent, none }: { recent: RecentRun | n
     <AppearanceBlock
       id="run-canvas"
       title="Run canvas"
-      alwaysShown="Type icon, name, status, child runs of an orchestrator"
+      alwaysShown="Type icon, name, status, child runs of a parent node"
       note={compactNodes ? "Compact nodes is on: cards show their icon, name and status only." : undefined}
       preview={<RunCanvasPreview recent={recent} none={none} compact={compactNodes} pointed={compactNodes ? null : pointed} />}
     >

@@ -21,7 +21,7 @@ import { useDetailTabs } from "../../../shared/extensions/catalogue";
 
 /**
  * The lower pane of the panel: the tabs — I/O, Transcript, Orchestration for
- * an orchestrator node, the extensions', Approve ▾ pinned at the right of
+ * a parent node (ADR-0064), the extensions', Approve ▾ pinned at the right of
  * them — then the selected tab: Outputs,
  * Inputs, Live artifacts, Properties and Prompt under I/O.
  */
@@ -29,7 +29,7 @@ export default function DetailsPane({
   node,
   runId,
   isArchived,
-  isOrchestratorNode,
+  showOrchestration,
   nodeName = null,
   detailTab,
   onSelectTab,
@@ -49,7 +49,8 @@ export default function DetailsPane({
   node: NodeState;
   runId: string;
   isArchived?: boolean;
-  isOrchestratorNode: boolean;
+  /** The node has a child run, or the Orchestrator toggle: the Orchestration tab. */
+  showOrchestration: boolean;
   nodeName?: string | null;
   /** `io`, `transcript`, `orchestration`, or the key of a `node/detail` tab of
    *  an extension. */
@@ -90,7 +91,7 @@ export default function DetailsPane({
   );
   const { tabs: extensionTabs, context: extensionContext } = useDetailTabs(entity, "node/detail");
   const extensionTab = extensionTabs.find((t) => t.key === detailTab) ?? null;
-  const coreTabs = isOrchestratorNode
+  const coreTabs = showOrchestration
     ? (["io", "transcript", "orchestration"] as const)
     : (["io", "transcript"] as const);
   const isCoreTab = (tab: string) => (coreTabs as readonly string[]).includes(tab);
@@ -112,7 +113,7 @@ export default function DetailsPane({
   );
   return (
     <div className="ri-dtabs" data-testid="details-pane">
-      {/* I/O | Transcript (| Orchestration for an orchestrator node, #723) |
+      {/* I/O | Transcript (| Orchestration for a parent node, #723) |
           the extensions' tabs, above the tab's content. */}
       <div className="ri-dtabs__bar" data-testid="detail-tabs-bar">
         <div className="ri-dtabs__tabs" role="tablist" aria-label="Node details" data-testid="detail-tabs">
@@ -160,12 +161,10 @@ export default function DetailsPane({
           onSelectIter={onSelectIter}
           live={iterLive}
         />
-      ) : isOrchestratorNode && detailTab === "orchestration" ? (
+      ) : showOrchestration && detailTab === "orchestration" ? (
         <OrchestrationTab
           childRuns={nodeChildren}
-          counts={childCounts}
           nodeLive={node.status === "running" || node.status === "awaiting_user"}
-          nodeAwaiting={node.status === "awaiting_user"}
           onOpenChild={(id) => onOpenChildRun?.(id)}
         />
       ) : (

@@ -138,7 +138,7 @@ async fn a_node_mounts_and_unmounts_in_the_projet_of_its_run_and_nowhere_else() 
     assert_eq!(body["run_id"], in_p.as_str());
     let (actor, operation) = last_asked(&control, Verb::Create);
     assert!(matches!(actor, Actor::Agent { .. }), "{actor:?}");
-    assert_eq!(operation.projects, [p.clone()]);
+    assert_eq!(operation.projects, std::slice::from_ref(&p));
     assert_eq!(served(&daemon, "mockup").await, 200);
     assert_eq!(listed(&daemon).await, ["mockup"]);
 
@@ -154,7 +154,7 @@ async fn a_node_mounts_and_unmounts_in_the_projet_of_its_run_and_nowhere_else() 
     assert_eq!(status, 200, "{body}");
     let (_, operation) = last_asked(&control, Verb::Delete);
     assert_eq!(operation.target.as_deref(), Some("mockup"));
-    assert_eq!(operation.projects, [p.clone()]);
+    assert_eq!(operation.projects, std::slice::from_ref(&p));
     assert_eq!(served(&daemon, "mockup").await, 404);
     assert!(listed(&daemon).await.is_empty());
 
@@ -168,7 +168,10 @@ async fn a_node_mounts_and_unmounts_in_the_projet_of_its_run_and_nowhere_else() 
     )
     .await;
     assert_eq!(status, 403, "{body}");
-    assert_eq!(last_asked(&control, Verb::Create).1.projects, [q.clone()]);
+    assert_eq!(
+        last_asked(&control, Verb::Create).1.projects,
+        std::slice::from_ref(&q)
+    );
     assert!(listed(&daemon).await.is_empty());
 
     // Outside any Run, the mount names no Projet, as before.

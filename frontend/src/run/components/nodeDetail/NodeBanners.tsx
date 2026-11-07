@@ -26,7 +26,7 @@ function interruptedBanner(reason: string | null | undefined): { title: string; 
 
 /**
  * The status banners stacked between the header and the terminal, one tinted
- * line each: completion released, awaiting user, stale, stopped, interrupted,
+ * line each: awaiting user, stale, stopped, interrupted,
  * skipped, frontmatter retry and the two failed variants.
  */
 export default function NodeBanners({
@@ -38,16 +38,12 @@ export default function NodeBanners({
   nodeAwaitsOnLatestIter,
   terminalLive,
   terminalSpectating,
-  canReleaseCompletion,
-  isReleasing,
-  releaseCompletion,
-  markComplete,
+  onShowApprove,
   onOpenChildRun,
   killStale,
   restartIteration,
   retry,
   refused,
-  markCompletable,
 }: {
   node: NodeState;
   isArchived?: boolean;
@@ -57,18 +53,14 @@ export default function NodeBanners({
   nodeAwaitsOnLatestIter: boolean;
   terminalLive: boolean | null;
   terminalSpectating: boolean;
-  canReleaseCompletion: boolean;
-  isReleasing: boolean;
-  releaseCompletion: () => void;
-  markComplete: () => void;
+  /** Approve ▾ is on the panel: « Show Approve » brings it to the screen and rings it. */
+  onShowApprove?: () => void;
   onOpenChildRun?: (childRunId: string) => void;
   killStale: () => void;
   restartIteration: () => void;
   retry: () => void;
   /** CORE-205: the gestures on this node the caller may not make, and why; they stay, greyed. */
   refused: NodeGestureRefusals;
-  /** The daemon would complete the node: « Approve » shows. */
-  markCompletable: boolean;
 }) {
   // A failed node is retried from its banner too.
   const failedActions = !isArchived && (
@@ -90,12 +82,7 @@ export default function NodeBanners({
           awaiting={selectedIter === node.iter ? node.awaiting : null}
           terminalLive={terminalLive ?? true}
           terminalSpectating={terminalSpectating}
-          canRelease={canReleaseCompletion && !isReleasing}
-          releaseRefused={refused.release}
-          canMarkComplete={markCompletable}
-          markCompleteRefused={refused.markComplete}
-          onRelease={releaseCompletion}
-          onMarkComplete={markComplete}
+          onShowApprove={onShowApprove}
           onOpenChildRun={onOpenChildRun}
         />
       )}

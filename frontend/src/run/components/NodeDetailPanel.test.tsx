@@ -193,6 +193,7 @@ describe("NodeDetailPanel", () => {
     useGestureRightsStore.setState({ rights: NOTHING_REFUSED, viewed: null, listed: new Set() });
     fetchPromptMock.mockClear();
     fetchNodeIOMock.mockClear();
+    fetchNodeIOMock.mockResolvedValue({ inputs: [], outputs: [] });
     killNodeMock.mockClear();
     restartNodeMock.mockClear();
     previewProvisioningMock.mockClear();
@@ -356,7 +357,7 @@ describe("NodeDetailPanel", () => {
       );
     });
 
-    it("renders the details pane (Mark complete + sections) by default (collapsed)", () => {
+    it("renders the details pane (Approve + sections) by default (collapsed)", () => {
       render(
         <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
@@ -364,7 +365,7 @@ describe("NodeDetailPanel", () => {
       );
       expect(screen.getByTestId("details-pane")).toBeInTheDocument();
       expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
-      expect(screen.getByTestId("mark-complete-btn")).toHaveAccessibleName("Mark complete");
+      expect(screen.getByTestId("approve-btn")).toHaveAccessibleName("Approve");
       expect(screen.getByTestId("prompt-section")).toBeInTheDocument();
     });
 
@@ -393,7 +394,7 @@ describe("NodeDetailPanel", () => {
       expect(screen.getByTestId("terminal-overlay-backdrop").className).toMatch(/\bfixed inset-0\b/);
       // The old « whole right panel » mode is gone: the panel is still there.
       expect(screen.getByTestId("details-pane")).toBeInTheDocument();
-      expect(screen.getByTestId("mark-complete-btn")).toBeInTheDocument();
+      expect(screen.getByTestId("approve-btn")).toBeInTheDocument();
     });
 
     it("gives the keyboard to the terminal when it opens", () => {
@@ -1272,31 +1273,31 @@ describe("NodeDetailPanel", () => {
       expect(screen.getByTestId("stale-banner")).toHaveTextContent("Idle 2m+ — outputs incomplete");
     });
 
-    it("offers Mark complete only where the daemon completes: never on a stale or interrupted node", () => {
+    it("offers Approve only where the daemon completes: never on a stale or interrupted node", () => {
       // The completion guard takes a running, awaiting or failed iteration; the
       // command field offers the same (paletteItems.test.ts).
       for (const status of ["running", "failed"] as const) {
         const { unmount } = render(<NodeDetailPanel node={makeNode({ status })} runId="run-1" />);
-        expect(screen.getByTestId("mark-complete-btn")).toBeInTheDocument();
+        expect(screen.getByTestId("approve-btn")).toBeInTheDocument();
         unmount();
       }
       for (const status of ["stale", "interrupted"] as const) {
         const { unmount } = render(<NodeDetailPanel node={makeNode({ status })} runId="run-1" />);
-        expect(screen.queryByTestId("mark-complete-btn")).not.toBeInTheDocument();
+        expect(screen.queryByTestId("approve-btn")).not.toBeInTheDocument();
         unmount();
       }
       // A paused Run is resumed before anything completes in it.
       render(<NodeDetailPanel node={makeNode({ status: "failed" })} runId="run-1" runStatus="paused" />);
-      expect(screen.queryByTestId("mark-complete-btn")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("approve-btn")).not.toBeInTheDocument();
     });
 
-    it("stopped node does not show Mark complete button", () => {
+    it("stopped node does not show Approve", () => {
       render(
         <>
           <NodeDetailPanel node={makeNode({ status: "stopped" })} runId="run-1" />
         </>,
       );
-      expect(screen.queryByTestId("mark-complete-btn")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("approve-btn")).not.toBeInTheDocument();
     });
 
     it("minimizes the terminal for a stopped node", () => {
@@ -1391,13 +1392,13 @@ describe("NodeDetailPanel", () => {
       expect(retryNodeMock).toHaveBeenCalledWith("run-1", "test-node");
     });
 
-    it("offers no Mark complete: the daemon refuses to complete an interrupted node, Reopen re-drives it", () => {
+    it("offers no Approve: the daemon refuses to complete an interrupted node, Reopen re-drives it", () => {
       render(
         <>
           <NodeDetailPanel node={interrupted()} runId="run-1" />
         </>,
       );
-      expect(screen.queryByTestId("mark-complete-btn")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("approve-btn")).not.toBeInTheDocument();
       expect(screen.getByTestId("interrupted-reopen-btn")).toBeInTheDocument();
     });
 
@@ -1419,7 +1420,7 @@ describe("NodeDetailPanel", () => {
       );
       expect(screen.queryByTestId("node-controls")).not.toBeInTheDocument();
       expect(screen.queryByTestId("interrupted-reopen-btn")).not.toBeInTheDocument();
-      expect(screen.queryByTestId("mark-complete-btn")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("approve-btn")).not.toBeInTheDocument();
     });
   });
 
@@ -2110,8 +2111,9 @@ describe("NodeDetailPanel", () => {
       );
       expect(screen.getByTestId("awaiting-banner-hint")).toHaveTextContent(/press Enter/);
       expect(screen.getByTestId("awaiting-banner-since")).toHaveTextContent(/waiting/);
-      // The completion buttons stay the only other interactive marker.
-      expect(screen.getByTestId("release-completion-btn")).not.toHaveAttribute("data-primary");
+      // A declared wait points at no completion gesture: Approve ▾ stays unringed.
+      expect(screen.getByTestId("approve-btn-menu")).toBeInTheDocument();
+      expect(screen.getByTestId("approve")).not.toHaveAttribute("data-ring");
     });
 
     // #870: a spectator's Enter reaches nothing until it takes control.
@@ -2185,12 +2187,14 @@ describe("NodeDetailPanel", () => {
       );
       expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent("Awaiting you");
       expect(screen.queryByTestId("awaiting-banner-message")).toBeNull();
-      // Non-interactive: no release button, « Mark complete » only.
-      expect(screen.queryByTestId("release-completion-btn")).toBeNull();
-      expect(screen.getByTestId("mark-complete-btn")).toBeInTheDocument();
+      // Non-interactive: Approve without its chevron.
+      expect(screen.queryByTestId("approve-btn-menu")).toBeNull();
+      expect(screen.getByTestId("approve-btn")).toBeInTheDocument();
     });
 
-    it("links both exits from the banner and rings « Mark ready » on a refused completion (A3)", () => {
+    it("names the wait and brings Approve to the screen, ringed, from its banner (A3)", async () => {
+      const scrollIntoView = vi.fn();
+      Element.prototype.scrollIntoView = scrollIntoView;
       render(
         <>
           <NodeDetailPanel
@@ -2203,16 +2207,20 @@ describe("NodeDetailPanel", () => {
           />
         </>,
       );
-      expect(screen.getByTestId("awaiting-banner")).toHaveAttribute(
-        "data-cause",
-        "completion_not_released",
-      );
+      const banner = screen.getByTestId("awaiting-banner");
+      expect(banner).toHaveAttribute("data-cause", "completion_not_released");
       expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent("Done, awaiting approval");
-      expect(screen.getByTestId("release-completion-btn")).toHaveAttribute("data-primary", "true");
-      fireEvent.click(screen.getByTestId("awaiting-banner-release"));
-      expect(releaseNodeCompletionMock).toHaveBeenCalledWith("run-1", "test-node", 1);
-      fireEvent.click(screen.getByTestId("awaiting-banner-mark-complete"));
-      expect(markNodeDoneMock).toHaveBeenCalled();
+      // No completion gesture in the banner any more, and no « Mark ready » anywhere.
+      expect(within(banner).queryByText("Approve")).toBeNull();
+      expect(within(banner).queryByText("Mark ready")).toBeNull();
+      expect(screen.queryByTestId("release-completion-btn")).toBeNull();
+      expect(screen.queryByText("Mark ready")).toBeNull();
+      expect(screen.getByTestId("approve")).not.toHaveAttribute("data-ring");
+
+      fireEvent.click(screen.getByTestId("awaiting-banner-show-approve"));
+      expect(screen.getByTestId("approve")).toHaveAttribute("data-ring", "true");
+      await waitFor(() => expect(screen.getByTestId("approve-btn")).toHaveFocus());
+      expect(scrollIntoView).toHaveBeenCalled();
     });
 
     it("points at the awaiting child and gives no Enter hint on a derived wait (C)", () => {
@@ -2308,8 +2316,116 @@ describe("NodeDetailPanel", () => {
         </>,
       );
       expect(screen.queryByTestId("awaiting-banner")).toBeNull();
-      expect(screen.getByTestId("release-completion-btn")).toBeInTheDocument();
-      expect(screen.getByTestId("mark-complete-btn")).toBeInTheDocument();
+      expect(screen.getByTestId("approve-btn-menu")).toBeInTheDocument();
+      expect(screen.getByTestId("approve-btn")).toBeInTheDocument();
+    });
+  });
+
+  // CORE-211: one completion gesture, Approve ▾, at the right of the detail tabs.
+  describe("Approve ▾ (CORE-211)", () => {
+    const out = (port: string, missing: boolean, port_type = "markdown") => ({
+      port,
+      repeated: false,
+      port_type,
+      files: missing ? [] : [{ path: `n/iter-1/${port}/output.md`, exists: true, size: 10, frontmatter: null }],
+      missing,
+    });
+    const interactive = (over?: Partial<NodeState>) =>
+      makeNode({
+        status: "running",
+        iterations: [
+          { iter: 1, status: "running", started_at: null, completed_at: null, interactive: true, completion_released: false },
+        ],
+        ...over,
+      });
+
+    it("sits at the right of the detail tabs; the header keeps the lifecycle gestures only", () => {
+      render(<NodeDetailPanel node={interactive()} runId="run-1" />);
+      const bar = screen.getByTestId("detail-tabs-bar");
+      expect(bar).toContainElement(screen.getByTestId("approve-btn"));
+      expect(bar).toContainElement(screen.getByTestId("approve-btn-menu"));
+      // Not among the tabs, which scroll: pinned beside them.
+      expect(screen.getByTestId("detail-tabs")).not.toContainElement(screen.getByTestId("approve-btn"));
+      const header = screen.getByTestId("node-controls");
+      expect(header).not.toContainElement(screen.getByTestId("approve-btn"));
+      expect(within(header).queryByRole("button", { name: /Mark ready|Mark complete|Approve|Completion released/ })).toBeNull();
+      expect(within(header).getByRole("button", { name: "Retry" })).toBeInTheDocument();
+      expect(within(header).getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    });
+
+    it("waits for the missing outputs, naming them, in a lighter ruby; the chevron stays live", async () => {
+      fetchNodeIOMock.mockResolvedValue({ inputs: [], outputs: [out("out", true), out("final", true, "image_list")] });
+      render(<NodeDetailPanel node={interactive()} runId="run-1" />);
+      await waitFor(() => expect(screen.getByTestId("approve-btn")).toHaveAttribute("data-pending", "true"));
+      const approve = screen.getByTestId("approve-btn");
+      expect(approve).toHaveAttribute("aria-disabled", "true");
+      expect(approve).toHaveClass("d-btn--primary");
+      expect(screen.getByTestId("approve-btn-menu")).not.toHaveAttribute("aria-disabled");
+      await act(async () => {
+        fireEvent.click(approve);
+      });
+      expect(markNodeDoneMock).not.toHaveBeenCalled();
+      fireEvent.pointerDown(approve);
+      expect(await screen.findByRole("tooltip")).toHaveTextContent("Missing outputs: out, final");
+    });
+
+    it("turns clickable once the outputs are written, and Approve completes without a success banner", async () => {
+      fetchNodeIOMock.mockResolvedValue({ inputs: [], outputs: [out("out", false)] });
+      render(<NodeDetailPanel node={interactive()} runId="run-1" />);
+      await waitFor(() => expect(fetchNodeIOMock).toHaveBeenCalled());
+      const approve = screen.getByTestId("approve-btn");
+      await waitFor(() => expect(approve).not.toHaveAttribute("aria-disabled"));
+      expect(approve).not.toHaveAttribute("data-pending");
+      await act(async () => {
+        fireEvent.click(approve);
+      });
+      expect(markNodeDoneMock).toHaveBeenCalledWith("run-1", "test-node", 1);
+      expect(screen.queryByTestId("mark-complete-verdict")).toBeNull();
+      expect(screen.queryByTestId("release-verdict")).toBeNull();
+    });
+
+    it("waits, inert, until the outputs of the iteration on screen are read", async () => {
+      let resolve: (v: unknown) => void = () => {};
+      fetchNodeIOMock.mockImplementation(() => new Promise((r) => (resolve = r)));
+      render(<NodeDetailPanel node={interactive()} runId="run-1" />);
+      const approve = screen.getByTestId("approve-btn");
+      expect(approve).toHaveAttribute("data-pending", "true");
+      fireEvent.click(approve);
+      expect(markNodeDoneMock).not.toHaveBeenCalled();
+      await act(async () => resolve({ inputs: [], outputs: [out("out", false)] }));
+      await waitFor(() => expect(screen.getByTestId("approve-btn")).not.toHaveAttribute("aria-disabled"));
+    });
+
+    it("is ruby on every completable status, without a chevron off an interactive live iteration", () => {
+      for (const status of ["running", "awaiting_user", "failed"] as const) {
+        const { unmount } = render(<NodeDetailPanel node={makeNode({ status })} runId="run-1" />);
+        expect(screen.getByTestId("approve-btn")).toHaveClass("d-btn--primary");
+        expect(screen.queryByTestId("approve-btn-menu")).toBeNull();
+        unmount();
+      }
+    });
+
+    it("hides on an older iteration and on an archived Run", async () => {
+      const node = makeNode({
+        status: "awaiting_user",
+        iter: 2,
+        iterations: [
+          { iter: 1, status: "completed", started_at: null, completed_at: null },
+          { iter: 2, status: "awaiting_user", started_at: null, completed_at: null },
+        ],
+      });
+      const { unmount } = render(<NodeDetailPanel node={node} runId="run-1" />);
+      expect(screen.getByTestId("approve-btn")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: /^Iteration 2 of/ }));
+      const option = await screen.findByTestId("iter-option-1");
+      await act(async () => {
+        fireEvent.click(option);
+      });
+      expect(screen.queryByTestId("approve-btn")).toBeNull();
+      unmount();
+
+      render(<NodeDetailPanel node={interactive()} runId="run-1" isArchived />);
+      expect(screen.queryByTestId("approve-btn")).toBeNull();
     });
   });
 
@@ -2317,8 +2433,10 @@ describe("NodeDetailPanel", () => {
     const awaitingNode = () => makeNode({ status: "awaiting_user" });
 
     async function clickMarkComplete() {
+      // Approve waits for the outputs of the iteration on screen to be read.
+      await waitFor(() => expect(screen.getByTestId("approve-btn")).not.toHaveAttribute("aria-disabled"));
       await act(async () => {
-        fireEvent.click(screen.getByTestId("mark-complete-btn"));
+        fireEvent.click(screen.getByTestId("approve-btn"));
       });
     }
 
@@ -2328,7 +2446,7 @@ describe("NodeDetailPanel", () => {
           <NodeDetailPanel node={awaitingNode()} runId="run-1" />
         </>,
       );
-      expect(screen.getByTestId("mark-complete-btn")).toBeInTheDocument();
+      expect(screen.getByTestId("approve-btn")).toBeInTheDocument();
     });
 
     it("shows a recoverable refusal as still-your-turn, with the missing ports", async () => {
@@ -2524,14 +2642,24 @@ describe("NodeDetailPanel", () => {
           ...overrides,
         });
 
-      it("shows both exits only for a live interactive iteration", () => {
+      async function openApproveMenu() {
+        await act(async () => {
+          fireEvent.click(screen.getByTestId("approve-btn-menu"));
+        });
+        return screen.findByRole("menu", { name: "Approve options" });
+      }
+
+      it("offers « Auto-approve when ready » under the chevron only for a live interactive iteration", async () => {
         const { rerender } = render(
           <>
             <NodeDetailPanel node={liveInteractive()} runId="run-1" />
           </>,
         );
-        expect(screen.getByTestId("release-completion-btn")).toBeInTheDocument();
-        expect(screen.getByTestId("mark-complete-btn")).toBeInTheDocument();
+        expect(screen.getByTestId("approve-btn")).toBeInTheDocument();
+        const menu = await openApproveMenu();
+        expect(
+          within(menu).getByRole("menuitemcheckbox", { name: "Auto-approve when ready" }),
+        ).toHaveAttribute("aria-checked", "false");
 
         rerender(
           <>
@@ -2552,7 +2680,8 @@ describe("NodeDetailPanel", () => {
             />
           </>,
         );
-        expect(screen.queryByTestId("release-completion-btn")).not.toBeInTheDocument();
+        expect(screen.queryByTestId("approve-btn-menu")).not.toBeInTheDocument();
+        expect(screen.getByTestId("approve-btn")).toBeInTheDocument();
 
         rerender(
           <>
@@ -2562,20 +2691,23 @@ describe("NodeDetailPanel", () => {
             />
           </>,
         );
-        expect(screen.queryByTestId("release-completion-btn")).not.toBeInTheDocument();
+        expect(screen.queryByTestId("approve-btn")).not.toBeInTheDocument();
+        expect(screen.queryByTestId("approve-btn-menu")).not.toBeInTheDocument();
       });
 
-      it("calls release and renders the projected released state", async () => {
+      it("arms auto-approval: the entry checked and inert, a blue dot on the chevron, no success banner", async () => {
         const { rerender } = render(
           <>
             <NodeDetailPanel node={liveInteractive()} runId="run-1" />
           </>,
         );
+        const menu = await openApproveMenu();
         await act(async () => {
-          fireEvent.click(screen.getByTestId("release-completion-btn"));
+          fireEvent.click(within(menu).getByRole("menuitemcheckbox", { name: "Auto-approve when ready" }));
         });
         expect(releaseNodeCompletionMock).toHaveBeenCalledWith("run-1", "test-node", 1);
         expect(screen.queryByTestId("release-verdict")).not.toBeInTheDocument();
+        expect(screen.getByTestId("approve-btn-menu")).not.toHaveAttribute("data-indicator");
 
         rerender(
           <>
@@ -2597,14 +2729,40 @@ describe("NodeDetailPanel", () => {
             />
           </>,
         );
-        expect(screen.getByTestId("release-verdict")).toHaveAttribute(
-          "data-verdict",
-          "released",
-        );
-        expect(screen.getByTestId("release-verdict")).toHaveTextContent("Completion released");
+        expect(screen.queryByTestId("release-verdict")).not.toBeInTheDocument();
+        const chevron = screen.getByTestId("approve-btn-menu");
+        expect(chevron).toHaveAttribute("data-indicator", "true");
+        const armed = await openApproveMenu();
+        const entry = within(armed).getByRole("menuitemcheckbox", { name: "Auto-approve when ready" });
+        expect(entry).toHaveAttribute("aria-checked", "true");
+        expect(entry).toHaveAttribute("aria-disabled", "true");
+        releaseNodeCompletionMock.mockClear();
+        fireEvent.click(entry);
+        expect(releaseNodeCompletionMock).not.toHaveBeenCalled();
       });
 
-      it("renders projected release state after reload and scopes it to the displayed iteration", () => {
+      it("says « Releasing… » in the entry while the request runs", async () => {
+        let resolve: (v: unknown) => void = () => {};
+        releaseNodeCompletionMock.mockImplementationOnce(() => new Promise((r) => (resolve = r)));
+        render(
+          <>
+            <NodeDetailPanel node={liveInteractive()} runId="run-1" />
+          </>,
+        );
+        let menu = await openApproveMenu();
+        await act(async () => {
+          fireEvent.click(within(menu).getByRole("menuitemcheckbox", { name: "Auto-approve when ready" }));
+        });
+        menu = await openApproveMenu();
+        expect(within(menu).getByRole("menuitemcheckbox", { name: "Releasing…" })).toHaveAttribute(
+          "aria-disabled",
+          "true",
+        );
+        expect(screen.queryByTestId("release-verdict")).not.toBeInTheDocument();
+        await act(async () => resolve({ kind: "released" }));
+      });
+
+      it("reads the armed state of the iteration on screen, not of an older one", () => {
         render(
           <>
             <NodeDetailPanel
@@ -2634,8 +2792,8 @@ describe("NodeDetailPanel", () => {
             />
           </>,
         );
-
-        expect(screen.getByTestId("release-completion-btn")).toHaveAccessibleName("Mark ready for completion");
+        // The latest iteration is on screen: not armed.
+        expect(screen.getByTestId("approve-btn-menu")).not.toHaveAttribute("data-indicator");
       });
     });
   });

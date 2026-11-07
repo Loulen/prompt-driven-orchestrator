@@ -1,4 +1,4 @@
-import { Check, LockOpen } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { Button } from "../../../shared/ui/kit";
 import NodeBanner from "./NodeBanner";
 import type { AwaitingInfo } from "../../../shared/generated/AwaitingInfo";
@@ -10,8 +10,8 @@ import { useWaitingLabel } from "../../store/useWaitingLabel";
  * - `declared` (A1/A2): « Question » and the agent's message verbatim; the
  *   Enter hint (the frozen-pane hint when no live socket, A4; « take control
  *   to reply » for a spectator, #870);
- * - `completion_not_released` (A3): « Done, awaiting approval », Mark ready and
- *   Approve;
+ * - `completion_not_released` (A3): « Done, awaiting approval » and Show
+ *   Approve, which brings Approve ▾ to the screen and rings it;
  * - `child_awaiting` (C): « A child run is waiting for you » and Open, NO
  *   Enter hint — Enter in the parent's pane lifts nothing;
  * - `children_pending`: the orchestrator gave its turn back (ADR-0064).
@@ -21,12 +21,7 @@ export default function AwaitingBanner({
   awaiting,
   terminalLive,
   terminalSpectating = false,
-  canRelease,
-  releaseRefused,
-  canMarkComplete,
-  markCompleteRefused,
-  onRelease,
-  onMarkComplete,
+  onShowApprove,
   onOpenChildRun,
 }: {
   awaiting: AwaitingInfo | null | undefined;
@@ -35,15 +30,8 @@ export default function AwaitingBanner({
   /** #870: this browser only watches the terminal; its Enter reaches nothing
    *  until it takes control. */
   terminalSpectating?: boolean;
-  canRelease: boolean;
-  /** CORE-205: why the caller may not release the completion (greyed), else absent. */
-  releaseRefused?: string;
-  /** The daemon would complete the node (else plain text). */
-  canMarkComplete: boolean;
-  /** CORE-205: why the caller may not approve (greyed), else absent. */
-  markCompleteRefused?: string;
-  onRelease: () => void;
-  onMarkComplete: () => void;
+  /** Approve ▾ is on the panel: bring it to the screen and ring it. */
+  onShowApprove?: () => void;
   onOpenChildRun?: (childRunId: string) => void;
 }) {
   const cause = awaiting?.cause ?? "declared";
@@ -57,29 +45,14 @@ export default function AwaitingBanner({
   let hint: string | null = null;
   if (cause === "completion_not_released") {
     title = "Done, awaiting approval";
-    text = "completion not released";
-    actions = (
-      <>
-        {canRelease && (
-          <Button size="sm" icon={LockOpen} onClick={onRelease} disabledReason={releaseRefused} data-testid="awaiting-banner-release">
-            Mark ready
-          </Button>
-        )}
-        {canMarkComplete && (
-          <Button
-            size="sm"
-            icon={Check}
-            onClick={onMarkComplete}
-            disabledReason={markCompleteRefused}
-            data-testid="awaiting-banner-mark-complete"
-          >
-            Approve
-          </Button>
-        )}
-      </>
+    text = "Approve below, or reply in the terminal";
+    actions = onShowApprove && (
+      <Button size="sm" icon={ChevronDown} onClick={onShowApprove} data-testid="awaiting-banner-show-approve">
+        Show Approve
+      </Button>
     );
     hint = !terminalLive
-      ? "This pane is a snapshot: reopen the session to keep talking, or use the buttons."
+      ? "This pane is a snapshot: reopen the session to keep talking, or approve below."
       : terminalSpectating
         ? "Another browser has control: take control to reply in the terminal."
         : "Not done yet? Reply in the terminal and press Enter: the agent keeps working.";

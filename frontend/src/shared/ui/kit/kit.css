@@ -154,6 +154,61 @@
     font-size: var(--fs-xs);
   }
 
+  /* ---------------------------------------------------------------- split button */
+  /* A main action welded to its chevron: inner corners square, a hairline
+     between the two in the button's ink. */
+  .d-split {
+    position: relative;
+    display: inline-flex;
+    flex: none;
+    align-items: stretch;
+  }
+  .d-split .d-split__main {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+  .d-split .d-split__chev {
+    position: relative;
+    margin-left: -1px;
+    padding: 0 4px;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    border-left-color: color-mix(in oklch, var(--text) 35%, transparent);
+  }
+  .d-split--primary .d-split__chev {
+    border-left-color: color-mix(in oklch, var(--primary-ink) 35%, transparent);
+  }
+  /* Pending: the main action cannot run yet — a lighter ruby, not the
+     greyed opacity of a refusal; the chevron stays full. Mixed in sRGB: an
+     oklch mix of the ruby with the near-neutral surface walks the hue round
+     through violet. The label takes the page's text, tinted, so it reads in
+     both modes (the ink is made for the full ruby, not this lighter one). */
+  .d-btn--primary[data-pending] {
+    border-color: color-mix(in srgb, var(--primary) 45%, var(--surface-1));
+    background: color-mix(in srgb, var(--primary) 45%, var(--surface-1));
+    color: color-mix(in srgb, var(--text) 78%, var(--primary));
+    opacity: 1;
+    cursor: not-allowed;
+  }
+  .d-split--primary .d-split__chev:hover:not(:disabled):not([aria-disabled="true"]),
+  .d-split--primary .d-split__chev[aria-expanded="true"] {
+    background: color-mix(in oklch, var(--primary) 88%, var(--text));
+  }
+  /* The menu set something on: a dot at the chevron's corner. */
+  .d-split__dot {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--color-st-running);
+    box-shadow: 0 0 0 1px var(--primary);
+  }
+  .d-split:not(.d-split--primary) .d-split__dot {
+    box-shadow: 0 0 0 1px var(--surface-1);
+  }
+
   /* ---------------------------------------------------------------- icon button */
   .d-icon {
     position: relative;

@@ -66,8 +66,10 @@ export default function PortRow({
   const { status: copyStatus, error: copyError, copy } = useCopyToClipboard();
   // An output is a card (the node's deliverable first); an input stays a compact row.
   const card = kind === "output";
-  // A card not produced yet stays quiet: « not produced yet » on hover only.
-  const [hovered, setHovered] = useState(false);
+  // An output the completion guard still waits for, by the daemon's own rule
+  // (an image port holding only a non-image file is missing too): « missing »
+  // at rest, next to its type. Approve's tooltip names the same outputs.
+  const missing = card && port.missing;
 
   let displayPath = firstFile?.path ?? "";
   if (port.files.length > 1 && (port.repeated || isImage)) {
@@ -128,8 +130,6 @@ export default function PortRow({
       className={`port-row ri-port${card ? " ri-port--card" : ""}`}
       // A written port opens from anywhere on it; its controls keep their own clicks.
       onClick={anyExists ? openFromAnywhere(onOpen) : undefined}
-      onMouseEnter={pendingCard ? () => setHovered(true) : undefined}
-      onMouseLeave={pendingCard ? () => setHovered(false) : undefined}
     >
       <div className="ri-port__line">
         <Icon size={14} strokeWidth={1.5} className="ri-port__ic" aria-label={portType} role="img" />
@@ -177,15 +177,14 @@ export default function PortRow({
         <span className="contents" onClick={(e) => e.stopPropagation()}>
           <ExtensionDecorations<PortItemContext> location="port/item" extra={decorated} className="relative" />
         </span>
-        {pendingCard ? (
-          <span className="ri-port__where" title={tip}>
-            {hovered && <span data-testid="port-not-produced">not produced yet</span>}
-          </span>
-        ) : (
-          <span className="ri-port__where" title={tip}>
-            {displayPath}
+        {missing && (
+          <span className="ri-port__missing" data-testid="port-missing">
+            missing
           </span>
         )}
+        <span className="ri-port__where" title={tip}>
+          {pendingCard ? null : displayPath}
+        </span>
         {anyExists && totalSize > 0 && <span className="ri-port__size">{formatSize(totalSize)}</span>}
         <span className="ri-port__tools">
           {copyTarget && (

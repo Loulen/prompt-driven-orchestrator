@@ -20,6 +20,38 @@ fn count_files(dir: &Path, keep: impl Fn(&Path) -> bool) -> usize {
         .count()
 }
 
+/// Whether the output `port` of `node_id` at `iter` has nothing on the
+/// blackboard: the one rule of a missing output, shared by the completion guard
+/// ([`validate`]) and the node's I/O read (`missing` on each output port).
+/// markdown and html: the file; image, image_list and files: at least one file
+/// of the port folder. A file that predates the iteration counts as present.
+/// The frontmatter is not part of it.
+pub fn output_missing(port: &Port, node_id: &str, iter: i64, artifacts_dir: &Path) -> bool {
+    match port.port_type {
+        PortType::Image | PortType::ImageList => {
+            let port_dir =
+                crate::domain::blackboard::port_dir(artifacts_dir, node_id, iter, &port.name);
+            count_image_files(&port_dir) == 0
+        }
+        // One file or more, of any format.
+        PortType::Files => {
+            let port_dir =
+                crate::domain::blackboard::port_dir(artifacts_dir, node_id, iter, &port.name);
+            count_files(&port_dir, |_| true) == 0
+        }
+        PortType::Markdown => {
+            !crate::domain::blackboard::artifact_path(artifacts_dir, node_id, iter, &port.name)
+                .exists()
+        }
+        // Existence of `output.html` only: an empty/broken page is the human
+        // reviewer's call, not ours.
+        PortType::Html => {
+            !crate::domain::blackboard::artifact_path_html(artifacts_dir, node_id, iter, &port.name)
+                .exists()
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldViolation {
     pub port: String,
@@ -55,60 +87,20 @@ pub fn validate(
     let mut violations = Vec::new();
 
     for port in ordinary {
-        match port.port_type {
-            PortType::Image => {
-                let port_dir =
-                    crate::domain::blackboard::port_dir(artifacts_dir, node_id, iter, &port.name);
-                let count = count_image_files(&port_dir);
-                if count == 0 {
-                    missing.push(port.name.clone());
-                } else if count > 1 {
-                    violations.push(FieldViolation {
-                        port: port.name.clone(),
-                        field: "(image)".into(),
-                        reason: format!("image port expects exactly 1 image file, found {count}"),
-                    });
-                }
-            }
-            PortType::ImageList => {
-                let port_dir =
-                    crate::domain::blackboard::port_dir(artifacts_dir, node_id, iter, &port.name);
-                let count = count_image_files(&port_dir);
-                if count == 0 {
-                    missing.push(port.name.clone());
-                }
-            }
-            // One file or more, of any format; no frontmatter to check.
-            PortType::Files => {
-                let port_dir =
-                    crate::domain::blackboard::port_dir(artifacts_dir, node_id, iter, &port.name);
-                if count_files(&port_dir, |_| true) == 0 {
-                    missing.push(port.name.clone());
-                }
-            }
-            PortType::Markdown => {
-                let path = crate::domain::blackboard::artifact_path(
-                    artifacts_dir,
-                    node_id,
-                    iter,
-                    &port.name,
-                );
-                if !path.exists() {
-                    missing.push(port.name.clone());
-                }
-            }
-            // Existence of `output.html` only: html carries no frontmatter, and
-            // an empty/broken page is the human reviewer's call, not ours.
-            PortType::Html => {
-                let path = crate::domain::blackboard::artifact_path_html(
-                    artifacts_dir,
-                    node_id,
-                    iter,
-                    &port.name,
-                );
-                if !path.exists() {
-                    missing.push(port.name.clone());
-                }
+        if output_missing(port, node_id, iter, artifacts_dir) {
+            missing.push(port.name.clone());
+            continue;
+        }
+        if port.port_type == PortType::Image {
+            let port_dir =
+                crate::domain::blackboard::port_dir(artifacts_dir, node_id, iter, &port.name);
+            let count = count_image_files(&port_dir);
+            if count > 1 {
+                violations.push(FieldViolation {
+                    port: port.name.clone(),
+                    field: "(image)".into(),
+                    reason: format!("image port expects exactly 1 image file, found {count}"),
+                });
             }
         }
     }

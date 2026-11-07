@@ -208,10 +208,8 @@ test("port card with no files renders as non-interactive div", async ({
     .filter({ hasText: "notes" });
   await expect(notesRow).toBeVisible({ timeout: 5_000 });
   await expect(notesRow.locator("button")).toHaveCount(0);
-  // Quiet at rest: « not produced yet » only on hover.
-  await expect(notesRow.getByText("not produced yet")).toHaveCount(0);
-  await notesRow.hover();
-  await expect(notesRow.getByText("not produced yet")).toBeVisible();
+  // CORE-211: the guard still waits for it — « missing » at rest.
+  await expect(notesRow.getByTestId("port-missing")).toHaveText("missing");
 });
 
 test("port card opens modal via keyboard (Enter key)", async ({

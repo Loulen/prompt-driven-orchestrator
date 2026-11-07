@@ -103,14 +103,14 @@ beforeEach(() => {
 });
 
 describe("the gestures of the view of a Run (CORE-42, CORE-205)", () => {
-  it("greys Stop, Retry and Mark complete for a caller who may only read the Run, their tooltip saying the extension's sentence", async () => {
+  it("greys Stop, Retry and Approve for a caller who may only read the Run, their tooltip saying the extension's sentence", async () => {
     asked.mockImplementation(async (q) => answerAsAlice(q));
     render(<RunView state={node()} />);
     // Before the answer, nothing is greyed: the daemon still decides.
     expect(greyed("stop-btn")).toBe(false);
     await waitFor(() => expect(greyed("stop-btn")).toBe(true));
     expect(greyed("retry-btn")).toBe(true);
-    expect(greyed("mark-complete-btn")).toBe(true);
+    expect(greyed("approve-btn")).toBe(true);
     expect(screen.getByTestId("node-controls")).toBeInTheDocument();
     // Greyed, not hidden nor `disabled`: still focusable, inert.
     expect(screen.getByTestId("stop-btn")).not.toBeDisabled();
@@ -130,7 +130,26 @@ describe("the gestures of the view of a Run (CORE-42, CORE-205)", () => {
     await waitFor(() => expect(asked).toHaveBeenCalled());
     expect(greyed("stop-btn")).toBe(false);
     expect(greyed("retry-btn")).toBe(false);
-    expect(greyed("mark-complete-btn")).toBe(false);
+    expect(greyed("approve-btn")).toBe(false);
+  });
+
+  it("greys Approve with the refusal's sentence rather than the missing outputs (CORE-205 first)", async () => {
+    const { fetchNodeIO } = await import("../api/nodes");
+    vi.mocked(fetchNodeIO).mockResolvedValue({
+      inputs: [],
+      outputs: [{ port: "out", repeated: false, port_type: "markdown", files: [], missing: true }],
+    });
+    asked.mockImplementation(async (q) => answerAsAlice(q));
+    render(<RunView state={node()} />);
+    await waitFor(() => expect(greyed("approve-btn")).toBe(true));
+    const approve = screen.getByTestId("approve-btn");
+    // The kit's grey, not the lighter ruby of an output still missing.
+    expect(approve).not.toHaveAttribute("data-pending");
+    await userEvent.setup().hover(approve);
+    const tip = await screen.findByRole("tooltip");
+    expect(tip).toHaveTextContent(SENTENCE);
+    expect(tip).not.toHaveTextContent("Missing outputs");
+    vi.mocked(fetchNodeIO).mockResolvedValue({ inputs: [], outputs: [] });
   });
 
   it("asks once when the view opens, for every gesture of the Run and its nodes, not once per button", async () => {

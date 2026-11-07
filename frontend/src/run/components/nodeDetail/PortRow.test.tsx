@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { PortIO } from "../../api/nodes";
 
@@ -150,6 +150,7 @@ function review(frontmatter: Record<string, unknown> | null, exists = true): Por
     port: "review",
     repeated: false,
     port_type: "markdown",
+    missing: !exists,
     files: [{ path: "worker/iter-2/review/output.md", exists, size: exists ? 6400 : null, frontmatter }],
   };
 }
@@ -204,18 +205,35 @@ describe("PortRow — an output card", () => {
     expect(onOpen).toHaveBeenCalledTimes(3);
   });
 
-  it("says « not produced yet » only on hover, and does not open", () => {
+  it("says « missing » at rest while the guard waits for it, and does not open", () => {
     const onOpen = renderOutput(review(null, false));
     const row = screen.getByTestId("port-row");
     expect(row).toHaveAttribute("data-pending");
-    expect(screen.queryByText("not produced yet")).not.toBeInTheDocument();
-    fireEvent.mouseEnter(row);
-    expect(screen.getByTestId("port-not-produced")).toHaveTextContent("not produced yet");
-    fireEvent.mouseLeave(row);
-    expect(screen.queryByText("not produced yet")).not.toBeInTheDocument();
+    expect(screen.getByTestId("port-missing")).toHaveTextContent("missing");
     fireEvent.click(row);
     expect(onOpen).not.toHaveBeenCalled();
     expect(row.querySelectorAll("button")).toHaveLength(0);
+  });
+
+  it("an image port holding only a non-image file is still « missing »", () => {
+    renderOutput({
+      port: "final",
+      repeated: false,
+      port_type: "image",
+      files: [{ path: "worker/iter-1/final/notes.txt", exists: true, size: 12, frontmatter: null }],
+      missing: true,
+    });
+    expect(screen.getByTestId("port-missing")).toHaveTextContent("missing");
+  });
+
+  it("a written output is not « missing », nor is an input", () => {
+    renderOutput(review(null));
+    expect(screen.queryByTestId("port-missing")).not.toBeInTheDocument();
+    cleanup();
+    render(
+      <PortRow port={{ ...review(null, false), missing: false }} kind="input" runId="run-1" nodeId="worker" onOpen={vi.fn()} />,
+    );
+    expect(screen.queryByTestId("port-missing")).not.toBeInTheDocument();
   });
 
   it("shows no frontmatter for a previous execution's file", () => {

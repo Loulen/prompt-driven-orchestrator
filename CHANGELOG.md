@@ -13,6 +13,32 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+### One Approve ▾ in the node panel, waiting for the missing outputs
+
+- The node panel has one completion gesture, Approve ▾, at the right of the I/O / Transcript tabs,
+  away from Stop. Approve completes the node now; its menu holds "Auto-approve when ready" (the
+  former "Mark ready for completion"), offered on an interactive iteration whose session is live.
+  The header keeps Review, Retry, Start, Restart and Stop: the "Mark ready for completion" and
+  "Mark complete" icons and the "Mark ready" button are gone.
+- Approve says what is missing before the click: while a declared output is not written, it is
+  inert, in a lighter ruby, and its tooltip lists the missing outputs. It turns clickable within
+  seconds once the agent writes them. A refusal of your rights still greys it, with its sentence.
+  Each output card the guard still waits for reads "missing" next to its type, at rest (it
+  replaces the "not produced yet" shown on hover).
+- When the user has not released an interactive node, the refused `pdo complete` tells the agent
+  to ask for "Auto-approve when ready" in the Approve menu, or Approve; the seeded
+  `pdo-interactive` skill (version 3) says the same.
+- Once "Auto-approve when ready" is armed, its entry is checked and a blue dot sits on the chevron.
+  No banner says "Completion released" or "Approved" any more; a refusal is still shown.
+- "Done, awaiting approval" loses its buttons: its "Show Approve" brings Approve ▾ to the screen
+  with an amber ring. The tabs scroll in a narrow panel; Approve ▾ stays pinned and keeps its
+  label.
+- New seams: `missing` on each output of a node's I/O read (`GET /runs/:id/nodes/:node/io`, the
+  `PortIO` type), by the completion guard's own rule (an inherited file counts as present); the
+  kit's `SplitButton`.
+
 ## 2.73.0
 
 ### A refused gesture is greyed, with a sentence that says why

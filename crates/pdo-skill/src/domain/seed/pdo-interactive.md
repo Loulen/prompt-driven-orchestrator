@@ -1,7 +1,7 @@
 ---
 name: pdo-interactive
 description: Talk with a human inside a PDO node — declare when you wait for them (`pdo wait-user`), keep the conversation open, complete once released.
-skill_version: 2
+skill_version: 3
 ---
 
 # Talking with a human inside a PDO node
@@ -56,16 +56,17 @@ answers in the same conversation you are in.
 ## Finishing
 
 Your completion is **guarded**: PDO refuses `pdo complete` on this node until
-the user clicks **« Mark ready for completion »** in the PDO UI.
+the user chooses **« Auto-approve when ready »** in the **Approve** menu
+of the PDO UI.
 
 1. When the user says they are done, finish your work and write your outputs.
 2. Run `pdo complete`. Two outcomes:
    - **exit 0** — the user had already released you: the node is complete.
    - **exit 3, `completion_not_released`** — not yet released. PDO has just
      declared the wait for you (the banner says you are done and wait for
-     their go). Tell the user to click **« Mark ready for completion »**, or
-     **« Mark complete »** to take the artifacts as they are. When they say
-     they clicked, run `pdo complete` again.
+     their go). Tell the user to choose **« Auto-approve when ready »** in the
+     **Approve** menu, or to click **« Approve »** to take the artifacts as
+     they are. When they say they did, run `pdo complete` again.
 3. **Do NOT run `pdo fail`** after an exit 3: nothing failed, the node is still
    yours.
 

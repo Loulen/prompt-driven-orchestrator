@@ -6,6 +6,7 @@ use std::path::Path;
 use serde::Serialize;
 use ts_rs::TS;
 
+use crate::application::node::outputs::output_missing;
 use crate::domain::state::RunState;
 use pdo_pipeline::domain::pipeline::{PipelineDef, PortType};
 
@@ -44,6 +45,10 @@ pub struct PortIO {
     pub repeated: bool,
     pub port_type: PortType,
     pub files: Vec<FileInfo>,
+    /// An output with nothing on the blackboard yet, by the completion guard's
+    /// own rule (`outputs::output_missing`): an
+    /// inherited file counts as present. Always `false` on an input.
+    pub missing: bool,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -146,6 +151,7 @@ pub fn resolve(
                         PortType::Markdown
                     },
                     files,
+                    missing: false,
                 });
             }
         }
@@ -162,6 +168,7 @@ pub fn resolve(
             repeated: false,
             port_type: PortType::Markdown,
             files,
+            missing: false,
         });
     }
 
@@ -176,6 +183,7 @@ pub fn resolve(
 
     let mut outputs: Vec<PortIO> = Vec::new();
     for output_port in &node.outputs {
+        let missing = output_missing(output_port, node_id, iter, artifacts_dir);
         match output_port.port_type {
             PortType::Image | PortType::ImageList | PortType::Files => {
                 let port_dir = crate::domain::blackboard::port_dir(
@@ -196,6 +204,7 @@ pub fn resolve(
                     repeated: false,
                     port_type: output_port.port_type,
                     files,
+                    missing,
                 });
             }
             PortType::Markdown => {
@@ -213,6 +222,7 @@ pub fn resolve(
                     repeated: false,
                     port_type: output_port.port_type,
                     files,
+                    missing,
                 });
             }
             // Plain `file_info`: html has no frontmatter to parse.
@@ -231,6 +241,7 @@ pub fn resolve(
                     repeated: false,
                     port_type: output_port.port_type,
                     files,
+                    missing,
                 });
             }
         }

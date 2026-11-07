@@ -10,6 +10,7 @@ use pdo_kernel::Actor;
 
 use crate::application::events::append_event;
 use crate::application::events::load_events;
+use crate::application::gesture;
 use crate::application::operations::on_node;
 use crate::domain::{event, projection};
 use crate::Runs;
@@ -133,6 +134,20 @@ pub struct ReleaseCompletion {
 
 impl Runs {
     pub async fn release_completion(
+        self: &Arc<Self>,
+        actor: &Actor,
+        command: ReleaseCompletion,
+    ) -> Response {
+        let run_id = command.run_id.clone();
+        gesture::by(
+            actor,
+            &run_id,
+            self.release_completion_gesture(actor, command),
+        )
+        .await
+    }
+
+    async fn release_completion_gesture(
         self: &Arc<Self>,
         actor: &Actor,
         command: ReleaseCompletion,

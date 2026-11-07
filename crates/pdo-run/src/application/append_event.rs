@@ -32,7 +32,12 @@ impl AppendEvent {
     /// guard. It protects only the log: an emitter with side effects (spawn,
     /// merge) must also validate before acting. A no-op verdict appends
     /// nothing and is not an error; a rejection is.
+    ///
+    /// The single point that names, on the events of a gesture, the Actor
+    /// who made it ([`crate::application::gesture`]).
     pub async fn execute(&self, event: &Event) -> anyhow::Result<()> {
+        let stamped = crate::application::gesture::stamped(event);
+        let event = stamped.as_ref().unwrap_or(event);
         if event.is_node_transition() || event.kind == EventKind::RunCompleted {
             let events = self.store.events(&event.run_id).await?;
             match validate_transition(project(&events).as_ref(), event) {

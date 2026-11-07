@@ -2,8 +2,7 @@
 //! (`pdo wait-user`, or the daemon on a refused unreleased completion), and lift
 //! it on the user's Enter across the PTY bridge.
 
-use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use pdo_kernel::authorization::{authorize, Denied};
 use pdo_kernel::extension_host::ExtensionHost;
@@ -11,38 +10,49 @@ use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use tracing::{info, warn};
 
 use crate::application::hosted::Hosted;
-use crate::application::ports::{NoRunProjects, NodeWaits, RunProjects, Tmux};
+use crate::application::ports::{NoRunProjects, NodeWaits, RunProjects, TerminalGesture, Tmux};
 use crate::domain::declared_wait::{
     check_target, classify_input, liftable, plan_declaration, DeclareOutcome, WaitRefusal,
     CAUSE_COMPLETION_NOT_RELEASED, CAUSE_DECLARED, COMPLETION_NOT_RELEASED_MESSAGE,
 };
 use crate::domain::names::{node_session_name, parse_session_name, ParsedSession};
 
-/// The sessions a human typed into since their last declaration: the Enter rule
-/// lifts a wait only after at least one typed byte.
-#[derive(Default)]
-pub struct TypedInput(Mutex<HashSet<String>>);
+pub use crate::application::typed_input::TypedInput;
 
-impl TypedInput {
-    pub(crate) fn forget(&self, session: &str) {
-        self.0.lock().unwrap().remove(session);
+/// Where a take-over or a turn of speech comes from: the terminal's bridge.
+pub const TERMINAL_SOURCE: &str = "pty";
+
+/// `actor` took the hand on the terminal of `session`, from its bridge or by
+/// an answer written on its behalf: a node's session whose pilot changes
+/// writes `NodeTakenOver`, once per change of pilot.
+pub(crate) async fn record_take_over(
+    waits: &dyn NodeWaits,
+    typed: &TypedInput,
+    actor: &Actor,
+    session: &str,
+) {
+    let Some(ParsedSession::NodeRun {
+        run_id,
+        node_id,
+        iter,
+    }) = parse_session_name(session)
+    else {
+        return;
+    };
+    if !typed.pilot(session, actor) {
+        return;
     }
-
-    /// Text PDO wrote into the session on the user's gesture (« Copy & send to
-    /// terminal ») counts as typed: the Enter that follows lifts a declared
-    /// wait as if the user had typed the text.
-    pub(crate) fn mark(&self, session: &str) {
-        self.0.lock().unwrap().insert(session.to_string());
-    }
-
-    /// Record the frame's signal; `true` when it is an Enter that follows a
-    /// typed byte (and the count starts over).
-    fn enter_after_typing(&self, session: &str, typed: bool, enter: bool) -> bool {
-        let mut sessions = self.0.lock().unwrap();
-        if typed {
-            sessions.insert(session.to_string());
-        }
-        enter && sessions.remove(session)
+    if let Err(e) = waits
+        .record_terminal_gesture(
+            &run_id,
+            &node_id,
+            iter,
+            TerminalGesture::TakenOver,
+            serde_json::json!({ "source": TERMINAL_SOURCE, "actor": actor }),
+        )
+        .await
+    {
+        warn!("Run {run_id}: the take-over of {node_id} iter-{iter} was not recorded: {e}");
     }
 }
 
@@ -231,6 +241,10 @@ impl LiftWait {
     /// typed byte since the last declaration, lift the wait if the node awaits on
     /// a declared / refused-completion cause. Never touches a `children_pending`
     /// marker nor a derived wait.
+    ///
+    /// The first input of `actor` after a take-over or a wait takes the floor:
+    /// one `NodeTyped` in the Run's log, or, when it answers a wait, the
+    /// `NodeResumed` its Enter writes; the keystrokes that follow write nothing.
     pub async fn note_input(&self, actor: &Actor, session: &str, bytes: &[u8]) {
         let (run_id, node_id, iter) = match parse_session_name(session) {
             Some(ParsedSession::NodeRun {
@@ -248,15 +262,62 @@ impl LiftWait {
         if !signal.typed && !signal.enter {
             return;
         }
-        if !self
+        if self
             .typed
             .enter_after_typing(session, signal.typed, signal.enter)
         {
+            match self.lift(actor, &run_id, &node_id, iter).await {
+                // The answer is this turn's line.
+                Ok(true) => {
+                    self.typed.takes_floor(session, actor);
+                    return;
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    warn!("Run {run_id}: failed to lift the wait of {node_id} iter-{iter}: {e}")
+                }
+            }
+        }
+        if signal.typed && self.typed.takes_floor(session, actor) {
+            self.record_typed(actor, &run_id, &node_id, iter).await;
+        }
+    }
+
+    /// `actor` took the hand on the terminal of `session`: a node's session
+    /// whose pilot changes writes `NodeTakenOver`.
+    pub async fn taken_over(&self, actor: &Actor, session: &str) {
+        record_take_over(self.waits.as_ref(), &self.typed, actor, session).await;
+    }
+
+    /// `NodeTyped` for `actor`'s turn, unless the node waits for a person:
+    /// then the Enter of the answer speaks, with its `NodeResumed`.
+    async fn record_typed(&self, actor: &Actor, run_id: &str, node_id: &str, iter: i64) {
+        let facts = match self.waits.wait_facts(run_id, node_id).await {
+            Ok(facts) => facts,
+            Err(e) => {
+                warn!("Run {run_id}: its log could not be read: {e}");
+                return;
+            }
+        };
+        let Some(facts) = facts.filter(|f| f.run_live && !f.is_script) else {
+            return;
+        };
+        let Some(node) = facts.node else { return };
+        if liftable(&node, iter) {
             return;
         }
-        match self.lift(actor, &run_id, &node_id, iter).await {
-            Ok(_) => {}
-            Err(e) => warn!("Run {run_id}: failed to lift the wait of {node_id} iter-{iter}: {e}"),
+        if let Err(e) = self
+            .waits
+            .record_terminal_gesture(
+                run_id,
+                node_id,
+                iter,
+                TerminalGesture::Typed,
+                serde_json::json!({ "source": TERMINAL_SOURCE, "actor": actor }),
+            )
+            .await
+        {
+            warn!("Run {run_id}: the input into {node_id} iter-{iter} was not recorded: {e}");
         }
     }
 

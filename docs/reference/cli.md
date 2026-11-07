@@ -84,7 +84,7 @@ Run `pdo service install` to start PDO at boot and keep it running after logout.
 | `pdo run force-route <run-id> --from <node-or-region> --to <node> [--json]` | Leave a node or a loop region through `--to`, past its conditions (`--to end` completes the Run). |
 | `pdo run region <run-id> <region-id> --end\|--bump <n>\|--max <n> [--json]` | End a loop region, run it `n` more laps, or set its lap cap. |
 | `pdo run manager start\|stop <run-id> [--json]` | Start or stop the Run's Pipeline Manager. |
-| `pdo run events <run-id> [--json]` | The Run's event log, one tab-separated line per event: time, kind, node, iteration. |
+| `pdo run events <run-id> [--json]` | The Run's event log, one tab-separated line per event: time, kind, node, iteration, and who made it (the Actor's display name, else its id; empty for the Run's own transitions). |
 | `pdo run costs <run-id>… [--json]` | The cost of Runs, one line each: id and USD (`?` unknown, `≥` a lower bound). |
 | `pdo run artifact <run-id> <path> [--zip] [-o <file>]` | One artifact of the Run, or with `--zip` a port folder zipped; written to `-o`, else to stdout. |
 | `pdo run file <run-id> <path> [--ref <ref>] [-o <file>]` | A file of the Run's repository at one of its refs (default: its worktree while it exists, else its tip). |

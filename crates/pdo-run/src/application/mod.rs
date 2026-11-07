@@ -15,7 +15,8 @@
 //!   [`skip_node`], [`start_node`], [`stop_node`], [`retry_node`],
 //!   [`import_files`],
 //!   [`children_wait`], [`node_diff`] and the Pipeline Manager's
-//!   [`commands`].
+//!   [`commands`]. Each is handled [`gesture::by`] its Actor, so the events
+//!   it appends on its Run name who made it (the audit of a Run).
 //! - The Run's surfaces: creating a Run ([`create_run`]), forgetting one
 //!   ([`forget_run`]), editing its repositories ([`edit_repos`]) and its own
 //!   pipeline ([`run_pipeline`]), starting and stopping its Pipeline Manager
@@ -45,6 +46,7 @@ pub mod edit_repos;
 pub mod events;
 pub mod fail_node;
 pub mod forget_run;
+pub mod gesture;
 pub mod import_files;
 pub mod list;
 pub mod manager;

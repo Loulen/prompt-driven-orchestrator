@@ -23,7 +23,8 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   file in the user's private folder, deleted before the harness starts; `tmux` only sees its path.
   In a sandbox, the `docker exec` forwards the variables by name (`-e NAME`), their values
   exported on the host just before. Every launch is covered: a Node, its Retry and its resume, a
-  Session hébergée, the Pipeline Manager, the library assistant.
+  hosted session, the Pipeline Manager, the library assistant.
+
 ### A page mounted from a node is judged in the Projet of its Run
 
 - New seam (extension API, a minor): when a node session mounts a page (`pdo page mount`,

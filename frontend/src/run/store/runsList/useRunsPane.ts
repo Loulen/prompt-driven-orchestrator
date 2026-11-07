@@ -12,7 +12,7 @@ import { RETRYABLE } from "../../components/runsList/runsListTables";
 import { useRunRowActions } from "./useRunRowActions";
 import { useRunTreeView } from "./useRunTreeView";
 import { useGestureRightsStore, useListedRunGestures } from "../gestureRightsStore";
-import { mayOnRun, type RunGesture } from "../../model/runGestures";
+import { whyNotOnRun, type RunGesture } from "../../model/runGestures";
 import { loadCollapsedRunGroups, saveCollapsedRunGroups } from "../../../lib/uiPrefs";
 
 /**
@@ -54,12 +54,13 @@ export function useRunsPane({
   const view = useRunTreeView(runs, selectedRunId, projects, deletedProjects);
 
   // CORE-42: the gestures of each row the caller may make, asked once per
-  // Run; a refused one is hidden from the row, its menu and the bulk bar.
+  // Run; CORE-205: a refused one stays on the row, its menu and the bulk bar,
+  // greyed, with the refusal's sentence.
   const runIds = useMemo(() => runs.map((r) => r.run_id), [runs]);
   useListedRunGestures(runIds);
   const gestureRights = useGestureRightsStore((s) => s.rights);
-  const mayOnRow = useCallback(
-    (runId: string, gesture: RunGesture) => mayOnRun(gestureRights, runId, gesture),
+  const whyNotOnRow = useCallback(
+    (runId: string, gesture: RunGesture) => whyNotOnRun(gestureRights, runId, gesture),
     [gestureRights],
   );
   const { activeTree, archivedTree, filteredRuns, isExpanded, archivedOpen } = view;
@@ -123,18 +124,21 @@ export function useRunsPane({
   const asRunItem = (r: RunListEntry): BulkItem => ({ id: r.run_id, label: r.name || r.run_id });
   // Each bulk action targets the subset of the selection it is valid for (mirror
   // of the per-row gates); an action whose subset is empty is disabled.
-  // CORE-42: and only the Runs where the caller may make it; an action no
-  // selected Run allows is hidden (`bulkShown`).
-  const allowing = (gesture: RunGesture) => selectedRuns.filter((r) => mayOnRow(r.run_id, gesture));
+  // CORE-42: and only the Runs where the caller may make it; CORE-205: an
+  // action no selected Run allows is greyed with the refusal's sentence
+  // (`bulkRefused`).
+  const allowing = (gesture: RunGesture) => selectedRuns.filter((r) => !whyNotOnRow(r.run_id, gesture));
   const cleanupItems = allowing("cleanup_run").filter((r) => r.status !== "archived").map(asRunItem);
   const retryItems = allowing("retry_all").filter((r) => RETRYABLE.includes(r.status)).map(asRunItem);
   const pauseItems = allowing("pause_run")
     .filter((r) => r.status === "running" || r.status === "awaiting_user")
     .map(asRunItem);
-  const bulkShown = {
-    cleanup: allowing("cleanup_run").length > 0,
-    retry: allowing("retry_all").length > 0,
-    pause: allowing("pause_run").length > 0,
+  const refusedToAll = (gesture: RunGesture) =>
+    selectedRuns.length > 0 && allowing(gesture).length === 0 ? whyNotOnRow(selectedRuns[0].run_id, gesture) : undefined;
+  const bulkRefused = {
+    cleanup: refusedToAll("cleanup_run"),
+    retry: refusedToAll("retry_all"),
+    pause: refusedToAll("pause_run"),
   };
   // Live runs the cleanup would stop (running/awaiting/paused) — the bar's caveat.
   const runningWillStop = selectedRuns.filter((r) => isLiveRun(r.status)).length;
@@ -172,8 +176,8 @@ export function useRunsPane({
     cleanupItems,
     retryItems,
     pauseItems,
-    bulkShown,
-    mayOnRow,
+    bulkRefused,
+    whyNotOnRow,
     runningWillStop,
     cleanupCascade,
     handleRunsSettled,

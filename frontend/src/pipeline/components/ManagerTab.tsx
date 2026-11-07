@@ -9,7 +9,7 @@ import "./inspect.css";
 import TmuxTerminal from "../../session/components/TmuxTerminal";
 import { startRunManager, stopRunManager } from "../../run/api/manager";
 import type { RunState } from "../../shared/generated/RunState";
-import { useMayOnRun } from "../../run/store/gestureRightsStore";
+import { useWhyNotOnRun } from "../../run/store/gestureRightsStore";
 
 export function ManagerTab({
   run,
@@ -23,10 +23,10 @@ export function ManagerTab({
   onOpenSettings?: () => void;
 }) {
   const hasManager = run.has_manager ?? false;
-  // CORE-42: Start and Stop only when the caller may make them.
-  const mayOnRun = useMayOnRun(run.run_id);
-  const mayStart = mayOnRun("start_manager");
-  const mayStop = mayOnRun("stop_manager");
+  // CORE-42, CORE-205: Start and Stop greyed, with why, when the caller may not make them.
+  const whyNotOnRun = useWhyNotOnRun(run.run_id);
+  const startRefused = whyNotOnRun("start_manager");
+  const stopRefused = whyNotOnRun("stop_manager");
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [confirmingStop, setConfirmingStop] = useState(false);
@@ -90,17 +90,16 @@ export function ManagerTab({
                 </Button>
               </>
             ) : (
-              mayStop && (
-                <IconButton
-                  icon={Square}
-                  size="sm"
-                  tone="danger"
-                  label="Stop manager"
-                  description="The session survives until cleanup otherwise"
-                  onClick={() => setConfirmingStop(true)}
-                  data-testid="manager-stop"
-                />
-              )
+              <IconButton
+                icon={Square}
+                size="sm"
+                tone="danger"
+                label="Stop manager"
+                description="The session survives until cleanup otherwise"
+                disabledReason={stopRefused}
+                onClick={() => setConfirmingStop(true)}
+                data-testid="manager-stop"
+              />
             )}
           </span>
         </div>
@@ -130,7 +129,7 @@ export function ManagerTab({
         <EmptyState
           icon={CircleX}
           action={
-            <Button size="sm" onClick={() => void start()} data-testid="manager-retry">
+            <Button size="sm" onClick={() => void start()} disabledReason={startRefused} data-testid="manager-retry">
               Retry
             </Button>
           }
@@ -149,17 +148,16 @@ export function ManagerTab({
         icon={Bot}
         action={
           <span className="ei-line">
-            {mayStart && (
-              <Button
-                tone="primary"
-                icon={Play}
-                onClick={() => void start()}
-                title="A conversational agent that drives this run: retries nodes, resolves merges, unblocks it"
-                data-testid="manager-start"
-              >
-                Start manager
-              </Button>
-            )}
+            <Button
+              tone="primary"
+              icon={Play}
+              onClick={() => void start()}
+              title={startRefused ? undefined : "A conversational agent that drives this run: retries nodes, resolves merges, unblocks it"}
+              disabledReason={startRefused}
+              data-testid="manager-start"
+            >
+              Start manager
+            </Button>
             <IconButton
               icon={Settings}
               label="Start with every run"

@@ -66,7 +66,9 @@ async function load(extensions: ExtensionEntry[], answers: Record<string, unknow
       if (url in answers) return Response.json(answers[url]);
       if (url === "/authorize") {
         const { operations } = JSON.parse(String(init?.body));
-        return Response.json({ decisions: operations.map(() => ({ decision: "deny", reason: "no" })) });
+        return Response.json({
+          decisions: operations.map(() => ({ decision: "deny", reason: "no", sentence: "You can't purge notes. Ask an administrator." })),
+        });
       }
       return new Response("not found", { status: 404 });
     }),
@@ -168,15 +170,20 @@ describe("CommandPalette", () => {
     expect(rows[0]).toHaveAttribute("aria-selected", "true");
   });
 
-  it("lists an extension's global Actions under its name, without the refused one, and runs them", async () => {
+  it("lists an extension's global Actions under its name, the refused one greyed with why, and runs the others", async () => {
     await load([NOTES]);
     renderPalette();
     fireEvent.click(screen.getByTestId("command-field"));
     const group = await screen.findByTestId("palette-group-ext:notes");
     expect(within(group).getByText("Notes")).toBeInTheDocument();
     expect(within(group).getByText("New note")).toBeInTheDocument();
-    // `notes/note` × `delete` is refused: absent, not greyed.
-    await waitFor(() => expect(screen.queryByText("Purge notes")).toBeNull());
+    // `notes/note` × `delete` is refused: greyed, the sentence on its row (CORE-205), and picking it does nothing.
+    const purge = (await within(group).findByText("Purge notes")).closest('[role="option"]')!;
+    expect(purge).toHaveAttribute("aria-disabled", "true");
+    expect(purge).toHaveTextContent("You can't purge notes. Ask an administrator.");
+    fireEvent.click(purge);
+    expect(called).toHaveLength(0);
+    expect(screen.getByTestId("command-palette-input")).toBeInTheDocument();
     fireEvent.click(within(group).getByText("New note"));
     await waitFor(() => expect(called).toHaveLength(1));
     expect(called[0].context).toMatchObject({ location: "palette", selected: null, contribution: "new-note" });

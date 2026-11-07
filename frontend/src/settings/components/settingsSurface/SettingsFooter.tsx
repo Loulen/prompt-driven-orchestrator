@@ -22,7 +22,7 @@ export default function SettingsFooter({
   /** Drops the draft. */
   onDiscard: () => void;
 }) {
-  const { saveState, isDirty, rollup, missingDefaultProfile } = form;
+  const { saveState, saveRefused, isDirty, rollup, missingDefaultProfile } = form;
   // A dangling stored default keeps Save reachable so the blocker is read next to it.
   if (!isDirty && !missingDefaultProfile && saveState.status === "idle") return null;
   const dirtyCount = rollup.fields.size;
@@ -53,8 +53,9 @@ export default function SettingsFooter({
         ref={saveButtonRef}
         tone="primary"
         onClick={() => void form.handleSave()}
-        disabled={saveState.status === "saving" || !loaded || (!isDirty && !missingDefaultProfile)}
-        title="Save (Ctrl+S)"
+        disabled={!saveRefused && (saveState.status === "saving" || !loaded || (!isDirty && !missingDefaultProfile))}
+        disabledReason={saveRefused}
+        title={saveRefused ? undefined : "Save (Ctrl+S)"}
         data-testid="settings-save"
       >
         {saveState.status === "saving" ? "Saving…" : "Save"}

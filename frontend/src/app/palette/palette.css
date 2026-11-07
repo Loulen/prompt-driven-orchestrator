@@ -159,6 +159,24 @@
   .sh-pal__row .d-kbd {
     flex: none;
   }
+  /* A gesture the caller may not make (CORE-205): greyed, why in place of its shortcut. */
+  .sh-pal__row--refused .sh-pal__label,
+  .sh-pal__row--refused .sh-pal__ico {
+    opacity: 0.45;
+  }
+  .sh-pal__row--refused {
+    cursor: not-allowed;
+  }
+  .sh-pal__why {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--g-2);
+    font-size: var(--fs-xs);
+  }
+  .sh-pal__why svg {
+    flex: none;
+    color: var(--color-st-await);
+  }
   .sh-pal__row--danger .sh-pal__label,
   .sh-pal__row--danger .sh-pal__ico {
     color: var(--color-st-failed);

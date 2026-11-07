@@ -62,6 +62,7 @@ export default function FileCommentGroups({ runId, pair, comments, outdatedEntri
                   initial={e.draft.text}
                   wipKey={wipKey(runId, e.anchor, pair)}
                   sendDisabledReason={comments.sendDisabledReason}
+                  sendRefused={comments.sendRefused}
                   onSave={(text) => comments.updateDraft(e.draft.key, text)}
                   onSend={(text) => {
                     comments.updateDraft(e.draft.key, text);

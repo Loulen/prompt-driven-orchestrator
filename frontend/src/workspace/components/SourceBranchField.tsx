@@ -79,6 +79,8 @@ interface Props {
    * branch) simply does not offer the button.
    */
   onFastForward?: (branch: string) => Promise<FastForwardOutcome | null>;
+  /** CORE-205: why the caller may not fast-forward (the button greyed, saying it), else absent. */
+  fastForwardRefused?: string;
   /** Distinguishes the primary field from each secondary row's. */
   testIdPrefix: string;
   /** `id` of the trigger, so an outer `<label htmlFor>` points at it. */
@@ -99,6 +101,7 @@ export default function SourceBranchField({
   onFetch,
   onReread,
   onFastForward,
+  fastForwardRefused,
   testIdPrefix,
   id,
   ariaLabel,
@@ -308,6 +311,7 @@ export default function SourceBranchField({
           onFastForward={
             onFastForward && canFastForward(selected) ? runFastForward : undefined
           }
+          fastForwardRefused={fastForwardRefused}
           touchesCheckout={fastForwardTouchesCheckout(selected)}
           onSwitchToUpstream={() => {
             const target = upstreamSwitchTarget(selected);

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { CloudOff, FolderGit2, GitBranch, X, Plus } from "lucide-react";
 import { Banner, Button, Chip, EmptyState, IconButton, Section } from "../../shared/ui/kit";
 import "../../pipeline/components/inspect.css";
@@ -8,6 +8,7 @@ import { useRecentReposStore } from "../../stores/recentReposStore";
 import SecondaryRepoRow, { type SecondaryRepo } from "./SecondaryRepoRow";
 import { SourceDriftChip } from "../../pipeline/components/InspectorPrimitives";
 import { useSourceDrift } from "../store/useSourceDrift";
+import { useRefusal } from "../../shared/authorization/useRefusals";
 
 /** A Run is editable (its repo list can change) exactly while it is live — the same
  *  set the server's `is_live` enforces. A terminal Run's list is frozen. */
@@ -36,6 +37,12 @@ export default function RepositoriesSection({
   onEdited?: () => void;
 }) {
   const editable = LIVE_STATUSES.has(run.status);
+  // CORE-205: why the caller may not edit the Run's repositories (its gestures greyed), else absent.
+  const editQuestion = useMemo(
+    () => ({ resource: "run", verb: { action: "edit_repos" }, target: run.run_id }),
+    [run.run_id],
+  );
+  const editRefused = useRefusal(editQuestion, editable);
   const recentRepos = useRecentReposStore((s) => s.recentRepos);
   // #803: the same measurement the Info tab's Source block shows, from the same
   // hook — two renderings of one number, never two computations of it.
@@ -142,7 +149,8 @@ export default function RepositoriesSection({
               label="Add repository"
               description="Applies to nodes launched after the change"
               onClick={() => setDraft({ path: "", baseBranch: "", valid: null, readOnly: false })}
-              disabled={busy}
+              disabled={busy && !editRefused}
+              disabledReason={editRefused}
               data-testid="add-secondary-repo"
             />
           ) : undefined
@@ -175,7 +183,8 @@ export default function RepositoriesSection({
                 size="sm"
                 label={`Remove secondary repository ${pin.alias}`}
                 onClick={() => removeSecondary(pin.alias)}
-                disabled={busy}
+                disabled={busy && !editRefused}
+                disabledReason={editRefused}
                 data-testid={`remove-secondary-repo-${pin.alias}`}
               />
             )}

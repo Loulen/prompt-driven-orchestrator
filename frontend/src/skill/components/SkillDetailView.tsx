@@ -43,6 +43,7 @@ export default function SkillDetailView({
   sourceFolder,
   onOpenSourceFolder,
   home,
+  refused = {},
 }: {
   skill: Skill;
   detail: SkillDetail | null;
@@ -71,6 +72,11 @@ export default function SkillDetailView({
   onOpenSourceFolder: (folderId: string) => void;
   /** The daemon's home: a local source reads `~/…`. */
   home: string | null;
+  /**
+   * Why the caller's rights refuse (CORE-205): `update` (rename, move, its
+   * files), `delete`. Greyed, the sentence in their tooltip; absent = allowed.
+   */
+  refused?: { update?: string; delete?: string };
 }) {
   const current = detail && detail.id === skill.id ? detail : null;
   // ADR-0081 (#31): the `skill/detail` tabs extensions add, after Files.
@@ -99,13 +105,15 @@ export default function SkillDetailView({
   // the pane with the drop overlay (#671 design 02/05) — never on a locked
   // skill, whose files refuse every write.
   const locked = isLocked(skill);
+  // Refused writes: nothing dropped, nothing added (the gestures are greyed below).
+  const writesRefused = locked || !!refused.update;
   // #33: a skill an extension provides, seeded with the extension's version.
   const provider = skill.extension ?? null;
   const { dragging, handlers: dropHandlers } = useFileDropTarget(
-    locked
+    writesRefused
       ? () => {}
       : (dataTransfer) => void files.acceptDrop(dataTransfer),
-    locked
+    writesRefused
       ? undefined
       : () => {
           if (tab !== "files") onTab("files");
@@ -120,7 +128,7 @@ export default function SkillDetailView({
     : [];
   return (
     <div className="relative flex min-h-0 flex-1 flex-col p-5" data-testid="skill-detail" {...dropHandlers}>
-      {dragging !== null && !locked && (
+      {dragging !== null && !writesRefused && (
         <DropOverlay count={dragging} hint="A SKILL.md replaces the skill text · folders are refused" />
       )}
       <div className="flex items-baseline gap-2">
@@ -224,9 +232,9 @@ export default function SkillDetailView({
           </span>
         ) : (
           <>
-            <ActionButton icon={<Pencil size={11} />} label="Rename" onClick={onRename} testid="skill-detail-rename" />
+            <ActionButton icon={<Pencil size={11} />} label="Rename" onClick={onRename} testid="skill-detail-rename" disabledReason={refused.update} />
             <span className="relative">
-              <ActionButton icon={<FolderInput size={11} />} label="Move to…" onClick={onMove} testid="skill-detail-move" />
+              <ActionButton icon={<FolderInput size={11} />} label="Move to…" onClick={onMove} testid="skill-detail-move" disabledReason={refused.update} />
               {movePickerOpen && (
                 <FolderPicker
                   folders={folders}
@@ -240,7 +248,7 @@ export default function SkillDetailView({
         )}
         <span className="flex-1" />
         {!locked && (
-          <ActionButton icon={<Trash2 size={11} />} label="Delete…" onClick={onDelete} danger testid="skill-detail-delete" />
+          <ActionButton icon={<Trash2 size={11} />} label="Delete…" onClick={onDelete} danger testid="skill-detail-delete" disabledReason={refused.delete} />
         )}
       </div>
 
@@ -267,7 +275,7 @@ export default function SkillDetailView({
       ) : tab === "skill" || tab !== "files" ? (
         <SkillMdTab current={current} frontmatter={frontmatter} frontmatterKeys={frontmatterKeys} />
       ) : (
-        <SkillFilesTab files={files} pathLabel={pathLabel} leaveRequest={leaveRequest} onLeaveSettled={onLeaveSettled} locked={locked} />
+        <SkillFilesTab files={files} pathLabel={pathLabel} leaveRequest={leaveRequest} onLeaveSettled={onLeaveSettled} locked={locked} writeRefused={refused.update} />
       )}
     </div>
   );

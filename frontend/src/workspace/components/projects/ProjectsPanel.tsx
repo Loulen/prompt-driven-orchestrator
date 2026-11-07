@@ -130,11 +130,15 @@ export default function ProjectsPanel({
         <EmptyState
           icon={Briefcase}
           action={
-            rights.canCreate && (
-              <Button size="sm" icon={Plus} onClick={() => setDraft({ name: "", members: [] })} data-testid="projects-new">
-                New project
-              </Button>
-            )
+            <Button
+              size="sm"
+              icon={Plus}
+              onClick={() => setDraft({ name: "", members: [] })}
+              disabledReason={rights.why.create}
+              data-testid="projects-new"
+            >
+              New project
+            </Button>
           }
         >
           <span data-testid="projects-empty">No project yet</span>
@@ -154,7 +158,7 @@ export default function ProjectsPanel({
               setError(null);
             }}
             onCreate={create}
-            canCreate={rights.canCreate}
+            createRefused={rights.why.create}
             home={home}
           />
           {selected && gestures && (
@@ -167,10 +171,10 @@ export default function ProjectsPanel({
               remotes={remotes}
               recent={recent}
               home={home}
-              editable={!rights.readOnly.has(selected.id)}
-              deletable={!rights.undeletable.has(selected.id)}
-              canBrowse={rights.canBrowse}
-              canCreateRepository={rights.canCreateRepository}
+              editRefused={rights.why.update.get(selected.id)}
+              deleteRefused={rights.why.delete.get(selected.id)}
+              browseRefused={rights.why.browse}
+              createRepositoryRefused={rights.why.createRepository}
               gestures={gestures}
             />
           )}

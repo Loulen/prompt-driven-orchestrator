@@ -100,6 +100,10 @@ export default function BankDetailPane({
           ) ?? null}
           onOpenSourceFolder={panel.openSourceFolder}
           home={home}
+          refused={{
+            update: panel.refusals.updateSkill(selectedSkill.id),
+            delete: panel.refusals.deleteSkill(selectedSkill.id),
+          }}
         />
       ) : selectedFolder ? (
         <FolderDetailView
@@ -114,9 +118,20 @@ export default function BankDetailPane({
           onUpdateFromSource={() => void panel.startUpdateFromSource(selectedFolder)}
           onExport={() => void panel.exportBundle({ skill_ids: [], folder_ids: [selectedFolder.id] })}
           home={home}
+          refused={{
+            newSubfolder: panel.refusals.createFolder,
+            update: panel.refusals.updateFolder(selectedFolder.id),
+            delete: panel.refusals.deleteFolder(selectedFolder.id),
+            updateFromSource: panel.refusals.updateFolderFromSource(selectedFolder.id),
+          }}
         />
       ) : emptyBank ? (
-        <EmptyBank onPaste={() => panel.setPasteOpen(true)} onImport={() => panel.setImportOpen(true)} />
+        <EmptyBank
+          onPaste={() => panel.setPasteOpen(true)}
+          onImport={() => panel.setImportOpen(true)}
+          pasteRefused={panel.refusals.createSkill}
+          importRefused={panel.refusals.importFromSource}
+        />
       ) : (
         <div className="flex flex-1 items-center justify-center p-8 text-center text-text-3 text-xs">
           Select a skill to read it, or a folder to manage it.

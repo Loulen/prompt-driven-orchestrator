@@ -1,11 +1,12 @@
 /**
  * A gesture the daemon refused (`403` `operation_refused`, CORE-42): the UI
- * hides what it knows to be refused, but a right can change between the
- * question and the click. A gesture that otherwise reports nothing says so
- * in a toast, with the daemon's sentence.
+ * greys what it knows to be refused (CORE-205), but a right can change
+ * between the question and the click. A gesture that otherwise reports
+ * nothing says so in a toast, with the sentence for a person the refusal
+ * carries ({@link refusalSentenceOf}), never the technical reason.
  */
 
-import { ApiError } from "../http/client";
+import { ApiError, refusalSentenceOf } from "../http/client";
 import { toast } from "../ui/toast";
 
 /** The slug of every refusal by the Autorisation d'opération. */
@@ -20,7 +21,13 @@ export function isRefusal(error: unknown): error is ApiError {
   );
 }
 
+/** The sentence for a person of `error` when it is a refusal; `null` otherwise. */
+export function refusalSentence(error: unknown): string | null {
+  return isRefusal(error) ? refusalSentenceOf(error.body) : null;
+}
+
 /** Show the refusal of a gesture, if `error` is one; anything else stays silent. */
 export function toastRefusal(error: unknown): void {
-  if (isRefusal(error)) toast(error.message, "error");
+  const sentence = refusalSentence(error);
+  if (sentence !== null) toast(sentence, "error");
 }

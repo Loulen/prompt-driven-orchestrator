@@ -5,7 +5,7 @@ import type { NodeState } from "../../../shared/generated/NodeState";
 import type { NodeStatus } from "../../../shared/generated/NodeStatus";
 import AwaitingBanner from "./AwaitingBanner";
 import { isOutputValidationFailure } from "../../model/nodeStatus";
-import type { NodeGestureRights } from "./types";
+import type { NodeGestureRefusals } from "./types";
 
 // The prefix the daemon puts on a merge-back conflict's interruption reason
 // (`merge_conflict: <detail>`, #601).
@@ -46,7 +46,8 @@ export default function NodeBanners({
   killStale,
   restartIteration,
   retry,
-  may,
+  refused,
+  markCompletable,
 }: {
   node: NodeState;
   isArchived?: boolean;
@@ -64,12 +65,14 @@ export default function NodeBanners({
   killStale: () => void;
   restartIteration: () => void;
   retry: () => void;
-  /** CORE-42: the gestures on this node the caller may make; the others hide. */
-  may: NodeGestureRights;
+  /** CORE-205: the gestures on this node the caller may not make, and why; they stay, greyed. */
+  refused: NodeGestureRefusals;
+  /** The daemon would complete the node: « Approve » shows. */
+  markCompletable: boolean;
 }) {
   // A failed node is retried from its banner too.
-  const failedActions = !isArchived && may.retry && (
-    <Button size="sm" icon={RotateCcw} data-testid="failed-retry-btn" onClick={retry}>
+  const failedActions = !isArchived && (
+    <Button size="sm" icon={RotateCcw} data-testid="failed-retry-btn" disabledReason={refused.retry} onClick={retry}>
       Retry
     </Button>
   );
@@ -88,7 +91,9 @@ export default function NodeBanners({
           terminalLive={terminalLive ?? true}
           terminalSpectating={terminalSpectating}
           canRelease={canReleaseCompletion && !isReleasing}
-          canMarkComplete={may.markComplete}
+          releaseRefused={refused.release}
+          canMarkComplete={markCompletable}
+          markCompleteRefused={refused.markComplete}
           onRelease={releaseCompletion}
           onMarkComplete={markComplete}
           onOpenChildRun={onOpenChildRun}
@@ -111,16 +116,18 @@ export default function NodeBanners({
           actions={
             !isArchived && (
               <>
-                {may.kill && (
-                  <Button size="sm" icon={Square} data-testid="stale-stop-btn" onClick={killStale}>
-                    Stop
-                  </Button>
-                )}
-                {may.restart && (
-                  <Button size="sm" icon={RotateCcw} data-testid="stale-retry-btn" onClick={restartIteration}>
-                    Retry
-                  </Button>
-                )}
+                <Button size="sm" icon={Square} data-testid="stale-stop-btn" disabledReason={refused.kill} onClick={killStale}>
+                  Stop
+                </Button>
+                <Button
+                  size="sm"
+                  icon={RotateCcw}
+                  data-testid="stale-retry-btn"
+                  disabledReason={refused.restart}
+                  onClick={restartIteration}
+                >
+                  Retry
+                </Button>
               </>
             )
           }
@@ -142,9 +149,14 @@ export default function NodeBanners({
           testId="interrupted-banner"
           {...interruptedBanner(node.failure_reason)}
           actions={
-            !isArchived &&
-            may.retry && (
-              <Button size="sm" icon={RotateCcw} data-testid="interrupted-reopen-btn" onClick={retry}>
+            !isArchived && (
+              <Button
+                size="sm"
+                icon={RotateCcw}
+                data-testid="interrupted-reopen-btn"
+                disabledReason={refused.retry}
+                onClick={retry}
+              >
                 Reopen
               </Button>
             )

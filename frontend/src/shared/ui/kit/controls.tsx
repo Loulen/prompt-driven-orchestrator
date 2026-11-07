@@ -17,14 +17,44 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
   tone?: "default" | "primary" | "ghost" | "danger";
   /** 24 px (`md`) or 20 px (`sm`). */
   size?: "md" | "sm";
+  /**
+   * Why the caller may not use it: the button stays visible, greyed
+   * (`aria-disabled`, still focusable), does nothing, and its tooltip says
+   * this sentence. Prefer it to `disabled` for a gesture the caller's rights
+   * refuse.
+   */
+  disabledReason?: string;
+}
+
+/**
+ * The props a control greyed for `reason` takes instead of its own:
+ * `aria-disabled`, and a click or a key that does nothing.
+ */
+function greyedFor<E extends HTMLElement>(
+  reason: string | undefined,
+  { onClick, onKeyDown }: Pick<React.HTMLAttributes<E>, "onClick" | "onKeyDown">,
+): Pick<React.HTMLAttributes<E>, "onClick" | "onKeyDown" | "aria-disabled"> {
+  if (!reason) return { onClick, onKeyDown };
+  return {
+    "aria-disabled": true,
+    onClick: (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    },
+    onKeyDown: (e) => {
+      // Tab and the arrows still move; Enter and Space do nothing.
+      if (e.key === "Enter" || e.key === " ") e.preventDefault();
+      onKeyDown?.(e);
+    },
+  };
 }
 
 /** A text button: hairline, no fill. */
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { icon: Icon, tone = "default", size = "md", className, children, type = "button", ...rest },
+  { icon: Icon, tone = "default", size = "md", className, children, type = "button", disabledReason, onClick, onKeyDown, ...rest },
   ref,
 ) {
-  return (
+  const button = (
     <button
       ref={ref}
       type={type}
@@ -37,11 +67,13 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
         className,
       )}
       {...rest}
+      {...greyedFor<HTMLButtonElement>(disabledReason, { onClick, onKeyDown })}
     >
       {Icon && <Icon size={size === "sm" ? 12 : 14} strokeWidth={1.5} aria-hidden />}
       {children}
     </button>
   );
+  return disabledReason ? <Tooltip label={disabledReason}>{button}</Tooltip> : button;
 });
 
 // ================================================================== icon button
@@ -59,15 +91,21 @@ export interface IconButtonProps extends Omit<React.ButtonHTMLAttributes<HTMLBut
   tone?: "danger";
   /** One short extra line in the tooltip. */
   description?: string;
+  /**
+   * Why the caller may not use it: the button stays visible, greyed
+   * (`aria-disabled`, still focusable), does nothing, and its tooltip says
+   * its name then this sentence (in place of `description`).
+   */
+  disabledReason?: string;
 }
 
 /** An icon-only button, 24 px (20 px `sm`), its name and shortcut in a tooltip. */
 export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
-  { icon: Icon, label, kbd, pressed, size = "md", badge, tone, description, className, type = "button", ...rest },
+  { icon: Icon, label, kbd, pressed, size = "md", badge, tone, description, disabledReason, className, type = "button", onClick, onKeyDown, ...rest },
   ref,
 ) {
   return (
-    <Tooltip label={label} kbd={kbd} description={description}>
+    <Tooltip label={label} kbd={kbd} description={disabledReason ?? description}>
       <button
         ref={ref}
         type={type}
@@ -75,6 +113,7 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(f
         aria-pressed={pressed}
         className={cx("d-icon", size === "sm" && "d-icon--sm", tone === "danger" && "d-icon--danger", className)}
         {...rest}
+        {...greyedFor<HTMLButtonElement>(disabledReason, { onClick, onKeyDown })}
       >
         <Icon size={size === "sm" ? 12 : 14} strokeWidth={1.5} aria-hidden />
         {badge ? <span className="d-icon__badge">{badge > 99 ? "99+" : badge}</span> : null}
@@ -89,9 +128,13 @@ export interface SegmentedItem<T extends string = string> {
   value: T;
   label?: string;
   icon?: Icon;
-  /** Tooltip, and the name of an icon-only item. */
+  /** Tooltip (the kit's), and the name of an icon-only item. */
   title?: string;
+  /** One more line in the tooltip, under the title or the label: what the choice does. */
+  description?: string;
   disabled?: boolean;
+  /** Why the caller may not choose it: greyed (`aria-disabled`), its tooltip says this sentence. */
+  disabledReason?: string;
 }
 
 export interface SegmentedProps<T extends string = string> {
@@ -113,7 +156,7 @@ export function Segmented<T extends string>({ items, value, onChange, label, siz
     const jump = e.key === "Home" || e.key === "End";
     if ((!dir && !jump) || disabled) return;
     e.preventDefault();
-    const on = items.filter((i) => !i.disabled);
+    const on = items.filter((i) => !i.disabled && !i.disabledReason);
     const next = jump
       ? on[e.key === "Home" ? 0 : on.length - 1]
       : on[(on.findIndex((i) => i.value === value) + dir + on.length) % on.length];
@@ -132,22 +175,35 @@ export function Segmented<T extends string>({ items, value, onChange, label, siz
       {items.map((it) => {
         const Icon = it.icon;
         const on = it.value === value;
-        return (
+        const name = it.title ?? it.label ?? it.value;
+        const extra = it.disabledReason ?? it.description;
+        const button = (
           <button
-            key={it.value}
             type="button"
             role="radio"
             aria-checked={on}
             tabIndex={on ? 0 : -1}
             disabled={disabled || it.disabled}
+            aria-disabled={it.disabledReason ? true : undefined}
             aria-label={it.label ? undefined : it.title}
-            title={it.title ?? it.label}
+            // A long label in a filled group ends in an ellipsis: its native title still reads it whole.
+            title={it.title || extra ? undefined : it.label}
             className="d-seg__btn"
-            onClick={() => onChange(it.value)}
+            onClick={() => {
+              if (!it.disabledReason) onChange(it.value);
+            }}
           >
             {Icon && <Icon size={size === "sm" ? 12 : 13} strokeWidth={1.5} aria-hidden />}
             {it.label && <span>{it.label}</span>}
           </button>
+        );
+        // A plain labelled choice needs no tooltip; a title, a description or a reason shows the kit's.
+        return it.title || extra ? (
+          <Tooltip key={it.value} label={name} description={extra}>
+            {button}
+          </Tooltip>
+        ) : (
+          <React.Fragment key={it.value}>{button}</React.Fragment>
         );
       })}
     </div>

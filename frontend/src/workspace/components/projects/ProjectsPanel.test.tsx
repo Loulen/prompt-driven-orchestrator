@@ -74,7 +74,7 @@ const PLATFORM: Project = { id: "p2", name: "Platform", members: ["/home/me/code
 const RUNS = [{ project_id: "p1" }, { project_id: "p1" }, { project_id: "p2" }, {}];
 
 const allow = { decision: "allow" as const };
-const deny = { decision: "deny" as const, reason: "no" };
+const deny = { decision: "deny" as const, reason: "no", sentence: "You can't change Project Checkout. Ask an administrator of Checkout." };
 
 function renderPanel(props: Partial<Parameters<typeof ProjectsPanel>[0]> = {}) {
   const onChanged = vi.fn();
@@ -386,24 +386,30 @@ describe("ProjectsPanel", () => {
     expect(screen.getByTestId("project-edit-modal")).toHaveTextContent("Checkout");
   });
 
-  it("reads a Projet the caller may not update as read-only", async () => {
+  it("reads a Projet the caller may not update as read-only, its gestures greyed with why (CORE-205)", async () => {
     // create, browse, create a repository, then p1 update/delete (denied), p2 allowed.
     api.askAuthorization.mockResolvedValue([deny, allow, allow, deny, deny, allow, allow]);
     renderPanel({ projects: [CHECKOUT, PLATFORM], entry: { projectId: "p1" } });
 
-    expect(await screen.findByTestId("project-read-only")).toBeInTheDocument();
-    expect(screen.queryByTestId("project-rename")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("project-delete")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("project-add-repo")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("project-repo-remove")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("project-repo-make-primary")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("projects-new")).not.toBeInTheDocument();
+    expect(await screen.findByTestId("project-read-only")).toHaveAttribute("title", deny.sentence);
+    const greyed = (testId: string) =>
+      screen.getAllByTestId(testId).every((el) => el.getAttribute("aria-disabled") === "true");
+    expect(greyed("project-rename")).toBe(true);
+    expect(greyed("project-delete")).toBe(true);
+    expect(greyed("project-more-settings")).toBe(true);
+    expect(greyed("project-add-repo")).toBe(true);
+    expect(greyed("project-repo-remove")).toBe(true);
+    expect(greyed("project-repo-make-primary")).toBe(true);
+    expect(greyed("projects-new")).toBe(true);
+    // Greyed, inert: no rename field opens.
+    fireEvent.click(screen.getByTestId("project-rename"));
+    expect(screen.queryByTestId("project-rename-input")).not.toBeInTheDocument();
     expect(api.askAuthorization).toHaveBeenCalledWith(
       expect.arrayContaining([{ resource: "project", verb: "update", target: "p1" }]),
     );
 
     fireEvent.click(screen.getAllByTestId("projects-list-item")[1]);
-    expect(screen.getByTestId("project-rename")).toBeInTheDocument();
+    expect(screen.getByTestId("project-rename")).not.toHaveAttribute("aria-disabled");
   });
 
   it("follows the Projets changed elsewhere", () => {

@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useAllowedActions } from "./actionRights";
+import { useGuardedActions } from "./actionRights";
 import { useContributions, useLocationContext, type ContributionElement } from "./catalogue";
 import type { Actor } from "../generated/Actor";
 import type { ActionLocation, EntityContext, LocationContext, PaletteContext, SearchResult } from "./contract";
@@ -38,13 +38,16 @@ export interface PaletteAction {
   context: LocationContext;
   /** The selected item it acts on; `null` for a global Action. */
   entity: EntityContext | null;
+  /** CORE-205: the sentence of its refusal, when the Actor may not make it (the row greyed). */
+  refused?: string;
 }
 
 const NO_ENTITY = { kind: "", id: "", attributes: {} } satisfies EntityContext;
 
 /**
- * The Actions of the palette the Actor may make: the global ones, and those
- * of the location acting on `selection`, each in registration order.
+ * The Actions of the palette: the global ones, and those of the location
+ * acting on `selection`, each in registration order; a refused one carries
+ * the sentence of its refusal (`refused`, CORE-205).
  */
 export function usePaletteActions(selection: EntityContext | null): {
   context: PaletteContext;
@@ -71,7 +74,7 @@ export function usePaletteActions(selection: EntityContext | null): {
       : [];
     return [...global, ...contextual];
   }, [globals, items, context, itemContext, location, selection]);
-  const allowed = useAllowedActions(candidates);
+  const allowed = useGuardedActions(candidates);
   return useMemo(
     () => ({
       context,

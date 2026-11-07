@@ -62,8 +62,8 @@ export default function SecondaryRepoRow({
   also,
 }: Props) {
   const [branchOpen, setBranchOpen] = useState(false);
-  // CORE-5: no loupe when the disk may not be browsed.
-  const canBrowse = useRunCreationRightsStore((s) => s.rights.canBrowse);
+  // CORE-5, CORE-205: the loupe greyed, with why, when the disk may not be browsed.
+  const browseRefused = useRunCreationRightsStore((s) => s.rights.browseRefused);
   const [validating, setValidating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -201,7 +201,7 @@ export default function SecondaryRepoRow({
             repoValid={repo.valid}
             repoValidating={validating}
             repoError={error}
-            canBrowse={canBrowse}
+            browseRefused={browseRefused}
             home={home}
           />
         </div>

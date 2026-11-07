@@ -28,10 +28,10 @@ interface Props {
    */
   explorerStartPath?: string;
   /**
-   * The loupe (browsing the disk). `false` hides it: the daemon would refuse the
-   * browse (CORE-5). Shown by default.
+   * Why the loupe (browsing the disk) is greyed: the daemon would refuse the
+   * browse (CORE-5); its tooltip says this sentence (CORE-205). Active by default.
    */
-  canBrowse?: boolean;
+  browseRefused?: string;
   /**
    * When set, the dropdown offers these groups instead of the recent
    * repositories: the repositories a Run may be created in, by Projet (CORE-5).
@@ -79,7 +79,7 @@ export default function RepoCombobox({
   repoValidating,
   repoError,
   explorerStartPath,
-  canBrowse = true,
+  browseRefused,
   groups,
   groupsNote,
   help,
@@ -213,9 +213,13 @@ export default function RepoCombobox({
             <ChevronDown size={12} strokeWidth={1.5} aria-hidden />
           </button>
         </div>
-        {canBrowse && (
-          <IconButton icon={FolderSearch} label="Browse folders" onClick={openExplorer} data-testid="repo-browse-trigger" />
-        )}
+        <IconButton
+          icon={FolderSearch}
+          label="Browse folders"
+          disabledReason={browseRefused}
+          onClick={openExplorer}
+          data-testid="repo-browse-trigger"
+        />
       </div>
       {hint}
       {invalid &&

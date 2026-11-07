@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import TriggersListPanel from "./TriggersListPanel";
 import type { TriggerListEntry } from "../../shared/generated/TriggerListEntry";
 
@@ -10,6 +10,26 @@ vi.mock("../api/triggers", () => ({
   deleteTrigger: (id: string) => deleteTrigger(id),
   updateTrigger: (id: string, req: unknown) => updateTrigger(id, req),
 }));
+
+// CORE-205: the gestures the caller may not make, asked once; all allowed
+// unless a test says otherwise.
+vi.mock("../../shared/authorization/api", async (orig) => ({
+  ...(await orig<typeof import("../../shared/authorization/api")>()),
+  askAuthorization: vi.fn(),
+}));
+import { askAuthorization, type OperationQuestion } from "../../shared/authorization/api";
+
+const WHY = "You can't change Triggers in Shop. Ask an administrator of Shop.";
+const mockedAsk = vi.mocked(askAuthorization);
+/** Refuse the Operations `refused` picks, allow the rest. */
+function refuse(refused: (op: OperationQuestion) => boolean) {
+  mockedAsk.mockImplementation((ops) =>
+    Promise.resolve(
+      ops.map((op) => (refused(op) ? { decision: "deny" as const, reason: "no_role", sentence: WHY } : { decision: "allow" as const })),
+    ),
+  );
+}
+const actionOf = (op: OperationQuestion) => (typeof op.verb === "object" ? op.verb.action : op.verb);
 
 const noop = () => {};
 
@@ -60,6 +80,7 @@ describe("TriggersListPanel", () => {
     updateTrigger.mockResolvedValue(undefined);
     deleteTrigger.mockReset();
     deleteTrigger.mockResolvedValue(undefined);
+    refuse(() => false);
   });
 
   it("shows an inviting empty state with an entry point when there are no triggers", () => {
@@ -286,5 +307,106 @@ describe("TriggersListPanel multi-select (#577)", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Select A" }));
     expect(screen.getByTestId("bulk-action-enable")).toBeDisabled();
     expect(screen.getByTestId("bulk-action-disable")).not.toBeDisabled();
+  });
+});
+
+// CORE-205 — a gesture the caller may not make stays, greyed, with the sentence.
+describe("TriggersListPanel — gestures the caller may not make (CORE-205)", () => {
+  beforeEach(() => {
+    updateTrigger.mockReset();
+    deleteTrigger.mockReset();
+    mockedAsk.mockClear();
+    refuse(() => false);
+  });
+
+  it("asks once for the list: the pause, the creation where it could go, each Trigger's gestures in its Projet", async () => {
+    renderPanel([trigger({ id: "t1", project_id: "p1" }), trigger({ id: "t2", name: "B" })], {
+      projects: [{ id: "p1", name: "Shop" } as never],
+    });
+    await waitFor(() => expect(mockedAsk).toHaveBeenCalledTimes(1));
+    expect(mockedAsk.mock.calls[0][0]).toEqual([
+      { resource: "trigger", verb: { action: "pause" }, projects: [] },
+      { resource: "trigger", verb: "create", projects: [] },
+      { resource: "trigger", verb: "create", projects: ["p1"] },
+      { resource: "trigger", verb: "update", target: "t1", projects: ["p1"] },
+      { resource: "trigger", verb: "delete", target: "t1", projects: ["p1"] },
+      { resource: "trigger", verb: { action: "fire" }, target: "t1", projects: ["p1"] },
+      { resource: "trigger", verb: "update", target: "t2", projects: [] },
+      { resource: "trigger", verb: "delete", target: "t2", projects: [] },
+      { resource: "trigger", verb: { action: "fire" }, target: "t2", projects: [] },
+    ]);
+  });
+
+  it("greys a refused row's switch, Run now and Delete with the sentence; a click does nothing", async () => {
+    const onRunNow = vi.fn();
+    refuse((op) => op.target === "t1" && ["update", "delete", "fire"].includes(actionOf(op)));
+    renderPanel([trigger({ id: "t1" })], { onRunNow });
+    await waitFor(() => expect(screen.getByTestId("trigger-toggle")).toHaveAttribute("aria-disabled", "true"));
+    for (const id of ["trigger-toggle", "trigger-run-now", "trigger-delete", "trigger-edit"]) {
+      const button = screen.getByTestId(id);
+      expect(button).toHaveAttribute("aria-disabled", "true");
+      expect(button).not.toBeDisabled();
+      fireEvent.click(button);
+    }
+    act(() => screen.getByTestId("trigger-delete").focus());
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(WHY);
+    expect(updateTrigger).not.toHaveBeenCalled();
+    expect(deleteTrigger).not.toHaveBeenCalled();
+    expect(onRunNow).not.toHaveBeenCalled();
+  });
+
+  it("leaves an allowed row's gestures active", async () => {
+    refuse((op) => op.target === "t2");
+    renderPanel([trigger({ id: "t1", name: "A" }), trigger({ id: "t2", name: "B" })]);
+    await waitFor(() => expect(mockedAsk).toHaveBeenCalled());
+    const rowA = screen.getAllByTestId("trigger-row")[0];
+    await waitFor(() =>
+      expect(within(screen.getAllByTestId("trigger-row")[1]).getByTestId("trigger-toggle")).toHaveAttribute("aria-disabled", "true"),
+    );
+    expect(within(rowA).getByTestId("trigger-toggle")).not.toHaveAttribute("aria-disabled");
+    expect(within(rowA).getByTestId("trigger-delete")).not.toHaveAttribute("aria-disabled");
+    fireEvent.click(within(rowA).getByTestId("trigger-toggle"));
+    await waitFor(() => expect(updateTrigger).toHaveBeenCalledWith("t1", { enabled: false }));
+  });
+
+  it("greys Pause all and New trigger when refused", async () => {
+    const onTogglePause = vi.fn();
+    const onNewTrigger = vi.fn();
+    refuse((op) => ["pause", "create"].includes(actionOf(op)));
+    renderPanel([trigger()], { onTogglePause, onNewTrigger });
+    await waitFor(() => expect(screen.getByTestId("triggers-pause-switch")).toHaveAttribute("aria-disabled", "true"));
+    expect(screen.getByTestId("triggers-new")).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(screen.getByTestId("triggers-pause-switch"));
+    fireEvent.click(screen.getByTestId("triggers-new"));
+    expect(onTogglePause).not.toHaveBeenCalled();
+    expect(onNewTrigger).not.toHaveBeenCalled();
+  });
+
+  it("keeps New trigger active when the creation is allowed in one Projet", async () => {
+    refuse((op) => actionOf(op) === "create" && (op.projects ?? []).length === 0);
+    renderPanel([trigger()], { projects: [{ id: "p1", name: "Shop" } as never] });
+    await waitFor(() => expect(mockedAsk).toHaveBeenCalled());
+    await Promise.resolve();
+    expect(screen.getByTestId("triggers-new")).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("greys a bulk action no selected Trigger allows, and acts only on those that allow it", async () => {
+    refuse((op) => op.target === "t1" && actionOf(op) === "delete");
+    renderPanel([trigger({ id: "t1", name: "A" }), trigger({ id: "t2", name: "B" })]);
+    await waitFor(() =>
+      expect(within(screen.getAllByTestId("trigger-row")[0]).getByTestId("trigger-delete")).toHaveAttribute("aria-disabled", "true"),
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select A" }));
+    expect(screen.getByTestId("bulk-action-delete")).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(screen.getByTestId("bulk-action-delete"));
+    expect(screen.queryByText(/^Delete \d+ triggers?\?$/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select B" }));
+    expect(screen.getByTestId("bulk-action-delete")).not.toHaveAttribute("aria-disabled");
+    fireEvent.click(screen.getByTestId("bulk-action-delete"));
+    expect(screen.getByText("Delete 1 trigger?")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("bulk-confirm"));
+    await waitFor(() => expect(deleteTrigger).toHaveBeenCalledTimes(1));
+    expect(deleteTrigger).toHaveBeenCalledWith("t2");
   });
 });

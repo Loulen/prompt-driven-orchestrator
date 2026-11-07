@@ -2,7 +2,7 @@ import type { ReviewDraft } from "../model/drafts";
 import { plural } from "../model/commentStatus";
 import { anchorLabel } from "../model/drafts";
 import { Send } from "lucide-react";
-import { Spinner } from "./commentBits";
+import { Refusable, Spinner } from "./commentBits";
 
 /**
  * The sticky footer bar of the Review page (#750): appears **only while drafts
@@ -19,12 +19,15 @@ interface Props {
   sending: boolean;
   managerRunning: boolean;
   sendDisabledReason: string | null;
+  /** CORE-205: why the caller may not send on this Run: Send all stays, greyed. */
+  sendRefused?: string;
   onJump: (draft: ReviewDraft) => void;
   onSendAll: () => void;
 }
 
-export default function ReviewSendBar({ drafts, sentCount, sending, managerRunning, sendDisabledReason, onJump, onSendAll }: Props) {
+export default function ReviewSendBar({ drafts, sentCount, sending, managerRunning, sendDisabledReason, sendRefused, onJump, onSendAll }: Props) {
   if (drafts.length === 0) return null;
+  const refused = sendDisabledReason ? undefined : sendRefused;
   const note = sendDisabledReason ?? (managerRunning ? "" : "starts the manager first");
   return (
     <div className="rv-sendbar" data-testid="review-send-bar">
@@ -48,16 +51,19 @@ export default function ReviewSendBar({ drafts, sentCount, sending, managerRunni
       <span className="d-meta rv-sendbar__note" title={note || undefined} data-testid="review-send-bar-note">
         {note}
       </span>
-      <button
-        type="button"
-        onClick={onSendAll}
-        disabled={!!sendDisabledReason || sending}
-        title={sendDisabledReason ?? "Send every draft to the manager as one message"}
-        data-testid="review-send-all"
-        className="d-btn d-btn--primary"
-      >
-        {sending ? <Spinner /> : <Send size={12} strokeWidth={1.5} aria-hidden />} Send all to manager
-      </button>
+      <Refusable reason={refused} label="Send all to manager">
+        <button
+          type="button"
+          onClick={refused ? undefined : onSendAll}
+          disabled={!!sendDisabledReason || sending}
+          aria-disabled={refused ? true : undefined}
+          title={refused ? undefined : (sendDisabledReason ?? "Send every draft to the manager as one message")}
+          data-testid="review-send-all"
+          className="d-btn d-btn--primary"
+        >
+          {sending ? <Spinner /> : <Send size={12} strokeWidth={1.5} aria-hidden />} Send all to manager
+        </button>
+      </Refusable>
     </div>
   );
 }

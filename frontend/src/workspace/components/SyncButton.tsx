@@ -36,6 +36,7 @@ export function SyncButton({
   onToggle,
   onFetch,
   onFastForward,
+  fastForwardRefused,
   touchesCheckout,
   onSwitchToUpstream,
   upstream,
@@ -50,6 +51,8 @@ export function SyncButton({
   onFetch: () => void;
   /** `undefined` = no fast-forward is on offer for this selection. */
   onFastForward?: () => void;
+  /** CORE-205: why the caller may not fast-forward (greyed, saying it), else absent. */
+  fastForwardRefused?: string;
   touchesCheckout?: boolean;
   onSwitchToUpstream: () => void;
   upstream: string | null;
@@ -135,6 +138,7 @@ export function SyncButton({
           ff={ff}
           onFetch={onFetch}
           onFastForward={onFastForward}
+          fastForwardRefused={fastForwardRefused}
           touchesCheckout={touchesCheckout}
           onSwitchToUpstream={onSwitchToUpstream}
           upstream={upstream}

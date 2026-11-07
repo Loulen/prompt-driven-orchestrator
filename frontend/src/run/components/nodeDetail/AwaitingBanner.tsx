@@ -22,7 +22,9 @@ export default function AwaitingBanner({
   terminalLive,
   terminalSpectating = false,
   canRelease,
+  releaseRefused,
   canMarkComplete,
+  markCompleteRefused,
   onRelease,
   onMarkComplete,
   onOpenChildRun,
@@ -34,8 +36,12 @@ export default function AwaitingBanner({
    *  until it takes control. */
   terminalSpectating?: boolean;
   canRelease: boolean;
-  /** CORE-42: « Mark complete » is allowed to the caller (else plain text). */
+  /** CORE-205: why the caller may not release the completion (greyed), else absent. */
+  releaseRefused?: string;
+  /** The daemon would complete the node (else plain text). */
   canMarkComplete: boolean;
+  /** CORE-205: why the caller may not approve (greyed), else absent. */
+  markCompleteRefused?: string;
   onRelease: () => void;
   onMarkComplete: () => void;
   onOpenChildRun?: (childRunId: string) => void;
@@ -55,12 +61,18 @@ export default function AwaitingBanner({
     actions = (
       <>
         {canRelease && (
-          <Button size="sm" icon={LockOpen} onClick={onRelease} data-testid="awaiting-banner-release">
+          <Button size="sm" icon={LockOpen} onClick={onRelease} disabledReason={releaseRefused} data-testid="awaiting-banner-release">
             Mark ready
           </Button>
         )}
         {canMarkComplete && (
-          <Button size="sm" icon={Check} onClick={onMarkComplete} data-testid="awaiting-banner-mark-complete">
+          <Button
+            size="sm"
+            icon={Check}
+            onClick={onMarkComplete}
+            disabledReason={markCompleteRefused}
+            data-testid="awaiting-banner-mark-complete"
+          >
             Approve
           </Button>
         )}

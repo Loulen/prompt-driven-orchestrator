@@ -8,7 +8,7 @@
  */
 
 import type { ReactNode } from "react";
-import { Check, ChevronDown, CircleAlert, LoaderCircle, RotateCcw } from "lucide-react";
+import { Check, ChevronDown, CircleAlert, LoaderCircle, Lock, RotateCcw } from "lucide-react";
 import ExtensionIcon from "../../shared/extensions/ExtensionIcon";
 import { usePageCounter } from "../../shared/extensions/pageCounter";
 import { Avatar, Kbd, StatusIcon } from "../../shared/ui/kit";
@@ -122,7 +122,8 @@ function ItemRow({ item, hits, ...p }: Omit<RowProps, "row"> & { item: PaletteIt
       id={p.id}
       role="option"
       aria-selected={p.active}
-      className={`sh-pal__row${item.danger ? " sh-pal__row--danger" : ""}`}
+      aria-disabled={item.disabledReason ? true : undefined}
+      className={`sh-pal__row${item.danger ? " sh-pal__row--danger" : ""}${item.disabledReason ? " sh-pal__row--refused" : ""}`}
       onClick={p.onPick}
       onMouseMove={p.onHover}
       data-testid="palette-row"
@@ -139,7 +140,12 @@ function ItemRow({ item, hits, ...p }: Omit<RowProps, "row"> & { item: PaletteIt
       )}
       <span className="sh-pal__fill" />
       {item.counter && item.extension && <ActionCount extension={item.extension.id} path={item.counter} />}
-      {item.checked ? (
+      {item.disabledReason ? (
+        <span className="sh-pal__meta sh-pal__why" title={item.disabledReason} data-testid="palette-refused">
+          <Lock size={12} strokeWidth={1.5} aria-hidden />
+          {item.disabledReason}
+        </span>
+      ) : item.checked ? (
         <Check size={14} strokeWidth={1.5} aria-label="Current" className="sh-pal__check" />
       ) : item.kbd ? (
         <Kbd>{item.kbd}</Kbd>

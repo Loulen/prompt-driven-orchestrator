@@ -168,6 +168,12 @@ pub fn refusal_headline(slug: &str, body: &serde_json::Value) -> String {
             "the user has not released this interactive node for completion".into()
         }
         "run_forgotten" => "this run has been forgotten (archived); it accepts nothing".into(),
+        // A refused Operation: the sentence a person reads, then the cause.
+        pdo_kernel::authorization::OPERATION_REFUSED => {
+            pdo_kernel::authorization::Denied::from_body(body)
+                .map(|denied| denied.for_an_agent())
+                .unwrap_or_else(|| "operation refused".into())
+        }
         // Unknown slug: hand it over as-is, plus whatever prose came with it.
         other => match body.get("message").and_then(|v| v.as_str()) {
             Some(m) => format!("{other}: {m}"),

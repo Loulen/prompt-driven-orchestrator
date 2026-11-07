@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Combine } from "lucide-react";
 import BulkActionBar from "../../pipeline/components/BulkActionBar";
 import { CombineModal } from "../components/CombineModal";
+import { COMBINE_QUESTION } from "../model/absorptionRights";
 import {
   GlobalMembersModal,
   MembersModal,
 } from "../components/StatsAbsorption";
 import { combineStatsRows, uncombineStatsMember } from "../api/absorptions";
+import { useRefusal } from "../../shared/authorization/useRefusals";
 import type { StatsAbsorbedMember } from "../../shared/generated/StatsAbsorbedMember";
 import type {
   AbsorbableRow,
@@ -268,6 +270,8 @@ export function useStatsAbsorption({
     }
   };
 
+  // CORE-205: Combine greyed, with why, when the caller may not combine.
+  const combineRefused = useRefusal(COMBINE_QUESTION, selection.length >= 2);
   const first = selection[0];
   const overlay = (
     <>
@@ -288,6 +292,7 @@ export function useStatsAbsorption({
               key: "combine",
               label: `Combine (${selection.length})…`,
               icon: <Combine size={14} strokeWidth={1.5} aria-hidden="true" />,
+              disabledReason: combineRefused,
               onClick: () => {
                 setError(null);
                 setCombining(true);

@@ -52,6 +52,11 @@ export interface PaletteItem {
   counter?: string;
   /** A destructive entry of a row menu. */
   danger?: boolean;
+  /**
+   * Why the caller may not do it (CORE-205): the row stays, greyed, the
+   * sentence in place of its shortcut; picking it does nothing.
+   */
+  disabledReason?: string;
   /** Listed under `>`. */
   command?: boolean;
   /** What the core remembers when it is picked. */

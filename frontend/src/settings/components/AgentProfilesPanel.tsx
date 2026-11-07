@@ -8,6 +8,15 @@ import type { AgentProfileReferents } from "../model/settings";
 import type { SettingsSection } from "../model/settingsCategories";
 import Section, { SectionExtra } from "./settingsSurface/Section";
 import AgentProfileModal from "./AgentProfileModal";
+import { useListRefusals } from "../../shared/authorization/useRefusals";
+import type { OperationQuestion } from "../../shared/authorization/api";
+
+const CREATE_PROFILE: OperationQuestion[] = [{ resource: "agent_profile", verb: "create" }];
+const profileId = (p: AgentProfile) => p.id;
+const perProfile = (p: AgentProfile): OperationQuestion[] => [
+  { resource: "agent_profile", verb: "update", target: p.id },
+  { resource: "agent_profile", verb: "delete", target: p.id },
+];
 
 /** The column heads of the profiles table. */
 const COLUMNS = ["Name", "Harness", "Model", "Effort", "Edited"];
@@ -22,6 +31,10 @@ const COLUMNS = ["Name", "Harness", "Model", "Effort", "Edited"];
  * The editor opens in a modal (#899) — from a row's name or pencil, or from the section's
  * « New profile » — the same modal for both. Delete asks first, naming how many live
  * references will resolve at the next tier.
+ *
+ * CORE-205: a gesture the caller may not make (`agent_profile` × create,
+ * update, delete, as `POST /authorize` answers) stays, greyed, its tooltip
+ * saying the refusal's sentence; the modal opens to read, its Save greyed.
  */
 export default function AgentProfilesPanel({
   section,
@@ -36,6 +49,10 @@ export default function AgentProfilesPanel({
   const [editing, setEditing] = useState<AgentProfile | "new" | null>(null);
   const [deleting, setDeleting] = useState<{ profile: AgentProfile; referents: AgentProfileReferents } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const refusals = useListRefusals(profiles, profileId, perProfile, CREATE_PROFILE);
+  const createRefused = refusals.global[0];
+  const updateRefused = (id: string) => refusals.of(id)[0];
+  const deleteRefused = (id: string) => refusals.of(id)[1];
 
   const inspectDelete = async (profile: AgentProfile) => {
     setError(null);
@@ -68,6 +85,7 @@ export default function AgentProfilesPanel({
           icon={Plus}
           label="New profile"
           size="sm"
+          disabledReason={createRefused}
           onClick={() => {
             setError(null);
             setEditing("new");
@@ -121,6 +139,7 @@ export default function AgentProfilesPanel({
                   icon={Pencil}
                   label={`Edit ${profile.name}`}
                   size="sm"
+                  disabledReason={updateRefused(profile.id)}
                   onClick={() => {
                     setError(null);
                     setEditing(profile);
@@ -130,7 +149,8 @@ export default function AgentProfilesPanel({
                   icon={Trash2}
                   label={`Delete ${profile.name}`}
                   size="sm"
-                  disabled={profile.id === "default"}
+                  disabled={profile.id === "default" && !deleteRefused(profile.id)}
+                  disabledReason={deleteRefused(profile.id)}
                   onClick={() => void inspectDelete(profile)}
                 />
               </span>
@@ -148,6 +168,7 @@ export default function AgentProfilesPanel({
         <AgentProfileModal
           profile={editing === "new" ? null : editing}
           profiles={profiles}
+          saveRefused={editing === "new" ? createRefused : updateRefused(editing.id)}
           onClose={() => setEditing(null)}
           onSaved={onChanged}
         />

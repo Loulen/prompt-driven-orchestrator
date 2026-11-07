@@ -7,7 +7,7 @@ import ModelPicker from "../../harness/components/ModelPicker";
 import EffortPicker from "../../harness/components/EffortPicker";
 import HarnessSelect from "../../harness/components/HarnessSelect";
 import { findHarnessOption, effortOffer, modelCount, probedAgo } from "../../harness/model/catalog";
-import { useHarnessCatalog, useRefreshModels } from "../../harness/store/useHarnessCatalog";
+import { useHarnessCatalog, useRefreshModels, useRefreshModelsRefused } from "../../harness/store/useHarnessCatalog";
 
 /**
  * The agent profile editor (#899): one modal for both a row's **Edit** pencil
@@ -23,6 +23,7 @@ export default function AgentProfileModal({
   profiles,
   onClose,
   onSaved,
+  saveRefused,
 }: {
   /** The profile being edited, or `null` to create a new one. */
   profile: AgentProfile | null;
@@ -30,6 +31,8 @@ export default function AgentProfileModal({
   profiles: AgentProfile[];
   onClose: () => void;
   onSaved: () => Promise<void>;
+  /** CORE-205: why the caller may not save it (Save greyed, its tooltip says why), else absent. */
+  saveRefused?: string;
 }) {
   const [draft, setDraft] = useState(() => ({
     name: profile?.name ?? "",
@@ -43,6 +46,7 @@ export default function AgentProfileModal({
   // « ↻ »: probe the harness's models again; the catalogue above reads them
   // anew once the daemon answers, here and in every other browser.
   const { probing, failed, refresh } = useRefreshModels();
+  const refreshRefused = useRefreshModelsRefused();
   const refreshing = probing.has(draft.harness);
   // #798: the effort offer is read against the model the form has selected — a
   // per-model key in the served `model_efforts` is authoritative for it
@@ -162,7 +166,8 @@ export default function AgentProfileModal({
                       size="sm"
                       className={refreshing ? "[&>svg]:animate-spin" : undefined}
                       onClick={() => void refresh(draft.harness)}
-                      disabled={refreshing || !(harnessOption?.installed ?? false)}
+                      disabled={!refreshRefused && (refreshing || !(harnessOption?.installed ?? false))}
+                      disabledReason={refreshRefused}
                       data-testid="agent-profile-models-refresh"
                     />
                   </span>
@@ -198,7 +203,13 @@ export default function AgentProfileModal({
             <Button onClick={onClose} data-testid="agent-profile-cancel">
               Cancel
             </Button>
-            <Button tone="primary" disabled={!canSave} onClick={() => void save()} data-testid="agent-profile-save">
+            <Button
+              tone="primary"
+              disabled={!canSave && !saveRefused}
+              disabledReason={saveRefused}
+              onClick={() => void save()}
+              data-testid="agent-profile-save"
+            >
               {profile ? "Save profile" : "Create"}
             </Button>
           </div>

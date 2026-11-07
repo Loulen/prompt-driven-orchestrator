@@ -1,5 +1,6 @@
 import { SKILL_MD, formatBytes } from "../model/skillFiles";
 import type { SkillFiles } from "../store/useSkillFiles";
+import { GREYED, RefusalTip } from "./BankControls";
 
 /**
  * The plain-text editor of a skill's file (#671): ⌘S saves, a dirty draft asks
@@ -10,11 +11,17 @@ export default function FileEditor({
   leave,
   onLeaveSettled,
   locked = false,
+  writeRefused,
 }: {
   files: SkillFiles;
   leave: (() => void) | null;
   onLeaveSettled: () => void;
   locked?: boolean;
+  /**
+   * Why the caller's rights refuse writing the skill (CORE-205): the text is
+   * read-only, Save stays greyed with the sentence in its tooltip.
+   */
+  writeRefused?: string;
 }) {
   const editor = files.editor!;
   const binary = editor.content?.binary ?? false;
@@ -22,7 +29,7 @@ export default function FileEditor({
   const isSkillMd = editor.path === SKILL_MD;
 
   const onKeyDown = (event: React.KeyboardEvent) => {
-    if (locked) return;
+    if (locked || writeRefused) return;
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
       void files.save();
@@ -117,7 +124,7 @@ export default function FileEditor({
         <textarea
           value={editor.draft}
           onChange={(event) => files.setDraft(event.target.value)}
-          readOnly={locked}
+          readOnly={locked || !!writeRefused}
           spellCheck={false}
           aria-label={`${editor.path} text`}
           aria-invalid={editor.error ? true : undefined}
@@ -158,15 +165,18 @@ export default function FileEditor({
               >
                 Revert
               </button>
-              <button
-                type="button"
-                onClick={() => void files.save()}
-                disabled={!dirty || files.saving}
-                data-testid="skill-file-save"
-                className="rounded-md bg-primary px-2.5 py-1 font-medium text-surface-0 hover:opacity-90 disabled:opacity-40"
-              >
-                {files.saving ? "Saving…" : "Save"}
-              </button>
+              <RefusalTip label="Save" reason={writeRefused}>
+                <button
+                  type="button"
+                  onClick={writeRefused ? undefined : () => void files.save()}
+                  disabled={!writeRefused && (!dirty || files.saving)}
+                  aria-disabled={writeRefused ? true : undefined}
+                  data-testid="skill-file-save"
+                  className={`rounded-md bg-primary px-2.5 py-1 font-medium text-surface-0 hover:opacity-90 disabled:opacity-40 ${GREYED}`}
+                >
+                  {files.saving ? "Saving…" : "Save"}
+                </button>
+              </RefusalTip>
             </>
           )}
         </div>

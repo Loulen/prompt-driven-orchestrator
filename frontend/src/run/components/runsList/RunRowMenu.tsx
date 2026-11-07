@@ -6,6 +6,7 @@ import { ExtensionMenuGroups } from "../../../shared/extensions/ExtensionActions
 import type { RunEntity } from "../../../shared/extensions/contract";
 import { DropdownMenuSeparator } from "../../../shared/ui/dropdown-menu";
 import RowMenu, { ROW_MENU_EXTENSION_ITEM, RowMenuItem } from "../../../shared/ui/RowMenu";
+import { reasonsOf } from "../../../shared/ui/menuReasons";
 import { toast } from "../../../shared/ui/toast";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 import { copyToClipboard } from "../../../shared/lib/clipboard";
@@ -22,10 +23,21 @@ export type RunRowMenuPane = Pick<
   | "runShell"
 >;
 
+/** Why the caller may not make each gesture of a row (CORE-205), absent when allowed. */
+export interface RunRowRefusals {
+  cleanup?: string;
+  rename?: string;
+  forget?: string;
+  pause?: string;
+  resume?: string;
+  retryAll?: string;
+}
+
 /**
  * The row's « ⋯ » menu (#30): the row's verbs (those of its hover icons, plus
  * Copy run id), the extensions' `run/item/menu` groups, then the destructive
- * entry. Its context hands the row's Run over as `entity`.
+ * entry. Its context hands the row's Run over as `entity`. A verb the caller
+ * may not make stays, greyed; the menu says why at its foot (CORE-205).
  */
 export default function RunRowMenu({
   run,
@@ -35,8 +47,8 @@ export default function RunRowMenu({
   canResume,
   canRetryAll,
   canCleanup,
-  canRename,
   canForget,
+  refused,
 }: {
   run: RunListEntry;
   pane: RunRowMenuPane;
@@ -45,35 +57,47 @@ export default function RunRowMenu({
   canResume: boolean;
   canRetryAll: boolean;
   canCleanup: boolean;
-  /** CORE-42: the caller may rename the Run. */
-  canRename: boolean;
-  /** CORE-42: an archived Run the caller may forget. */
+  /** An archived Run: Forget applies. */
   canForget: boolean;
+  /** CORE-42, CORE-205: the gestures the caller may not make, and why. */
+  refused: RunRowRefusals;
 }) {
   const { startRename, handlePause, handleResume, setConfirmRetryAll, setConfirmCleanup, setConfirmForget, runShell } =
     pane;
   const isArchived = run.status === "archived";
   const label = run.name || run.run_id;
   const extra = useMemo(() => ({ entity: runEntity(run) }), [run]);
+  const reasons = reasonsOf(
+    !isRenaming && refused.rename,
+    canPause && refused.pause,
+    canResume && refused.resume,
+    canRetryAll && refused.retryAll,
+    canCleanup && refused.cleanup,
+    canForget && refused.forget,
+  );
   return (
-    <RowMenu label={`More actions for ${label}`} testId="run-row-menu">
-      {!isRenaming && canRename && (
-        <RowMenuItem data-testid="run-menu-rename" onClick={() => startRename(run)}>
+    <RowMenu label={`More actions for ${label}`} testId="run-row-menu" reasons={reasons}>
+      {!isRenaming && (
+        <RowMenuItem data-testid="run-menu-rename" disabledReason={refused.rename} onClick={() => startRename(run)}>
           <Pencil /> Rename
         </RowMenuItem>
       )}
       {canPause && (
-        <RowMenuItem data-testid="run-menu-pause" onClick={() => handlePause(run.run_id)}>
+        <RowMenuItem data-testid="run-menu-pause" disabledReason={refused.pause} onClick={() => handlePause(run.run_id)}>
           <Pause /> Pause
         </RowMenuItem>
       )}
       {canResume && (
-        <RowMenuItem data-testid="run-menu-resume" onClick={() => handleResume(run.run_id)}>
+        <RowMenuItem data-testid="run-menu-resume" disabledReason={refused.resume} onClick={() => handleResume(run.run_id)}>
           <Play /> Resume
         </RowMenuItem>
       )}
       {canRetryAll && (
-        <RowMenuItem data-testid="run-menu-retry-all" onClick={() => setConfirmRetryAll(run.run_id)}>
+        <RowMenuItem
+          data-testid="run-menu-retry-all"
+          disabledReason={refused.retryAll}
+          onClick={() => setConfirmRetryAll(run.run_id)}
+        >
           <RotateCcw /> Retry all
         </RowMenuItem>
       )}
@@ -92,13 +116,19 @@ export default function RunRowMenu({
           variant="destructive"
           data-testid="run-menu-cleanup"
           data-run-id={run.run_id}
+          disabledReason={refused.cleanup}
           onClick={() => setConfirmCleanup({ runId: run.run_id, status: run.status })}
         >
           <Trash2 /> {isLiveRun(run.status) ? "Stop and archive" : "Cleanup"}
         </RowMenuItem>
       )}
       {canForget && (
-        <RowMenuItem variant="destructive" data-testid="run-menu-forget" onClick={() => setConfirmForget(run.run_id)}>
+        <RowMenuItem
+          variant="destructive"
+          data-testid="run-menu-forget"
+          disabledReason={refused.forget}
+          onClick={() => setConfirmForget(run.run_id)}
+        >
           <Trash2 /> Forget
         </RowMenuItem>
       )}

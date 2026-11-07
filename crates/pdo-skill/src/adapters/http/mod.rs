@@ -179,9 +179,7 @@ mod tests {
 
     #[test]
     fn a_refusal_answers_the_body_every_context_answers() {
-        let denied = Denied {
-            reason: "the bank is frozen".into(),
-        };
+        let denied = Denied::new("the bank is frozen");
         let error = SkillError::Denied(denied.clone());
         assert_eq!(skill_error_body(&error), denied.body());
         assert_eq!(skill_error_response(error).status(), StatusCode::FORBIDDEN);

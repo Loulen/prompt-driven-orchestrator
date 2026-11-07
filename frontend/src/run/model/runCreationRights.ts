@@ -9,23 +9,30 @@
  */
 
 import type { Decision, OperationQuestion } from "../../shared/authorization/api";
-import { isAllowed } from "../../shared/authorization/api";
+import { isAllowed, refusalOf } from "../../shared/authorization/api";
+import { GENERIC_REFUSAL } from "../../shared/http/client";
 import type { Project } from "../../workspace/model/project";
 
-/** Why New run is disabled (CORE-5). */
-export const NO_RUN_ANYWHERE = "You can't create Runs in any Project. Ask an administrator for access.";
 
 export interface RunCreationRights {
   /** The answer arrived. Before it, everything shows (the daemon decides). */
   known: boolean;
   /** The loupe: browsing the disk for a repository. */
   canBrowse: boolean;
+  /** CORE-205: why the loupe is greyed (the refusal's sentence), else absent. */
+  browseRefused?: string;
   /** A Run may be created in no Projet (a repository no Projet owns). */
   outsideProjects: boolean;
   /** The Projets a Run may be created in, in the order listed. */
   allowedProjects: Project[];
   /** The Projets listed where a Run may not be created. */
   hiddenProjects: Project[];
+  /**
+   * CORE-205: the sentence of the refusal of a Run in no Projet (else of the
+   * first Projet refused), what a greyed « New Run » says when no Projet
+   * allows a Run ({@link whyNoRunAnywhere}).
+   */
+  createRefused?: string;
 }
 
 /** Nothing known yet: everything shows, as without extension. */
@@ -56,9 +63,11 @@ export function runCreationRights(projects: Project[], decisions: Decision[]): R
   return {
     known: true,
     canBrowse: isAllowed(decisions[0]),
+    browseRefused: refusalOf(decisions[0]),
     outsideProjects: isAllowed(decisions[1]),
     allowedProjects,
     hiddenProjects,
+    createRefused: refusalOf(decisions[1]) ?? projects.map((_, i) => refusalOf(decisions[i + 2])).find(Boolean),
   };
 }
 
@@ -73,6 +82,15 @@ export function isRestricted(rights: RunCreationRights): boolean {
 /** A Run may be created somewhere (the « New Run » button is enabled). */
 export function canCreateSomeRun(rights: RunCreationRights): boolean {
   return !rights.known || rights.outsideProjects || rights.allowedProjects.length > 0;
+}
+
+/**
+ * Why « New Run » is greyed: no Projet allows a Run; the sentence the
+ * extension gave with the refusal, else the core's generic one. `undefined`
+ * when a Run may be created somewhere.
+ */
+export function whyNoRunAnywhere(rights: RunCreationRights): string | undefined {
+  return canCreateSomeRun(rights) ? undefined : (rights.createRefused ?? GENERIC_REFUSAL);
 }
 
 /** A group of repositories the restricted form offers, under its Projet's name. */

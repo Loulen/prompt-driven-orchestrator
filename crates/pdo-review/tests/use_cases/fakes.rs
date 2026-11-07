@@ -261,9 +261,7 @@ impl ExtensionHost for Host {
             .unwrap()
             .push((actor.clone(), operation.clone()));
         if *self.refuse.lock().unwrap() {
-            Authorization::Deny {
-                reason: "the test host refuses everything".into(),
-            }
+            Authorization::deny("the test host refuses everything")
         } else {
             Authorization::Allow
         }

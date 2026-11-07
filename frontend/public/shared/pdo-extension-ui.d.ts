@@ -217,6 +217,10 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   tone?: "default" | "primary" | "ghost" | "danger";
   /** 24 px (`md`) or 20 px (`sm`). */
   size?: "md" | "sm";
+  /** Why the caller may not use it: visible, greyed (`aria-disabled`, still
+   *  focusable), inert, its tooltip says the sentence. Prefer it to `disabled`
+   *  for a gesture the caller's rights refuse. Since 0.23. */
+  disabledReason?: string;
 }
 /** A text button: hairline, no fill. */
 export const Button: ForwardRefExoticComponent<ButtonProps & RefAttributes<HTMLButtonElement>>;
@@ -234,6 +238,9 @@ export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonEle
   tone?: "danger";
   /** One short extra line in the tooltip. */
   description?: string;
+  /** Why the caller may not use it: visible, greyed (`aria-disabled`), inert;
+   *  its tooltip says its name, then this sentence. Since 0.23. */
+  disabledReason?: string;
 }
 /** An icon-only button, its name and shortcut in a tooltip. */
 export const IconButton: ForwardRefExoticComponent<IconButtonProps & RefAttributes<HTMLButtonElement>>;
@@ -319,9 +326,14 @@ export interface SegmentedItem<T extends string = string> {
   value: T;
   label?: string;
   icon?: Icon;
-  /** Tooltip, and the name of an icon-only item. */
+  /** Tooltip (the kit's `Tooltip` since 0.23, a native `title` before), and
+   *  the name of an icon-only item. */
   title?: string;
+  /** One more line in the tooltip: what the choice does. Since 0.23. */
+  description?: string;
   disabled?: boolean;
+  /** Why the caller may not choose it: greyed, its tooltip says the sentence. Since 0.23. */
+  disabledReason?: string;
 }
 export interface SegmentedProps<T extends string = string> {
   items: SegmentedItem<T>[];
@@ -374,6 +386,10 @@ export interface MenuItem {
   radio?: boolean;
   danger?: boolean;
   disabled?: boolean;
+  /** Why the caller may not pick it: the entry stays, greyed, and the menu
+   *  says the sentence once, on a line at its foot with a lock, rather than a
+   *  tooltip per entry. Implies `disabled`. Since 0.23. */
+  disabledReason?: string;
   onSelect?: () => void;
   submenu?: MenuEntry[];
 }

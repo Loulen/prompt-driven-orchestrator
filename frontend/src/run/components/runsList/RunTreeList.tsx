@@ -9,6 +9,8 @@ import RunRow from "./RunRow";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 import ExtensionDecorations from "../../../shared/extensions/ExtensionDecorations";
 import type { DecorationContext } from "../../../shared/extensions/contract";
+import { whyNoRunAnywhere } from "../../model/runCreationRights";
+import { useRunCreationRightsStore } from "../../store/runCreationRightsStore";
 
 /** The empty Runs list is about no entity (`runs/empty`). */
 const RUNS_EMPTY: Omit<DecorationContext, "location" | "run" | "project"> = { entity: null };
@@ -47,6 +49,8 @@ export default function RunTreeList({
     isGroupCollapsed, toggleGroup,
   } = pane;
   const archivedVisible = archivedOpen ? flattenVisible(archivedTree, isExpanded) : [];
+  // CORE-5, CORE-205: New run greyed, with why, where no Projet allows creating a Run.
+  const noRunReason = useRunCreationRightsStore((s) => whyNoRunAnywhere(s.rights));
   const renderRunRow = (node: RunTreeNode) => (
     <RunRow
       key={node.run.run_id}
@@ -81,7 +85,15 @@ export default function RunTreeList({
       }
     >
       {runs.length === 0 && (
-        <ListEmpty icon={Play} title="No runs" actionLabel="New run" actionIcon={Plus} onAction={onNewRun} testId="runs-empty">
+        <ListEmpty
+          icon={Play}
+          title="No runs"
+          actionLabel="New run"
+          actionIcon={Plus}
+          onAction={onNewRun}
+          actionRefused={noRunReason}
+          testId="runs-empty"
+        >
           {/* API 0.11: what the extensions say about the empty list; nothing
               at all without a contribution. */}
           <ExtensionDecorations<DecorationContext>

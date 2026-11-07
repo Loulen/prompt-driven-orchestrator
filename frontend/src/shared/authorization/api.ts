@@ -2,10 +2,11 @@
  * The question of authorization (CORE-5): would the daemon allow these
  * Operations to the caller? `POST /authorize` answers one decision per
  * Operation, in order, without running any. Without extension, everything is
- * allowed. The UI hides what would be refused; the daemon still refuses it.
+ * allowed. The UI greys what would be refused, its tooltip saying the
+ * refusal's sentence (CORE-205); the daemon still refuses it.
  */
 
-import { request } from "../http/client";
+import { GENERIC_REFUSAL, request } from "../http/client";
 
 /** What an Operation does: `read`, `create`, `update`, `delete`, or a named action. */
 export type OperationVerb = "read" | "create" | "update" | "delete" | { action: string };
@@ -20,7 +21,11 @@ export interface OperationQuestion {
   projects?: string[];
 }
 
-export type Decision = { decision: "allow" } | { decision: "deny"; reason: string };
+/**
+ * One answer: `reason` is the technical cause (for a program), `sentence`
+ * what a person reads (the extension's, else the core's generic one).
+ */
+export type Decision = { decision: "allow" } | { decision: "deny"; reason: string; sentence?: string };
 
 export function askAuthorization(operations: OperationQuestion[]): Promise<Decision[]> {
   if (operations.length === 0) return Promise.resolve([]);
@@ -32,4 +37,14 @@ export function askAuthorization(operations: OperationQuestion[]): Promise<Decis
 
 export function isAllowed(decision: Decision | undefined): boolean {
   return decision?.decision !== "deny";
+}
+
+/**
+ * The sentence a person reads for `decision` when it refuses, `undefined`
+ * when it allows (or when there is no answer yet): what a greyed gesture's
+ * tooltip says (`disabledReason`).
+ */
+export function refusalOf(decision: Decision | undefined): string | undefined {
+  if (decision?.decision !== "deny") return undefined;
+  return decision.sentence?.trim() ? decision.sentence : GENERIC_REFUSAL;
 }

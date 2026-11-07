@@ -4,7 +4,7 @@ import { Button } from "../../shared/ui/kit";
 import type { LoopKind } from "../../shared/generated/LoopKind";
 import { useEditStore } from "../store/editStore";
 import { endRegion } from "../../run/api/commands";
-import { useMayOnRun } from "../../run/store/gestureRightsStore";
+import { useWhyNotOnRun } from "../../run/store/gestureRightsStore";
 import { toastRefusal } from "../../shared/authorization/refusal";
 
 /**
@@ -60,8 +60,8 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
   const selected = useEditStore(
     (s) => s.selection.kind === "region" && s.selection.regionId === data.regionId,
   );
-  // CORE-42: « route from manager » only when the caller may end the region.
-  const mayEndRegion = useMayOnRun(data.runId as string | null | undefined)("end_region");
+  // CORE-42, CORE-205: « route from manager » greyed, with why, when the caller may not end the region.
+  const endRegionRefused = useWhyNotOnRun(data.runId as string | null | undefined)("end_region");
   const collection = data.kind === "collection";
   // A fan-out splits its members, a bounded loop repeats them.
   const Glyph = collection ? Split : Repeat;
@@ -112,13 +112,14 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
       {data.exhausted && (
         <div data-testid="loop-region-block" className="cv-region__block">
           exhausted · unrouted
-          {data.runId != null && mayEndRegion && (
+          {data.runId != null && (
             // The run overlay on an exhausted-unrouted region offers a "route
             // from manager" affordance (ADR-0011 / #152): ending the region by
             // id fires its completion and the daemon resumes the run.
             <Button
               size="sm"
               data-testid="loop-region-route-from-manager"
+              disabledReason={endRegionRefused}
               onClick={(e) => {
                 e.stopPropagation();
                 endRegion(data.runId as string, data.regionId).catch(toastRefusal);

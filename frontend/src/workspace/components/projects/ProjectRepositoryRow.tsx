@@ -14,7 +14,7 @@ export default function ProjectRepositoryRow({
   remote,
   alsoIn,
   primary,
-  editable,
+  editRefused,
   onMakePrimary,
   onRemove,
 }: {
@@ -24,7 +24,8 @@ export default function ProjectRepositoryRow({
   remote: string | null | undefined;
   alsoIn: string[];
   primary: boolean;
-  editable: boolean;
+  /** CORE-205: why the caller may not change the Projet (its gestures greyed), else absent. */
+  editRefused?: string;
   onMakePrimary: () => void;
   onRemove: () => void;
 }) {
@@ -37,8 +38,15 @@ export default function ProjectRepositoryRow({
           default
         </span>
       )}
-      {!primary && editable && (
-        <Button size="sm" tone="ghost" className="set-hover" onClick={onMakePrimary} data-testid="project-repo-make-primary">
+      {!primary && (
+        <Button
+          size="sm"
+          tone="ghost"
+          className="set-hover"
+          onClick={onMakePrimary}
+          disabledReason={editRefused}
+          data-testid="project-repo-make-primary"
+        >
           Make default
         </Button>
       )}
@@ -54,17 +62,16 @@ export default function ProjectRepositoryRow({
           +{alsoIn.length}
         </span>
       )}
-      {editable && (
-        <IconButton
-          icon={X}
-          label={`Remove ${path} from the project`}
-          description="The folder stays on disk"
-          size="sm"
-          className="set-hover"
-          onClick={onRemove}
-          data-testid="project-repo-remove"
-        />
-      )}
+      <IconButton
+        icon={X}
+        label={`Remove ${path} from the project`}
+        description="The folder stays on disk"
+        disabledReason={editRefused}
+        size="sm"
+        className="set-hover"
+        onClick={onRemove}
+        data-testid="project-repo-remove"
+      />
     </div>
   );
 }

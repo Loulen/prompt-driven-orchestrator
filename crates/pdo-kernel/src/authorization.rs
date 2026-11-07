@@ -122,9 +122,7 @@ mod tests {
         let read = Operation::new(ResourceKind::Run, Verb::Read).on("r1");
         assert_eq!(
             authorize_read(&RefusesReads, &Actor::LocalOperator, &read),
-            Err(Denied {
-                reason: "no reading".into()
-            })
+            Err(Denied::new("no reading"))
         );
         assert_eq!(
             authorize_read(&NoExtensions, &Actor::LocalOperator, &read),
@@ -171,9 +169,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_refusal_is_a_403_with_the_slug_and_the_reason() {
-        let denied = Denied {
-            reason: "projects are read-only".into(),
-        };
+        let denied = Denied::new("projects are read-only");
         let response = denied.into_response();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         let bytes = pdo_extension_api::axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -185,6 +181,7 @@ mod tests {
                 "error": "operation_refused",
                 "message": "operation refused: projects are read-only",
                 "reason": "projects are read-only",
+                "sentence": "You don't have the rights to do this.",
             })
         );
     }

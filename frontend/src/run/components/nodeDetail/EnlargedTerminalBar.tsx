@@ -22,8 +22,12 @@ export interface TerminalCompletion {
   /** `awaiting_user` on a live run: the gestures belong in the enlarged bar. */
   showGestures: boolean;
   canRelease: boolean;
-  /** CORE-42: « Mark complete » is allowed to the caller (else hidden). */
+  /** CORE-205: why the caller may not release the completion (greyed), else absent. */
+  releaseRefused?: string;
+  /** The daemon would complete the node (else hidden). */
   canMarkComplete: boolean;
+  /** CORE-205: why the caller may not mark it complete (greyed), else absent. */
+  markCompleteRefused?: string;
   released: boolean;
   isReleasing: boolean;
   releaseVerdict: ({ iter: number } & ReleaseVerdict) | null;
@@ -75,6 +79,7 @@ export function EnlargedCompletionGestures({
           label={releaseLabel}
           pressed={completion.released}
           disabled={completion.isReleasing}
+          disabledReason={completion.releaseRefused}
           data-testid="term-release-completion"
           onClick={() => {
             onGesture("release");
@@ -87,6 +92,7 @@ export function EnlargedCompletionGestures({
           icon={Check}
           size="sm"
           label={MARK_COMPLETE_LABEL}
+          disabledReason={completion.markCompleteRefused}
           data-testid="term-mark-complete"
           onClick={() => {
             onGesture("mark");

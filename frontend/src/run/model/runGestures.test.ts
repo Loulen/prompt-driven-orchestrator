@@ -11,6 +11,8 @@ import {
   mayOnNode,
   mayOnRun,
   NODE_GESTURES,
+  whyNotOnNode,
+  whyNotOnRun,
   NOTHING_REFUSED,
   RUN_ROW_GESTURES,
   withDecisions,
@@ -18,7 +20,8 @@ import {
 } from "./runGestures";
 
 const allow: Decision = { decision: "allow" };
-const deny: Decision = { decision: "deny", reason: "Reader of P" };
+const SENTENCE = "You can't change Runs in Project P. Ask an administrator of P.";
+const deny: Decision = { decision: "deny", reason: "the test rules refuse it", sentence: SENTENCE };
 
 describe("the questions of a Run's gestures", () => {
   it("asks each gesture on the Run, then each gesture on each node, as the daemon asks them", () => {
@@ -51,6 +54,16 @@ describe("the rights the decisions grant", () => {
     expect(mayOnNode(rights, "r1", "a", "retry")).toBe(true);
     // Another Run, never asked about: nothing hidden.
     expect(mayOnRun(rights, "r2", "retry_all")).toBe(true);
+    // A refusal keeps the sentence a person reads, never the technical reason.
+    expect(whyNotOnRun(rights, "r1", "retry_all")).toBe(SENTENCE);
+    expect(whyNotOnNode(rights, "r1", "a", "stop")).toBe(SENTENCE);
+    expect(whyNotOnRun(rights, "r1", "pause_run")).toBeUndefined();
+  });
+
+  it("says the core's generic sentence when the extension gives none (CORE-205)", () => {
+    const row: GestureQuestion = { runId: "r1", runGestures: ["retry_all"], nodeIds: [] };
+    const rights = withDecisions(NOTHING_REFUSED, [row], [{ decision: "deny", reason: "the test rules refuse it" }]);
+    expect(whyNotOnRun(rights, "r1", "retry_all")).toBe("You don't have the rights to do this.");
   });
 
   it("takes the new answer of what is asked again, and keeps the rest", () => {

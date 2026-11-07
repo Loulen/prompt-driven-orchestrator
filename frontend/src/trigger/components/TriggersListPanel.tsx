@@ -14,6 +14,7 @@ import ListEmpty from "../../shared/ui/leftList/ListEmpty";
 import TriggerRow from "./triggersList/TriggerRow";
 import TriggersBulk, { type TriggerBulkKind } from "./triggersList/TriggersBulk";
 import TriggersListHeader from "./triggersList/TriggersListHeader";
+import { useTriggerListRefusals } from "../store/useTriggerRefusals";
 import ExtensionListFilters from "../../shared/extensions/ExtensionListFilters";
 import {
   isAttributeFilterActive,
@@ -94,6 +95,14 @@ export default function TriggersListPanel({
     });
   }, [allTriggers, projects, attributeFilter, projectFilter, filterActive]);
 
+  // CORE-205: the gestures the caller may not make, asked once for the list;
+  // a refused one stays, greyed, with the refusal's sentence.
+  const projectIds = useMemo(() => projects.map((p) => p.id), [projects]);
+  const refusals = useTriggerListRefusals(allTriggers, projectIds);
+  const selectedTriggers = triggers.filter((t) => selSet.has(t.id));
+  const bulkDeleteRefused =
+    selectedTriggers.length > 0 && selectedTriggers.every((t) => refusals.of(t.id).delete !== undefined);
+
   async function handleDelete(triggerId: string) {
     try {
       await deleteTrigger(triggerId);
@@ -144,6 +153,7 @@ export default function TriggersListPanel({
       onEdit={onEditTrigger && (() => onEditTrigger(t))}
       onDelete={() => void handleDelete(t.id)}
       onToggle={() => void handleToggle(t)}
+      refused={refusals.of(t.id)}
     />
   );
 
@@ -153,6 +163,8 @@ export default function TriggersListPanel({
         paused={paused}
         onTogglePause={onTogglePause}
         onNewTrigger={onNewTrigger}
+        pauseRefused={refusals.pause}
+        createRefused={refusals.create}
       />
 
       <ExtensionListFilters
@@ -184,6 +196,7 @@ export default function TriggersListPanel({
           actionLabel="New trigger"
           actionIcon={Plus}
           onAction={onNewTrigger}
+          actionRefused={refusals.create}
           testId="triggers-empty"
         />
       ) : (
@@ -198,7 +211,7 @@ export default function TriggersListPanel({
               selectVisible,
               clear: clearSel,
               onBulkDelete: () => {
-                if (selectedIds.length > 0) setPending("delete");
+                if (selectedIds.length > 0 && !bulkDeleteRefused) setPending("delete");
               },
             })
           }
@@ -246,11 +259,12 @@ export default function TriggersListPanel({
       )}
 
       <TriggersBulk
-        selectedTriggers={triggers.filter((t) => selSet.has(t.id))}
+        selectedTriggers={selectedTriggers}
         selectedCount={selectedIds.length}
         pending={pending}
         setPending={setPending}
         onTriggersChanged={onTriggersChanged}
+        refusalsOf={refusals.of}
       />
 
     </div>

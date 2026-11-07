@@ -18,14 +18,16 @@ export type AddRepositoryChoice =
 export default function AddRepositoryMenu({
   recent,
   home,
-  canBrowse,
-  canCreateRepository,
+  browseRefused,
+  createRepositoryRefused,
   onChoose,
 }: {
   recent: string[];
   home: string | null;
-  canBrowse: boolean;
-  canCreateRepository: boolean;
+  /** CORE-205: why the caller may not browse the disk (« Local folder… » greyed), else absent. */
+  browseRefused?: string;
+  /** CORE-205: why the caller may not create a repository (clone and new greyed), else absent. */
+  createRepositoryRefused?: string;
   onChoose: (choice: AddRepositoryChoice) => void;
 }) {
   const entries: MenuEntry[] = [
@@ -42,20 +44,21 @@ export default function AddRepositoryMenu({
           { kind: "separator" as const },
         ]
       : []),
-    ...(canBrowse
-      ? [{ label: "Local folder…", icon: HardDrive, onSelect: () => onChoose({ kind: "local" }) }]
-      : []),
-    ...(canCreateRepository
-      ? [
-          { label: "Clone from a URL…", icon: Globe, onSelect: () => onChoose({ kind: "clone" }) },
-          {
-            label: "New empty repository…",
-            icon: FolderPlus,
-            hint: "git init",
-            onSelect: () => onChoose({ kind: "new" }),
-          },
-        ]
-      : []),
+    // CORE-205: a refused entry stays, greyed; the menu says why at its foot.
+    { label: "Local folder…", icon: HardDrive, disabledReason: browseRefused, onSelect: () => onChoose({ kind: "local" }) },
+    {
+      label: "Clone from a URL…",
+      icon: Globe,
+      disabledReason: createRepositoryRefused,
+      onSelect: () => onChoose({ kind: "clone" }),
+    },
+    {
+      label: "New empty repository…",
+      icon: FolderPlus,
+      hint: "git init",
+      disabledReason: createRepositoryRefused,
+      onSelect: () => onChoose({ kind: "new" }),
+    },
   ];
   return (
     <span className="self-start">

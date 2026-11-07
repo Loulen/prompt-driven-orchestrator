@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import { FolderOpen, Square } from "lucide-react";
+import { Tooltip } from "../../shared/ui/kit";
 
 /** The overlay itself (design 02): one line for the count, one for the two rules.
  *  `title` replaces the count line (the import into a node says where they go). */
@@ -30,6 +31,11 @@ interface Props {
   /** Files chosen in the native picker (`<input type=file multiple>`). */
   onPickFiles: (files: FileList) => void;
   disabled?: boolean;
+  /**
+   * Why the caller's rights refuse adding files (CORE-205): the bar stays
+   * focusable but greyed and inert, its tooltip says the sentence.
+   */
+  disabledReason?: string;
   compact?: boolean;
   testId?: string;
 }
@@ -40,17 +46,19 @@ interface Props {
  * native file picker (multi-select, files only); Browse… opens the daemon-side
  * explorer. The surface that accepts the drop is the parent (`useFileDropTarget`).
  */
-export default function SkillFileDropZone({ label, onBrowse, onPickFiles, disabled, compact, testId = "skill-drop-zone" }: Props) {
+export default function SkillFileDropZone({ label, onBrowse, onPickFiles, disabled, disabledReason, compact, testId = "skill-drop-zone" }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const inert = disabled || !!disabledReason;
   const openPicker = () => {
-    if (disabled) return;
+    if (inert) return;
     inputRef.current?.click();
   };
   return (
+    <Tooltip label="Add reference files" description={disabledReason} disabled={!disabledReason}>
     <div
       role="button"
       tabIndex={disabled ? -1 : 0}
-      aria-disabled={disabled || undefined}
+      aria-disabled={inert || undefined}
       aria-label="Add reference files"
       data-testid={testId}
       onClick={openPicker}
@@ -62,17 +70,18 @@ export default function SkillFileDropZone({ label, onBrowse, onPickFiles, disabl
       }}
       className={`flex items-center gap-2 rounded-md border border-dashed border-line-strong bg-surface-2 text-text-3 outline-none transition-colors focus-visible:border-primary hover:border-primary/60 ${
         compact ? "px-2.5 py-1.5" : "px-3 py-2"
-      } ${disabled ? "opacity-50" : "cursor-pointer"} text-xs`}
+      } ${disabled ? "opacity-50" : disabledReason ? "cursor-not-allowed opacity-45" : "cursor-pointer"} text-xs`}
     >
       <Square size={11} className="shrink-0 text-text-3" aria-hidden />
       <span className="min-w-0 flex-1 truncate">{label}</span>
       <button
         type="button"
         disabled={disabled}
+        aria-disabled={disabledReason ? true : undefined}
         data-testid={`${testId}-browse`}
         onClick={(event) => {
           event.stopPropagation();
-          onBrowse();
+          if (!disabledReason) onBrowse();
         }}
         className="flex shrink-0 items-center gap-1 rounded-md border border-line-strong bg-surface-2 px-2 py-1 text-text-2 hover:border-primary disabled:opacity-50 text-xs"
       >
@@ -93,5 +102,6 @@ export default function SkillFileDropZone({ label, onBrowse, onPickFiles, disabl
         }}
       />
     </div>
+    </Tooltip>
   );
 }

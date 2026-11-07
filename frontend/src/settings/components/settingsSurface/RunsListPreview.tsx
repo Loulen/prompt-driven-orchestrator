@@ -30,7 +30,7 @@ function previewPane(runs: RunListEntry[], expanded: ReadonlySet<string>): RunRo
     toggleSel: nothing,
     visibleRunIds: [],
     runById: new Map(runs.map((run) => [run.run_id, run])),
-    mayOnRow: () => false,
+    whyNotOnRow: () => undefined,
     filteredRuns: runs,
     setRunFilter: nothing,
     setAttributeFilter: nothing,

@@ -2,13 +2,13 @@ import { ChevronsDownUp, ChevronsUpDown, Plus } from "lucide-react";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 import { ExtensionActionButtons } from "../../../shared/extensions/ExtensionActions";
 import type { RunListEntry } from "../../../shared/generated/RunListEntry";
-import { IconButton, Tooltip } from "../../../shared/ui/kit";
+import { IconButton } from "../../../shared/ui/kit";
 import LeftPaneBar from "../../../shared/ui/LeftPaneBar";
 import {
   useRecheckRunCreationRights,
   useRunCreationRightsStore,
 } from "../../store/runCreationRightsStore";
-import { canCreateSomeRun, NO_RUN_ANYWHERE } from "../../model/runCreationRights";
+import { whyNoRunAnywhere } from "../../model/runCreationRights";
 import RunFilterFunnel from "./RunFilterFunnel";
 
 const NO_EXTRA = {};
@@ -24,9 +24,9 @@ interface Props {
  *  filters' funnel (CORE-110), expand / collapse all and New run. The Projets
  *  are set up in Settings › Projects. */
 export default function RunsPaneHeader({ pane, runs, triggers, onNewRun }: Props) {
-  // CORE-5: disabled, with its reason, when no Projet allows creating a Run.
-  const canCreate = useRunCreationRightsStore((s) => canCreateSomeRun(s.rights));
-  useRecheckRunCreationRights(!canCreate);
+  // CORE-5: greyed, with its reason, when no Projet allows creating a Run.
+  const noRunReason = useRunCreationRightsStore((s) => whyNoRunAnywhere(s.rights));
+  useRecheckRunCreationRights(noRunReason !== undefined);
   return (
     <LeftPaneBar title="Runs">
       {/* #30 — `runs/header`: the extensions' icon buttons, before the core's. */}
@@ -48,18 +48,14 @@ export default function RunsPaneHeader({ pane, runs, triggers, onNewRun }: Props
           onClick={() => pane.setAllExpanded(!pane.allExpanded)}
         />
       )}
-      {canCreate ? (
-        <IconButton icon={Plus} label="New run" onClick={onNewRun} data-testid="new-run-button" />
-      ) : (
-        <Tooltip label="New run" description={NO_RUN_ANYWHERE}>
-          {/* A disabled button fires no pointer event: the span carries the tooltip. */}
-          <span className="inline-flex" tabIndex={0} data-testid="new-run-disabled">
-            <button type="button" disabled aria-label="New run" data-testid="new-run-button" className="d-icon">
-              <Plus size={14} strokeWidth={1.5} aria-hidden />
-            </button>
-          </span>
-        </Tooltip>
-      )}
+      {/* CORE-205: greyed (`aria-disabled`, still focusable), its tooltip says why. */}
+      <IconButton
+        icon={Plus}
+        label="New run"
+        onClick={onNewRun}
+        disabledReason={noRunReason}
+        data-testid="new-run-button"
+      />
     </LeftPaneBar>
   );
 }

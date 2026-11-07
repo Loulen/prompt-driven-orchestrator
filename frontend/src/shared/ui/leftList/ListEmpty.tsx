@@ -11,6 +11,7 @@ export default function ListEmpty({
   actionLabel,
   onAction,
   actionIcon,
+  actionRefused,
   testId,
   children,
 }: {
@@ -19,6 +20,8 @@ export default function ListEmpty({
   actionLabel?: string;
   onAction?: () => void;
   actionIcon?: Icon;
+  /** CORE-205: why the caller may not make the action (greyed, its tooltip says why), else absent. */
+  actionRefused?: string;
   testId?: string;
   /** What the extensions add under it (`runs/empty`). */
   children?: ReactNode;
@@ -29,7 +32,7 @@ export default function ListEmpty({
         icon={icon}
         action={
           actionLabel && onAction ? (
-            <Button size="sm" icon={actionIcon} onClick={onAction}>
+            <Button size="sm" icon={actionIcon} onClick={onAction} disabledReason={actionRefused}>
               {actionLabel}
             </Button>
           ) : undefined

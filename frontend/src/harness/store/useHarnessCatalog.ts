@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchHarnessCatalog, refreshHarnessModels } from "../api/catalog";
+import { useRefusal } from "../../shared/authorization/useRefusals";
 import { harnessCatalog, type HarnessCatalog } from "../model/catalog";
 
 /**
@@ -88,4 +89,12 @@ export function useRefreshModels() {
     }
   }, []);
   return { probing, failed, refresh };
+}
+
+/** The Operation behind « Refresh models » (`POST /settings/harnesses/{name}/refresh`). */
+const REFRESH_CATALOGUE = { resource: "instance_settings", verb: { action: "refresh_catalogue" } } as const;
+
+/** Why the caller may not refresh a harness's models (CORE-205: the button greyed), else `undefined`. */
+export function useRefreshModelsRefused(): string | undefined {
+  return useRefusal(REFRESH_CATALOGUE);
 }

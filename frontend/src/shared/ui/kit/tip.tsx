@@ -133,7 +133,11 @@ export function TooltipLayer({
       onPointerDown={() => {
         entered.current = false;
         pressed.current = true;
-        hide();
+        // A press on a greyed control asks why it does nothing: say it at once.
+        if (firstBox(wrap.current)?.getAttribute("aria-disabled") === "true") {
+          window.clearTimeout(timer.current);
+          setAnchor(firstBox(wrap.current));
+        } else hide();
       }}
       onFocus={() => {
         // A click focuses too, and a menu gives the focus back: only a keyboard focus opens it.

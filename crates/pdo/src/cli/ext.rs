@@ -147,6 +147,13 @@ fn relay(daemon: &Daemon, id: &str, args: Vec<String>) -> ExitCode {
             eprintln!("Error: {message}. `pdo ext` lists the extensions that have a command line.");
             ExitCode::from(EXIT_NO_CLI)
         }
+        Some(pdo_extension_api::OPERATION_REFUSED) => {
+            let denied = pdo_extension_api::Denied::from_body(&body)
+                .map(|denied| denied.for_an_agent())
+                .unwrap_or_else(|| message.to_string());
+            eprintln!("Error: {denied}");
+            ExitCode::FAILURE
+        }
         _ => {
             eprintln!("Error: the daemon answered {status}: {message}");
             ExitCode::FAILURE

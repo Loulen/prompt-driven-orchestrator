@@ -188,6 +188,8 @@ function makeNode(overrides?: Partial<NodeState>): NodeState {
 
 describe("NodeDetailPanel", () => {
   beforeEach(() => {
+    // No refusal leaks from one test to the next (CORE-205: a refused gesture stays, greyed).
+    useGestureRightsStore.setState({ rights: NOTHING_REFUSED, viewed: null, listed: new Set() });
     fetchPromptMock.mockClear();
     fetchNodeIOMock.mockClear();
     killNodeMock.mockClear();
@@ -1725,7 +1727,7 @@ describe("NodeDetailPanel", () => {
       expect(screen.getByTestId("start-btn")).toBeInTheDocument();
     });
 
-    it("an on-demand node not launched keeps its Start, hidden when refused (ADR-0086)", async () => {
+    it("an on-demand node not launched keeps its Start, greyed with why when refused (ADR-0086, CORE-205)", async () => {
       const { unmount } = render(
         <>
           <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" isOnDemand />
@@ -1736,9 +1738,11 @@ describe("NodeDetailPanel", () => {
       expect(screen.getByTestId("node-status-badge")).toHaveTextContent("On demand");
       unmount();
 
-      // CORE-42: the view of the Run asks the rights once; a refused Start is hidden.
+      // CORE-42: the view of the Run asks the rights once; CORE-205: a refused Start stays, greyed.
       askAuthorizationMock.mockImplementationOnce((questions: unknown[]) =>
-        Promise.resolve(questions.map(() => ({ decision: "deny", reason: "reader" }))),
+        Promise.resolve(
+          questions.map(() => ({ decision: "deny", reason: "reader", sentence: "You can't start nodes in Project P." })),
+        ),
       );
       function RunView() {
         useRunViewGestures("run-1", ["test-node"]);
@@ -1749,8 +1753,13 @@ describe("NodeDetailPanel", () => {
           <RunView />
         </>,
       );
-      await waitFor(() => expect(screen.queryByTestId("start-btn")).not.toBeInTheDocument());
-      useGestureRightsStore.setState({ rights: NOTHING_REFUSED, viewed: null, listed: new Set() });
+      try {
+        await waitFor(() => expect(screen.getByTestId("start-btn")).toHaveAttribute("aria-disabled", "true"));
+        fireEvent.click(screen.getByTestId("start-btn"));
+        expect(startNodeMock).not.toHaveBeenCalled();
+      } finally {
+        useGestureRightsStore.setState({ rights: NOTHING_REFUSED, viewed: null, listed: new Set() });
+      }
     });
 
     it("a skipped node offers Play, which retries it (ADR-0086)", async () => {

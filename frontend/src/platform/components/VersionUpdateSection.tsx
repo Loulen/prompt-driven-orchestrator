@@ -20,6 +20,15 @@ import { copyToClipboard } from "../../shared/lib/clipboard";
 import type { SettingsSection } from "../../settings/model/settingsCategories";
 import { SwitchRow } from "../../settings/components/settingsSurface/fields";
 import Section, { SectionExtra } from "../../settings/components/settingsSurface/Section";
+import { useRefusals } from "../../shared/authorization/useRefusals";
+import type { OperationQuestion } from "../../shared/authorization/api";
+
+/** The Operations behind Update, Check now and the update check switch. */
+const UPDATE_GESTURES: OperationQuestion[] = [
+  { resource: "update", verb: { action: "apply" } },
+  { resource: "update", verb: { action: "check" } },
+  { resource: "instance_settings", verb: "update" },
+];
 
 /**
  * Settings › General › Version & update (#697) — the daemon's cached version check, read from `GET /update`
@@ -70,6 +79,8 @@ export default function VersionUpdateSection({
       cancelled = true;
     };
   }, [logOpen, attemptId]);
+  // CORE-205: the gestures of the section the caller may not make, greyed with why.
+  const [applyRefused, checkRefused, toggleRefused] = useRefusals(UPDATE_GESTURES);
   const [checking, setChecking] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
@@ -140,9 +151,10 @@ export default function VersionUpdateSection({
           tone={newerAvailable(status) ? "primary" : "default"}
           icon={Download}
           onClick={() => onRequestUpdate?.()}
-          disabled={!canOfferUpdate(status) || !onRequestUpdate}
+          disabled={!applyRefused && (!canOfferUpdate(status) || !onRequestUpdate)}
+          disabledReason={applyRefused}
           data-testid="setting-version-update-button"
-          title={updateNotOfferedReason(status) ?? `Update to v${status.latest_version}`}
+          title={applyRefused ? undefined : (updateNotOfferedReason(status) ?? `Update to v${status.latest_version}`)}
         >
           {newerAvailable(status) && status.latest_version ? `Update to v${status.latest_version}` : "Update"}
         </Button>
@@ -153,7 +165,8 @@ export default function VersionUpdateSection({
         size="sm"
         className={checking ? "[&>svg]:animate-spin" : undefined}
         onClick={() => void checkNow()}
-        disabled={!status || checking || !status.check_enabled || status.source_url == null}
+        disabled={!checkRefused && (!status || checking || !status.check_enabled || status.source_url == null)}
+        disabledReason={checkRefused}
         description={
           status?.source_url == null
             ? "No release source for this build"
@@ -193,11 +206,11 @@ export default function VersionUpdateSection({
     <Section section={section} tools={tools}>
       <SwitchRow
         label="Update check"
-        help="At start, every 6 h and on demand; off, no request ever leaves the daemon"
+        help={toggleRefused ?? "At start, every 6 h and on demand; off, no request ever leaves the daemon"}
         scope="live"
         testId="setting-row-update-check"
         checked={status.check_enabled}
-        disabled={toggling}
+        disabled={toggling || !!toggleRefused}
         onChange={(on) => void toggle(on)}
       />
       <SectionExtra testId="setting-version-update">

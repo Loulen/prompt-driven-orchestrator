@@ -280,7 +280,7 @@ describe("ProjectEditModal", () => {
 
   // #930: an extension refusing the rename answers 403 with its reason; the
   // modal's existing error shows it, with no extension-specific code.
-  it("shows the reason an extension refused a rename in the modal's error", async () => {
+  it("shows the sentence an extension gave for refusing a rename in the modal's error (CORE-205)", async () => {
     const actual = await vi.importActual<typeof import("../api/projects")>("../api/projects");
     updateProject.mockImplementation(actual.updateProject);
     const fetchMock = vi.fn(async () => ({
@@ -290,6 +290,7 @@ describe("ProjectEditModal", () => {
         error: "operation_refused",
         message: "operation refused: renames are frozen",
         reason: "renames are frozen",
+        sentence: "You can't rename Projects. Ask an administrator.",
       }),
     }));
     vi.stubGlobal("fetch", fetchMock);
@@ -307,7 +308,7 @@ describe("ProjectEditModal", () => {
 
     await waitFor(() =>
       expect(screen.getByTestId("project-edit-error").textContent).toBe(
-        "operation refused: renames are frozen",
+        "You can't rename Projects. Ask an administrator.",
       ),
     );
     expect(fetchMock).toHaveBeenCalledWith(

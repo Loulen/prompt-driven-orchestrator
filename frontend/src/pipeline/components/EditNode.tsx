@@ -22,6 +22,7 @@ import { useElementMarks } from "../../hooks/useElementMarks";
 import { useIsDropTarget } from "./DragHighlightContext";
 import { anchorHandleId, landsByDrop } from "../../lib/anchorSide";
 import { CircleCheck, Play } from "lucide-react";
+import { Tooltip } from "../../shared/ui/kit";
 import type { NodeCost } from "../../shared/generated/NodeCost";
 import { InputImages } from "./NodeMeta";
 import type { NodeAgentLabel } from "../model/nodeAgent";
@@ -71,6 +72,8 @@ export interface EditNodeData {
   inRun?: boolean;
   /** ADR-0086: what the card's ▶ does, when it has one (run view only). */
   play?: "start" | "retry";
+  /** CORE-205: why the caller may not press the ▶ (greyed, its tooltip says why). */
+  playRefused?: string;
   onPlay?: () => void;
   /** What runs the node, for the card's meta grid. */
   agent?: NodeAgentLabel;
@@ -224,20 +227,22 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
 
   const inRun = data.inRun === true;
   const play = data.play && data.onPlay && (
-    <button
-      type="button"
-      data-testid="node-play-btn"
-      data-play={data.play}
-      aria-label={data.play === "start" ? `Start ${data.label}` : `Run ${data.label} again`}
-      title={data.play === "start" ? "Start" : "Run as if taken"}
-      onClick={(e) => {
-        e.stopPropagation();
-        data.onPlay?.();
-      }}
-      className="nodrag nopan cv-n__play"
-    >
-      <Play size={10} strokeWidth={1.75} aria-hidden />
-    </button>
+    <Tooltip label={data.play === "start" ? "Start" : "Run as if taken"} description={data.playRefused}>
+      <button
+        type="button"
+        data-testid="node-play-btn"
+        data-play={data.play}
+        aria-label={data.play === "start" ? `Start ${data.label}` : `Run ${data.label} again`}
+        aria-disabled={data.playRefused ? true : undefined}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (!data.playRefused) data.onPlay?.();
+        }}
+        className="nodrag nopan cv-n__play"
+      >
+        <Play size={10} strokeWidth={1.75} aria-hidden />
+      </button>
+    </Tooltip>
   );
   return (
     <>

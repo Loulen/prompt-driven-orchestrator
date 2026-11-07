@@ -6,6 +6,8 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Lock } from "lucide-react";
+import { useRefusal } from "../../../shared/authorization/useRefusals";
 import type { SettingsSection } from "../../model/settingsCategories";
 import { fetchInstanceProvisioning, previewProvisioning, saveInstanceProvisioning } from "../../../workspace/api/provisioning";
 import { EMPTY_PROVISIONING_RULES, ruleLines } from "../../../workspace/model/provisioning";
@@ -17,6 +19,9 @@ import type { ProvisioningRules } from "../../../shared/generated/ProvisioningRu
 import { TextArea, TextInput, toast } from "../../../shared/ui/kit";
 import { RowError, SettingRow } from "./fields";
 import Section, { SectionExtra } from "./Section";
+
+/** The Operation behind a write of the instance's rules (`PUT /settings/provisioning`). */
+const UPDATE_INSTANCE_SETTINGS = { resource: "instance_settings", verb: "update" } as const;
 
 /** The pause after the last keystroke before the rules are written. */
 export const PROVISIONING_SAVE_DELAY_MS = 600;
@@ -108,6 +113,7 @@ export default function ProvisioningRows({ section }: { section: SettingsSection
   const chain = useRef<Promise<void>>(Promise.resolve());
   const writes = useRef(0);
   const mounted = useRef(true);
+  const editRefused = useRefusal(UPDATE_INSTANCE_SETTINGS);
   const write = (payload: string) => {
     pending.current = null;
     sent.current = payload;
@@ -178,8 +184,13 @@ export default function ProvisioningRows({ section }: { section: SettingsSection
     };
   }, []);
 
-  const status =
-    save.status === "saving" ? (
+  // CORE-205: rules the caller may not change read as such, their fields greyed.
+  const status = editRefused ? (
+    <span className="set-line set-faint text-xs" data-testid="provisioning-refused">
+      <Lock size={12} strokeWidth={1.5} aria-hidden />
+      {editRefused}
+    </span>
+  ) : save.status === "saving" ? (
       <span className="set-faint text-xs">Saving…</span>
     ) : save.status === "saved" ? (
       <span className="set-faint text-xs" data-testid="provisioning-saved">
@@ -252,7 +263,7 @@ export default function ProvisioningRows({ section }: { section: SettingsSection
               rows={2}
               className="set-grow"
               invalid={!!conflict}
-              disabled={texts == null}
+              disabled={texts == null || !!editRefused}
               value={texts?.[key] ?? ""}
               onChange={(event) => {
                 const value = event.target.value;

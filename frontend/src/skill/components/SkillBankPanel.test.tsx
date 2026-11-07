@@ -68,7 +68,13 @@ vi.mock("../../workspace/api/browse", async (importOriginal) => ({
   browseFs: (...args: unknown[]) => browseFsMock(...args),
 }));
 
+vi.mock("../../shared/authorization/api", async (orig) => ({
+  ...(await orig<typeof import("../../shared/authorization/api")>()),
+  askAuthorization: vi.fn(),
+}));
+
 import { ApiError } from "../../shared/http/client";
+import { askAuthorization, type OperationQuestion } from "../../shared/authorization/api";
 
 import SkillBankPanel from "./SkillBankPanel";
 import type { Skill } from "../../shared/generated/Skill";
@@ -162,6 +168,9 @@ beforeEach(() => {
   ]) {
     mock.mockReset();
   }
+  // Every gesture allowed unless a test refuses some.
+  vi.mocked(askAuthorization).mockReset();
+  vi.mocked(askAuthorization).mockImplementation(async (ops) => ops.map(() => ({ decision: "allow" as const })));
   fetchRecentSkillSourcesMock.mockResolvedValue({ sources: [] });
   fetchSkillFileMock.mockImplementation(async (_id: string, path: string) =>
     path === "SKILL.md"
@@ -830,5 +839,89 @@ describe("SkillBankPanel Files tab (#671)", () => {
     await waitFor(() => expect(uploadSkillFileFromPathMock).toHaveBeenCalledTimes(2));
     expect(uploadSkillFileFromPathMock).toHaveBeenCalledWith("s-gr", "/home/user/notes/a.md", "a.md");
     expect(uploadSkillFileFromPathMock).toHaveBeenCalledWith("s-gr", "/home/user/notes/b.md", "b.md");
+  });
+});
+
+describe("SkillBankPanel: gestures the caller's rights refuse (CORE-205)", () => {
+  const SENTENCE = "Only the bank's editors can do that.";
+  /** Refuse the Operations `refused` matches, allow the rest. */
+  function refuse(refused: (op: OperationQuestion) => boolean) {
+    vi.mocked(askAuthorization).mockImplementation(async (ops) =>
+      ops.map((op) =>
+        refused(op) ? { decision: "deny" as const, reason: "role", sentence: SENTENCE } : { decision: "allow" as const },
+      ),
+    );
+  }
+
+  it("asks the bank's rights once for the whole screen", async () => {
+    setup(POPULATED);
+    await waitFor(() => expect(askAuthorization).toHaveBeenCalledTimes(1));
+    const ops = vi.mocked(askAuthorization).mock.calls[0][0];
+    expect(ops).toContainEqual({ resource: "skill", verb: "create" });
+    expect(ops).toContainEqual({ resource: "skill_folder", verb: "create" });
+    expect(ops).toContainEqual({ resource: "skill", verb: "delete", target: "s-tdd" });
+    expect(ops).toContainEqual({ resource: "skill_folder", verb: { action: "rescan" }, target: "f-m" });
+  });
+
+  it("allowed: the gestures are active", async () => {
+    setup(POPULATED);
+    await waitFor(() => expect(askAuthorization).toHaveBeenCalled());
+    expect(screen.getByTestId("skill-new-folder")).not.toHaveAttribute("aria-disabled");
+    fireEvent.click(screen.getByText("grilling"));
+    await screen.findByTestId("skill-detail");
+    expect(screen.getByTestId("skill-detail-delete")).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("a refused new folder is greyed with the sentence, and its click creates nothing", async () => {
+    refuse((op) => op.resource === "skill_folder" && op.verb === "create");
+    setup(POPULATED);
+    const button = screen.getByTestId("skill-new-folder");
+    await waitFor(() => expect(button).toHaveAttribute("aria-disabled", "true"));
+    const describedBy = button.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    fireEvent.click(button);
+    expect(createSkillFolderMock).not.toHaveBeenCalled();
+    fireEvent.pointerDown(button);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(SENTENCE);
+  });
+
+  it("a refused delete of a skill is greyed in its detail and its menu; rename stays active", async () => {
+    refuse((op) => op.resource === "skill" && op.verb === "delete" && op.target === "s-gr");
+    setup(POPULATED);
+    await waitFor(() => expect(askAuthorization).toHaveBeenCalled());
+    fireEvent.click(screen.getByText("grilling"));
+    const remove = await screen.findByTestId("skill-detail-delete");
+    await waitFor(() => expect(remove).toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(remove);
+    expect(fetchSkillReferentsMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("skill-delete")).toBeNull();
+    expect(screen.getByTestId("skill-detail-rename")).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("a refused paste is greyed in the Add menu, the sentence once at its foot", async () => {
+    refuse((op) => op.resource === "skill" && op.verb === "create");
+    setup(POPULATED);
+    await waitFor(() => expect(askAuthorization).toHaveBeenCalled());
+    fireEvent.click(screen.getByTestId("skill-add"));
+    const paste = screen.getByTestId("skill-paste");
+    await waitFor(() => expect(paste).toHaveAttribute("aria-disabled", "true"));
+    expect(screen.getByTestId("skill-import")).not.toHaveAttribute("aria-disabled");
+    expect(screen.getAllByTestId("menu-disabled-reason")).toHaveLength(1);
+    expect(screen.getByTestId("menu-disabled-reason")).toHaveTextContent(SENTENCE);
+    fireEvent.click(paste);
+    expect(screen.queryByTestId("paste-skill-modal")).toBeNull();
+  });
+
+  it("a refused update of a skill greys its files' trash and drop bar; nothing is deleted", async () => {
+    refuse((op) => op.resource === "skill" && op.verb === "update" && op.target === "s-gr");
+    setup(POPULATED);
+    await waitFor(() => expect(askAuthorization).toHaveBeenCalled());
+    await openFilesTab();
+    const trash = within(screen.getAllByTestId("skill-file-row")[1]).getByTestId("skill-file-delete");
+    await waitFor(() => expect(trash).toHaveAttribute("aria-disabled", "true"));
+    expect(screen.getByTestId("skill-files-drop")).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(trash);
+    expect(screen.queryByTestId("skill-file-delete-confirm")).toBeNull();
+    expect(deleteSkillFileMock).not.toHaveBeenCalled();
   });
 });

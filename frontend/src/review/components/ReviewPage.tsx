@@ -9,6 +9,7 @@ import { useReviewCommentState } from "../store/useReviewCommentState";
 import { useReviewDiff } from "../store/useReviewDiff";
 import { useReviewEntries } from "../store/useReviewEntries";
 import { useReviewGestures } from "../store/useReviewGestures";
+import { useReviewRefusals } from "../store/useReviewRefusals";
 import { useReviewKeyboard } from "../store/useReviewKeyboard";
 import { useReviewLayout } from "../store/useReviewLayout";
 import { useReviewFileLanding } from "../store/useReviewFileLanding";
@@ -166,6 +167,9 @@ export default function ReviewPage({ runId }: Props) {
     seen: c.seen,
   });
   const sendDisabledReason = sendReasonOf(run, refs);
+  // CORE-205: Send, Resolve and Reopen the caller may not make stay, greyed.
+  const commentIds = useMemo(() => (run?.review_comments ?? []).map((cm) => cm.id), [run?.review_comments]);
+  const refusals = useReviewRefusals(runId, commentIds);
   const g = useReviewGestures({
     runId,
     runRef: r.runRef,
@@ -175,6 +179,7 @@ export default function ReviewPage({ runId }: Props) {
     entries,
     flashing: live.flashing,
     sendDisabledReason,
+    refusals,
     jumpTo,
   });
 

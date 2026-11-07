@@ -244,6 +244,8 @@ function PaletteBox() {
 
   const pick = (row: Row | null) => {
     if (!row) return;
+    // CORE-205: a refused gesture says why on its row, and does nothing.
+    if (row.kind === "item" && row.item.disabledReason) return;
     if (row.kind === "more") {
       // The active row stays in place: the first of the rows it reveals.
       const at = rows.indexOf(row);

@@ -1,5 +1,6 @@
 import { FileText, Pencil, Trash2 } from "lucide-react";
 import { formatBytes } from "../model/skillFiles";
+import { GREYED, RefusalTip } from "./BankControls";
 
 /** One row of a skill's Files tab: open it in the editor, or delete it after an inline Keep / Delete. */
 export default function FileRow({
@@ -9,6 +10,7 @@ export default function FileRow({
   badge,
   compact,
   deletable,
+  deleteRefused,
   confirming,
   onOpen,
   onAskDelete,
@@ -21,6 +23,8 @@ export default function FileRow({
   badge: { text: string; tone: "acc"; detail?: string } | null;
   compact: boolean;
   deletable: boolean;
+  /** Why the caller's rights refuse deleting it (CORE-205): the trash stays, greyed. */
+  deleteRefused?: string;
   confirming: boolean;
   onOpen: () => void;
   onAskDelete: () => void;
@@ -94,15 +98,18 @@ export default function FileRow({
             <Pencil size={11} />
           </button>
           {deletable && (
-            <button
-              type="button"
-              onClick={onAskDelete}
-              aria-label={`Delete ${path}`}
-              data-testid="skill-file-delete"
-              className="grid h-5 w-5 shrink-0 place-items-center rounded text-text-3 hover:bg-hover hover:text-st-failed"
-            >
-              <Trash2 size={11} />
-            </button>
+            <RefusalTip label={`Delete ${path}`} reason={deleteRefused}>
+              <button
+                type="button"
+                onClick={deleteRefused ? undefined : onAskDelete}
+                aria-label={`Delete ${path}`}
+                aria-disabled={deleteRefused ? true : undefined}
+                data-testid="skill-file-delete"
+                className={`grid h-5 w-5 shrink-0 place-items-center rounded text-text-3 hover:bg-hover hover:text-st-failed ${GREYED}`}
+              >
+                <Trash2 size={11} />
+              </button>
+            </RefusalTip>
           )}
         </>
       )}

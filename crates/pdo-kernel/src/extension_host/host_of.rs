@@ -57,9 +57,7 @@ impl Host for ExtensionHostOf {
         let authorization = ExtensionHost::authorize(&extensions, actor, operation);
         match crate::authorization::decide(authorization, actor, operation) {
             Ok(()) => Authorization::Allow,
-            Err(denied) => Authorization::Deny {
-                reason: denied.reason,
-            },
+            Err(denied) => denied.into(),
         }
     }
 

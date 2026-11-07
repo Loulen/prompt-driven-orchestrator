@@ -338,8 +338,9 @@ unchanged.
 - **Rights** (CORE-5): the form asks the question of authorization (`POST /authorize`) at each
   open. When the disk may not be browsed (`repository` × `read`), the loupe is gone; when a Run
   may not be created somewhere, the field offers the repositories of the Projets that allow it,
-  grouped by Projet, and says how many Projets it hides. « New Run » is disabled, with its reason,
-  when no Projet allows a Run.
+  grouped by Projet, and says how many Projets it hides. « New Run » is greyed, with its reason,
+  when no Projet allows a Run (0.23: the loupe is greyed too, with the refusal's sentence, rather
+  than gone).
 
 ### `node/config`
 
@@ -521,9 +522,11 @@ calls its command with the location's context; the `when` clause reads that same
   separator.
 - **A command that fails** (a throw, a rejection) shows an error toast; the bar or the menu keeps
   working. Every element sits in its own error boundary.
-- **A refused action is absent** (0.18): when its command declares the Operation it makes
-  ([Commands](#commands)), the core asks the question of authorization before rendering the
-  action, and leaves it out if refused. Never greyed out.
+- **A refused action is greyed** (0.18; greyed instead of absent since 0.23): when its command
+  declares the Operation it makes ([Commands](#commands)), the core asks the question of
+  authorization before rendering the action. Refused, the action stays, greyed and inert: in a bar
+  its tooltip says the refusal's sentence, in a menu the sentence shows once at the menu's foot,
+  in the command field it shows on the row.
 
 The contexts they hand over, on top of `LocationContext`:
 
@@ -922,8 +925,9 @@ error toast. An action whose command the bundle does not export is not rendered.
 `.guarded_by(resource, verb)` (0.18) declares the Operation the command makes. Before rendering
 an action that calls it, wherever it sits, the core asks `POST /authorize` about that Operation,
 aimed at the `entity` of the action's location when it hands one over (placed in its Projets as
-the daemon places its own), and leaves the action out when it is refused, or until it is
-answered. A command without one always shows; the extension's route still refuses what it must.
+the daemon places its own); it leaves the action out until it is answered, then shows it active,
+or greyed with the refusal's sentence when it is refused (0.23). A command without one always
+shows; the extension's route still refuses what it must.
 
 ```rust
 let archive = UiCommand::new("test.archive", "Archive", "archive")
@@ -1155,17 +1159,17 @@ taking `size`, `strokeWidth` and `className`.
 
 | Export | What it draws |
 | --- | --- |
-| `Button` | A text button, hairline: `tone` `primary` (the accent, the one main action), `ghost`, `danger`; `size` `sm` (20 px); an `icon` |
-| `IconButton` | An icon-only button, its `label` and `kbd` in a tooltip; `pressed`, a `badge` count |
+| `Button` | A text button, hairline: `tone` `primary` (the accent, the one main action), `ghost`, `danger`; `size` `sm` (20 px); an `icon`; `disabledReason` (0.23) |
+| `IconButton` | An icon-only button, its `label` and `kbd` in a tooltip; `pressed`, a `badge` count; `disabledReason` (0.23) |
 | `Tooltip` | Wraps one control: « Name (shortcut) », one `description` line at most. Shows once the pointer moves on the control (not when a surface opens under a still pointer) or on a keyboard focus (not on the focus a menu gives back after Escape or a pick) |
 | `Kbd` | A key or a chord |
 | `TextInput`, `TextArea` | Inputs; `invalid`, `mono`, `small` |
 | `Field` | A form row: the label in a 96 px column (`help` in its tooltip), the control, the `error` at the row end |
 | `Select` | A single value out of `options` (icons, hints, groups, a search box past 8); its tooltip is the value shown; `active` tints a filter in force (0.20) |
-| `Segmented` | Two to four exclusive choices, arrow keys; `fill` (0.20) takes the row's width, the items sharing it, a long label ending in an ellipsis |
+| `Segmented` | Two to four exclusive choices, arrow keys; `fill` (0.20) takes the row's width, the items sharing it, a long label ending in an ellipsis; an item's `title` and `description` show in the kit's `Tooltip`, an item's `disabledReason` greys it (0.23) |
 | `Switch`, `Checkbox` | On/off, the accent when on; a box with its text, `mixed` |
 | `Popover` | A non-modal panel under its `trigger`; Escape and a click outside close it |
-| `Menu` | A menu under its `trigger`: check column, icon, label, shortcut; separators, labels, submenus, `danger` |
+| `Menu` | A menu under its `trigger`: check column, icon, label, shortcut; separators, labels, submenus, `danger`; an entry's `disabledReason` greys it and the menu says the sentence once, at its foot, with a lock (0.23) |
 | `Modal` | A modal dialog: title bar, body, footer (`actions`, `footerNote`); Escape closes, Ctrl+Enter runs `onSubmit` |
 | `ConfirmDialog` | A confirmation: the action and its object, the consequence, the mono target; Enter confirms |
 | `toast(text, kind?, options?)` | A toast in the core's stack: `info`, `success`, `warning`, `error`, a `title`, one action |
@@ -1179,6 +1183,15 @@ taking `size`, `strokeWidth` and `className`.
 | `Avatar` | A person: round, a tint of its hue, its initials; a robot for an agent, a bolt for a trigger ([People](#people)) |
 | `AvatarStack` | People overlapping, three then « +n » (0.20) |
 | `personColor(person)` | The CSS colour of a person's marks outside its avatar (0.20) |
+
+**A gesture the caller may not make** (0.23) stays visible and greyed, never hidden: give the
+control `disabledReason` with the sentence the refusal carries (`POST /authorize` answers it with
+each refused decision, `sentence`). `Button` and `IconButton` turn `aria-disabled` (still
+focusable, a click or Enter does nothing) and their tooltip says the sentence, under the name for
+an `IconButton`; a press on it shows the tooltip at once. In a `Menu`, the greyed entries carry no
+tooltip each: the menu ends on one line, a lock and the sentence (each distinct sentence once).
+Prefer `disabledReason` to `disabled` for a refusal of rights: `disabled` stays for a gesture the
+state of the object forbids.
 
 ### People
 
@@ -1309,7 +1322,7 @@ the Opération on the Ressource `session`, in its Projet:
 | `GET /sessions/<id>/live/<path>` | `read` | one, with its content type; `?download` as an attachment |
 
 A refused Opération answers `403` with the core's refusal (`{"error": "operation_refused",
-"message", "reason"}`), before anything is read: the caller learns nothing of the session. Any
+"message", "reason", "sentence"}`, 0.23: `sentence` is what a person reads), before anything is read: the caller learns nothing of the session. Any
 other refusal answers `{"error"}` with its status: `404` no such Session hébergée, `409` not in a
 state for the gesture.
 

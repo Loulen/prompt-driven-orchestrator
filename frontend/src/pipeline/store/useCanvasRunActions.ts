@@ -10,7 +10,7 @@ import { reviewUrl } from "../../run/model/runRefs";
 import { useReviewSeen } from "../../review/store/useReviewUnread";
 import { reopenRun, retryAll } from "../../run/api/commands";
 import { useRunShell } from "../../session/store/useRunShell";
-import { useMayOnRun } from "../../run/store/gestureRightsStore";
+import { useWhyNotOnRun } from "../../run/store/gestureRightsStore";
 import { toastRefusal } from "../../shared/authorization/refusal";
 // #723 — orchestrator pastilles on the run-view node card.
 
@@ -73,9 +73,9 @@ export function useCanvasRunActions(activeRunState: RunState | null, onSelectRun
   const handleOpenShell = useCallback(async () => {
     if (activeRunState) await openShell(activeRunState.run_id);
   }, [activeRunState, openShell]);
-  // CORE-42: Reopen and Retry all only when the caller may make them.
-  const mayOnRun = useMayOnRun(activeRunState?.run_id);
-  const mayReopen = mayOnRun("reopen_run");
-  const mayRetryAll = mayOnRun("retry_all");
-  return { reviewHref, reviewPending, reviewTone, reviewTitle, finishedRun, runShell, confirmRetryAll, setConfirmRetryAll, handleReopen, handleRetryAll, handleOpenShell, mayReopen, mayRetryAll };
+  // CORE-42, CORE-205: Reopen and Retry all greyed, with why, when the caller may not make them.
+  const whyNotOnRun = useWhyNotOnRun(activeRunState?.run_id);
+  const reopenRefused = whyNotOnRun("reopen_run");
+  const retryAllRefused = whyNotOnRun("retry_all");
+  return { reviewHref, reviewPending, reviewTone, reviewTitle, finishedRun, runShell, confirmRetryAll, setConfirmRetryAll, handleReopen, handleRetryAll, handleOpenShell, reopenRefused, retryAllRefused };
 }

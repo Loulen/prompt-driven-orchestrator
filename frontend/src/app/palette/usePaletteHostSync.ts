@@ -6,6 +6,8 @@ import type { RunState } from "../../shared/generated/RunState";
 import type { Trigger } from "../../shared/generated/Trigger";
 import type { SettingsPosition } from "../../settings/components/settingsSurface/surfaceProps";
 import { usePaletteHost, type PaletteHost, type PaletteSelection } from "./paletteHost";
+import { whyNoRunAnywhere } from "../../run/model/runCreationRights";
+import { useRunCreationRightsStore } from "../../run/store/runCreationRightsStore";
 
 interface SelectionInput {
   selectedTrigger: Trigger | null;
@@ -91,6 +93,8 @@ export function usePaletteHostSync(shell: ShellGestures, selection: SelectionInp
   const openSettings = useCallback(() => settings(), [settings]);
   const openAppearance = useCallback(() => settings({ category: "appearance", section: "appearance" }), [settings]);
   const openStats = useCallback(() => stats(), [stats]);
+  const noRunReason = useRunCreationRightsStore((s) => whyNoRunAnywhere(s.rights));
+  const newRunRefused = noRunReason;
   useEffect(() => {
     usePaletteHost.getState().setHost({
       runs,
@@ -99,10 +103,11 @@ export function usePaletteHostSync(shell: ShellGestures, selection: SelectionInp
       openRun,
       openTrigger,
       newRun,
+      newRunRefused,
       newTrigger,
       openSettings,
       openAppearance,
       openStats,
     });
-  }, [runs, triggers, selected, openRun, openTrigger, newRun, newTrigger, openSettings, openAppearance, openStats]);
+  }, [runs, triggers, selected, openRun, openTrigger, newRun, newRunRefused, newTrigger, openSettings, openAppearance, openStats]);
 }

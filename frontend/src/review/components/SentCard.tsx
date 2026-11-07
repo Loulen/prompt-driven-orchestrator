@@ -34,6 +34,8 @@ export default function SentCard({
   deciding,
   onResolve,
   onReopen,
+  resolveRefused,
+  reopenRefused,
   onSeen,
   outdated,
   movedFrom,
@@ -47,6 +49,9 @@ export default function SentCard({
   deciding: boolean;
   onResolve?: () => void;
   onReopen?: () => void;
+  /** CORE-205: why the caller may not resolve / reopen it: the button stays, greyed. */
+  resolveRefused?: string;
+  reopenRefused?: string;
   onSeen?: () => void;
   outdated?: { writtenOn: string };
   movedFrom?: number;
@@ -265,6 +270,7 @@ export default function SentCard({
                     onClick={onResolve}
                     disabled={deciding || !onResolve}
                     title={`Confirm: mark ${c.id} resolved (you keep Reopen)`}
+                    disabledReason={resolveRefused}
                     testId="review-comment-resolve"
                   >
                     <Check size={11} /> Resolve
@@ -273,17 +279,32 @@ export default function SentCard({
                     onClick={onReopen}
                     disabled={deciding || !onReopen}
                     title="Decline the proposal, keep the comment open for the agent"
+                    disabledReason={reopenRefused}
                     testId="review-comment-reopen"
                   >
                     <Undo2 size={11} /> Reopen
                   </DecisionButton>
                 </>
               ) : state === "resolved" ? (
-                <DecisionButton ghost onClick={onReopen} disabled={deciding || !onReopen} title="Reopen this comment" testId="review-comment-reopen">
+                <DecisionButton
+                  ghost
+                  onClick={onReopen}
+                  disabled={deciding || !onReopen}
+                  title="Reopen this comment"
+                  disabledReason={reopenRefused}
+                  testId="review-comment-reopen"
+                >
                   <Undo2 size={11} /> Reopen
                 </DecisionButton>
               ) : footer.kind !== "awaiting" ? (
-                <DecisionButton ghost onClick={onResolve} disabled={deciding || !onResolve} title="Resolve this comment yourself" testId="review-comment-resolve">
+                <DecisionButton
+                  ghost
+                  onClick={onResolve}
+                  disabled={deciding || !onResolve}
+                  title="Resolve this comment yourself"
+                  disabledReason={resolveRefused}
+                  testId="review-comment-resolve"
+                >
                   <Check size={11} /> Resolve
                 </DecisionButton>
               ) : null}

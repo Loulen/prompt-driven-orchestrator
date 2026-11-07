@@ -5,12 +5,14 @@ import { fastForwardLabel, shortAge, type FastForwardState, type SyncState } fro
 import { Body, GapSentence, Title } from "./SyncCopy";
 import { fetchedSentence } from "../model/syncSentences";
 import { FastForwardCard } from "./FastForwardCard";
+import { Tooltip } from "../../shared/ui/kit";
 
 export function SyncPopover({
   state,
   ff,
   onFetch,
   onFastForward,
+  fastForwardRefused,
   touchesCheckout,
   onSwitchToUpstream,
   upstream,
@@ -22,6 +24,8 @@ export function SyncPopover({
   ff: FastForwardState;
   onFetch: () => void;
   onFastForward?: () => void;
+  /** CORE-205: why the caller may not fast-forward (the button greyed, its tooltip says why), else absent. */
+  fastForwardRefused?: string;
   touchesCheckout?: boolean;
   onSwitchToUpstream: () => void;
   upstream: string | null;
@@ -74,16 +78,19 @@ export function SyncPopover({
   ) : null;
 
   const fastForwardButton = onFastForward ? (
-    <button
-      type="button"
-      onClick={onFastForward}
-      disabled={frozen}
-      className="flex items-center gap-1.5 rounded border border-primary/30 bg-selected px-2 py-1 font-medium text-primary transition-colors hover:bg-primary/20 disabled:opacity-40 text-xs"
-      data-testid={`${testIdPrefix}-sync-ff`}
-    >
-      <ChevronsRight size={11} />
-      {frozen ? "Fast-forwarding…" : fastForwardLabel(branchName)}
-    </button>
+    <Tooltip label={fastForwardLabel(branchName)} description={fastForwardRefused} disabled={!fastForwardRefused}>
+      <button
+        type="button"
+        onClick={fastForwardRefused ? undefined : onFastForward}
+        disabled={frozen}
+        aria-disabled={fastForwardRefused ? true : undefined}
+        className="flex items-center gap-1.5 rounded border border-primary/30 bg-selected px-2 py-1 font-medium text-primary transition-colors hover:bg-primary/20 disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:opacity-40 text-xs"
+        data-testid={`${testIdPrefix}-sync-ff`}
+      >
+        <ChevronsRight size={11} />
+        {frozen ? "Fast-forwarding…" : fastForwardLabel(branchName)}
+      </button>
+    </Tooltip>
   ) : null;
 
   return (

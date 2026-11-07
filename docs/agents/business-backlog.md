@@ -40,6 +40,9 @@ The maintainer drops raw items into the Backlog (`type=metier`, `To do`) and lat
 2. sets that story to `In progress`;
 3. moves the original items to the Corbeille (restorable), so the Backlog only shows the story.
 
+A batch of **one** item is not consolidated: that item is the story. Grilling sets it to
+`In progress` and leaves its body and its ID as they are.
+
 A deleted Tâche loses its ID (unlike a moved one): the « ex CORE-n » mention is the only trace.
 
 ## Commands / gestures

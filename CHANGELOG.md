@@ -24,6 +24,29 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   daemon pings every connection of `/ws` and drops one that answered nothing for 10 s.
 - Extension API: the life of a `/ws` connection (`tab`, the close code `4000` of a replaced
   connection, Ping and the 10 s delay), see the reference's Presences.
+### Who made each gesture on a Run
+
+- The events of a gesture on a Run name the Actor who made it, as `payload.actor` (the shape
+  `node_resumed` already used): a command of the operator or the Pipeline Manager (mark done, force
+  route, skip…), a retry, a stop, a skip, a completion, a fail, a release, starting or stopping the
+  Pipeline Manager, and the events of that Run these cause while they are handled (the stop and
+  the respawn of a retry, a downstream node a mark done starts). What the scheduler does on its own
+  names nobody. Events written before keep reading as they are.
+- Two new events on a node's terminal: `node_taken_over` when an Actor takes the hand (attaches
+  first, takes control from the pilot, or an extension answers on its behalf; nothing more when the
+  same Actor attaches again), and
+  `node_typed` for a turn of speech, the first input after a take-over or a wait, never one per
+  keystroke. Answering a wait stays the one `node_resumed` line.
+- `pdo run events <run>` adds a last column, who made the event: its display name (`POST
+  /actors/display`), else its id; empty when no Actor did. `--json` gives `payload.actor`.
+
+### A page mounted from a node is judged in the Projet of its Run
+
+- New seam (extension API, a minor): when a node session mounts a page (`pdo page mount`,
+  `POST /pages`), its `page_mount` Operation is in the Projet of the session's Run; the unmount of a
+  page a Run mounted is in the Projet of that Run, whoever asks. An extension that grants writing in
+  that Projet now lets an agent publish a page without any instance-wide grant. A mount outside any
+  Run still names no Projet. `POST /authorize` places a `page_mount` question the same way.
 
 ### A link toward a Node, and an answer typed on someone's behalf
 

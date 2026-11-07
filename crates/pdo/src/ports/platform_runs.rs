@@ -1,6 +1,6 @@
 //! The Runs, as the platform context sees them: a page mount's session claim,
 //! the command it records, the Runs and nodes its guide links to, the live
-//! Runs an update's confirm counts.
+//! Runs an update's confirm counts, the Projets a mount is judged in.
 
 use std::sync::Arc;
 
@@ -65,6 +65,10 @@ impl PlatformRuns for RunsOfPlatform {
             let (_, run) = reload_run_state_with(&self.0, run_id).await?;
             Some(run.node_defs.into_iter().map(|def| def.id).collect())
         })
+    }
+
+    fn projects_of_run<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Vec<String>> {
+        Box::pin(async move { self.0.projects_of_run(run_id).await })
     }
 
     /// Live Runs (`Running` / `AwaitingUser` / `Paused`) — what the update's

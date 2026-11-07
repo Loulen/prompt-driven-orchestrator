@@ -10,6 +10,7 @@ use tracing::{error, info};
 use crate::application::events::append_event;
 use crate::application::events::load_events;
 use crate::application::events::reload_run_state;
+use crate::application::gesture;
 use crate::application::node::reap::reap_node_session;
 use crate::application::operations::on_node;
 use crate::application::paths::effective_repo_root;
@@ -95,6 +96,11 @@ pub struct FailNode {
 
 impl Runs {
     pub async fn fail_node(self: &Arc<Self>, actor: &Actor, command: FailNode) -> Response {
+        let run_id = command.run_id.clone();
+        gesture::by(actor, &run_id, self.fail_node_gesture(actor, command)).await
+    }
+
+    async fn fail_node_gesture(self: &Arc<Self>, actor: &Actor, command: FailNode) -> Response {
         let FailNode {
             run_id,
             node_id,

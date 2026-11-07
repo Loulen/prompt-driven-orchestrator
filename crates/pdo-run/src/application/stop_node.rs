@@ -9,6 +9,7 @@ use tracing::{error, info};
 
 use crate::application::events::append_event;
 use crate::application::events::load_events;
+use crate::application::gesture;
 use crate::application::node::primitives as node_primitives;
 use crate::application::node::reap::reap_node_session;
 use crate::application::operations::on_node;
@@ -28,6 +29,11 @@ pub struct StopNode {
 
 impl Runs {
     pub async fn stop_node(self: &Arc<Self>, actor: &Actor, command: StopNode) -> Response {
+        let run_id = command.run_id.clone();
+        gesture::by(actor, &run_id, self.stop_node_gesture(actor, command)).await
+    }
+
+    async fn stop_node_gesture(self: &Arc<Self>, actor: &Actor, command: StopNode) -> Response {
         let StopNode { run_id, node_id } = command;
         if let Err(denied) = self
             .authorize(actor, &on_node("stop", &run_id, &node_id))

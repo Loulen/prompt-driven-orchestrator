@@ -18,6 +18,7 @@ use ts_rs::TS;
 pub use spawn::{apply_manager_profile_pin, spawn_manager_session};
 
 use crate::application::events::{emit_run_event, load_projected};
+use crate::application::gesture;
 use crate::application::node::prompt::RunNameHint;
 use crate::application::operations::on_run;
 use crate::application::paths::effective_repo_root;
@@ -51,6 +52,10 @@ impl Runs {
     /// silent success (the projection ignores `ManagerStarted`; the wire's
     /// `has_manager` stays the observed tmux fact).
     pub async fn start_manager(self: &Arc<Self>, actor: &Actor, run_id: &str) -> Response {
+        gesture::by(actor, run_id, self.start_manager_gesture(actor, run_id)).await
+    }
+
+    async fn start_manager_gesture(self: &Arc<Self>, actor: &Actor, run_id: &str) -> Response {
         if let Err(denied) = self
             .authorize(actor, &on_run("start_manager", run_id))
             .await
@@ -84,6 +89,10 @@ impl Runs {
     /// `200` ("nothing to stop"), and still writes its `ManagerStopped` event: the
     /// projection ignores the kind, so the durable record never lies about state.
     pub async fn stop_manager(self: &Arc<Self>, actor: &Actor, run_id: &str) -> Response {
+        gesture::by(actor, run_id, self.stop_manager_gesture(actor, run_id)).await
+    }
+
+    async fn stop_manager_gesture(self: &Arc<Self>, actor: &Actor, run_id: &str) -> Response {
         if let Err(denied) = self.authorize(actor, &on_run("stop_manager", run_id)).await {
             return denied.into_response();
         }

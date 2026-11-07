@@ -15,6 +15,16 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 
 ## Unreleased
 
+### A session's variables out of the process list
+
+- The variables of a session (a Node's, those an extension adds through `node_env` or
+  `session_env`, the core's) no longer sit in the argv of any process, where any local user read
+  them with `ps` while the session lived. The session's script reaches `bash` through a `0600`
+  file in the user's private folder, deleted before the harness starts; `tmux` only sees its path.
+  In a sandbox, the `docker exec` forwards the variables by name (`-e NAME`), their values
+  exported on the host just before. Every launch is covered: a Node, its Retry and its resume, a
+  Session hébergée, the Pipeline Manager, the library assistant.
+
 ### A link toward a Node, and an answer typed on someone's behalf
 
 - A deep link toward a Node opens the Run with that Node selected and its detail shown, its

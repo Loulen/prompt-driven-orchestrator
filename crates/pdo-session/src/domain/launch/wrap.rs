@@ -50,24 +50,18 @@ pub(super) fn extension_exports(
 
 /// Splice the container-exec argv (built by the sandbox context, see
 /// [`super::ContainerExec`]) around a base tail:
-/// `docker <exec argv incl. -e K=V> pdo-sbx-<run> bash -lc '<tail>'`.
-/// The base tail is single-quoted as one `bash -lc` argument; `wrap_with_env`
-/// then single-quotes the whole thing again for its outer `bash -c` (the same
-/// double-quoting the `--model` path already relies on).
+/// `docker <exec argv incl. -e K> pdo-sbx-<run> bash -lc '<tail>'`.
+/// The exec forwards each variable **by name** (`-e K`): its value is the one
+/// the host side of the script exported, so no value ever sits in the argv of
+/// the `docker` client. The base tail is single-quoted as one `bash -lc`
+/// argument.
 pub(super) fn wrap_tail_in_docker_exec(
     wrap: &SandboxWrap<'_>,
-    extra_env: &[(String, String)],
+    forwarded: &[(String, String)],
     base_tail: &str,
 ) -> String {
-    // #708: the staging set's env leads, then the per-node catalogue. Both are
-    // valued `-e K=V` on the exec — a host-side export would not cross it.
-    let exec_env: Vec<(String, String)> = wrap
-        .set_env
-        .iter()
-        .cloned()
-        .chain(extra_env.iter().cloned())
-        .collect();
-    let mut argv = wrap.exec.exec_argv(&exec_env);
+    let names: Vec<String> = forwarded.iter().map(|(k, _)| k.clone()).collect();
+    let mut argv = wrap.exec.exec_argv(&names);
     argv.push("bash".to_string());
     argv.push("-lc".to_string());
     argv.push(base_tail.to_string());
@@ -77,9 +71,13 @@ pub(super) fn wrap_tail_in_docker_exec(
         .join(" ")
 }
 
-/// Wrap a tail command with PDO env exports and an `exec bash -c` trampoline.
+/// Prefix a tail command with the PDO env exports: the bash script a session
+/// runs.
 ///
-/// Both `exec`s collapse the shell so claude becomes the session leader.
+/// The script is never handed to a process as an argument: the tmux adapter
+/// writes it to a private file that `bash` reads (see `adapters::tmux`), so the
+/// values exported here never sit in the argv of any process (`ps`). The tail's
+/// `exec` collapses that `bash` so the harness becomes the session leader.
 ///
 /// `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` is exported to suppress the
 /// claude-code remote-bridge / CCR feature. Without it, a sub-claude spawned
@@ -107,7 +105,7 @@ pub(super) fn wrap_tail_in_docker_exec(
 /// `session_path` is exported as the session `PATH` **before** every other export
 /// (#661 / ADR-0060, prolonging ADR-0055). The preflight (`binary_available`)
 /// resolves the harness on
-/// [`harness_probe_path`] — the user's *interactive* `PATH` — but a `bash -c` tail
+/// [`harness_probe_path`] — the user's *interactive* `PATH` — but the script's `bash`
 /// is neither interactive nor login, so it would otherwise run in the tmux server's
 /// inherited `PATH` (the systemd unit's), where a user-installed `claude` (native
 /// installer → `~/.local/bin`) is absent: `exit 127`, the lone window returns, the
@@ -154,7 +152,7 @@ pub fn wrap_with_env(
         .map(|(k, v)| format!("export {k}={} && ", sh_single_quote(v)))
         .collect();
 
-    let inner = format!(
+    format!(
         "{path_export}\
          export PDO_RUN_ID={run_id_q} && \
          export PDO_NODE_ID={node_id_q} && \
@@ -173,7 +171,5 @@ pub fn wrap_with_env(
         // posted the container-side value, which the exec deliberately never
         // clobbers (ADR-0030 §5).
         daemon_url_q = sh_single_quote(&host_daemon_url(daemon_port)),
-    );
-
-    format!("exec bash -c {}", sh_single_quote(&inner))
+    )
 }

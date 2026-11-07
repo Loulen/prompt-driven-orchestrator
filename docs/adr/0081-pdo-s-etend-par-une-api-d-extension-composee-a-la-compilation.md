@@ -508,7 +508,8 @@ test_extension/launch.rs`).
   `PATCH`). Les trois sont exposés par l'API (Run, liste des Runs, Trigger) et aux extensions.
   `Actor` devient désérialisable.
 - **`node_env(&NodeLaunch) -> NodeEnv`** : des variables pour un Node, agent ou script, sur
-  l'hôte (`export`) ou dans le sandbox (`-e K=V` sur le `docker exec`), à la reprise d'un agent
+  l'hôte (`export`) ou dans le sandbox (`-e K` sur le `docker exec`, la valeur exportée côté
+  hôte, amendé par ADR draft-les-variables-d-une-session-ne-passent-par-aucune-ligne-de-commande), à la reprise d'un agent
   aussi. Le core ne laisse jamais écraser une des siennes : identité de session, `PATH`, `HOME`,
   marqueur de sandbox, variables du harnais, catalogue d'un script, env du profil de sandbox ; une
   telle variable est ignorée avec un avertissement. Un nom qui n'est pas un identifiant shell est

@@ -375,11 +375,11 @@ impl NodePanes for Panes {
 pub struct Exec;
 
 impl ContainerExec for Exec {
-    fn exec_argv(&self, env: &[(String, String)]) -> Vec<String> {
+    fn exec_argv(&self, names: &[String]) -> Vec<String> {
         let mut argv = vec!["docker".to_string(), "exec".into()];
-        for (k, v) in env {
+        for name in names {
             argv.push("-e".into());
-            argv.push(format!("{k}={v}"));
+            argv.push(name.clone());
         }
         argv.push("pdo-sbx-r1".into());
         argv

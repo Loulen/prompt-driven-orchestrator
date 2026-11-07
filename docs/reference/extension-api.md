@@ -303,8 +303,15 @@ or `{"kind": "trigger", …}` for a fired Run), `trigger` (`{id, editor}`: the T
 the Run and its last editor then), `repository` (the Run's primary repository) and `project`
 (the id of the Projet owning it).
 
-- **Variables** (`node_env`): exported before the Node's command on the host, passed as
-  `-e NAME=value` on the `docker exec` in a sandbox. A name the core sets is **never
+- **Variables** (`node_env`): exported before the Node's command on the host, forwarded by
+  name (`-e NAME`) on the `docker exec` in a sandbox. Their values never sit in the argv of a
+  process (`ps` shows none): the session's script reaches `bash` through a `0600` file in the
+  user's private folder (`$XDG_RUNTIME_DIR`, else the temporary folder), deleted before the
+  harness starts and whatever the launch's outcome; only its path goes to `tmux`. The same holds
+  for every session the core launches (a Node, its Retry and its resume, a Session hébergée, the
+  Pipeline Manager, the library assistant). The values do stay in the harness's environment
+  (`/proc/<pid>/environ`, readable by the same user only). In a sandbox they are also in the
+  environment of the host's `docker` client, so a `DOCKER_*` name steers it. A name the core sets is **never
   overwritten**: dropped with a warning (`PATH`, `HOME`, `PDO_RUN_ID`, `PDO_NODE_ID`,
   `PDO_NODE_ITER`, `PDO_DAEMON_URL`, `PDO_SBX_SESSION`, `PDO_SESSION_ID`, the harness's variables, a script's
   `PDO_INPUT_*`/`PDO_OUTPUT_*`/…, the sandbox profile's env). A name that is no shell identifier

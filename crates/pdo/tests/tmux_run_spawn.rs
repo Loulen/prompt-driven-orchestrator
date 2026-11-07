@@ -79,9 +79,9 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
 }
 
 #[test]
-fn build_tmux_script_uses_exec_bash_and_invokes_claude() {
+fn build_tmux_script_exports_then_invokes_claude() {
     // Acceptance: the constructed command string contains
-    // `claude --dangerously-skip-permissions` and the `exec bash -c` shape.
+    // `claude --dangerously-skip-permissions` after the exports.
     // `None` override → production claude tail.
     let prompt_path = std::path::Path::new("/tmp/pdo-test/solo-iter-1.md");
     // #550: the `claude` descriptor — its launch template reproduces the legacy
@@ -109,16 +109,14 @@ fn build_tmux_script_uses_exec_bash_and_invokes_claude() {
     );
 
     assert!(
-        script.starts_with("exec bash -c "),
-        "script should start with `exec bash -c `; got: {script}"
+        script.starts_with("export PATH="),
+        "script should start with its exports; got: {script}"
     );
     assert!(
         script.contains("exec claude --dangerously-skip-permissions"),
         "script must invoke claude with --dangerously-skip-permissions; got: {script}"
     );
-    // The script is wrapped in `bash -c '...'`, so single quotes around the
-    // embedded prompt path get rewritten as `'\''`. We just need to see that
-    // the path appears inside a `cat …` command substitution.
+    // The path appears inside a `cat …` command substitution.
     assert!(
         script.contains("$(cat ") && script.contains("/tmp/pdo-test/solo-iter-1.md"),
         "script must `cat` the prompt file inside command substitution; got: {script}"

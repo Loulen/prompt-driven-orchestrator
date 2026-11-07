@@ -52,7 +52,7 @@ pub fn build_tmux_script(
 
 /// [`build_tmux_script`], plus the variables the extensions add to the Node
 /// (`extension_env`, API 0.8). They are exported last on the host, forwarded
-/// as `-e K=V` on the exec when sandboxed, and **never** overwrite a variable
+/// by name (`-e K`) on the exec when sandboxed, and **never** overwrite a variable
 /// of the core ([`extension_exports`]): an empty list is byte-identical to
 /// [`build_tmux_script`].
 #[allow(clippy::too_many_arguments)]
@@ -126,11 +126,9 @@ pub fn build_tmux_script_with(
     };
 
     // #407: when sandboxed, the node's tail runs INSIDE the container via a
-    // `docker exec … bash -lc '<tail>'`. The per-node catalogue is forwarded on
-    // the exec as explicit `-e K=V` (never PDO_DAEMON_URL); the host-side base env
-    // exports still run (harmless) so `PDO_DAEMON_URL=localhost` is not carried
-    // in. `wrap_with_env` then gets an EMPTY `extra_env` — the catalogue crossed
-    // the exec, not the host export — keeping the host wrapper minimal.
+    // `docker exec … bash -lc '<tail>'`. The staging set's env and the per-node
+    // variables are exported host-side, then forwarded on the exec by name
+    // (`-e K`, never PDO_DAEMON_URL), so no value sits in the `docker` argv.
     let set_env = sandbox.map(|wrap| wrap.set_env).unwrap_or_default();
     let node_env: Vec<(String, String)> = extra_env
         .iter()
@@ -142,7 +140,8 @@ pub fn build_tmux_script_with(
         .collect();
     match sandbox {
         Some(wrap) => {
-            let docker_tail = wrap_tail_in_docker_exec(wrap, &node_env, &tail_cmd);
+            let forwarded = forwarded_env(wrap, &node_env);
+            let docker_tail = wrap_tail_in_docker_exec(wrap, &forwarded, &tail_cmd);
             wrap_with_env(
                 run_id,
                 node_id,
@@ -150,7 +149,7 @@ pub fn build_tmux_script_with(
                 daemon_port,
                 session_path,
                 &harness_env,
-                NO_ENV,
+                &forwarded,
                 &docker_tail,
             )
         }
@@ -165,6 +164,12 @@ pub fn build_tmux_script_with(
             &tail_cmd,
         ),
     }
+}
+
+/// What a sandboxed session forwards into its container: the staging set's env
+/// (#708), then the per-node variables. Exported host-side, crossed by name.
+fn forwarded_env(wrap: &SandboxWrap<'_>, node_env: &[(String, String)]) -> Vec<(String, String)> {
+    wrap.set_env.iter().chain(node_env).cloned().collect()
 }
 
 /// Build a resume script that re-enters the node's saved conversation in the same
@@ -288,7 +293,8 @@ pub fn build_resume_script_with(
     let node_env = extension_exports(extension_env, &[&harness_env, set_env]);
     match sandbox {
         Some(wrap) => {
-            let docker_tail = wrap_tail_in_docker_exec(wrap, &node_env, &tail_cmd);
+            let forwarded = forwarded_env(wrap, &node_env);
+            let docker_tail = wrap_tail_in_docker_exec(wrap, &forwarded, &tail_cmd);
             wrap_with_env(
                 run_id,
                 node_id,
@@ -296,7 +302,7 @@ pub fn build_resume_script_with(
                 daemon_port,
                 session_path,
                 &harness_env,
-                &[],
+                &forwarded,
                 &docker_tail,
             )
         }
@@ -345,7 +351,7 @@ mod tests {
             None,
             None,
         );
-        assert!(script.starts_with("exec bash -c "));
+        assert!(script.starts_with("export "), "{script}");
         assert!(script.contains("exec claude --dangerously-skip-permissions"));
         assert!(script.contains("PDO_RUN_ID"));
         assert!(script.contains("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"));
@@ -374,7 +380,7 @@ mod tests {
     }
 
     /// #661/ADR-0055 — the fix. The session `PATH` is exported at the **head** of
-    /// the wrapper, before every `PDO_*` export and before the tail, so a `bash -c`
+    /// the wrapper, before every `PDO_*` export and before the tail, so a bash
     /// tail (neither interactive nor login) resolves the harness in the very `PATH`
     /// the preflight (`binary_available`) found it on — not the tmux server's
     /// inherited service `PATH`. Without it a user-installed `claude` (native
@@ -401,10 +407,8 @@ mod tests {
             None,
         );
         // Present and single-quoted, carrying the user prefix the service PATH lacks.
-        // `wrap_with_env` re-wraps the inner in `bash -c '…'`, so the single quotes
-        // around the value are rewritten as `'\''` (the same escaping `--model` uses).
         assert!(
-            script.contains(r"export PATH='\''/home/u/.local/bin:/usr/bin:/bin'\'' &&"),
+            script.contains(r"export PATH='/home/u/.local/bin:/usr/bin:/bin' &&"),
             "session PATH must be exported at the head: {script}"
         );
         // It leads: PATH before the PDO_* exports, and those before the tail — so the
@@ -449,7 +453,7 @@ mod tests {
             "empty session PATH must emit no PATH export: {script}"
         );
         assert!(
-            script.starts_with("exec bash -c 'export PDO_RUN_ID="),
+            script.starts_with("export PDO_RUN_ID="),
             "legacy inner shape preserved when no session PATH: {script}"
         );
     }
@@ -473,7 +477,7 @@ mod tests {
             None,
         );
         assert!(
-            script.contains(r"export PATH='\''/home/u/.local/bin:/usr/bin:/bin'\'' &&"),
+            script.contains(r"export PATH='/home/u/.local/bin:/usr/bin:/bin' &&"),
             "resume must export the session PATH: {script}"
         );
         let path_at = script
@@ -531,11 +535,6 @@ mod tests {
     fn build_script_inserts_model_when_some() {
         // #296: `Some(model)` inserts a single-quoted `--model '<m>'` between
         // `--dangerously-skip-permissions` and the prompt `cat` substitution.
-        //
-        // The whole tail is re-wrapped in `bash -c '…'` by `wrap_with_env`, so
-        // the single quotes around the model value get rewritten by
-        // `sh_single_quote` as `'\''` — i.e. `--model 'opus'` becomes
-        // `--model '\''opus'\''` in the final script bytes.
         let prompt_path = Path::new("/tmp/test-prompt.md");
         let script = build_tmux_script(
             "run-abc",
@@ -556,12 +555,12 @@ mod tests {
         );
         assert!(script.contains("--model"), "model flag present: {script}");
         assert!(
-            script.contains(r"--model '\''opus'\''"),
-            "model value single-quoted (bash -c escaping): {script}"
+            script.contains(r"--model 'opus'"),
+            "model value single-quoted: {script}"
         );
         // The flag sits right after the base flag, before the prompt cat.
         assert!(
-            script.contains(r"--dangerously-skip-permissions --model '\''opus'\'' "),
+            script.contains(r"--dangerously-skip-permissions --model 'opus' "),
             "model flag must sit right after the base flag: {script}"
         );
         let model_at = script.find("--model").unwrap();
@@ -668,11 +667,10 @@ mod tests {
         // #424: `--effort` sits AFTER `--model` — the model test above pins the
         // substring `--dangerously-skip-permissions --model '<m>' `, so inserting
         // before it would break that assertion for nothing. Single-quoted like the
-        // model value, hence `'\''` once `wrap_with_env` re-wraps the tail in
-        // `bash -c '…'`.
+        // model value.
         let script = agent_script(Some("opus"), Some("low"));
         assert!(
-            script.contains(r"--model '\''opus'\'' --effort '\''low'\'' "),
+            script.contains(r"--model 'opus' --effort 'low' "),
             "effort must follow the model, both single-quoted: {script}"
         );
         let model_at = script.find("--model").unwrap();
@@ -691,7 +689,7 @@ mod tests {
         // double space where the absent model fragment would have been.
         let script = agent_script(None, Some("xhigh"));
         assert!(
-            script.contains(r#"--dangerously-skip-permissions --effort '\''xhigh'\'' "$(cat "#),
+            script.contains(r#"--dangerously-skip-permissions --effort 'xhigh' "$(cat "#),
             "effort-only tail must leave no gap: {script}"
         );
         assert!(!script.contains("--model"), "{script}");
@@ -762,8 +760,7 @@ mod tests {
     fn build_script_inserts_settings_after_effort_before_cat() {
         // #433: `--settings '<file>'` sits AFTER `--model`/`--effort` and before the
         // prompt `cat` — the position that keeps every model/effort substring test
-        // green. Single-quoted, hence `'\''` after `wrap_with_env` re-wraps in
-        // `bash -c '…'`.
+        // green. Single-quoted.
         let script = build_tmux_script(
             "run-abc",
             "solo",
@@ -783,7 +780,7 @@ mod tests {
         );
         assert!(
             script.contains(
-                r"--effort '\''low'\'' --settings '\''/wd/.pdo/prompts/solo-iter-1.settings.json'\'' "
+                r"--effort 'low' --settings '/wd/.pdo/prompts/solo-iter-1.settings.json' "
             ),
             "settings must follow effort, single-quoted: {script}"
         );
@@ -818,14 +815,11 @@ mod tests {
     fn build_script_inserts_session_id_after_model_and_effort() {
         // #473: a pinned id emits `--session-id '<uuid>'` LAST — after model/effort,
         // right before the prompt cat — so Claude Code names its transcript
-        // `<uuid>.jsonl` and the sweep resolves it by identity. Single-quoted, hence
-        // `'\''` once `wrap_with_env` re-wraps the tail in `bash -c '…'`.
+        // `<uuid>.jsonl` and the sweep resolves it by identity. Single-quoted.
         let sid = "11111111-2222-3333-4444-555555555555";
         let script = agent_script_with_session(Some("opus"), Some("low"), Some(sid));
         assert!(
-            script.contains(&format!(
-                r#"--effort '\''low'\'' --session-id '\''{sid}'\'' "$(cat "#
-            )),
+            script.contains(&format!(r#"--effort 'low' --session-id '{sid}' "$(cat "#)),
             "session-id must follow model/effort and precede the prompt cat: {script}"
         );
         let effort_at = script.find("--effort").unwrap();
@@ -844,9 +838,7 @@ mod tests {
         // flag with no double space.
         let script = agent_script_with_settings(Path::new("/wd/s.json"));
         assert!(
-            script.contains(
-                r#"--dangerously-skip-permissions --settings '\''/wd/s.json'\'' "$(cat "#
-            ),
+            script.contains(r#"--dangerously-skip-permissions --settings '/wd/s.json' "$(cat "#),
             "settings-only tail must leave no gap: {script}"
         );
         assert!(
@@ -963,7 +955,7 @@ mod tests {
         );
         assert!(
             script.contains(
-                r"--continue --effort '\''low'\'' --settings '\''/wd/.pdo/prompts/solo-iter-1.settings.json'\''"
+                r"--continue --effort 'low' --settings '/wd/.pdo/prompts/solo-iter-1.settings.json'"
             ),
             "resume tail must re-inject --settings after --effort: {script}"
         );
@@ -978,7 +970,7 @@ mod tests {
         let script = agent_script_with_session(None, None, Some(sid));
         assert!(
             script.contains(&format!(
-                r#"--dangerously-skip-permissions --session-id '\''{sid}'\'' "$(cat "#
+                r#"--dangerously-skip-permissions --session-id '{sid}' "$(cat "#
             )),
             "id-only tail must leave no gap: {script}"
         );
@@ -1007,7 +999,7 @@ mod tests {
             None,
             None,
         );
-        assert!(script.starts_with("exec bash -c "));
+        assert!(script.starts_with("export "), "{script}");
         assert!(
             !script.contains("claude"),
             "script node launches no claude: {script}"
@@ -1188,7 +1180,7 @@ mod tests {
             None,
             None,
         );
-        assert!(script.starts_with("exec bash -c "));
+        assert!(script.starts_with("export "), "{script}");
         assert!(
             script.contains("bash -i"),
             "runs interactive bash: {script}"
@@ -1256,7 +1248,7 @@ mod tests {
     }
 
     impl ContainerExec for TestExec<'_> {
-        fn exec_argv(&self, env: &[(String, String)]) -> Vec<String> {
+        fn exec_argv(&self, names: &[String]) -> Vec<String> {
             let mut args: Vec<String> = ["docker", "exec", "-i", "-t", "-e"]
                 .iter()
                 .map(|s| s.to_string())
@@ -1265,9 +1257,9 @@ mod tests {
             for a in ["-e", "PDO_NODE_ID", "-e", "PDO_NODE_ITER"] {
                 args.push(a.to_string());
             }
-            for (k, v) in env.iter().filter(|(k, _)| k != "PDO_DAEMON_URL") {
+            for name in names.iter().filter(|k| *k != "PDO_DAEMON_URL") {
                 args.push("-e".to_string());
-                args.push(format!("{k}={v}"));
+                args.push(name.clone());
             }
             args.push("--user".to_string());
             args.push("1000:1000".to_string());
@@ -1282,9 +1274,9 @@ mod tests {
         SandboxWrap { exec, set_env: &[] }
     }
 
-    /// #708: a staging set's env (pi's two vars) rides the exec as valued `-e K=V`,
-    /// before the catalogue and never as a host-side export; an empty set env leaves
-    /// the exec argv byte-identical (claude).
+    /// #708: a staging set's env (pi's two vars) is exported host-side and rides
+    /// the exec by name, before the catalogue; an empty set env leaves the exec
+    /// argv byte-identical (claude).
     #[test]
     fn sandbox_wrap_forwards_the_staging_set_env_on_the_exec() {
         let harness = pdo_harness::registry::pi();
@@ -1319,8 +1311,12 @@ mod tests {
         let container_at = with.find("pdo-sbx-run-abc").expect("the container name");
         let exec_argv = &with[exec_at..container_at];
         assert!(
-            exec_argv.contains("-e PI_SKIP_VERSION_CHECK=1 -e PI_TELEMETRY=0 --user 1000:1000"),
-            "the set env is valued `-e` pairs on the exec, before --user: {exec_argv}"
+            exec_argv.contains("-e PI_SKIP_VERSION_CHECK -e PI_TELEMETRY --user 1000:1000"),
+            "the set env is forwarded by name on the exec, before --user: {exec_argv}"
+        );
+        assert!(
+            with[..exec_at].contains("export PI_SKIP_VERSION_CHECK='1' && export PI_TELEMETRY='0'"),
+            "the values are exported host-side: {with}"
         );
 
         let bare_exec = TestExec::new("run-abc", "pdo-run-abc-solo-iter-1", Path::new("/wd"));
@@ -1377,7 +1373,7 @@ mod tests {
             None,
         );
         // Host wrapper preserved.
-        assert!(script.starts_with("exec bash -c "), "{script}");
+        assert!(script.starts_with("export "), "{script}");
         assert!(script.contains("export PDO_RUN_ID="), "{script}");
         // The container-exec prefix, in canonical order.
         assert!(
@@ -1404,9 +1400,9 @@ mod tests {
 
     #[test]
     fn sandbox_wraps_script_tail_with_env_catalogue() {
-        // #407 D6: a `script` node's dynamic catalogue crosses the exec as
-        // explicit `-e K=V` (a bare host export wouldn't cross), NOT as a host
-        // export — so each catalogue key appears exactly once (on the exec).
+        // #407 D6: a `script` node's dynamic catalogue crosses the exec by name
+        // (`-e K`): its values are exported host-side, so none sits in the
+        // `docker` argv.
         let prompt_path = Path::new("/repo/.pdo/runs/r1/worktree/.pdo/prompts/solo-iter-1.md");
         let wt = Path::new("/repo/.pdo/runs/r1/worktree");
         let wrap_exec = TestExec::new("r1", "pdo-r1-solo-iter-1", wt);
@@ -1437,24 +1433,24 @@ mod tests {
             Some(&wrap),
             None,
         );
+        let exec_at = script.find("docker exec").expect("a docker exec");
+        let (host, exec) = script.split_at(exec_at);
         assert!(
-            script.contains("-e PDO_ARTIFACTS_DIR=/repo/.pdo/runs/r1/worktree/.pdo/artifacts"),
+            exec.contains("-e PDO_ARTIFACTS_DIR -e PDO_OUTPUT_out -e PDO_VAR_x --user"),
             "{script}"
         );
         assert!(
-            script.contains(
-                "-e PDO_OUTPUT_out=/repo/.pdo/runs/r1/worktree/.pdo/artifacts/solo/iter-1/out/output.md"
+            host.contains("export PDO_ARTIFACTS_DIR='/repo/.pdo/runs/r1/worktree/.pdo/artifacts'"),
+            "{script}"
+        );
+        assert!(
+            host.contains(
+                "export PDO_OUTPUT_out='/repo/.pdo/runs/r1/worktree/.pdo/artifacts/solo/iter-1/out/output.md'"
             ),
             "{script}"
         );
-        assert!(script.contains("-e PDO_VAR_x=hello"), "{script}");
-        // The catalogue is NOT host-exported (only the base four are): each key
-        // appears exactly once, on the exec.
-        assert_eq!(
-            script.matches("PDO_ARTIFACTS_DIR").count(),
-            1,
-            "catalogue must cross the exec once, not also host-exported: {script}"
-        );
+        assert!(host.contains("export PDO_VAR_x='hello'"), "{script}");
+        assert!(!exec.contains("hello"), "no value on the exec: {script}");
         // The body runs under timeout, self-signalling — inside the container.
         assert!(script.contains("timeout 60s bash"), "{script}");
         assert!(script.contains("pdo complete"), "{script}");
@@ -1575,8 +1571,7 @@ mod tests {
         // #473: a node with a pinned session id resumes by IDENTITY — `--resume
         // <uuid>`, which re-enters this node's own transcript, never "the newest
         // conversation of the cwd" (which is the manager's or a sibling's when the
-        // cwd is the shared Run worktree). The uuid is single-quoted, hence `'\''`
-        // once `wrap_with_env` re-wraps the tail in `bash -c '…'`.
+        // cwd is the shared Run worktree). The uuid is single-quoted.
         let sid = "11111111-2222-3333-4444-555555555555";
         let off = build_resume_script(
             "r1",
@@ -1592,7 +1587,7 @@ mod tests {
             None,
         );
         assert!(
-            off.contains(&format!(r"--resume '\''{sid}'\''")),
+            off.contains(&format!(r"--resume '{sid}'")),
             "resume must target the pinned session id: {off}"
         );
         assert!(
@@ -1600,9 +1595,9 @@ mod tests {
             "a pinned id must NOT fall back to positional --continue: {off}"
         );
         // Sandboxed: same identity resume, wrapped into the container. The docker
-        // exec re-quotes the tail (`sh_quote_arg` around the outer `bash -c`), so
-        // the single-quote escaping is doubled — assert on the flag + the verbatim
-        // uuid, not on the exact quoting.
+        // exec quotes the tail (`sh_quote_arg` around its `bash -lc`), so the
+        // single quotes are escaped: assert on the flag + the verbatim uuid, not on
+        // the exact quoting.
         let wt = Path::new("/repo/.pdo/runs/r1/worktree");
         let wrap_exec = TestExec::new("r1", "pdo-r1-solo-iter-1", wt);
         let wrap = sample_wrap(&wrap_exec);
@@ -1650,7 +1645,7 @@ mod tests {
             None,
         );
         assert!(
-            by_id.contains(&format!(r"--resume '\''{sid}'\''")),
+            by_id.contains(&format!(r"--resume '{sid}'")),
             "copilot resumes by identity with its own --resume verb: {by_id}"
         );
         assert!(
@@ -1699,14 +1694,14 @@ mod tests {
             Some(ext),
         );
         assert!(
-            armed.contains(&format!(r"--session-id '\''{sid}'\''")),
+            armed.contains(&format!(r"--session-id '{sid}'")),
             "pi resumes by identity with its created-or-resumed flag: {armed}"
         );
         assert!(
-            armed.contains(r"-e '\''/repo/.pdo/prompts/solo-iter-1.turn-end.ts'\''"),
+            armed.contains(r"-e '/repo/.pdo/prompts/solo-iter-1.turn-end.ts'"),
             "the extension is re-armed at resume: {armed}"
         );
-        assert!(armed.contains(r"--thinking '\''high'\''"), "{armed}");
+        assert!(armed.contains(r"--thinking 'high'"), "{armed}");
         assert!(
             !armed.contains("--settings"),
             "never claude's flag: {armed}"
@@ -1751,7 +1746,7 @@ mod tests {
         );
         assert!(!script.contains("--resume"), "{script}");
         assert!(
-            script.contains(r"exec claude --dangerously-skip-permissions --continue'"),
+            script.ends_with(r"exec claude --dangerously-skip-permissions --continue"),
             "empty id must degrade to the legacy --continue tail: {script}"
         );
     }
@@ -1779,10 +1774,9 @@ mod tests {
                 !script.contains("--effort"),
                 "no effort flag when unset ({effort:?}): {script}"
             );
-            // Nothing trails `--continue`: the tail ends there (before the closing
-            // quote of the `bash -c '…'` wrapper).
+            // Nothing trails `--continue`: the script ends there.
             assert!(
-                script.contains(r"exec claude --dangerously-skip-permissions --continue'"),
+                script.ends_with(r"exec claude --dangerously-skip-permissions --continue"),
                 "legacy resume tail must be byte-identical ({effort:?}): {script}"
             );
         }
@@ -1810,7 +1804,7 @@ mod tests {
             None,
         );
         assert!(
-            script.contains(r"--continue --effort '\''low'\''"),
+            script.contains(r"--continue --effort 'low'"),
             "effort must be re-posed right after --continue: {script}"
         );
         assert!(
@@ -1931,13 +1925,46 @@ mod tests {
             None,
             &ext_env(&[("FIXTURE_HELLO", "monde"), ("PDO_OUTPUT_OUT", "/x")]),
         );
+        let exec_at = script.find("docker exec").expect("a docker exec");
+        let (host, exec) = script.split_at(exec_at);
         assert!(
-            script.contains("-e FIXTURE_HELLO=monde"),
-            "forwarded on the exec: {script}"
+            exec.contains("-e PDO_OUTPUT_OUT -e FIXTURE_HELLO --user"),
+            "forwarded by name on the exec: {script}"
         );
-        assert!(!script.contains("export FIXTURE_HELLO"), "{script}");
-        assert!(!script.contains("PDO_OUTPUT_OUT=/x"), "{script}");
-        assert!(script.contains("PDO_OUTPUT_OUT=/a/out.md"), "{script}");
+        assert!(!exec.contains("monde"), "no value on the exec: {script}");
+        assert!(host.contains("export FIXTURE_HELLO='monde'"), "{script}");
+        assert!(!script.contains("PDO_OUTPUT_OUT='/x'"), "{script}");
+        assert!(host.contains("PDO_OUTPUT_OUT='/a/out.md'"), "{script}");
+    }
+
+    /// A sandboxed resume re-poses the extensions' variables the same way:
+    /// exported host-side, forwarded by name, never valued on the exec.
+    #[test]
+    fn a_sandboxed_resume_forwards_the_extension_env_by_name() {
+        let wrap_exec = TestExec::new("r1", "pdo-r1-solo-iter-1", Path::new("/wd"));
+        let wrap = sample_wrap(&wrap_exec);
+        let script = build_resume_script_with(
+            "r1",
+            "solo",
+            1,
+            6172,
+            TEST_SESSION_PATH,
+            &pdo_harness::registry::claude(),
+            None,
+            Some("sid"),
+            None,
+            Some(&wrap),
+            None,
+            &ext_env(&[("FIXTURE_SECRET", "witness-value")]),
+        );
+        let exec_at = script.find("docker exec").expect("a docker exec");
+        let (host, exec) = script.split_at(exec_at);
+        assert!(exec.contains("-e FIXTURE_SECRET --user"), "{script}");
+        assert!(!exec.contains("witness-value"), "{script}");
+        assert!(
+            host.contains("export FIXTURE_SECRET='witness-value'"),
+            "{script}"
+        );
     }
 
     /// A resumed node re-carries its extensions' variables.

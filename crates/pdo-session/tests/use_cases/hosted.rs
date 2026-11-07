@@ -627,7 +627,7 @@ async fn a_relaunched_agent_resumes_its_conversation_with_who_relaunched_it() {
     assert_eq!(session.id, ended.id, "the same session");
     let script = w.last_script_of(&session.id);
     assert!(
-        script.contains(&format!("--resume '\\''{conversation}'\\''")),
+        script.contains(&format!("--resume '{conversation}'")),
         "{script}"
     );
     assert!(!script.contains("--session-id"), "{script}");

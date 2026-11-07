@@ -504,7 +504,7 @@ mod tests {
         );
         let (_, script) = tmux.created.lock().unwrap()[0].clone();
         assert!(
-            script.contains("export PDO_RUN_ID='\\''__libassist__'\\''"),
+            script.contains("export PDO_RUN_ID='__libassist__'"),
             "{script}"
         );
         assert!(script.contains("FIXTURE_HELLO"), "{script}");

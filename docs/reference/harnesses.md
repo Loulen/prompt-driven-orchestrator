@@ -35,7 +35,7 @@ Custom descriptors in `~/.pdo/harnesses/descriptors.yaml` can launch, attach, re
 | Requirement | Setup |
 | --- | --- |
 | Authentication | Log in with each harness before using it through PDO |
-| An approved working directory | Trust the target repository root once; trust cascades to subdirectories |
+| An approved working directory | Trust the target repository root once; trust cascades to subdirectories. The autonomy flags PDO passes (`copilot`'s `--allow-all`, for one) cover tools, paths and URLs, not the « trust this folder » dialog: an untrusted root leaves the node alive and mute on its first turn |
 | An installed version | Compare your installed harness with the last validated version in the support table |
 | A model catalogue for `pi` | Keep pi's model catalogue reachable from its home (`~/.pi/agent`): pi prices each message from it, and a message it cannot price makes the node's cost read "—" rather than `$0` |
 | `pi` in the sandbox image | PDO does not provide the sandbox image. For a sandboxed `pi` node your image must contain the `pi` binary: PDO checks it with a `which` at spawn, and a node whose binary is missing goes `Interrupted` with that reason (ADR-0063) |

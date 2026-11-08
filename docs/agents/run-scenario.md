@@ -27,6 +27,10 @@ make demo-daemon PORT=6491             # this branch's `pdo daemon`
 make demo-daemon PORT=6491 TEST_EXT=1  # the demo daemon of the test extension instead
 ```
 
+Without `TEST_EXT`, the demo daemon is the **vanilla core**: this repository's binary with no
+extension loaded, the product published as PDO. The Happy Paths are played on it
+(`docs/test-scenarios/README.md` § « The core alone »).
+
 Pick a free port between 6400 and 6999 (another agent may be testing at the same time); the
 user's ports (5172, 5272, 6160, 6172…) and the caller's own daemon are refused. The command:
 
@@ -72,7 +76,8 @@ the setup.
 
 UI-first. Use the **Chrome DevTools MCP** server when available
 (`mcp__plugin_chrome-devtools-mcp_chrome-devtools__*`); fall back to **Playwright MCP**
-(`mcp__plugin_playwright_playwright__browser_*`) — both expose roughly the same primitives:
+(`mcp__plugin_playwright_playwright__browser_*`), or the `playwright-cli` skill from a shell — all
+expose roughly the same primitives:
 
 - `navigate_page` — open `http://127.0.0.1:<port>` (the demo daemon's)
 - `take_snapshot` (semantic DOM) and `take_screenshot` (visual evidence)

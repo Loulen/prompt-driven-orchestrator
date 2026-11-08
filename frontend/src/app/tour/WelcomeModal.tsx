@@ -86,7 +86,7 @@ export default function WelcomeModal({ onStartFullTour, onStartTour, onLater }: 
             Quit any tour <Kbd>Esc</Kbd>
           </span>
           <span className="d-grow" />
-          <Button tone="ghost" onClick={onLater} data-testid="tour-welcome-later" title="Tours stay in Settings › Tutorials">
+          <Button tone="ghost" onClick={onLater} data-testid="tour-welcome-later" title="Tours stay in Settings › General › Tutorials">
             Later
           </Button>
         </div>

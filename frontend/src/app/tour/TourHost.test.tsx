@@ -165,7 +165,7 @@ describe("running a tour", () => {
     tick();
     await user().keyboard("{Escape}");
     expect(screen.queryByTestId("projecteur")).not.toBeInTheDocument();
-    expect(screen.getByTestId("tour-quit-notice")).toBeInTheDocument();
+    expect(screen.getByTestId("tour-quit-notice")).toHaveTextContent("Tour closed · Settings › General › Tutorials");
     // Quitting mid-tour marks nothing.
     expect(loadToursDone()).toEqual({});
   });
@@ -629,7 +629,11 @@ describe("the welcome modal", () => {
     expect(screen.getByTestId("tour-welcome-first-pipeline")).toBeEnabled();
     // #824 built *First run*: no greyed placeholder left in the catalog.
     expect(screen.getByTestId("tour-welcome-first-run")).toBeEnabled();
-    expect(screen.getByTestId("tour-welcome-later")).toBeInTheDocument();
+    // The tours live under Settings › General › Tutorials: the way back says so.
+    expect(screen.getByTestId("tour-welcome-later")).toHaveAttribute(
+      "title",
+      "Tours stay in Settings › General › Tutorials",
+    );
   });
 
   it("« Later » sets the key and never asks again", async () => {

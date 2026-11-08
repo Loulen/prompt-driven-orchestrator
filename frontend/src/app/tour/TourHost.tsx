@@ -315,7 +315,7 @@ export default function TourHost({ controller, showWelcome, onWelcomeAnswered, o
           data-testid="tour-quit-notice"
           className="fixed bottom-8 left-1/2 z-[110] -translate-x-1/2 rounded border border-line bg-surface-2 px-3 py-1.5 text-xs text-text-2 shadow-lg"
         >
-          Tour closed · Settings › Tutorials
+          Tour closed · Settings › General › Tutorials
         </div>
       )}
     </>

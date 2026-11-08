@@ -115,6 +115,9 @@ pub fn opencode() -> HarnessDescriptor {
 /// - the model hole is **absent when unset**, so a node with no explicit model
 ///   launches on copilot's own automatic model selector (AC), the class of
 ///   dead-end #561 measured on `opencode` never arises;
+/// - `--effort {effort}` is copilot's effort axis (`--effort, --reasoning-effort
+///   <level>`, the seven stops its catalogue reads); absent when unset, so copilot
+///   keeps its own default, and re-posed on resume as `claude`'s and `pi`'s are;
 /// - `--session-id {session_id}` pins the session identity at launch (measured on
 ///   the installed binary — the caller-provided id the SDK documents, requested
 ///   for the CLI in github/copilot-cli#167), so resume re-enters **this** node's
@@ -139,6 +142,7 @@ pub fn copilot() -> HarnessDescriptor {
             "--allow-all",
             "--no-ask-user",
             "--model {model}",
+            "--effort {effort}",
             "--session-id {session_id}",
             "-i {prompt}",
         ]
@@ -152,6 +156,7 @@ pub fn copilot() -> HarnessDescriptor {
             "--no-ask-user",
             "{resume}",
             "--model {model}",
+            "--effort {effort}",
         ]
         .iter()
         .map(|s| s.to_string())

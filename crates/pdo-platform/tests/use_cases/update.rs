@@ -363,7 +363,7 @@ async fn an_apply_spawns_the_plan_journals_it_and_records_the_exit() {
     let started = w.apply().execute(&Actor::LocalOperator).await.unwrap();
     assert_eq!(
         started.command,
-        "brew update && brew upgrade Loulen/pdo-v2/pdo-v2"
+        "brew update && brew upgrade Loulen/tap/pdo"
     );
     assert_eq!(started.from_version, INSTALLED_VERSION);
     let plans = w.executor.plans.lock().unwrap().clone();

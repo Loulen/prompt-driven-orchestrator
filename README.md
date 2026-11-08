@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/Loulen/prompt-driven-orchestrator/releases/latest"><img src="https://img.shields.io/github/v/release/Loulen/prompt-driven-orchestrator?style=flat&amp;label=release&amp;color=10b981" alt="Latest release" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-10b981?style=flat" alt="License: MIT" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-10b981?style=flat" alt="License: Apache 2.0" /></a>
   <img src="https://img.shields.io/badge/macOS%20%7C%20Linux-10b981?style=flat-square" alt="Supported platforms: macOS and Linux" />
 </p>
 
@@ -227,7 +227,7 @@ Want to contribute or run PDO from source? See [CONTRIBUTING.md](CONTRIBUTING.md
 A binary with its own extensions depends on the core crates by git tag and calls `serve(config, extensions)` ([ADR-0081](docs/adr/0081-pdo-s-etend-par-une-api-d-extension-composee-a-la-compilation.md)). `pdo-daemon` embeds the web UI at compile time, and cargo's checkout of a git dependency has no `node_modules`, so give the build an already built UI of the **same tag** through `PDO_FRONTEND_DIST` (absolute path to a `dist/` folder holding `index.html`). Building that `dist/` takes Node.js 22+ and pnpm 10+, once:
 
 ```bash
-git clone --depth 1 --branch v2.0.0 https://github.com/Loulen/PDO-v2 pdo-core
+git clone --depth 1 --branch v2.0.0 https://github.com/Loulen/prompt-driven-orchestrator pdo-core
 (cd pdo-core/frontend && pnpm install --frozen-lockfile && pnpm run build)
 PDO_FRONTEND_DIST="$PWD/pdo-core/frontend/dist" cargo build   # in your project
 ```
@@ -243,4 +243,4 @@ PDO_FRONTEND_DIST = { value = "pdo-core/frontend/dist", relative = true }
 
 ## License
 
-PDO is free and open source under the [MIT License](LICENSE): use it, modify it, embed it, host it, for any purpose.
+PDO is free and open source under the [Apache License 2.0](LICENSE): use it, modify it, embed it, host it, for any purpose. The license grants no right to the Acogni trademarks; see [NOTICE](NOTICE). Versions up to 1.132.0 were released under the MIT License; their history is in [docs/CHANGELOG-v1.md](docs/CHANGELOG-v1.md).

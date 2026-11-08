@@ -82,7 +82,7 @@ export default {
 ```
 
 ```bash
-git clone --branch v<tag> git@github.com:Loulen/PDO-v2.git ../pdo-core
+git clone --branch v<tag> git@github.com:Loulen/prompt-driven-orchestrator.git ../pdo-core
 (cd ../pdo-core/frontend && pnpm install && pnpm exec playwright install chromium)
 make -C ../pdo-core readme-media CONFIG=$PWD/media/media.config.mjs
 make -C ../pdo-core readme-media-publish CONFIG=$PWD/media/media.config.mjs

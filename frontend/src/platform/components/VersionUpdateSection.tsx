@@ -253,7 +253,12 @@ export default function VersionUpdateSection({
           {status.checked_at ? (
             <span className="set-ellipsis" title={absoluteTime(status.checked_at)}>
               {relativeTime(status.checked_at)}
-              {status.source && <span className="set-faint"> · {status.source}</span>}
+              {status.source && (
+                <span className="set-faint" title={status.source_url ?? undefined}>
+                  {" "}
+                  · {status.source}
+                </span>
+              )}
             </span>
           ) : (
             <span className="set-mono">—</span>

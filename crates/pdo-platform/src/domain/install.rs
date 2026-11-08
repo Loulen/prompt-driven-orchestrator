@@ -9,14 +9,14 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// The v2 formula (`pdo-v2`, tap `Loulen/homebrew-pdo-v2`). The manual command
-/// names it in full so `brew` never resolves the v1 `pdo` formula of `Loulen/tap`.
-pub const HOMEBREW_COMMAND: &str = "brew update && brew upgrade Loulen/pdo-v2/pdo-v2";
-/// Re-running the cargo-dist installer replaces `~/.local/bin/pdo` the supported way.
-/// `Loulen/PDO-v2` publishes no release yet, so this installer does not exist
-/// yet: only a cargo-dist receipt left on the machine (by a v1 install) leads here.
+/// The `pdo` formula of the tap `Loulen/homebrew-tap`, which cargo-dist publishes
+/// from the public repository. The manual command names it in full so `brew`
+/// never resolves another tap's `pdo`.
+pub const HOMEBREW_COMMAND: &str = "brew update && brew upgrade Loulen/tap/pdo";
+/// Re-running the cargo-dist installer of the public repository's latest release
+/// replaces `~/.local/bin/pdo` the supported way.
 pub const SCRIPT_COMMAND: &str = "curl --proto '=https' --tlsv1.2 -LsSf \
-    https://github.com/Loulen/PDO-v2/releases/latest/download/pdo-daemon-installer.sh | sh";
+    https://github.com/Loulen/prompt-driven-orchestrator/releases/latest/download/pdo-daemon-installer.sh | sh";
 /// No installer to delegate to: the user rebuilds, PDO does not update itself.
 pub const UNKNOWN_COMMAND: &str = "Build from source, then restart the daemon.";
 
@@ -259,12 +259,11 @@ mod tests {
     fn manual_command_matches_the_method() {
         assert_eq!(
             InstallMethod::Homebrew.manual_command(),
-            Some("brew update && brew upgrade Loulen/pdo-v2/pdo-v2")
+            Some("brew update && brew upgrade Loulen/tap/pdo")
         );
-        assert!(InstallMethod::Script
-            .manual_command()
-            .unwrap()
-            .contains("Loulen/PDO-v2/releases/latest/download/pdo-daemon-installer.sh"));
+        assert!(InstallMethod::Script.manual_command().unwrap().contains(
+            "Loulen/prompt-driven-orchestrator/releases/latest/download/pdo-daemon-installer.sh"
+        ));
         assert!(InstallMethod::Unknown
             .manual_command()
             .unwrap()

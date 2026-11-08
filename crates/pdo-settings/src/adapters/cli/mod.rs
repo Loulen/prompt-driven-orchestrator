@@ -67,7 +67,8 @@ pub enum SettingsAction {
         #[command(subcommand)]
         action: ProvisioningAction,
     },
-    /// Your Apparence: Theme, Mode sombre, Nodes compactes, Éléments masquables.
+    /// Your Apparence: Theme, Mode sombre, Palette daltonienne, Nodes compactes,
+    /// Éléments masquables.
     Appearance {
         /// Replace it with the document of this file (`-` for the standard
         /// input), shaped as `--json` prints it under `appearance`.

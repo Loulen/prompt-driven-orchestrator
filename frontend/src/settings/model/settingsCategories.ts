@@ -120,8 +120,8 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
     label: "Appearance",
     sections: [
       {
-        // Each row wears its own scope: the Theme and the Dark mode follow the Actor,
-        // the UI scale stays with this device.
+        // Each row wears its own scope: the Theme, the Dark mode and the colour-blind
+        // status palette follow the Actor, the UI scale stays with this device.
         id: "theme",
         label: "Theme",
       },

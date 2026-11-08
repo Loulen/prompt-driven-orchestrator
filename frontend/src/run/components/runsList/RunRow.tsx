@@ -7,13 +7,11 @@ import type { RunTreeNode } from "../../model/runTree";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 import ExtensionDecorations from "../../../shared/extensions/ExtensionDecorations";
 import type { DecorationContext } from "../../../shared/extensions/contract";
-import { StatusIcon } from "../../../shared/ui/kit";
-import StatusMark from "../../../shared/ui/leftList/StatusMark";
 import HoverBar, { RowAction } from "../../../shared/ui/leftList/HoverBar";
 import RunRowMenu, { type RunRowMenuPane } from "./RunRowMenu";
 import RunParentLink, { type RunParentLinkPane } from "./RunParentLink";
 import RunRowPeople from "./RunRowPeople";
-import { ChildPills, NodePips, RunFigures, TriggerMark } from "./RunRowParts";
+import { ChildPills, NodePips, RunFigures, RunStatusMark, TriggerMark } from "./RunRowParts";
 import { shownNodes } from "../../model/runRowNodes";
 import type { RunGesture } from "../../model/runGestures";
 import { hasSecondLine, isSecondLineElement, RUN_ROW, RUN_ROW_LOCATIONS } from "../../model/runRowElements";
@@ -257,17 +255,13 @@ export default function RunRow({
           <span className="lp-chev lp-chev--none" />
         )}
         {/* #577 — the status mark doubles as the select control. */}
-        <StatusMark
-          glyph={
-            <span data-testid="run-status-dot" data-status={shownStatus}>
-              <StatusIcon kind="run" status={shownStatus} title={reason} />
-            </span>
-          }
+        <RunStatusMark
+          status={shownStatus}
+          word={RUN_STATUS_WORD[shownStatus]}
+          reason={reason}
+          name={label}
           selected={rowSelected}
           selecting={runSel.size > 0}
-          label={rowSelected ? `Deselect ${label}` : `Select ${label}`}
-          title={`${RUN_STATUS_WORD[shownStatus]}${reason ? `: ${reason}` : ""}\nClick to select, Shift+click for a range`}
-          testId="run-select-control"
           onSelect={(e) => {
             if (e.shiftKey) selectRange("runs", run.run_id, visibleRunIds);
             else toggleSel("runs", run.run_id);

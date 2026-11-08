@@ -93,11 +93,6 @@ export function deriveEditNodes(
         isolated: runState?.nodes?.[n.id]?.isolated_worktree ?? isNodeIsolated(n),
         status,
         reached: markerReached(n.type, runState),
-        // Input images uploaded with the run surface on the start marker only
-        // (issue #145). They come from the projected run state, so template
-        // editing (no run state) leaves the start node image-free.
-        inputImages:
-          n.type === "start" ? (runState?.start_node?.input_images ?? []) : undefined,
         inputs: n.inputs.map((p) => ({ name: p.name, description: p.description })),
         // The card lists each output with its type's icon.
         outputs: n.outputs.map((p) => ({ name: p.name, description: p.description, port_type: p.port_type ?? "markdown" })),

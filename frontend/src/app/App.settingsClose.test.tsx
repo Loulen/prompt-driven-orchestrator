@@ -216,6 +216,8 @@ vi.mock("../settings/api/settings", () => {
       deleteAgentProfile: vi.fn().mockResolvedValue(undefined),
       fetchAgentProfileReferents: vi.fn().mockResolvedValue([]),
       fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
+      // « Save & close » of the draft guard writes the form.
+      updateSettings: vi.fn().mockResolvedValue(settings),
       fetchStatsAbsorptions: vi.fn().mockResolvedValue({ absorptions: [] }),
       uncombineStatsMember: vi.fn(),
       fetchStatsOverview: vi.fn().mockResolvedValue({
@@ -464,6 +466,7 @@ vi.mock("../pipeline/api/document", async (importOriginal) => ({
 import App from "./App";
 import { useEditStore } from "../pipeline/store/editStore";
 import { fetchUpdateStatus } from "../platform/api/update";
+import { updateSettings } from "../settings/api/settings";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -645,6 +648,62 @@ describe("App — the update modals opened from Settings", () => {
       restore();
     }
   }, 20_000);
+
+  it("« What's new » with a modified form asks first: kept, Settings stays; discarded, the changelog shows alone", async () => {
+    const restore = await offerAnUpdate();
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await openSettings(user);
+      fireEvent.change(await screen.findByTestId("setting-session-cap"), { target: { value: "12" } });
+
+      await user.click(await screen.findByTestId("setting-version-whats-new"));
+      expect(await screen.findByTestId("settings-confirm-close")).toBeInTheDocument();
+      await user.click(screen.getByTestId("settings-confirm-keep"));
+      expect(screen.getByTestId("settings-surface")).toBeInTheDocument();
+      expect(screen.queryByTestId("changelog-modal")).not.toBeInTheDocument();
+      // The draft is still there.
+      expect(screen.getByTestId("setting-session-cap")).toHaveValue(12);
+
+      await user.click(screen.getByTestId("setting-version-whats-new"));
+      await user.click(await screen.findByTestId("settings-confirm-discard"));
+      await expectClosed();
+      expect(await screen.findByTestId("changelog-modal")).toBeInTheDocument();
+
+      // Closing it goes back to the app, not to Settings.
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByTestId("changelog-modal")).not.toBeInTheDocument());
+      expect(screen.queryByTestId("settings-surface")).not.toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  }, 30_000);
+
+  it("« Update » with a modified form goes through the guard: Save & close saves, closes, then shows the confirm", async () => {
+    const restore = await offerAnUpdate();
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await openSettings(user);
+      fireEvent.change(await screen.findByTestId("setting-session-cap"), { target: { value: "12" } });
+      const update = await screen.findByTestId("setting-version-update-button");
+      await waitFor(() => expect(update).not.toBeDisabled());
+
+      await user.click(update);
+      expect(await screen.findByTestId("settings-confirm-close")).toBeInTheDocument();
+      expect(screen.queryByTestId("update-confirm")).not.toBeInTheDocument();
+      await user.click(screen.getByTestId("settings-confirm-save-close"));
+      await expectClosed();
+      expect(vi.mocked(updateSettings)).toHaveBeenCalled();
+      expect(await screen.findByTestId("update-confirm")).toBeInTheDocument();
+
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByTestId("update-confirm")).not.toBeInTheDocument());
+      expect(screen.queryByTestId("settings-surface")).not.toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  }, 30_000);
 
   it("renders the update modals after the full-window surfaces, so neither can hide them", async () => {
     const user = userEvent.setup();

@@ -24,7 +24,6 @@ import { anchorHandleId, landsByDrop } from "../../lib/anchorSide";
 import { CircleCheck, Play } from "lucide-react";
 import { Tooltip } from "../../shared/ui/kit";
 import type { NodeCost } from "../../shared/generated/NodeCost";
-import { InputImages } from "./NodeMeta";
 import type { NodeAgentLabel } from "../model/nodeAgent";
 import type { ChildCounts } from "../../run/model/orchestration";
 import SearchMatchBadge from "../../run/components/runSearch/SearchMatchBadge";
@@ -52,9 +51,6 @@ export interface EditNodeData {
   // True only for start/end markers on a completed run, or one waiting at End
   // for its started nodes — see `markerReached`.
   reached?: boolean;
-  // Filenames of images uploaded with the run's input. Only the start marker
-  // surfaces these (issue #145); undefined/empty on every other node.
-  inputImages?: string[];
   // Compact badge when this node is the single member of a loop region: a
   // collection (`⇉ ...`, #151) or a single-member bounded loop (`↻ ...`, #173).
   // Absent on non-member nodes and on multi-member regions (boxed instead).
@@ -118,11 +114,6 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
   // A reached start/end marker wears the « done » border and, on End, a check,
   // so the run view signals end-reached like completed work nodes (#105).
   const reached = data.reached ?? false;
-  // Images uploaded with the run's input ride along on the Start marker only
-  // (issue #145). The canvas shows a compact, filename-tagged strip; the full
-  // thumbnails live in the StartInspector.
-  const inputImages =
-    data.nodeType === "start" ? (data.inputImages ?? []) : [];
 
   // Work nodes and the End marker (#840) anchor incoming edges by drop
   // position, on any border. Keyed on node TYPE so a work node carrying a
@@ -219,7 +210,6 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
         <NodeTypeIcon type={data.nodeType} size={11} className="cv-mk__ic" />
         <span>{data.label}</span>
         {reached && !start && <CircleCheck size={12} strokeWidth={1.5} className="cv-mk__ok" aria-label="Reached" />}
-        {inputImages.length > 0 && <InputImages names={inputImages} />}
         {rim}
       </div>
     );

@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, expect, beforeEach } from "vitest";
 import { fromDocument, writeLocalCopy } from "./lib/appearance";
+import { COLOUR_BLIND, loadColourBlindStatus, STATUS_PALETTE_STORAGE_KEY } from "./lib/statusPalette";
 import { loadThemeChoice } from "./lib/theme";
 import { loadUiScale } from "./lib/uiScale";
 
@@ -43,6 +44,7 @@ function run(script: string, localStorage: unknown, osDark = true) {
   const fake = {
     documentElement: {
       setAttribute: (name: string, value: string) => (root[name] = value),
+      removeAttribute: (name: string) => delete root[name],
       style: {
         setProperty: (name: string, value: string) => (root[name] = value),
         set colorScheme(value: string) {
@@ -125,6 +127,30 @@ describe("the theme script", () => {
         appearance.mode,
       ]);
     }
+  });
+
+  it("stamps the colour-blind status palette on a stored \"true\" only, as lib/statusPalette reads it", () => {
+    for (const stored of ["true", "false", "colour-blind", "", null]) {
+      window.localStorage.clear();
+      if (stored !== null) window.localStorage.setItem(STATUS_PALETTE_STORAGE_KEY, stored);
+      const { root } = run(THEME_SCRIPT, store({ [STATUS_PALETTE_STORAGE_KEY]: stored }));
+      expect({ stored, got: root["data-status-palette"] ?? null }).toEqual({
+        stored,
+        got: loadColourBlindStatus() ? COLOUR_BLIND : null,
+      });
+    }
+  });
+
+  it("paints the Actor's colour-blind palette the Apparence left as this browser's copy, and follows another page", () => {
+    window.localStorage.clear();
+    writeLocalCopy(fromDocument({ version: 1, colour_blind_status: true, elements: {} }));
+    const copy = store({ [STATUS_PALETTE_STORAGE_KEY]: window.localStorage.getItem(STATUS_PALETTE_STORAGE_KEY) });
+    const { root, listeners } = run(THEME_SCRIPT, copy);
+    expect(root["data-status-palette"]).toBe(COLOUR_BLIND);
+    // Turned off on another page: the attribute goes.
+    copy.data[STATUS_PALETTE_STORAGE_KEY] = null as unknown as string;
+    listeners.storage({ key: STATUS_PALETTE_STORAGE_KEY });
+    expect(root["data-status-palette"]).toBeUndefined();
   });
 
   it("survives a store that throws, rather than blanking the page", () => {

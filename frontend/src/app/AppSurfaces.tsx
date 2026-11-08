@@ -46,16 +46,11 @@ export default function AppSurfaces({
         onSaved={onSessionsSaved}
         initialPosition={surfaces.settingsEntry.position}
         onOpenStats={surfaces.openStats}
-        // « What's new » and « Update » leave Settings first: their modals open
-        // over the app (`UpdateModals`, mounted after this), never under it.
-        onOpenChangelog={() => {
-          surfaces.setSettingsOpen(false);
-          onOpenChangelog();
-        }}
-        onRequestUpdate={() => {
-          surfaces.setSettingsOpen(false);
-          onRequestUpdate();
-        }}
+        // « What's new » and « Update » leave Settings first, through its draft
+        // guard (the surface closes, then calls them): their modals open over the
+        // app (`UpdateModals`, mounted after this), never under it.
+        onOpenChangelog={onOpenChangelog}
+        onRequestUpdate={onRequestUpdate}
         onStartTour={onStartTour}
         onStartFullTour={onStartFullTour}
         projects={projects}

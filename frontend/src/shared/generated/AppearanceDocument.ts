@@ -22,6 +22,11 @@ dark_mode?: boolean | null,
  */
 compact_nodes?: boolean | null, 
 /**
+ * The Palette daltonienne (« Colour-blind friendly status colours »);
+ * absent: the default.
+ */
+colour_blind_status?: boolean | null, 
+/**
  * The deviations of the Éléments masquables: `element id → visible`.
  * An element absent here follows its default.
  */

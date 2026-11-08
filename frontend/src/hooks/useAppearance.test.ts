@@ -20,7 +20,10 @@ beforeEach(() => {
   api.saveAppearance.mockReset().mockImplementation(async (document) => ({ appearance: document }));
 });
 
-afterEach(() => resetAppearance());
+afterEach(() => {
+  resetAppearance();
+  document.documentElement.removeAttribute("data-status-palette");
+});
 
 describe("the Apparence store", () => {
   it("paints this browser's copy at boot, before the daemon answers", () => {
@@ -44,6 +47,19 @@ describe("the Apparence store", () => {
     expect(localStorage.getItem("pdo.ui.mode")).toBe("light");
     expect(localStorage.getItem("pdo.ui.compactNodes")).toBe("true");
     expect(api.saveAppearance).not.toHaveBeenCalled();
+  });
+
+  it("paints the Actor's colour-blind palette on <html>, and takes it off again", async () => {
+    initAppearance();
+    expect(document.documentElement.hasAttribute("data-status-palette")).toBe(false);
+    api.fetchAppearance.mockResolvedValue({ appearance: { version: 1, colour_blind_status: true, elements: {} } });
+    await act(() => syncAppearance());
+    expect(document.documentElement.getAttribute("data-status-palette")).toBe("colour-blind");
+    expect(localStorage.getItem("pdo.ui.colourBlindStatus")).toBe("true");
+    act(() => updateAppearance((appearance) => ({ ...appearance, colourBlindStatus: false })));
+    expect(document.documentElement.hasAttribute("data-status-palette")).toBe(false);
+    expect(localStorage.getItem("pdo.ui.colourBlindStatus")).toBeNull();
+    expect(api.saveAppearance).toHaveBeenLastCalledWith({ version: 1, elements: {} });
   });
 
   it("gives an Actor without an Apparence the values this browser held", async () => {

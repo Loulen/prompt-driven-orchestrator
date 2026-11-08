@@ -40,6 +40,10 @@ pub struct AppearanceDocument {
     /// Nodes compactes; absent: the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compact_nodes: Option<bool>,
+    /// The Palette daltonienne (« Colour-blind friendly status colours »);
+    /// absent: the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colour_blind_status: Option<bool>,
     /// The deviations of the Éléments masquables: `element id → visible`.
     /// An element absent here follows its default.
     #[serde(default)]
@@ -139,10 +143,12 @@ mod tests {
             "theme": "classic",
             "dark_mode": false,
             "compact_nodes": true,
+            "colour_blind_status": true,
             "elements": { "runs.list.cost": true, "runs.list.ext.test:mark": false },
         });
         let document = parse(json.clone()).unwrap();
         assert_eq!(document.theme.as_deref(), Some("classic"));
+        assert_eq!(document.colour_blind_status, Some(true));
         assert_eq!(document.elements.len(), 2);
         assert_eq!(serde_json::to_value(&document).unwrap(), json);
     }
@@ -181,6 +187,7 @@ mod tests {
             serde_json::json!({ "version": 0 }),
             serde_json::json!({ "version": "1" }),
             serde_json::json!({ "version": 1, "dark_mode": "yes" }),
+            serde_json::json!({ "version": 1, "colour_blind_status": "on" }),
             serde_json::json!({ "version": 1, "theme": "" }),
             serde_json::json!({ "version": 1, "theme": "x".repeat(MAX_THEME + 1) }),
             serde_json::json!({ "version": 1, "elements": { "runs.list.cost": "hidden" } }),

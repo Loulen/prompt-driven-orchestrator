@@ -148,24 +148,29 @@
     background: var(--color-st-await);
   }
 
-  /* The select-all box of a group header: a hairline square, ruby when on. */
+  /* The select-all control of a group header, round like a row's: a neutral
+     14 px ring, a full 16 px round of the accent when on. */
   .lp-box {
     display: inline-grid;
     flex: none;
     place-items: center;
-    width: 12px;
-    height: 12px;
+    box-sizing: border-box;
+    width: 14px;
+    height: 14px;
     margin: 0 2px;
     padding: 0;
-    border: 1px solid var(--text-3);
-    border-radius: var(--radius-ui);
-    background: var(--surface-0);
+    border: 2px solid var(--text-3);
+    border-radius: 50%;
+    background: transparent;
     color: var(--primary-ink);
     cursor: pointer;
   }
   .lp-box[aria-checked="true"] {
-    border-color: var(--selected-edge);
-    background: var(--selected-edge);
+    width: 16px;
+    height: 16px;
+    margin: 0 1px;
+    border: 0;
+    background: var(--primary);
   }
 
   /* ---------------------------------------------------------------- rows */
@@ -317,29 +322,37 @@
     display: inline-grid;
     place-items: center;
   }
+  /* The select control, round (CONTEXT.md « Contrôle de sélection d'une liste »):
+     a 14 px ring of the status's colour while the row is hovered or some row is
+     ticked, a full 16 px round of the accent with its check once ticked. */
   .lp-mark__box {
     position: absolute;
     top: 50%;
     left: 50%;
     display: none;
     place-items: center;
-    width: 12px;
-    height: 12px;
-    border: 1px solid var(--text-2);
-    border-radius: var(--radius-ui);
-    background: var(--surface-0);
+    box-sizing: border-box;
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--mark-tone, var(--text-3));
+    border-radius: 50%;
+    background: transparent;
     color: var(--primary-ink);
     transform: translate(-50%, -50%);
   }
-  .lp-mark:is(:hover, :focus-visible, [data-selecting], [aria-checked="true"]) .lp-mark__glyph {
+  .lp-mark:is(:hover, :focus-visible, [data-selecting], [aria-checked="true"]) .lp-mark__glyph,
+  .lp-row:hover .lp-mark .lp-mark__glyph {
     visibility: hidden;
   }
-  .lp-mark:is(:hover, :focus-visible, [data-selecting], [aria-checked="true"]) .lp-mark__box {
+  .lp-mark:is(:hover, :focus-visible, [data-selecting], [aria-checked="true"]) .lp-mark__box,
+  .lp-row:hover .lp-mark .lp-mark__box {
     display: grid;
   }
   .lp-mark[aria-checked="true"] .lp-mark__box {
-    border-color: var(--selected-edge);
-    background: var(--selected-edge);
+    width: 16px;
+    height: 16px;
+    border: 0;
+    background: var(--primary);
   }
   .lp-mark:focus-visible {
     outline: 1px solid var(--focus-ring);

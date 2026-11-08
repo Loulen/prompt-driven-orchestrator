@@ -6,7 +6,7 @@
  *
  *  - **Boot** ({@link initAppearance}, before the first render): the local
  *    copy of this browser, painted on `<html>`. The theme script stamped the
- *    same Theme and mode already: no flash.
+ *    same Theme, mode and status palette already: no flash.
  *  - **The daemon** ({@link syncAppearance}, once the interface is admitted,
  *    and again on every resync): its document wins and becomes the local copy;
  *    an Actor with no document yet adopts this browser's values, written back
@@ -28,6 +28,7 @@ import {
   writeLocalCopy,
   type Appearance,
 } from "../lib/appearance";
+import { applyStatusPalette } from "../lib/statusPalette";
 import { applyThemeChoice } from "../lib/theme";
 import { fetchAppearance, saveAppearance } from "../settings/api/appearance";
 import { toast } from "../shared/ui/toast";
@@ -44,8 +45,14 @@ let unbindStorage: (() => void) | null = null;
 function publish(next: Appearance): void {
   if (sameAppearance(next, snapshot)) return;
   snapshot = next;
-  applyThemeChoice(snapshot);
+  paint(snapshot);
   for (const notify of listeners) notify();
+}
+
+/** The Theme, the mode and the status palette on `<html>`. */
+function paint(appearance: Appearance): void {
+  applyThemeChoice(appearance);
+  applyStatusPalette(appearance.colourBlindStatus);
 }
 
 function current(): Appearance {
@@ -65,7 +72,7 @@ export function initAppearance(): Appearance {
   unbindStorage = null;
   loaded = true;
   snapshot = readLocalCopy();
-  applyThemeChoice(snapshot);
+  paint(snapshot);
   for (const notify of listeners) notify();
   followOtherTabs();
   return snapshot;

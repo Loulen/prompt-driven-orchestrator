@@ -337,19 +337,27 @@ pub async fn maybe_complete_run(
     true
 }
 
-// ─ Liaison forte orchestrateur ↔ enfants (#724, ADR-0064) ────────────────────
+// ─ Liaison forte nœud parent ↔ enfants (#724, ADR-0064) ─────────────────────
 //
-// Le NodeRun d’un nœud « orchestrator » (toggle gelé au démarrage du Run,
-// `NodeDefInfo::orchestrator`) ne se termine pas pendant que ses runs enfants
-// (mêmes `parent_run_id` + `parent_node_id`, ADR-0064) sont non terminaux :
+// Le NodeRun de tout **nœud parent** — agent ou `script`, toggle Orchestrator
+// ou non : un nœud dont la session a créé au moins un run enfant non oublié
+// (mêmes `parent_run_id` + `parent_node_id`, ADR-0064) — ne se termine pas
+// pendant que ses runs enfants sont non terminaux. La liaison suit les enfants
+// RÉELS, jamais le toggle : le toggle n’ajoute que le skill `pdo-orchestrate`
+// et sa ligne d’invocation.
 //
-// - la **porte** ([`orchestrator_binding_refusal`]) refuse `pdo complete` tant
-//   que des enfants tournent, avec un message qui compte ; au moins un enfant
-//   `failed` parque le nœud `AwaitingUser` — l’agent a rendu la main, c’est
-//   l’utilisateur qui tranche (retry de l’enfant ou forçage `mark_node_done`,
-//   qui n’est PAS gated : c’est le forçage) — et pose le **pilote**
+// - la **porte** ([`parent_node_binding_refusal`]) refuse la complétion tant
+//   que des enfants tournent, avec un message qui compte et indique
+//   `pdo run wait --all` ; au moins un enfant `failed` parque le nœud
+//   `AwaitingUser` — l’agent a rendu la main, c’est l’utilisateur qui tranche
+//   (retry de l’enfant ou forçage `mark_node_done`, qui n’est PAS gated :
+//   c’est le forçage) — et pose le **pilote**
 //   ([`spawn_children_settled_watcher`]) qui complétera le nœud de lui-même
 //   quand tous les enfants seront terminaux — « le nœud se complète ».
+// - elle vaut pour TOUTES les sources de complétion qui passent par le corps
+//   commun (explicite, Stop hook, fin de tour, fin de `script`) : un `script`
+//   retenu n’échoue pas, sa queue bash reconnaît le refus `children_pending`
+//   et laisse le watcher compléter le nœud.
 //
 // Aucune propagation de mort vers le bas : la liaison ne fait que RETENIR le
 // parent ; stop du nœud, archive et forget du parent ne touchent aucun enfant,

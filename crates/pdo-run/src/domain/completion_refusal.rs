@@ -76,9 +76,10 @@ pub enum CompletionRefusal {
     AppendFailed {
         error: String,
     },
-    /// Liaison forte orchestrateur ↔ enfants (#724 / ADR-0064) : le nœud est
-    /// orchestrator (toggle gelé au démarrage du Run) et ses runs enfants (mêmes
-    /// `parent_run_id` + `parent_node_id`) ne sont pas tous terminaux. Le nœud
+    /// Liaison forte nœud parent ↔ enfants (#724 / ADR-0064) : le nœud est un
+    /// nœud parent (sa session a créé des runs enfants — mêmes `parent_run_id` +
+    /// `parent_node_id` —, toggle Orchestrator ou non) et ses runs enfants non
+    /// oubliés ne sont pas tous terminaux. Le nœud
     /// reste vivant : aucun événement terminal n'est appendé, la livraison n'a
     /// pas lieu. Avec au moins un enfant `failed`, le NodeRun est parqué
     /// `AwaitingUser` (le `NodeAwaitingUser` porte `reason: "children_pending"`)
@@ -217,18 +218,20 @@ impl CompletionRefusal {
 
 /// Le message « avec compteur » du refus de liaison (#724) : l'agent (et la
 /// surface) voient COMBIEN d'enfants retiennent encore le nœud, et lesquels
-/// réclament l'utilisateur.
+/// réclament l'utilisateur. Générique : il vaut pour tout nœud parent, ne parle
+/// jamais d'« orchestrator » et suffit à un agent qui n'a pas le skill
+/// `pdo-orchestrate`, puisqu'il nomme le geste d'attente, `pdo run wait --all`.
 fn children_pending_message(node_id: &str, active: usize, failed: usize) -> String {
     if failed > 0 {
         format!(
-            "orchestrator node `{node_id}` is held by its child runs: {active} active, \
-             {failed} failed — the node is awaiting the user: retry the failed child run or \
-             force-complete the node"
+            "node `{node_id}` is held by its child runs: {active} active, {failed} failed \
+             — the node is awaiting the user: retry the failed child run or force-complete \
+             the node"
         )
     } else {
         format!(
-            "orchestrator node `{node_id}` is held by its child runs: {active} active — \
-             complete again once every child run is terminal"
+            "node `{node_id}` is held by its child runs: {active} active — wait for them \
+             with `pdo run wait --all`, then complete again"
         )
     }
 }

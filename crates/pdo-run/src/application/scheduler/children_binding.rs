@@ -1,6 +1,9 @@
-//! The strong binding of an orchestrator node to its child runs (#724 /
-//! ADR-0064): the node does not terminate while a child is live, and a watcher
-//! lifts the marker once they have all settled.
+//! The strong binding of a parent node to its child runs (#724 / ADR-0064):
+//! any node whose session created a child run (agent or `script`, Orchestrator
+//! toggle or not) does not terminate while a child is live, and a watcher
+//! completes it once they have all settled. The binding reads the real
+//! children, never the toggle: the toggle only adds the `pdo-orchestrate`
+//! skill and announces a parent node.
 
 use crate::domain::{event, projection, state};
 use tracing::{error, info, warn};
@@ -14,7 +17,7 @@ use crate::domain::completion_refusal;
 use crate::Runs;
 
 /// Le marqueur que la porte pose sur le NodeRun au refus : un `NodeAwaitingUser`
-/// portant cette raison. C’est lui qui distingue « l’orchestrator a rendu la
+/// portant cette raison. C’est lui qui distingue « le nœud parent a rendu la
 /// main et attend ses enfants » d’un agent encore au travail (auquel on ne
 /// arrache jamais la main) et d’un nœud interactif simplement `AwaitingUser`.
 pub const BINDING_MARKER_REASON: &str = "children_pending";
@@ -30,8 +33,8 @@ pub struct ChildrenSnapshot {
 /// Le verdict de la liaison sur un [`ChildrenSnapshot`].
 #[derive(Debug, PartialEq, Eq)]
 pub enum ChildrenVerdict {
-    /// Aucun enfant : la liaison ne dit rien (un toggle sans spawn n’engage
-    /// rien — l’agent peut aussi n’avoir pas encore créé ses enfants).
+    /// Aucun enfant : la liaison ne dit rien — le nœud n’est pas (encore) un
+    /// nœud parent, il se complète comme avant, toggle ou non.
     NoChildren,
     /// Tous les enfants sont terminaux, aucun n’est `failed` : le nœud peut
     /// se compléter.
@@ -67,11 +70,24 @@ impl ChildrenSnapshot {
 /// Lit les runs enfants du nœud `node_id` du Run `run_id` : tout Run dont le
 /// `RunStarted` mécanique porte ces deux valeurs de provenance. Recharge tout
 /// à chaque appel — c’est ce qui rend la ré-adoption au restart gratuite.
+///
+/// La porte lit les enfants de TOUT nœud à chaque complétion : la lecture part
+/// donc des seuls candidats (les `RunStarted` qui portent cette provenance, une
+/// requête), de sorte qu’un nœud sans enfant, le cas courant, ne rejoue aucun
+/// Run. Si la requête échoue, repli sur la liste de tous les Runs : plus lent,
+/// jamais faux.
 pub async fn children_snapshot(state: &Runs, run_id: &str, node_id: &str) -> ChildrenSnapshot {
     let mut snapshot = ChildrenSnapshot::default();
-    let Ok(run_ids) = load_all_run_ids(state).await else {
-        error!("binding: failed to list runs for children of {node_id} in {run_id}");
-        return snapshot;
+    let run_ids = match state.store().child_run_ids(run_id, node_id).await {
+        Ok(ids) => ids,
+        Err(e) => {
+            warn!("binding: indexed child lookup failed for {node_id} in {run_id} ({e}); scanning");
+            let Ok(ids) = load_all_run_ids(state).await else {
+                error!("binding: failed to list runs for children of {node_id} in {run_id}");
+                return snapshot;
+            };
+            ids
+        }
     };
     for child_id in run_ids {
         if child_id == run_id {
@@ -105,25 +121,21 @@ pub async fn children_snapshot(state: &Runs, run_id: &str, node_id: &str) -> Chi
     snapshot
 }
 
-/// La porte de complétion de la liaison forte. `None` ⇒ la complétion peut
-/// continuer ; `Some(refusal)` ⇒ refus avec compteur, marqueur d’attente posé
-/// (nœud parqué `AwaitingUser`) et pilote détaché (le watcher).
-pub async fn orchestrator_binding_refusal(
+/// La porte de complétion de la liaison forte, pour tout **nœud parent** : elle
+/// ne lit pas le toggle Orchestrator mais les enfants réels du nœud, de sorte
+/// qu’un nœud sans enfant (ou dont tous les enfants sont oubliés, ou terminaux
+/// sans échec) passe. Elle tient toutes les sources de complétion qui passent
+/// par le corps commun : `pdo complete`, auto-complétion de fin de tour, fin
+/// d’un `script`. `None` ⇒ la complétion peut continuer ; `Some(refusal)` ⇒
+/// refus avec compteur, marqueur d’attente posé (nœud parqué `AwaitingUser`)
+/// et pilote détaché (le watcher).
+pub async fn parent_node_binding_refusal(
     state: &std::sync::Arc<Runs>,
     events: &[event::Event],
-    run_state: &state::RunState,
     run_id: &str,
     node_id: &str,
     iter: i64,
 ) -> Option<completion_refusal::CompletionRefusal> {
-    // Nœud sans toggle : aucune retenue — le comportement est inchangé.
-    if !run_state
-        .node_defs
-        .iter()
-        .any(|nd| nd.id == node_id && nd.orchestrator)
-    {
-        return None;
-    }
     let snapshot = children_snapshot(state, run_id, node_id).await;
     let ChildrenVerdict::Pending { active, failed } = snapshot.verdict() else {
         return None;
@@ -194,7 +206,7 @@ pub fn spawn_children_settled_watcher(
 ) {
     tokio::spawn(async move {
         // Backoff : réactif au début (les tests comme les humains attendent un
-        // enfant qui vient de se terminer), économe ensuite (un orchestrator
+        // enfant qui vient de se terminer), économe ensuite (un nœud parent
         // peut attendre des enfants pendant des heures — c’est le contrat).
         let mut delay = std::time::Duration::from_millis(250);
         loop {
@@ -237,7 +249,7 @@ pub fn spawn_children_settled_watcher(
             }
 
             info!(
-                "binding: every child run of orchestrator {node_id} iter-{iter} in run \
+                "binding: every child run of parent node {node_id} iter-{iter} in run \
                  {run_id} is terminal — completing the node"
             );
             match crate::application::complete_node::complete_node_iteration(
@@ -251,7 +263,7 @@ pub fn spawn_children_settled_watcher(
             {
                 crate::application::complete_node::CompletionAttempt::Completed => {
                     info!(
-                        "binding: orchestrator {node_id} completed in run {run_id} \
+                        "binding: parent node {node_id} completed in run {run_id} \
                          (children settled)"
                     );
                 }
@@ -275,7 +287,7 @@ pub fn spawn_children_settled_watcher(
 }
 
 /// Le marqueur `children_pending` est-il déjà posé sur cette itération ?
-pub(super) fn binding_marker_present(events: &[event::Event], node_id: &str, iter: i64) -> bool {
+pub(crate) fn binding_marker_present(events: &[event::Event], node_id: &str, iter: i64) -> bool {
     events.iter().any(|e| {
         e.kind == event::EventKind::NodeAwaitingUser
             && e.node_id.as_deref() == Some(node_id)

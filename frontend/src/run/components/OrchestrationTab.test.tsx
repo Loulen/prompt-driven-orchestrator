@@ -56,7 +56,7 @@ describe("OrchestrationTab with a stalled child (#783)", () => {
     render(
       <>
         <ChildCountPills counts={counts} size="xs" testId="tab-child-pills" />
-        <OrchestrationTab childRuns={children} counts={counts} nodeLive nodeAwaiting={false} onOpenChild={() => {}} />
+        <OrchestrationTab childRuns={children} nodeLive onOpenChild={() => {}} />
       </>,
     );
     expect(screen.getByTestId("tab-child-pills-stale")).toHaveTextContent("1");
@@ -66,7 +66,7 @@ describe("OrchestrationTab with a stalled child (#783)", () => {
   it("lists the children under no line of explanation, live children included", () => {
     const children = [child("a"), child("b", { stalled: true })];
     render(
-      <OrchestrationTab childRuns={children} counts={countChildren(children)} nodeLive nodeAwaiting={false} onOpenChild={() => {}} />,
+      <OrchestrationTab childRuns={children} nodeLive onOpenChild={() => {}} />,
     );
     expect(screen.queryByText(/completes when/i)).toBeNull();
   });
@@ -78,9 +78,7 @@ describe("OrchestrationTab with an awaiting child (#588)", () => {
     render(
       <OrchestrationTab
         childRuns={children}
-        counts={countChildren(children)}
         nodeLive
-        nodeAwaiting
         onOpenChild={() => {}}
       />,
     );

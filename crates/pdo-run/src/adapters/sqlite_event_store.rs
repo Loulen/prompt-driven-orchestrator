@@ -230,6 +230,24 @@ pub async fn has_children(db: &sqlx::SqlitePool, run_id: &str) -> bool {
     .unwrap_or(true)
 }
 
+/// The Runs started from the session of `node_id` in `run_id`: one indexed
+/// read of the `run_started` events that carry this provenance (ADR-0064).
+pub async fn child_run_ids(
+    db: &sqlx::SqlitePool,
+    run_id: &str,
+    node_id: &str,
+) -> Result<Vec<String>> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT run_id FROM events WHERE kind = 'run_started' \
+         AND json_extract(payload, '$.parent_run_id') = ? \
+         AND json_extract(payload, '$.parent_node_id') = ?",
+    )
+    .bind(run_id)
+    .bind(node_id)
+    .fetch_all(db)
+    .await?)
+}
+
 #[derive(sqlx::FromRow)]
 struct EventRow {
     id: i64,
@@ -297,6 +315,14 @@ impl EventStore for SqliteEventStore {
 
     fn has_children<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, bool> {
         Box::pin(has_children(&self.db, run_id))
+    }
+
+    fn child_run_ids<'a>(
+        &'a self,
+        run_id: &'a str,
+        node_id: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<String>>> {
+        Box::pin(child_run_ids(&self.db, run_id, node_id))
     }
 
     fn forget<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Result<()>> {
@@ -426,6 +452,40 @@ mod tests {
             .unwrap();
         assert!(store.has_children("parent").await);
         assert!(!store.has_children("child").await);
+    }
+
+    #[tokio::test]
+    async fn the_children_of_a_node_are_the_runs_started_from_its_session() {
+        let store = store().await;
+        let started = |run_id: &str, node: &str| {
+            event(
+                run_id,
+                EventKind::RunStarted,
+                Some(serde_json::json!({ "parent_run_id": "parent", "parent_node_id": node })),
+            )
+        };
+        for e in [
+            started("child-a", "worker"),
+            started("child-b", "worker"),
+            started("other", "reviewer"),
+        ] {
+            store.append(&e).await.unwrap();
+        }
+        let port: &dyn EventStore = &store;
+        let mut ids = port.child_run_ids("parent", "worker").await.unwrap();
+        ids.sort();
+        assert_eq!(ids, vec!["child-a", "child-b"]);
+        assert!(port
+            .child_run_ids("parent", "nobody")
+            .await
+            .unwrap()
+            .is_empty());
+        // A forgotten child leaves the node: its log is gone.
+        port.forget("child-b").await.unwrap();
+        assert_eq!(
+            port.child_run_ids("parent", "worker").await.unwrap(),
+            vec!["child-a"]
+        );
     }
 
     #[tokio::test]

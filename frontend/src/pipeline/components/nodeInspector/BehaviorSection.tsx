@@ -110,15 +110,18 @@ export default function BehaviorSection({
       )}
 
       {/* #723/ADR-0064: the « Orchestrator » toggle — agent nodes only (a
-          script runs no agent). Turning it on seeds the `pdo-orchestrate`
-          skill; the daemon files the fixed /pdo-orchestrate line at spawn. The toggle
+          script runs no agent). Any node may create child runs and gets the
+          orchestration UI from its real children; the toggle only announces a
+          parent node (Orchestration tab from the start) and seeds the
+          `pdo-orchestrate` skill; the daemon files the fixed /pdo-orchestrate
+          line at spawn. The toggle
           is the single source of intent: removing the skill by hand keeps it on
           and warns, with a one-click re-add. */}
       {!isScript && (
         <>
           <FormRow
             label="Orchestrator"
-            help="May start child runs · adds the pdo-orchestrate skill"
+            help="Any node can create child runs (pdo run create). This toggle adds the pdo-orchestrate skill and shows the Orchestration tab from the start. Frozen once the NodeRun spawns."
             aside={orchestratorFrozen ? <FrozenMark title="Frozen at spawn: an edit applies to the next NodeRun" /> : undefined}
           >
             <Toggle

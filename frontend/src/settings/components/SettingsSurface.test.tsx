@@ -1599,7 +1599,7 @@ describe("SettingsSurface — Settings › Appearance", () => {
     fetchSettingsMock.mockResolvedValue(sample());
     openAppearance();
     const block = await screen.findByTestId("appearance-block-run-canvas");
-    expect(block).toHaveTextContent("Always shown: Type icon, name, status, child runs of an orchestrator");
+    expect(block).toHaveTextContent("Always shown: Type icon, name, status, child runs of a parent node");
     const preview = within(block).getByTestId("appearance-preview-run-canvas");
     expect(preview).not.toHaveAttribute("data-compact");
     const toggle = within(within(block).getByTestId("setting-row-compact-nodes")).getByRole("switch", { name: "Compact nodes" });

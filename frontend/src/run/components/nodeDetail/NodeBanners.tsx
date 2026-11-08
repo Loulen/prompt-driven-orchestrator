@@ -40,6 +40,9 @@ export default function NodeBanners({
   terminalSpectating,
   onShowApprove,
   onOpenChildRun,
+  onOpenOrchestration,
+  failedChildren = 0,
+  failedChildId = null,
   killStale,
   restartIteration,
   retry,
@@ -56,6 +59,11 @@ export default function NodeBanners({
   /** Approve ▾ is on the panel: « Show Approve » brings it to the screen and rings it. */
   onShowApprove?: () => void;
   onOpenChildRun?: (childRunId: string) => void;
+  /** A parent node: the waiting banner's Open Orchestration switches to the tab. */
+  onOpenOrchestration?: () => void;
+  /** The node's failed child runs, read live, and the first of them. */
+  failedChildren?: number;
+  failedChildId?: string | null;
   killStale: () => void;
   restartIteration: () => void;
   retry: () => void;
@@ -84,6 +92,9 @@ export default function NodeBanners({
           terminalSpectating={terminalSpectating}
           onShowApprove={onShowApprove}
           onOpenChildRun={onOpenChildRun}
+          onOpenOrchestration={onOpenOrchestration}
+          failedChildren={failedChildren}
+          failedChildId={failedChildId}
         />
       )}
 

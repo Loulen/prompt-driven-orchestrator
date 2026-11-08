@@ -389,6 +389,9 @@ mod runs_list_target_repo;
 #[path = "run_provenance.rs"]
 mod run_provenance;
 
+#[path = "run_tree_cost.rs"]
+mod run_tree_cost;
+
 #[path = "orchestrator_binding.rs"]
 mod orchestrator_binding;
 

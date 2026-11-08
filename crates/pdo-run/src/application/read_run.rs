@@ -4,12 +4,14 @@ use std::sync::Arc;
 
 use crate::application::ports::{EventStore, LiveFacts, ManagerSessions};
 use crate::application::projections::overlay_child_awaiting;
+use crate::application::tree_cost::TreeCosts;
 use crate::domain::event::Event;
 use crate::domain::projection::project;
 use crate::domain::state::RunState;
 
 /// A Run's detail: its projection, overlaid and filled with what the disk
-/// says, the events it was folded from, and what is observed live.
+/// says (its tree cost included), the events it was folded from, and what is
+/// observed live.
 #[derive(Debug, Clone)]
 pub struct RunDetail {
     pub state: RunState,
@@ -53,6 +55,13 @@ impl ReadRun {
         };
         overlay_child_awaiting(self.store.as_ref(), &mut state).await;
         self.live_facts.fill(&mut state, &events).await;
+        state.tree_cost = TreeCosts::of_run(
+            self.store.as_ref(),
+            self.live_facts.as_ref(),
+            run_id,
+            state.cost.clone(),
+        )
+        .await;
         let has_manager = self.managers.exists(run_id);
         Ok(Some(RunDetail {
             state,

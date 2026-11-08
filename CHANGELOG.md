@@ -13,6 +13,24 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+### Tree cost: what an orchestration really cost
+
+- A Run that launched child runs shows its tree cost in Run info: the "Est. cost" cell reads the
+  Run's own cost plus every descendant's (archived ones included), followed by "⑂ N", the number
+  of descendants. Its tooltip breaks it into "Parent run" and "Child runs (N)", and into each
+  depth when the tree is deeper than one level. A descendant whose cost cannot be computed turns
+  the total into "—" and says how many runs are missing, the known parts kept; a lower-bound
+  descendant makes the tree a lower bound (†). A Run without child runs shows its cost as before.
+- The Orchestration tab shows each child's tree cost, with a "⑂ N" chip on a child that has
+  child runs of its own; Σ sums the children's tree costs, and a "Tree cost" line under it gives
+  the Run's total, parent run plus child runs.
+- `GET /runs/{id}` carries an additive `tree_cost` (total, parent, children, descendants,
+  by depth) for a Run that has descendants, and each entry of `GET /runs/{id}/children` its own.
+  For extensions, `RunCost` gains `tree` (`RunTreeCost`: total, parent, children, descendants,
+  by depth), read by `Host::run_cost`.
+
 ## 2.74.0
 
 ### Approve ▾ beyond the node panel: enlarged terminal, command field, tour

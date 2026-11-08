@@ -5,6 +5,7 @@ import type { HarnessCost } from "../../shared/generated/HarnessCost";
 import type { RunStatus } from "../../shared/generated/RunStatus";
 import type { RunState } from "../../shared/generated/RunState";
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
+import type { TreeCost } from "../../shared/generated/TreeCost";
 import { isLiveRun } from "./runStatus";
 import { formatEstCost } from "./costLabel";
 import type { WsMessage } from "./liveStream";
@@ -34,6 +35,9 @@ export interface RunChildEntry {
     uncosted_harnesses?: string[];
     by_harness?: HarnessCost[];
   };
+  /** The child's Coût de l'arbre when it has children of its own (its cost
+   *  plus its descendants'); absent otherwise: its tree cost is `cost`. */
+  tree_cost?: TreeCost;
 }
 
 export interface RunChildrenGroup {
@@ -106,6 +110,16 @@ export function childCostKnown(cost?: RunChildEntry["cost"]): number | null {
   if ((cost.uncosted_harnesses?.length ?? 0) > 0) return null;
   if (cost.usd === 0 && (cost.by_harness ?? []).length === 0) return null;
   return cost.usd;
+}
+
+/**
+ * The cost an Orchestration row shows for a child: its **tree cost** when it
+ * has descendants, its own cost otherwise. A tree total the daemon refused
+ * (`null`) reads as unavailable (`undefined`, so « — »).
+ */
+export function childTreeCost(child: RunChildEntry): RunChildEntry["cost"] {
+  if (child.tree_cost) return child.tree_cost.total ?? undefined;
+  return child.cost;
 }
 
 /** How often the children are read while the event stream is down. */

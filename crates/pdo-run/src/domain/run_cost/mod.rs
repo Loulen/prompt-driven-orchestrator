@@ -3,6 +3,7 @@
 //! the identity that tells two executions apart. The files it is read from are
 //! the adapters' (`adapters/run_cost/`); this is the shape and the arithmetic.
 
+pub mod tree;
 pub mod usage;
 
 use crate::domain::state::{CostForm, CostStat};

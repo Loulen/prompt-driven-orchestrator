@@ -22,6 +22,7 @@ import type { SkillRef } from "./SkillRef";
 import type { SourceFetchError } from "./SourceFetchError";
 import type { StartNodeInfo } from "./StartNodeInfo";
 import type { SwitchState } from "./SwitchState";
+import type { TreeCost } from "./TreeCost";
 
 export type ProjectedRunState = { run_id: string, status: RunStatus, pipeline_name: string, name?: string, input: string | null, 
 /**
@@ -323,4 +324,8 @@ loc?: LocStat,
  * persisted; see [`CostStat`]. More durable than `loc`: archival leaves
  * `~/.claude/projects/` intact, so an archived Run keeps its cost.
  */
-cost?: CostStat, };
+cost?: CostStat, 
+/**
+ * The Coût de l'arbre, read by the detail; absent without descendant.
+ */
+tree_cost?: TreeCost, };

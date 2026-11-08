@@ -1003,6 +1003,38 @@ impl TestDaemon {
             .await;
     }
 
+    /// Seed a started child Run of `parent_run_id`, created from its
+    /// `parent_node_id` session, working in `target_repo`, nothing on disk.
+    pub async fn seed_child_run_in(
+        &self,
+        run_id: &str,
+        pipeline_name: &str,
+        target_repo: &str,
+        parent_run_id: &str,
+        parent_node_id: &str,
+    ) {
+        self.handle
+            .as_ref()
+            .expect("daemon handle")
+            .seed_child_run_in(
+                run_id,
+                pipeline_name,
+                target_repo,
+                parent_run_id,
+                parent_node_id,
+            )
+            .await;
+    }
+
+    /// Seed the archival of `run_id`, nothing on disk.
+    pub async fn seed_run_archived(&self, run_id: &str) {
+        self.handle
+            .as_ref()
+            .expect("daemon handle")
+            .seed_run_archived(run_id)
+            .await;
+    }
+
     /// Open a WebSocket connection to `/ws`, as the caller the test extension
     /// identifies by `actor` (its `x-pdo-test-actor` header).
     pub async fn connect_ws_as(

@@ -211,6 +211,59 @@ impl DaemonHandle {
         .await;
     }
 
+    /// Seed a `run_started` event of a child Run of `parent_run_id`, created
+    /// from its `parent_node_id` session, working in `target_repo`: a tree of
+    /// Runs without spawning any session (the tree cost, ADR
+    /// draft-cout-de-l-arbre).
+    #[doc(hidden)]
+    pub async fn seed_child_run_in(
+        &self,
+        run_id: &str,
+        pipeline_name: &str,
+        target_repo: &str,
+        parent_run_id: &str,
+        parent_node_id: &str,
+    ) {
+        let _ = pdo_run::application::events::append_event(
+            &self.run,
+            &Event {
+                id: None,
+                run_id: run_id.to_string(),
+                ts: pdo_kernel::clock::now_iso(),
+                kind: EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({
+                    "pipeline_name": pipeline_name,
+                    "input": "seeded input",
+                    "target_repo": target_repo,
+                    "parent_run_id": parent_run_id,
+                    "parent_node_id": parent_node_id,
+                })),
+            },
+        )
+        .await;
+    }
+
+    /// Seed the archival of `run_id` (`run_archived`), without touching the
+    /// disk: an archived Run the reads still hold.
+    #[doc(hidden)]
+    pub async fn seed_run_archived(&self, run_id: &str) {
+        let _ = pdo_run::application::events::append_event(
+            &self.run,
+            &Event {
+                id: None,
+                run_id: run_id.to_string(),
+                ts: pdo_kernel::clock::now_iso(),
+                kind: EventKind::RunArchived,
+                node_id: None,
+                iter: None,
+                payload: None,
+            },
+        )
+        .await;
+    }
+
     /// Seed a `run_started` event whose payload carries **no** `target_repo` — a
     /// legacy Run record. Same rationale as
     /// [`Self::seed_legacy_trigger_without_target_repo`]: `POST /runs` refuses

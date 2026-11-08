@@ -1,5 +1,6 @@
 //! A Run as an extension sees it (API 0.12): who has it open (its
-//! [`Presence`]s) and what it cost ([`RunCost`]), read through the
+//! [`Presence`]s) and what it cost ([`RunCost`], its tree of child Runs
+//! included), read through the
 //! [`Host`](crate::Host) or announced on the bus.
 
 use std::future::Future;
@@ -58,6 +59,68 @@ pub struct RunCost {
     /// why `usd` is unknown.
     #[serde(default)]
     pub uncosted_harnesses: Vec<String>,
+    /// The **Coût de l'arbre** of a Run that has child Runs: this cost (the
+    /// Coût du Run parent) plus every descendant's own, archived ones
+    /// included. `None` for a Run without child Run, and on the costs inside
+    /// a [`RunTreeCost`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tree: Option<Box<RunTreeCost>>,
+}
+
+/// The tree cost of a Run that has child Runs, as its Info tab shows it:
+/// the total, then « Parent run » and « Child runs (N) », and the descendants
+/// per depth. Each amount follows the rules of a [`RunCost`]: one descendant
+/// without a cost makes every sum it belongs to unknown, one lower bound makes
+/// them lower bounds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct RunTreeCost {
+    /// The parent Run and every descendant.
+    pub total: RunCost,
+    /// The parent Run alone: the same amount as the [`RunCost`] carrying it.
+    pub parent: RunCost,
+    /// Every descendant, every depth.
+    pub children: RunCost,
+    /// How many descendants, every depth.
+    pub descendants: u32,
+    /// The descendants per depth, the direct children (depth 1) first.
+    #[serde(default)]
+    pub by_depth: Vec<RunDepthCost>,
+}
+
+impl RunTreeCost {
+    pub fn new(total: RunCost, parent: RunCost, children: RunCost, descendants: u32) -> Self {
+        Self {
+            total,
+            parent,
+            children,
+            descendants,
+            by_depth: Vec::new(),
+        }
+    }
+
+    /// The same tree, with its descendants per depth.
+    pub fn by_depth(mut self, depths: impl IntoIterator<Item = RunDepthCost>) -> Self {
+        self.by_depth = depths.into_iter().collect();
+        self
+    }
+}
+
+/// One depth of a Run's tree: 1 is the direct children, 2 the grandchildren.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct RunDepthCost {
+    pub depth: u32,
+    /// How many Runs sit at this depth.
+    pub runs: u32,
+    /// Their summed cost.
+    pub cost: RunCost,
+}
+
+impl RunDepthCost {
+    pub fn new(depth: u32, runs: u32, cost: RunCost) -> Self {
+        Self { depth, runs, cost }
+    }
 }
 
 impl RunCost {
@@ -68,6 +131,7 @@ impl RunCost {
             partial: false,
             unpriced_models: Vec::new(),
             uncosted_harnesses: Vec::new(),
+            tree: None,
         }
     }
 
@@ -78,6 +142,7 @@ impl RunCost {
             partial: false,
             unpriced_models: Vec::new(),
             uncosted_harnesses: Vec::new(),
+            tree: None,
         }
     }
 
@@ -85,6 +150,12 @@ impl RunCost {
     pub fn without_prices_for(mut self, models: impl IntoIterator<Item = String>) -> Self {
         self.unpriced_models = models.into_iter().collect();
         self.partial = !self.unpriced_models.is_empty();
+        self
+    }
+
+    /// The same cost, for a Run whose child Runs cost `tree`.
+    pub fn with_tree(mut self, tree: RunTreeCost) -> Self {
+        self.tree = Some(Box::new(tree));
         self
     }
 
@@ -126,13 +197,24 @@ mod tests {
     }
 
     #[test]
-    fn a_cost_says_when_it_is_a_lower_bound_or_unknown() {
+    fn a_cost_says_when_it_is_a_lower_bound_or_unknown_and_what_its_tree_costs() {
         let partial = RunCost::new(1.5).without_prices_for(["mystery".to_string()]);
         assert_eq!(partial.usd, Some(1.5));
         assert!(partial.partial);
         let unknown = RunCost::new(1.5).uncosted_by(["opencode".to_string()]);
         assert_eq!(unknown.usd, None);
         assert_eq!(unknown.uncosted_harnesses, ["opencode"]);
+        let tree = RunCost::new(0.8).with_tree(
+            RunTreeCost::new(RunCost::new(4.2), RunCost::new(0.8), RunCost::new(3.4), 4)
+                .by_depth([RunDepthCost::new(1, 3, RunCost::new(2.1))]),
+        );
+        let json = serde_json::to_value(&tree).unwrap();
+        assert_eq!(json["tree"]["total"]["usd"], 4.2);
+        assert_eq!(json["tree"]["children"]["usd"], 3.4);
+        assert_eq!(json["tree"]["descendants"], 4);
+        assert_eq!(json["tree"]["by_depth"][0]["runs"], 3);
+        assert!(json["tree"]["parent"].get("tree").is_none());
+        assert_eq!(serde_json::from_value::<RunCost>(json).unwrap(), tree);
         assert_eq!(
             serde_json::to_value(RunCost::unknown()).unwrap(),
             serde_json::json!({

@@ -392,4 +392,8 @@ pub struct RunState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub cost: Option<CostStat>,
+    /// The Coût de l'arbre, read by the detail; absent without descendant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tree_cost: Option<TreeCost>,
 }

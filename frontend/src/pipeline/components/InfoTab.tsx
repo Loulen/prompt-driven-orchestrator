@@ -9,6 +9,7 @@ import type { RunState } from "../../shared/generated/RunState";
 import { isLiveRun } from "../../run/model/runStatus";
 import { formatDuration, useRunDuration } from "../../run/model/runDuration";
 import { formatEstCost } from "../../run/model/costLabel";
+import { TreeCostCell } from "./RunStatsTreeCost";
 import { waitingForStartedNodesLabel } from "../../run/model/nodePlay";
 import { Banner, Chip, KeyValue, Section, StatusIcon, type KeyValueRow } from "../../shared/ui/kit";
 import type { EditorPipelineDef } from "../model/pipeline";
@@ -129,7 +130,8 @@ function RunStats({ run, onOpenDiff, marks }: { run: RunState; onOpenDiff: () =>
           )}
         </Stat>
       )}
-      {estCost && (
+      {estCost && run.tree_cost && <TreeCostCell tree={run.tree_cost} marks={estCost} />}
+      {estCost && !run.tree_cost && (
         <Stat icon={Coins} label="Est. cost" title={cost?.title ?? "Est. cost"} testid="stat-cost" marks={estCost}>
           {cost ? (
             <span title={cost.title}>

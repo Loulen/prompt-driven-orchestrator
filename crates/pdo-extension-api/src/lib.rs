@@ -91,7 +91,9 @@ pub use node_write::{
 };
 pub use operation::{Operation, ResourceKind, Verb};
 pub use run_creation::{ExtensionData, NewRun, RunCreation, RunNotCreated, RunRepo};
-pub use run_view::{Presence, RunCost, RunCostRead, PRESENCE_ARRIVED, PRESENCE_LEFT};
+pub use run_view::{
+    Presence, RunCost, RunCostRead, RunDepthCost, RunTreeCost, PRESENCE_ARRIVED, PRESENCE_LEFT,
+};
 pub use session::{
     SessionChange, SessionEvent, SessionKind, SessionLaunch, SessionRef, SESSION_ENDED,
     SESSION_STARTED, SESSION_TAKEN_OVER,

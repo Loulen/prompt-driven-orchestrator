@@ -22,6 +22,7 @@ import type { SkillRef } from "./SkillRef";
 import type { SourceFetchError } from "./SourceFetchError";
 import type { StartNodeInfo } from "./StartNodeInfo";
 import type { SwitchState } from "./SwitchState";
+import type { TreeCost } from "./TreeCost";
 
 /**
  * The TypeScript shape of `GET /runs/{id}`: the projected [`RunState`] plus what
@@ -328,4 +329,8 @@ loc?: LocStat,
  * persisted; see [`CostStat`]. More durable than `loc`: archival leaves
  * `~/.claude/projects/` intact, so an archived Run keeps its cost.
  */
-cost?: CostStat, };
+cost?: CostStat, 
+/**
+ * The Coût de l'arbre, read by the detail; absent without descendant.
+ */
+tree_cost?: TreeCost, };

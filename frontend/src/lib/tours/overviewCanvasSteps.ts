@@ -157,6 +157,11 @@ export const CANVAS_STEPS: TourStep[] = [
     // Closing the viewer destroys the target — the condition is read first, so
     // that is the step done, not a missing target (`observeTour`).
     done: (o) => !o.present(CODE_VIEWER),
+    // That condition holds for good once the viewer is closed, but « close it »
+    // only makes sense with the viewer open: `Previous` from the terminal step
+    // is greyed out rather than replaying it over a viewer that is gone
+    // (CONTEXT.md § « Rejeu d'étape »).
+    replayNeedsTarget: true,
   },
   {
     id: "terminal",

@@ -126,6 +126,12 @@ export function currentStep(tour: TourDef, run: TourRun): TourStep | null {
   return tour.steps[run.index] ?? null;
 }
 
+/** Is every one of the step's targets on screen right now? None at all counts as missing. */
+export function targetOnScreen(step: TourStep, o: TourObservation): boolean {
+  const selectors = step.target(o);
+  return selectors.length > 0 && selectors.every((s) => o.present(s));
+}
+
 /** Is the step's condition satisfied right now? Drives `Next`'s enabled state. */
 export function isStepDone(step: TourStep, o: TourObservation): boolean {
   return step.done ? step.done(o) : false;
@@ -217,6 +223,41 @@ export function skipStep(tour: TourDef, run: TourRun, o: TourObservation): TourR
 }
 
 /**
+ * May `Previous` **replay** the step before this one (CONTEXT.md § « Rejeu
+ * d'étape »)?
+ *
+ * Only while a step is running, from step 2 on: the intro card, the stop card and
+ * the end card have no step to go back to, and step 1 has nothing before it (a
+ * Full tour's legs are independent: there is no going back into the previous
+ * tour). The previous step must be **replayable**: its condition still holds, or
+ * every one of its targets is on screen (only the latter for a step flagged
+ * {@link TourStep.replayNeedsTarget}). Otherwise it would come back pointing at
+ * nothing and stop the tour on a failure card, which `Previous` must never do. A
+ * step the app is refusing right now is not replayable either, for the same
+ * reason. The tour undoes nothing to get there (ADR-0071 §2).
+ */
+export function canGoBack(tour: TourDef, run: TourRun, o: TourObservation): boolean {
+  if (run.phase !== "running" || run.index < 1) return false;
+  const previous = tour.steps[run.index - 1];
+  if (!previous) return false;
+  if (previous.refused?.(o)) return false;
+  if (!previous.replayNeedsTarget && isStepDone(previous, o)) return true;
+  return targetOnScreen(previous, o);
+}
+
+/**
+ * The `Previous` button: re-enter the step before by the same path as advancing
+ * (`satisfiedOnEntry` recomputed, `missingSince` and `failure` reset). A replayed
+ * step whose condition holds is shown again and waits for `Next`; one that does
+ * not is live and advances on its own gesture. No state is added to the run: no
+ * « furthest step », no review mode. Does nothing when {@link canGoBack} says no.
+ */
+export function goBack(tour: TourDef, run: TourRun, o: TourObservation): TourRun {
+  if (!canGoBack(tour, run, o)) return run;
+  return enterStep(tour, run.index - 1, o);
+}
+
+/**
  * One tick. The hook calls this on an interval and on every scroll/resize; it is
  * pure, so calling it more often only costs a comparison.
  *
@@ -268,9 +309,7 @@ export function observeTour(tour: TourDef, run: TourRun, o: TourObservation, now
     return goNext(tour, cleared, o);
   }
 
-  const selectors = step.target(o);
-  const present = selectors.length > 0 && selectors.every((s) => o.present(s));
-  if (present) return run.missingSince === null ? run : { ...run, missingSince: null };
+  if (targetOnScreen(step, o)) return run.missingSince === null ? run : { ...run, missingSince: null };
 
   const timeout = step.targetTimeoutMs === undefined ? DEFAULT_TARGET_TIMEOUT_MS : step.targetTimeoutMs;
   const missingSince = run.missingSince ?? now;

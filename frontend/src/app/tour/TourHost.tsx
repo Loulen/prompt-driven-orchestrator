@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import Projecteur from "./Projecteur";
 import { toCssRect } from "../../shared/ui/zoom";
 import TourPopover, { TourAside } from "./TourPopover";
@@ -14,8 +14,9 @@ import type { TourController } from "../../hooks/tour/tourView";
  * component ever learns that tours exist (acceptance criterion « Aucune logique de
  * tour dans les composants existants »).
  *
- * It owns three things the machine has no opinion about: the Escape key, the
- * four-second notice after a quit, and the welcome modal's three answers.
+ * It owns three things the machine has no opinion about: the keyboard (Escape,
+ * and ← / → for Previous / Next), the four-second notice after a quit, and the
+ * welcome modal's three answers.
  */
 
 interface Props {
@@ -48,6 +49,72 @@ const ESC_OWNERS =
 const ESC_TARGET_OWNERS = '[data-testid="tmux-terminal"]';
 
 /**
+ * Where ← / → belong to whatever has the focus, not to the tour (CONTEXT.md §
+ * « Rejeu d'étape »): a field moves its caret, the terminal sends the key to the
+ * agent, a node or an edge of the canvas is nudged by it. The same surfaces that
+ * keep their Escape, plus the widgets whose arrows are their own navigation: a
+ * radio group, a tab strip, a slider, a list's options, a menu's items, the Run
+ * tree of the left panel.
+ */
+const ARROW_TARGET_OWNERS = [
+  "input",
+  "textarea",
+  "select",
+  '[contenteditable]:not([contenteditable="false"])',
+  ESC_TARGET_OWNERS,
+  // The whole canvas: its nodes and edges, its zoom controls and minimap. A
+  // click on the empty pane takes no focus, so this costs the tour nothing.
+  ".react-flow",
+  // A Run row walks the Run tree with ← / →, but only claims the key when it
+  // does something: on a row with nothing to open or close, the tour would
+  // otherwise move under a reader who meant the list.
+  "[data-run-row]",
+  '[role="radio"]',
+  '[role="tab"]',
+  '[role="slider"]',
+  '[role="listbox"]',
+  '[role="option"]',
+  '[role="menuitem"]',
+  '[role="menuitemcheckbox"]',
+  '[role="menuitemradio"]',
+  '[role="treeitem"]',
+].join(", ");
+
+/**
+ * Surfaces that own ← / → **while they are up**, wherever the focus is: an open
+ * menu, dropdown or combobox list walks its options with them, and the artifact
+ * viewer and the image lightbox page through files and iterations, on `window`,
+ * so the tour could not tell their keystroke from its own. Open popups only: a
+ * list that is always on screen (the Stats master list) keeps its arrows through
+ * the focus, above, and leaves them to the tour otherwise.
+ */
+const ARROW_OWNERS =
+  '[role="menu"], .d-pop, [data-slot="dropdown-menu-content"], .art-scrim, [data-testid="image-lightbox"]';
+
+/**
+ * What the arrows press right now, read from the latest view by the listener:
+ * the button's own handler while it is shown and live, else `null`.
+ */
+interface ArrowControls {
+  back: (() => void) | null;
+  next: (() => void) | null;
+}
+
+/** ← / → for the tour, or `null` when the keystroke is somebody else's. */
+function arrowOf(event: KeyboardEvent): "back" | "next" | null {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return null;
+  if (event.defaultPrevented) return null;
+  // Alt+← is the browser's Back, Shift+← extends a selection: not ours.
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return null;
+  // A held key would fly through every step that waits for Next.
+  if (event.repeat) return null;
+  const target = event.target;
+  if (target instanceof Element && target.closest(ARROW_TARGET_OWNERS)) return null;
+  if (document.querySelector(ARROW_OWNERS)) return null;
+  return event.key === "ArrowLeft" ? "back" : "next";
+}
+
+/**
  * How far along the **Full tour** the intermediate card sits (#825), or `null`
  * for a tour started on its own — there is no chain to report on.
  *
@@ -63,7 +130,7 @@ function chainProgress(tourId: string, nextTourId: string | null) {
 }
 
 export default function TourHost({ controller, showWelcome, onWelcomeAnswered, onOpenTutorials }: Props) {
-  const { view, start, quit, next, skip, finish, finishHere, continueChain, begin, retryPrep } =
+  const { view, start, quit, next, back, skip, finish, finishHere, continueChain, begin, retryPrep } =
     controller;
   const [quitNotice, setQuitNotice] = useState(false);
 
@@ -106,6 +173,31 @@ export default function TourHost({ controller, showWelcome, onWelcomeAnswered, o
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [running, quitWithNotice]);
+
+  // ← = Previous, → = Next, each only when its button is shown and live: a key
+  // never does what the card does not offer. Same registration as Escape (bubble
+  // phase, keyed on « running »), so the live state and the handlers are read
+  // through a ref rather than by re-registering on every view.
+  const arrows = useRef<ArrowControls>({ back: null, next: null });
+  const pressBack = running && (view?.stepNumber ?? 0) > 1 && view?.canGoBack ? back : null;
+  const pressNext = running && view?.awaitingConfirm && view?.ready ? next : null;
+  // A layout effect, so a keystroke right after a render never reads the
+  // buttons of the view before it.
+  useLayoutEffect(() => {
+    arrows.current = { back: pressBack, next: pressNext };
+  }, [pressBack, pressNext]);
+  useEffect(() => {
+    if (!running) return;
+    const onKey = (event: KeyboardEvent) => {
+      const action = arrowOf(event);
+      const press = action ? arrows.current[action] : null;
+      if (!press) return;
+      event.preventDefault();
+      press();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [running]);
 
   return (
     <>
@@ -169,7 +261,9 @@ export default function TourHost({ controller, showWelcome, onWelcomeAnswered, o
             ready={view.ready}
             awaitingConfirm={view.awaitingConfirm}
             checklist={view.checklist}
+            canGoBack={view.canGoBack}
             onNext={next}
+            onBack={back}
             onSkip={skip}
             onQuit={quitWithNotice}
           />

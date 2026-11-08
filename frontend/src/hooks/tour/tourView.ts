@@ -42,6 +42,12 @@ export interface TourView {
   ready: boolean;
   /** The step waits for `Next` instead of advancing on its own. */
   awaitingConfirm: boolean;
+  /**
+   * `Previous` would replay the step before (CONTEXT.md § « Rejeu d'étape »):
+   * recomputed each tick, since whether that step's screen is still there
+   * changes as the user works.
+   */
+  canGoBack: boolean;
   /** The step's body, resolved against what the tour is observing (#825). */
   body: string;
   /** The step's quieter second paragraph, resolved the same way. */
@@ -91,6 +97,8 @@ export interface TourController {
   /** Leave without marking anything: an abandoned tour is not a finished one. */
   quit: () => void;
   next: () => void;
+  /** `Previous`: replay the step before, when it is replayable. */
+  back: () => void;
   skip: () => void;
   /** The end card's primary — the only thing that writes the "done" key. */
   finish: () => void;

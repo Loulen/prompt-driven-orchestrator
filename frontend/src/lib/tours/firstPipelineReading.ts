@@ -10,6 +10,20 @@ import type { TourAppState, TourObservation, TourStep } from "../tourDef";
 import { carriedPorts, carries } from "../edgePorts";
 import { splitFieldKey } from "../whenClause";
 import type { EditorNodeDef, EditorPipelineDef } from "../../pipeline/model/pipeline";
+import { withTourIdentity } from "../tourMemory";
+
+/** The pipeline's name, before this browser's Identité de tour. */
+export const TUTORIAL_PIPELINE_ID = "tutorial-implement-test";
+
+/**
+ * The name the tour asks the user to paste for the pipeline itself:
+ * `tutorial-implement-test-k3x9`. Two people building it on one instance would
+ * otherwise both ask for the same YAML file, and the second Create would be
+ * refused.
+ */
+export function tutorialPipelineName(): string {
+  return withTourIdentity(TUTORIAL_PIPELINE_ID);
+}
 
 // ---- reading the observed pipeline ---------------------------------------
 // Every target below is resolved from state rather than hard-coded, because the
@@ -171,6 +185,26 @@ export function pipelineCreated(o: TourObservation): boolean {
   return !o.present(NEW_PIPELINE_DIALOG) && o.app.pipeline != null;
 }
 
+/**
+ * The pipeline this tour built, while the Library still lists it: the name the
+ * tour handed out to paste, or (for a reader who typed a name of their own) the
+ * active tab, as long as it holds the tour's loop (tester → implementer and
+ * tester → End). Deleting the pipeline closes its tab and activates whichever is
+ * left; that one is not the tour's, even when the Library lists it. `null` once
+ * the built pipeline is gone from the Library.
+ */
+export function builtPipelineId(o: TourObservation): string | null {
+  const library = o.app.libraryPipelineIds;
+  const mine = tutorialPipelineName();
+  if (library.includes(mine)) return mine;
+  const active = o.app.pipelineId;
+  if (!active || !library.includes(active)) return null;
+  const [implementer, tester] = [agent(o.app, 0), agent(o.app, 1)];
+  const isTheLoop =
+    edgeIndex(o.app.pipeline, tester, implementer) >= 0 && edgeIndex(o.app.pipeline, tester, endNode(o.app)) >= 0;
+  return isTheLoop ? active : null;
+}
+
 export function selected(app: TourAppState, node: EditorNodeDef | null): boolean {
   return !!node && app.selection.kind === "node" && app.selection.id === node.id;
 }
@@ -203,6 +237,14 @@ function whenEquals(edge: EdgeDef | undefined, field: string, value: string): bo
  * edge holds some other condition, the body says what the step is waiting for,
  * so a reader whose clause is off by one field or value is not left staring at
  * a card that never moves (#846, FP iteration 1).
+ *
+ * It lights the When editor only while THIS edge is the selected one; otherwise
+ * it lights the edge itself. Replayed with Previous (CONTEXT.md § « Rejeu
+ * d'étape »), the step comes back with whatever edge the reader last selected
+ * (the tester → End one, for « Only loop back on a failure »), and a generic
+ * When editor would have pointed at the wrong edge's condition. Once the
+ * condition holds, the body says so instead of « Not there yet » beside a live
+ * Next.
  */
 export function conditionStep(def: {
   id: string;
@@ -216,18 +258,25 @@ export function conditionStep(def: {
     const i = edgeIndex(app.pipeline, agent(app, 1), def.to(app), OUT_PORT);
     return i < 0 ? undefined : app.pipeline?.edges[i];
   };
+  const done = (o: TourObservation) => whenEquals(edge(o.app), "verdict", def.value);
   return {
     id: def.id,
     title: def.title,
     body: (o) => {
+      if (done(o)) return `Already set: the condition reads verdict eq ${def.value}. ${def.why}`;
+      if (!edgeSelected(o.app, def.to(o.app)))
+        return `Click the edge first, then add the condition verdict eq ${def.value} in its inspector. ${def.why}`;
       const when = edge(o.app)?.when;
       return !when || Object.keys(when).length === 0
         ? `Add the condition verdict eq ${def.value}. ${def.why}`
         : `Not there yet: the condition must read verdict eq ${def.value}, on the out output. ${def.why}`;
     },
-    target: () => ['[data-testid="when-editor"]'],
-    waitingFor: "the When editor of the selected edge",
-    failureHint: "The edge was deselected before the condition was saved.",
-    done: (o) => whenEquals(edge(o.app), "verdict", def.value),
+    target: (o) =>
+      edgeSelected(o.app, def.to(o.app))
+        ? ['[data-testid="when-editor"]']
+        : edgeSel(o.app, agent(o.app, 1), def.to(o.app), OUT_PORT),
+    waitingFor: "the edge and its When editor",
+    failureHint: "The edge was deleted before the condition was saved.",
+    done,
   };
 }

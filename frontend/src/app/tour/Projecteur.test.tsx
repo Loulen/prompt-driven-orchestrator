@@ -264,6 +264,20 @@ describe("the popover", () => {
     expect(screen.queryByTestId("tour-next")).not.toBeInTheDocument();
   });
 
+  it("resolves a block that carries the Identité de tour when the card shows it", () => {
+    let identity = "k3x9";
+    renderPopover(step({ confirm: true, copyBlock: () => `my-first-run-${identity}` }), {
+      awaitingConfirm: true,
+    });
+    expect(screen.getByTestId("tour-copy-block")).toHaveTextContent("my-first-run-k3x9");
+    identity = "p7qa";
+    cleanup();
+    renderPopover(step({ confirm: true, copyBlock: () => `my-first-run-${identity}` }), {
+      awaitingConfirm: true,
+    });
+    expect(screen.getByTestId("tour-copy-block")).toHaveTextContent("my-first-run-p7qa");
+  });
+
   it("hands over the exact block a free input needs", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
@@ -339,25 +353,34 @@ describe("the popover", () => {
 
   // ---- #911 --------------------------------------------------------------
 
-  it("draws a step's illustration: one mock row per status, in the app's dot colours", () => {
+  it("draws a step's illustration: one row per status, led by the list's own Status icon", () => {
     renderPopover(
       step({
         illustration: {
           kind: "rows",
           rows: [
-            { label: "a", detail: "waits for you", dotClass: "bg-st-await" },
-            { label: "b", detail: "running", dotClass: "bg-st-running", pulse: true },
-            { label: "c", detail: "finished", dotClass: "bg-st-done" },
+            { status: "completed", label: "a check: finished" },
+            { status: "running", label: "a turning circle: running" },
+            { status: "awaiting_user", label: "a question mark: waits for you" },
           ],
         },
       }),
     );
     const rows = screen.getAllByTestId("tour-illustration-row");
-    expect(rows.map((r) => r.textContent)).toEqual(["awaits for you", "brunning", "cfinished"]);
-    const dots = screen.getAllByTestId("tour-illustration-dot");
-    expect(dots[0]).toHaveClass("bg-st-await");
-    expect(dots[1]).toHaveClass("bg-st-running", "animate-pulse");
-    expect(dots[2]).toHaveClass("bg-st-done");
+    expect(rows.map((r) => r.getAttribute("data-status"))).toEqual(["completed", "running", "awaiting_user"]);
+    // The shape is named by the icon itself (its accessible name), and by the row's text.
+    expect(rows.map((r) => r.querySelector('[role="img"]')?.getAttribute("aria-label"))).toEqual([
+      "Completed",
+      "Running",
+      "Awaiting you",
+    ]);
+    expect(rows.map((r) => r.textContent?.replace(/^(Completed|Running|Awaiting you)/, ""))).toEqual([
+      "a check: finished",
+      "a turning circle: running",
+      "a question mark: waits for you",
+    ]);
+    // No colour dot any more: the shape carries the status.
+    expect(screen.queryByTestId("tour-illustration-dot")).not.toBeInTheDocument();
   });
 
   it("draws no illustration on a step without one", () => {

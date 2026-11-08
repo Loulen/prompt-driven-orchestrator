@@ -1,9 +1,10 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { Check, Circle, Copy, LoaderCircle, X } from "lucide-react";
 import { placePopover } from "../../lib/tourPlacement";
-import { Button, IconButton } from "../../shared/ui/kit";
+import { Button, IconButton, StatusIcon } from "../../shared/ui/kit";
 import type { TourRect } from "../../hooks/tour/tourView";
 import type { TourChecklistItem, TourDef, TourStep } from "../../lib/tourDef";
+import { copyBlockOf } from "../../lib/tour";
 import type { TourIllustration } from "../../lib/tourPanels";
 import { copyToClipboard } from "../../shared/lib/clipboard";
 import { cssViewport } from "../../shared/ui/zoom";
@@ -68,6 +69,7 @@ export default function TourPopover({
   // the badge resets by itself when the tour moves on — no effect to reconcile it.
   const [copiedStep, setCopiedStep] = useState<string | null>(null);
   const copied = copiedStep === step.id;
+  const copyBlock = copyBlockOf(step);
   // The spinner row belongs to the wait, not to the step: once the condition is
   // met there is nothing left to wait for, and a spinner that kept turning under
   // a satisfied checklist would be the card contradicting itself.
@@ -87,8 +89,8 @@ export default function TourPopover({
   }, [hole, step.id, body, note, checklist]);
 
   const copy = () => {
-    if (!step.copyBlock) return;
-    void copyToClipboard(step.copyBlock);
+    if (!copyBlock) return;
+    void copyToClipboard(copyBlock);
     setCopiedStep(step.id);
   };
 
@@ -158,9 +160,9 @@ export default function TourPopover({
         </p>
       )}
 
-      {step.copyBlock && (
+      {copyBlock && (
         <div className="tr-copy">
-          <pre data-testid="tour-copy-block">{step.copyBlock}</pre>
+          <pre data-testid="tour-copy-block">{copyBlock}</pre>
           <IconButton
             icon={copied ? Check : Copy}
             label={copied ? "Copied" : "Copy the block"}
@@ -216,21 +218,17 @@ export default function TourPopover({
 }
 
 /**
- * A step's picture (#911): a mock of the Runs list, one row per status, with
- * the dot colours the real list uses. Framed like a small panel so it reads as
- * « what it looks like », not as rows of the real list.
+ * A step's picture (#911): one row per status, each led by the Status icon the
+ * real list draws, and named by its shape. Framed like a small panel so it reads
+ * as « what it looks like », not as rows of the real list.
  */
 function Illustration({ illustration }: { illustration: TourIllustration }) {
   return (
     <ul className="tr-illus" data-testid="tour-illustration" aria-label="Example">
       {illustration.rows.map((row) => (
-        <li key={row.label} data-testid="tour-illustration-row">
-          <span
-            data-testid="tour-illustration-dot"
-            className={`block h-2 w-2 shrink-0 rounded-full ${row.dotClass} ${row.pulse ? "animate-pulse" : ""}`}
-          />
-          <span className="min-w-0 flex-1 truncate font-medium text-text-2">{row.label}</span>
-          <span className="shrink-0 text-text-3">{row.detail}</span>
+        <li key={row.status} data-testid="tour-illustration-row" data-status={row.status}>
+          <StatusIcon kind="run" status={row.status} size="sm" />
+          <span className="min-w-0 flex-1 truncate text-text-2">{row.label}</span>
         </li>
       ))}
     </ul>

@@ -8,7 +8,7 @@
 import type { EditorNodeDef } from "../../pipeline/model/pipeline";
 import type { TourAppState, TourObservation, TourRunSummary, TourStep } from "../tourDef";
 import type { TourIllustration } from "../tourPanels";
-import { OVERVIEW_RUN_NAME, TUTORIAL_OVERVIEW_PIPELINE_ID } from "./overviewPipeline";
+import { TUTORIAL_OVERVIEW_PIPELINE_ID } from "./overviewPipeline";
 import { overviewRunId } from "./overviewPreparation";
 
 const testId = (id: string) => `[data-testid="${id}"]`;
@@ -86,13 +86,18 @@ export const INSPECTOR_EXPLORE = [
   testId("term-copy"),
 ];
 
-/** The status dot, drawn three times over (#911): the tour's Run only ever shows green. */
-export const STATUS_DOTS: TourIllustration = {
+/**
+ * The Status icon's legend: the four shapes a reader meets first, named by
+ * their shape and their meaning. The tour's Run only ever wears the check, and
+ * the shape carries the status, not the colour (CONTEXT.md § « Status icon »).
+ */
+export const STATUS_ICONS: TourIllustration = {
   kind: "rows",
   rows: [
-    { label: "fix-login", detail: "waits for you", dotClass: "bg-st-await" },
-    { label: "add-tests", detail: "running", dotClass: "bg-st-running", pulse: true },
-    { label: OVERVIEW_RUN_NAME, detail: "finished", dotClass: "bg-st-done" },
+    { status: "completed", label: "a check: finished" },
+    { status: "running", label: "a turning circle: running" },
+    { status: "awaiting_user", label: "a question mark: waits for you" },
+    { status: "failed", label: "a cross: failed" },
   ],
 };
 export const STATS_BUTTON = testId("open-stats");

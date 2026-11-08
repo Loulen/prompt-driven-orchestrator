@@ -9,6 +9,7 @@
  * must go. `lib/tourDef.ts` composes them into `TourStep` and `TourDef`.
  */
 
+import type { RunStatus } from "../shared/generated/RunStatus";
 import type { TourObservation } from "./tourDef";
 
 /** One side bubble of a step (#911). */
@@ -20,21 +21,18 @@ export interface TourAside {
 }
 
 /**
- * A card illustration (#911). One shape so far — a mock list whose rows lead
- * with a status dot, drawn with the app's own colour classes so the picture and
- * the real list cannot disagree.
+ * A card illustration (#911). One shape so far — a legend of the Status icon:
+ * one row per status, led by the icon the real list draws (`StatusIcon`), so the
+ * picture and the list cannot disagree. The shape carries the status, the colour
+ * only reinforces it (CONTEXT.md § « Status icon »).
  */
 export interface TourIllustration {
   kind: "rows";
   rows: {
-    /** The row's name, e.g. a Run name. */
+    /** The Run status whose icon leads the row. */
+    status: RunStatus;
+    /** The shape and what it means, in the reader's words: « a check: finished ». */
     label: string;
-    /** What the dot means, in the reader's words — "waits for you". */
-    detail: string;
-    /** The dot's colour class, the app's own: `bg-st-await`, `bg-st-done`… */
-    dotClass: string;
-    /** Pulse the dot, as the real list does for a live row. */
-    pulse?: boolean;
   }[];
 }
 
@@ -43,7 +41,7 @@ export interface TourStepPanels {
   /**
    * A small picture inside the card, under the body — for the one step whose
    * subject cannot be shown by lighting the app (#911, after the human test): the
-   * status dot has three colours and the tour's Run only ever wears one. Data,
+   * Status icon has several shapes and the tour's Run only ever wears one. Data,
    * not markup, so the popover renders it without knowing which step asked.
    */
   illustration?: TourIllustration;

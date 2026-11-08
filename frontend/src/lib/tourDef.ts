@@ -77,17 +77,27 @@ export interface TourAppState {
   /** How many Runs this instance has (the welcome-modal rule reads it too). */
   runCount: number;
   /**
-   * The newest Run in the list, or `null` on a Run-less instance (#824). The
-   * *First run* tour ends on a recap of the Run the user just launched, and the
-   * modal that held its name is closed by then — so the name has to come from the
-   * list, which the UI has loaded anyway (ADR-0071 §3).
+   * The id the New Run form received from the daemon the last time THIS browser
+   * pressed Run, or `null` before any. On a shared instance the newest Run of the
+   * list may be a neighbour's, launched a second after yours: the id your own
+   * Launch got back is the one fact that says which Run is yours (CONTEXT.md
+   * § « Identité de tour »).
+   */
+  launchedRunId: string | null;
+  /**
+   * **Your Run**: the Run whose id {@link launchedRunId} holds, or `null` before
+   * this browser launched one. Never the head of the list: read as « the Run the
+   * tour just caused », a neighbour's Launch validated your step and took over
+   * your recap. Its name comes from the list once the list has caught up with the
+   * Launch, the id until then. The *First run* tour ends on a recap of it, and
+   * the modal that held its name is closed by then (ADR-0071 §3).
    *
    * `nodes` is empty until the user opens that Run: the detail is fetched by the
    * inspector, for the inspector. That is not a gap the tour has to paper over —
    * the step that asks the user to open the Run is precisely the one before the
    * steps that read its nodes (#825).
    */
-  latestRun: TourRunView | null;
+  myRun: TourRunView | null;
   /** Every Run the list holds, newest first (#911) — the same list the left panel
    *  renders, read rather than fetched (ADR-0071 §3). */
   runs: TourRunSummary[];
@@ -177,8 +187,14 @@ export interface TourStep extends TourStepPanels {
   waitingFor: string;
   /** One extra sentence on the failure card, in the user's terms. */
   failureHint?: string;
-  /** A block to paste, rendered with a Copy button. Any free input gets one. */
-  copyBlock?: string;
+  /**
+   * A block to paste, rendered with a Copy button. Any free input gets one.
+   *
+   * A function when the block carries this browser's Identité de tour:
+   * `my-first-run-k3x9` is only known once the identity has been read, which a
+   * module constant cannot wait for. Resolve it with `copyBlockOf` (`lib/tour.ts`).
+   */
+  copyBlock?: string | (() => string);
   /**
    * Free input: the step shows `Next` (enabled once `done` holds) instead of
    * advancing on its own, so the user owns the moment they move on (story 14).
@@ -252,8 +268,9 @@ export interface TourStep extends TourStepPanels {
   refused?: (o: TourObservation) => string | null;
   /** Headline of the refusal card, e.g. "The Run could not be launched". */
   refusalTitle?: string;
-  /** One sentence under the quoted reason, in the user's terms. */
-  refusalHint?: string;
+  /** One sentence under the quoted reason, in the user's terms. A function for
+   *  the same reason as {@link TourStep.copyBlock}: it may name a suffixed object. */
+  refusalHint?: string | (() => string);
 }
 
 export interface TourChecklistItem {

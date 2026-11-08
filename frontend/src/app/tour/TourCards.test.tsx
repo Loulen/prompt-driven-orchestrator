@@ -25,7 +25,8 @@ const APP: TourAppState = {
   libraryPipelineIds: [],
   runCount: 1,
   runs: [],
-  latestRun: { id: "r1", name: "my-first-run", nodes: [] },
+  launchedRunId: "r1",
+  myRun: { id: "r1", name: "my-first-run", nodes: [] },
   activeRunId: "r1",
 };
 
@@ -230,8 +231,8 @@ describe("the end card", () => {
   it("renders a recap computed from what the tour observed", () => {
     const tour: TourDef = {
       ...BASE,
-      recapIntro: (app) => `You built ${app.latestRun?.name ?? "a Run"}:`,
-      recap: (app) => [{ label: app.latestRun?.name ?? "your Run", text: "on `/tmp/pdo-tutorial`" }],
+      recapIntro: (app) => `You built ${app.myRun?.name ?? "a Run"}:`,
+      recap: (app) => [{ label: app.myRun?.name ?? "your Run", text: "on `/tmp/pdo-tutorial`" }],
     };
     render(<TourEndCard tour={tour} app={APP} onFinish={vi.fn()} onFinishHere={vi.fn()} onStartTour={vi.fn()} />);
     expect(screen.getByRole("heading", { name: "First run · done" })).toHaveAttribute("title", "You built my-first-run:");

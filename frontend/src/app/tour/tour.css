@@ -355,7 +355,7 @@
     text-align: right;
   }
 
-  /* An example inside a step: rows of the Runs list, framed as a small panel. */
+  /* An example inside a step: a legend of the Status icon, framed as a small panel. */
   .tr-illus {
     display: flex;
     flex-direction: column;

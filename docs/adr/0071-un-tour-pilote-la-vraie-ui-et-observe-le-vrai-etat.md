@@ -1,8 +1,9 @@
 # Un Tour pilote la vraie UI et observe le vrai état
 
 > Statut : accepted (grilling #816), amendé au grilling #909 (§4 : la préparation peut lancer un vrai Run
-> de nodes `script` et poser un objet temporaire que le rangement retire). Vocabulaire : CONTEXT.md
-> § « Tours guidés — onboarding ».
+> de nodes `script` et poser un objet temporaire que le rangement retire), amendé au grilling CORE-213
+> (§5 : les objets d'un tour appartiennent à l'Identité de tour du navigateur). Vocabulaire :
+> CONTEXT.md § « Tours guidés — onboarding ».
 
 ## Contexte
 
@@ -52,6 +53,28 @@ tout**, outputs et terminal désignés comme zones vides — moins cher, mais le
 qu'il explique. Le prix assumé : le tour dit qu'un node est « en général un agent » en montrant des
 scripts.
 
+**5. Ce qu'un tour prépare ou fait coller appartient à l'Identité de tour du navigateur.** Une
+instance se partage, et un tour ne connaît pas d'utilisateur. Un tour reconnaissait ses objets à leur
+nom fixe ou à « le plus récent » : le Run d'*Overview* réutilisé par tous (l'archivage de l'un
+bloquait l'étape d'archivage des autres), le Trigger d'exemple que le rangement de l'un retirait sous
+les yeux d'un autre, « ton Run » de *First run* lu comme la première ligne de la liste (le lancement
+d'un voisin validait ton étape), et le nom de pipeline de *First pipeline* refusé au deuxième navigateur.
+Chaque navigateur tire donc une fois une **Identité de tour** (quatre caractères `[0-9a-z]`, mémoire
+navigateur) que tous les noms préparés ou collés par un tour portent en suffixe. La préparation ne
+réutilise, et le rangement ne retire, que les objets de cette identité ; le Run lancé par
+l'utilisateur se reconnaît à l'id que **son** lancement a reçu, jamais à sa place dans la liste. Ce que
+les tours ne font que lire (Dépôt d'entraînement, pipelines `tutorial-overview` et
+`tutorial-interactive`, Projet *Tutorial*) reste commun. Le daemon ignore toujours les tours (§3) :
+l'identité est un suffixe de nom, pas un champ.
+
+Écartées : **un identifiant par passage** (chaque rejeu empilerait un Run et un Trigger, ce que
+l'idempotence de §4 refuse) ; **un prénom saisi** au lancement (une étape de plus, et deux « Alex » se
+marchent encore dessus) ; **l'Acteur connecté** (une instance sans Extension d'identité n'en a qu'un pour tout le monde). Le
+prix assumé : une identité perdue (mémoire vidée, autre navigateur) en tire une nouvelle et laisse ses
+anciens objets orphelins, le Trigger y restant inoffensif par construction ; et deux onglets du même
+navigateur partagent une identité, donc un Run et un Trigger d'*Overview* : le rangement de l'un retire
+le Trigger que l'autre montre.
+
 ## Conséquences
 
 - *First run* dépend d'un harnais configuré pour aller jusqu'au bout ; sans lui, l'étape de lancement
@@ -61,6 +84,8 @@ scripts.
   ciblables (`<select>` natif) doit être remplacé par le menu maison avant d'entrer dans un tour.
 - Le dépôt d'entraînement vit sous `/tmp` et disparaît avec lui ; aucun nettoyage à gérer.
 - Un onglet fermé en plein tour saute le rangement : le Trigger d'exemple reste, inoffensif, et le
-  prochain passage le reprend par son nom avant de le ranger.
+  prochain passage du même navigateur le reprend par son nom avant de le ranger. Un Trigger d'exemple
+  hérité, sans suffixe d'identité, est retiré par le rangement de n'importe quel passage ; un Run
+  d'*Overview* hérité reste en place.
 - Les Runs des tours sont de vrais Runs : ils comptent dans Stats et dans la règle de la Modale de
   bienvenue.

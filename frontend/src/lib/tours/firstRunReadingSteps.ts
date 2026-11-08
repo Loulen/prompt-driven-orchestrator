@@ -45,10 +45,16 @@ export const READING_STEPS: TourStep[] = [
     // It still has an idea to give — the list on the left is where your Runs
     // live — so it stops for a `Next` once the Run is open, and says what
     // already happened rather than instructing a click nobody needs to make.
-    body: (o) =>
-      runIsOpen(o.app)
-        ? "Your Run is the top row of the list on the left, and Launch already opened its tab. Every Run is a row here; the dot is its status, blue while it runs."
-        : "Click your Run at the top of the list. Every Run is a row here; the dot is its status, blue while it runs.",
+    //
+    // No « top row »: on a shared instance a neighbour who launched a second
+    // later sits above yours. The card names your Run, the frame finds it
+    // wherever it is, and both sentences stay true at any position.
+    body: (o) => {
+      const name = o.app.myRun?.name ?? "your Run";
+      return runIsOpen(o.app)
+        ? `Your Run, ${name}, is lit in the list on the left, and Launch already opened its tab. Every Run is a row here; the icon is its status.`
+        : `Click ${name} in the list on the left. Every Run is a row here; the icon is its status.`;
+    },
     // Strictly the row. Falling back to the Runs tab would keep a target alive
     // forever, and « waiting on something that will never come » is precisely
     // what story 18 asks a tour not to do.

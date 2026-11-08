@@ -30,6 +30,9 @@ fn info_logs_emitted_when_rust_log_is_unset() {
         // the boot pass refreshes rather than seeds), but a test must not depend on
         // the network being irrelevant — it must not reach for it at all.
         .env("PDO_PRICE_SYNC", "off")
+        // Same rule for the boot version check: the vanilla channel checks the
+        // public repository's releases, and this daemon's home is the real one.
+        .env("PDO_UPDATE_CHECK", "0")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .spawn()

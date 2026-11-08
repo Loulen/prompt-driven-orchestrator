@@ -39,6 +39,7 @@ echo "[smoke] Using port $PORT, working dir $TMPDIR"
 # Run daemon from the tempdir so its .pdo lives there, not in the repo.
 # PDO_PRICE_SYNC=off (#427): the smoke test polls /runs for up to 30 s, so a boot
 # price fetch waiting on a DNS timeout would pass anyway while masking exactly that.
+# PDO_UPDATE_CHECK=off: no boot version check against the public repository's releases.
 #
 # exec (#514): without it, the subshell runs two commands (cd && pdo), so bash
 # forks pdo as a child and blocks in wait — $! then names the *subshell*, not pdo.
@@ -46,7 +47,7 @@ echo "[smoke] Using port $PORT, working dir $TMPDIR"
 # port and tmux socket — one orphan daemon leaked per CI run. The leak was invisible
 # because the subshell stays alive while pdo runs, so kill -0 and the HTTP poll both
 # passed. exec replaces the subshell with pdo so $! is the daemon's real PID.
-( cd "$TMPDIR" && PDO_PRICE_SYNC=off exec "$BIN" daemon --port "$PORT" >"$LOG" 2>&1 ) &
+( cd "$TMPDIR" && PDO_PRICE_SYNC=off PDO_UPDATE_CHECK=off exec "$BIN" daemon --port "$PORT" >"$LOG" 2>&1 ) &
 DAEMON_PID=$!
 
 cleanup() {

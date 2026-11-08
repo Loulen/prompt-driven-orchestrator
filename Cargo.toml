@@ -27,10 +27,10 @@ members = [
 [workspace.package]
 edition = "2021"
 version = "2.75.0"
-license = "MIT"
+license = "Apache-2.0"
 description = "Prompt-Driven Orchestrator — a local daemon that runs and supervises agentic coding pipelines"
-repository = "https://github.com/Loulen/PDO-v2"
-homepage = "https://github.com/Loulen/PDO-v2"
+repository = "https://github.com/Loulen/prompt-driven-orchestrator"
+homepage = "https://github.com/Loulen/prompt-driven-orchestrator"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }

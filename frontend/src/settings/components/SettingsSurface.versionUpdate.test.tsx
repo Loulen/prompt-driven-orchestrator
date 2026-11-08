@@ -427,6 +427,11 @@ describe("Settings › General › Version & update (#697)", () => {
     await waitFor(() => expect(btn).toHaveAccessibleName("Check now"));
     expect(screen.getByTestId("setting-version-latest")).toHaveTextContent("v1.59.0");
     expect(screen.getByTestId("setting-version-checked-at")).toHaveTextContent("GitHub Releases");
+    // The label names the kind of source; its tooltip, the release page it checked.
+    expect(screen.getByText("· GitHub Releases", { exact: false })).toHaveAttribute(
+      "title",
+      "https://api.github.com/repos/Loulen/prompt-driven-orchestrator/releases/latest",
+    );
     expect(heard).toHaveBeenCalled();
     expect(screen.queryByTestId("setting-version-check-error")).not.toBeInTheDocument();
     window.removeEventListener(UPDATE_STATUS_CHANGED, heard);

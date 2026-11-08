@@ -60,7 +60,7 @@ pub struct DaemonConfig {
     pub update_source_url: Option<String>,
     /// The release channel a distribution declares (#24, set by
     /// `Config::with_release_channel`); `None` → the vanilla channel (`PDO`, the
-    /// core's version, no source, the detected install method).
+    /// core's version, the public repository's releases, the detected install method).
     pub release_channel: Option<pdo_platform::domain::release_channel::UpdateChannel>,
     /// Run the boot check + 6 h periodic version-check loop. `true` in production;
     /// `false` in the layer-3 literals, which drive

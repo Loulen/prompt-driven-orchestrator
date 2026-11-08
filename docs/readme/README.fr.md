@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/Loulen/prompt-driven-orchestrator/releases/latest"><img src="https://img.shields.io/github/v/release/Loulen/prompt-driven-orchestrator?style=flat&amp;label=release&amp;color=10b981" alt="Latest release" /></a>
-  <a href="../../LICENSE"><img src="https://img.shields.io/badge/license-MIT-10b981?style=flat" alt="License: MIT" /></a>
+  <a href="../../LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-10b981?style=flat" alt="License: Apache 2.0" /></a>
   <img src="https://img.shields.io/badge/macOS%20%7C%20Linux-10b981?style=flat-square" alt="Plateformes : macOS et Linux" />
 </p>
 
@@ -224,4 +224,4 @@ Envie de contribuer ou de lancer PDO depuis les sources ? Voir [CONTRIBUTING.md]
 
 ## Licence
 
-PDO est libre et open source, sous [licence MIT](../../LICENSE) : utilisez-le, modifiez-le, embarquez-le, hébergez-le, pour tout usage.
+PDO est libre et open source, sous [licence Apache 2.0](../../LICENSE) : utilisez-le, modifiez-le, embarquez-le, hébergez-le, pour tout usage. La licence ne donne aucun droit sur les marques Acogni ; voir [NOTICE](../../NOTICE). Les versions jusqu'à 1.132.0 ont été publiées sous licence MIT ; leur historique est dans [docs/CHANGELOG-v1.md](../CHANGELOG-v1.md).

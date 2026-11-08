@@ -4,7 +4,8 @@ One entry per version, newest first: what changes on screen, the new seams for e
 breaking changes, each marked **Breaking**. The binary embeds this file: "What's new" shows its
 latest entries. The full history lives in the git log and in the
 [GitHub Releases](https://github.com/Loulen/prompt-driven-orchestrator/releases), generated from
-the commits.
+the commits. The history of PDO 1.x, up to 1.132.0, is archived in
+[docs/CHANGELOG-v1.md](docs/CHANGELOG-v1.md).
 
 Work not released yet sits under `## Unreleased`, the first entry; "What's new" does not show it.
 `make release-bump` turns it into the version's entry when a story merges into `main`.
@@ -12,6 +13,28 @@ Work not released yet sits under `## Unreleased`, the first entry; "What's new" 
 The project follows semantic versioning. It has **no backward-compatibility goal**: a break is
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
+
+## Unreleased
+
+### Upgrading from 1.x
+
+This is the first 2.x release published in this repository: it replaces PDO 1.x in place.
+
+- Your data is kept. 2.x reads the `~/.pdo` folder of 1.x as it is: pipelines, Runs, Projects,
+  settings and the database open without a migration step.
+- The service is kept. The same unit starts the daemon at boot, now on the 2.x binary.
+- To upgrade, run `brew upgrade pdo` (or `brew update && brew upgrade Loulen/tap/pdo`), or re-run
+  the install script of the latest release. The Update button of a 1.x install does the same.
+- Going back to 1.x afterwards is not guaranteed: 2.x adds tables and columns 1.x does not know.
+- From this version on, PDO is licensed under the Apache License 2.0, with a `NOTICE` file. Versions
+  up to 1.132.0 stay under the MIT License; their changelog is in `docs/CHANGELOG-v1.md`.
+
+### Updates come from the public repository
+
+- Settings › Version & update checks the latest release of `Loulen/prompt-driven-orchestrator`,
+  and the tooltip of "GitHub Releases" next to the check date shows the address it asked. The
+  Homebrew command is `brew update && brew upgrade Loulen/tap/pdo` (the `pdo` formula, no longer
+  `pdo-v2`), and the script command re-runs that repository's installer.
 
 ## 2.75.0
 
@@ -71,14 +94,14 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   Runs they launched), "Projects" (the Runs launched in the Projects you check) or "All I can see".
   It only narrows what your rights already show.
 - When a node of such a Run starts waiting for you (a question, a completion to approve, a Run
-  paused on an incident) and no PDO tab of the browser is in view, one tab shows a notification
+  paused on an incident) and no tab of the interface is in view, one tab shows a notification
   (the node's name, then "is waiting for you" or "is done, waiting for your go"; "Run paused on an
   incident") and plays a chime of its reason, at most one chime every 10 s. Clicking the
   notification brings the tab back on the Run with the node selected. A wait already there when
   the page loads, or caught up after a reconnection, alerts nothing; neither does a parent node
   waiting on its child runs.
 - `GET /runs` gives each child Run its `root_run_id`, the Run at the top of its chain of parents.
-- While an alert switch is on, a hidden PDO tab reopens its event stream after a drop (a daemon restart,
+- While an alert switch is on, a hidden interface tab reopens its event stream after a drop (a daemon restart,
   a network change) instead of waiting to be shown; `openProbedSocket` takes a `whileHidden` option.
 ### Tree cost: what an orchestration really cost
 

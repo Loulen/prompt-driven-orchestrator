@@ -2,15 +2,15 @@
 
 ## License
 
-PDO is [MIT licensed](LICENSE). By opening a pull request you agree that your contribution
-is released under the same license. Only contribute code you have the right to
-contribute: work done under an employment or client contract may belong to that employer
-or client. Agent-generated code is fine, and the project itself is built that way; you
+PDO is licensed under the [Apache License 2.0](LICENSE), with a [NOTICE](NOTICE). By opening a
+pull request you agree that your contribution is released under the same license. Only
+contribute code you have the right to contribute: work done under an employment or client
+contract may belong to that employer or client. Agent-generated code is fine, and the project itself is built that way; you
 remain the author of record.
 
-The maintainer does not intend to change the license of this code. If that ever changed,
-it would be announced in the CHANGELOG with a major version bump, and previous versions
-would remain MIT.
+Versions up to 1.132.0 were released under the MIT License and remain so; their notice is kept
+in [NOTICE](NOTICE). The maintainer does not intend to change the license again. If that ever
+changed, it would be announced in the CHANGELOG, and previous versions would keep theirs.
 
 ## Workflow
 

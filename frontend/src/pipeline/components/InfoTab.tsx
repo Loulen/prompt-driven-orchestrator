@@ -27,6 +27,8 @@ import { useAppearancePreview, useElementMarks, type ElementMarks } from "../../
 import { useSourceDrift } from "../../run/store/useSourceDrift";
 import type { SourceDrift } from "../../shared/generated/SourceDrift";
 import { RUN_INFO } from "../model/runInfoElements";
+import { BudgetReachedBanner } from "./BudgetReachedBanner";
+import { budgetReachedRegion } from "./loopRegionCost";
 import "./inspect.css";
 
 /** How an element renders: its marks, `null` when the Apparence hides it. */
@@ -220,6 +222,7 @@ export function InfoTab({
   pipelineName,
   pipelineId,
   onOpenDiff,
+  onClose,
 }: {
   run: RunState | null;
   pipeline: EditorPipelineDef | null;
@@ -230,6 +233,8 @@ export function InfoTab({
   hasAssistant?: boolean;
   /** #748: the Changes stat is the link to what it counts — the Diff tab. */
   onOpenDiff: () => void;
+  /** Close the panel: a link toward the canvas (the « budget reached » region) hands it the pane. */
+  onClose?: () => void;
 }) {
   const pipelines = useEditStore((s) => s.pipelines);
   // ADR-0088: a version shown in its own tab is read only, like a Run.
@@ -239,6 +244,7 @@ export function InfoTab({
   const versionRef = run ? (run.pipeline_version ?? null) : shownVersion;
   const version = versionRef ? versionLabel({ number: versionRef.number, title: versionRef.title }) : null;
   const waiting = run?.waiting_for_started_nodes ?? 0;
+  const budgetRegion = budgetReachedRegion(run);
   // A Run's Info leaves out what the Apparence hides; its name, its status and its banners always show.
   const marks = useElementMarks();
   const note = marks(RUN_INFO.note);
@@ -290,7 +296,9 @@ export function InfoTab({
           />
         </div>
       )}
-      {run?.awaiting_reason && (
+      {run && budgetRegion != null ? (
+        <BudgetReachedBanner run={run} regionId={budgetRegion} pipeline={pipeline} onShowRegion={onClose} />
+      ) : run?.awaiting_reason && (
         <div data-testid="run-awaiting-reason">
           {/* #588: only an incident carries a machine slug; a declared wait is
               the agent's question (or an awaiting child), not an interruption. */}

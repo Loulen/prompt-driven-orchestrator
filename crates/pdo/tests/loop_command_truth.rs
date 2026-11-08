@@ -120,6 +120,65 @@ loops:
     max_iter: $max_laps
 "#;
 
+/// A bounded two-member loop capped at $0.50 through a `$var` (ADR draft
+/// plafond-de-cout-de-boucle), with an exhaustion exit at `max_iter`. Its first
+/// lap costs $5 (a planted transcript), so the re-entry that would start lap 2
+/// meets the cap.
+const CAPPED_PIPELINE_NAME: &str = "capped-truth-test";
+const CAPPED_PIPELINE_YAML: &str = r#"name: capped-truth-test
+version: "1.0"
+variables:
+  budget: { type: float, default: 0.5 }
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: impl
+    name: impl
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: code
+  - id: rev
+    name: rev
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: review
+  - id: ship
+    name: ship
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: impl, port: task }
+  - source: { node: impl, port: code }
+    target: { node: rev, port: code }
+  - source: { node: rev, port: review }
+    target: { node: ship, port: review }
+    when: "iter >= max"
+  - source: { node: rev, port: review }
+    target: { node: impl, port: task }
+    else: true
+  - source: { node: ship, port: out }
+    target: { node: end, port: result }
+loops:
+  - id: review_loop
+    kind: bounded
+    members: [rev, impl]
+    max_iter: 5
+    max_cost_usd: $budget
+"#;
+
 fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     let pipelines_dir = repo.join(".pdo").join("pipelines");
     std::fs::create_dir_all(&pipelines_dir)?;
@@ -127,6 +186,7 @@ fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
         (LOOP_PIPELINE_NAME, LOOP_PIPELINE_YAML, "worker"),
         (LEGACY_PIPELINE_NAME, LEGACY_PIPELINE_YAML, "planner"),
         (EXHAUST_PIPELINE_NAME, EXHAUST_PIPELINE_YAML, "impl"),
+        (CAPPED_PIPELINE_NAME, CAPPED_PIPELINE_YAML, "impl"),
     ] {
         std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml)?;
         let prompts_dir = pipelines_dir.join(format!("{name}.prompts"));
@@ -688,5 +748,153 @@ async fn bump_region_that_actually_reschedules_reports_the_spawn() {
         command_events(&url, &run_id, "resume_run").await.len(),
         1,
         "routing a halted region lifts the Halt"
+    );
+}
+
+/// Plant a $5 Claude Code transcript (1 MTok of opus input) for the session
+/// the daemon pinned on `node_id`'s latest start, under the tempdir home.
+async fn plant_five_dollars(daemon: &TestDaemon, run_id: &str, node_id: &str) {
+    let session_id = daemon.pinned_session_id(run_id, node_id).await;
+    let worktree = daemon
+        .repo_root()
+        .join(".pdo/runs")
+        .join(run_id)
+        .join("worktree");
+    let enc = pdo_harness::claude_transcript::encode_working_dir(&worktree);
+    let dir = daemon.repo_root().join(".claude/projects").join(enc);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join(format!("{session_id}.jsonl")),
+        "{\"type\":\"assistant\",\"requestId\":\"r1\",\"message\":{\"id\":\"m1\",\
+         \"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":1000000,\"output_tokens\":0}}}\n",
+    )
+    .unwrap();
+}
+
+async fn get_run(daemon_url: &str, run_id: &str) -> serde_json::Value {
+    reqwest::get(format!("{daemon_url}/runs/{run_id}"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_loop_at_its_cost_cap_parks_budget_reached_and_never_starts_the_next_lap() {
+    let daemon = TestDaemon::spawn_with_home_override(seed, Some("exec sleep 600".to_string()))
+        .await
+        .unwrap();
+    let run_id = create_run(&daemon, CAPPED_PIPELINE_NAME).await;
+    let url = daemon.url();
+
+    wait_until("impl iter 1 to start", || async {
+        node_started_count(&url, &run_id, "impl").await >= 1
+    })
+    .await;
+    plant_five_dollars(&daemon, &run_id, "impl").await;
+
+    // While lap 1 runs, the read side shows the loop cost and its cap.
+    let run = get_run(&url, &run_id).await;
+    let cost = &run["loop_costs"]["review_loop"];
+    assert!(
+        (cost["usd"].as_f64().unwrap_or_default() - 5.0).abs() < 1e-9,
+        "the loop cost is the members' attributed cost: {cost}"
+    );
+    assert_eq!(cost["cap_usd"], 0.5, "the $var cap is resolved: {cost}");
+    assert_eq!(cost["members"][0]["node_id"], "impl");
+
+    // Drive lap 1 to its end through the command surface.
+    for (node_id, port) in [("impl", "code"), ("rev", "review")] {
+        wait_until(&format!("{node_id} iter 1 to start"), || async {
+            node_started_count(&url, &run_id, node_id).await >= 1
+        })
+        .await;
+        let (status, body) = post_command(
+            &url,
+            &run_id,
+            serde_json::json!({
+                "kind": "inject_artifact",
+                "path": format!("{node_id}/iter-1/{port}/output.md"),
+                "content": "# done\n",
+            }),
+        )
+        .await;
+        assert_eq!(status, 200, "inject_artifact for {node_id}: {body}");
+        let (status, body) = post_command(
+            &url,
+            &run_id,
+            serde_json::json!({ "kind": "mark_node_done", "node_id": node_id, "iter": 1 }),
+        )
+        .await;
+        assert_eq!(status, 200, "mark_node_done for {node_id}: {body}");
+    }
+
+    wait_until("the run to park awaiting-user (budget reached)", || async {
+        run_status(&url, &run_id).await == "awaiting_user"
+    })
+    .await;
+    let run = get_run(&url, &run_id).await;
+    assert_eq!(
+        run["awaiting_reason_code"], "region_budget_exhausted",
+        "{run}"
+    );
+    assert_eq!(run["awaiting_region_id"], "review_loop", "{run}");
+    let reason = run["awaiting_reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.starts_with("budget reached")
+            && reason.contains("of $0.50 after")
+            && reason.contains("lap 1/5"),
+        "the reason names the spend, the cap and the lap: {reason}"
+    );
+    let started = started_pairs(&url, &run_id).await;
+    assert_eq!(
+        started.iter().filter(|(n, _)| n == "impl").count(),
+        1,
+        "lap 2 never starts: {started:?}"
+    );
+    assert!(
+        !started.iter().any(|(n, _)| n == "ship"),
+        "the exhaustion exit is not followed: {started:?}"
+    );
+
+    // A plain resume re-parks: the cap still holds at the re-entry.
+    let (status, body) =
+        post_command(&url, &run_id, serde_json::json!({ "kind": "resume_run" })).await;
+    assert_eq!(status, 200, "resume_run: {body}");
+    wait_until("the run to park again", || async {
+        run_status(&url, &run_id).await == "awaiting_user"
+    })
+    .await;
+    let run = get_run(&url, &run_id).await;
+    assert_eq!(
+        run["awaiting_reason_code"], "region_budget_exhausted",
+        "{run}"
+    );
+    assert_eq!(node_started_count(&url, &run_id, "impl").await, 1);
+}
+
+#[tokio::test]
+async fn a_cost_cap_var_that_is_not_a_positive_amount_refuses_the_launch() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs", daemon.url()))
+        .json(&serde_json::json!({
+            "pipeline": CAPPED_PIPELINE_NAME,
+            "input": "x",
+            "variables": { "budget": 0 },
+            "target_repo": daemon.target_repo(),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let error = body["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("'review_loop'")
+            && error.contains("max_cost_usd")
+            && error.contains("$budget"),
+        "names the region, the field and the variable: {body}"
     );
 }

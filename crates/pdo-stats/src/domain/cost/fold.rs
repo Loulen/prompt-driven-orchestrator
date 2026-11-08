@@ -474,6 +474,7 @@ mod tests {
                     unpriced_models: vec!["claude-fable-5".to_string()],
                     unavailable_reasons: Vec::new(),
                     model_slices: Vec::new(),
+                    started_event: None,
                 },
                 pdo_run::domain::run_cost::CostContribution {
                     harness: "future".to_string(),
@@ -488,6 +489,7 @@ mod tests {
                     unpriced_models: Vec::new(),
                     unavailable_reasons: vec!["harness has no cost source".to_string()],
                     model_slices: Vec::new(),
+                    started_event: None,
                 },
             ],
         };
@@ -542,6 +544,7 @@ mod tests {
                         None => vec!["no readable transcript".to_string()],
                     },
                     model_slices: Vec::new(),
+                    started_event: None,
                 }],
             }
         }
@@ -601,6 +604,7 @@ mod tests {
                     unpriced_models: Vec::new(),
                     unavailable_reasons: vec!["harness has no cost source".to_string()],
                     model_slices: Vec::new(),
+                    started_event: None,
                 }],
             }],
             Vec::new(),
@@ -704,6 +708,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             model_slices: slices,
+            started_event: None,
         }
     }
 
@@ -918,6 +923,7 @@ mod tests {
             unpriced_models: Vec::new(),
             unavailable_reasons: Vec::new(),
             model_slices: vec![model_slice("claude-opus-4-8", true, None, Some(2.0))],
+            started_event: None,
         };
         let run = node_run_row("2026-09-01", "n", "Worker", vec![infra]);
 
@@ -959,6 +965,7 @@ mod tests {
                 unpriced_models: Vec::new(),
                 unavailable_reasons: vec!["harness has no cost source".to_string()],
                 model_slices: Vec::new(),
+                started_event: None,
             }],
         );
         let stats = fold_harness_cost(&[run], Vec::new(), &Default::default());
@@ -1045,6 +1052,7 @@ mod tests {
                 Some("high"),
                 Some(2.0),
             )],
+            started_event: None,
         };
         let unassigned = pdo_run::domain::run_cost::CostContribution {
             usd: Some(1.0),

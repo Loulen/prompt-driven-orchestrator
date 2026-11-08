@@ -40,6 +40,9 @@ export interface HarnessOption {
   /** When the daemon last probed this harness's catalogue (RFC 3339); `null`
    *  when never. Optional so a literal predating it still typechecks. */
   probedAt?: string | null;
+  /** Whether PDO can read this harness's cost. `false` ⇒ a loop member running
+   *  on it does not count toward the loop's cost cap. Absent ⇒ able. */
+  canCost?: boolean;
 }
 
 /** The picker's two sections (#586): the embedded floor, and the disk-declared
@@ -60,7 +63,7 @@ const FLOOR_CATALOG: HarnessCatalog = {
     // is not mis-greyed for the split-second before the fetch resolves; the served
     // value replaces it. Not a source of truth (the daemon re-resolves at spawn).
     { name: "claude", installed: true, models: [], modelContexts: {}, efforts: [], modelEfforts: {}, hasEffort: true, version: null },
-    { name: "opencode", installed: true, models: [], modelContexts: {}, efforts: [], modelEfforts: {}, hasEffort: false, version: null },
+    { name: "opencode", installed: true, models: [], modelContexts: {}, efforts: [], modelEfforts: {}, hasEffort: false, version: null, canCost: false },
   ],
   descriptors: [],
 };
@@ -93,6 +96,7 @@ export function harnessCatalog(
       hasEffort: h.has_effort ?? true,
       version: h.version ?? null,
       probedAt: h.probed_at ?? null,
+      canCost: h.can_cost ?? true,
     });
   }
   return catalog;

@@ -89,6 +89,14 @@
   line-height: 14px;
   color: var(--text-2);
 }
+.cv-n__loop[data-budget] { color: var(--color-st-await); }
+.cv-n__loop-cost[data-warn] { color: var(--color-st-await); }
+.cv-n__budget {
+  padding: 0 6px 4px;
+  font-family: var(--font-code);
+  font-size: var(--fs-2xs);
+  color: var(--color-st-await);
+}
 .cv-n__grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 6px; padding: 3px 6px 4px; }
 .cv-n__cell {
   display: flex;
@@ -300,6 +308,14 @@
 .cv-region__corner > span { overflow: hidden; text-overflow: ellipsis; color: var(--text-2); font-weight: var(--w-medium); }
 .cv-region__corner[data-exhausted] { --rg: var(--color-st-blocked); }
 .cv-region__corner[data-exhausted] > span { color: var(--rg); }
+/* The Coût de boucle after the counter; amber from 80 % of the cap (only the
+   text), the whole region amber once the cap parked the Run. */
+.cv-region__sep { opacity: 0.5; }
+.cv-region__corner > .cv-region__cost { font-weight: var(--w-regular); }
+.cv-region__corner > .cv-region__cost[data-warn] { color: var(--color-st-await); }
+.cv-region[data-budget] { --rg: var(--color-st-await); }
+.cv-region__corner[data-budget] { --rg: var(--color-st-await); }
+.cv-region__corner[data-budget] > span { color: var(--rg); }
 .cv-region__block {
   position: absolute;
   bottom: 4px;
@@ -318,6 +334,10 @@
   font-family: var(--font-code);
   font-size: var(--fs-2xs);
   color: var(--color-st-blocked);
+}
+.cv-region__block[data-budget] {
+  border-color: color-mix(in oklab, var(--color-st-await) 45%, var(--line));
+  color: var(--color-st-await);
 }
 
 /* ------------------------------------------------------------ notes */

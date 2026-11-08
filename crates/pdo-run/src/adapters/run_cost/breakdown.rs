@@ -148,6 +148,7 @@ pub fn compute_run_cost_breakdown(
                 .unwrap_or_default(),
             unavailable_reasons,
             model_slices,
+            started_event: Some(execution.started_event),
         });
     }
 
@@ -220,6 +221,7 @@ pub fn compute_run_cost_breakdown(
             } else {
                 Vec::new()
             },
+            started_event: None,
         });
     }
     if let Some((cost, models)) =
@@ -243,6 +245,7 @@ pub fn compute_run_cost_breakdown(
             // their node is not: they ventilate inside the model axis, under the
             // pipeline's "Unassigned" node, effort "not set".
             model_slices: leftover_model_slices(&models, 0),
+            started_event: None,
         });
     }
 

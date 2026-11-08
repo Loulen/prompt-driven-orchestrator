@@ -59,6 +59,12 @@ into a named, **bounded loop** (`↻ 1/8` on the canvas) with a `max_iter`, so a
 forever. A **collection loop** fans a node out over a list field of its input, with laps running in
 parallel.
 
+Each loop shows what it spent since it was entered, after its counter (`↻ 3/5 · ~$1.20`), with each
+member's share in the tooltip. A bounded loop also takes a cost cap, `max_cost_usd` (a dollar amount
+or a `$variable`): once the loop's cost reaches it, the lap in progress finishes, the next one does
+not start, and the run waits « budget reached » for you to raise the cap or end the region. It never
+follows the loop's exhaustion exit and never fails the run.
+
 Branches converge on any node: wire several edges into an `agent` and it waits until each incoming
 edge has fired or died, receives only the outputs of the branches that fired (same-named edges group
 into one input), and finds each isolated branch's code already merged back on the run's branch. A

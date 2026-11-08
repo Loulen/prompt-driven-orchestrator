@@ -558,7 +558,8 @@ describe("harnessState (#551/#452)", () => {
     });
     // #616: each option now also carries the served offer; these entries served
     // none, so the offer defaults (empty catalogues, hasEffort=true when
-    // `has_effort` is absent, no version, never probed).
+    // `has_effort` is absent, no version, never probed, a readable cost when
+    // `can_cost` is absent).
     const off = {
       models: [],
       modelContexts: {},
@@ -567,6 +568,7 @@ describe("harnessState (#551/#452)", () => {
       hasEffort: true,
       version: null,
       probedAt: null,
+      canCost: true,
     };
     expect(catalog.builtin).toEqual([
       { name: "claude", installed: true, ...off },

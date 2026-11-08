@@ -5,40 +5,9 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use super::views::NodeStateView;
 use super::*;
 use crate::domain::event::{EdgeInfo, NodeDefInfo};
-
-/// The TypeScript shape of `GET /runs/{id}`: the projected [`RunState`] plus what
-/// `get_run` adds to the JSON on the way out (`has_manager`, and the entity
-/// attributes the extensions stamped on the Run when it carries some).
-#[derive(TS)]
-#[ts(export, rename = "RunState")]
-#[allow(dead_code)]
-struct RunStateView {
-    #[ts(flatten)]
-    state: RunState,
-    #[ts(optional)]
-    has_manager: Option<bool>,
-    #[ts(optional)]
-    attributes: Option<std::collections::BTreeMap<String, String>>,
-}
-
-/// The TypeScript shape of one node of `GET /runs/{id}`: the projected
-/// [`NodeState`] plus the provisioning `get_run` copies from the iteration's
-/// `NodeStarted` event.
-#[derive(TS)]
-#[ts(export, rename = "NodeState")]
-#[allow(dead_code)]
-struct NodeStateView {
-    #[ts(flatten)]
-    state: NodeState,
-    #[ts(optional)]
-    provisioning: Option<pdo_workspace::domain::provisioning::ProvisioningRules>,
-    #[ts(optional)]
-    provisioning_plan: Option<pdo_workspace::domain::provisioning::ProvisioningPlan>,
-    #[ts(optional)]
-    provisioning_frozen_at: Option<String>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, rename = "ProjectedRunState")]
@@ -91,6 +60,14 @@ pub struct RunState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub awaiting_reason_code: Option<String>,
+    /// The loop region a region park is about: projected from the
+    /// `RunInterrupted` payload's `region_id` (`region_exhausted`,
+    /// `region_ended_unrouted`, `region_budget_exhausted`), cleared with
+    /// [`awaiting_reason_code`]. Lets the canvas mark THAT region « budget
+    /// reached » without parsing the prose. Absent on historical logs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub awaiting_region_id: Option<String>,
     /// The « Attente des nœuds lancés » (ADR-0086) as the Run's snapshot froze
     /// it: `true` ⇒ the Run waits at `End` for the nodes it launched.
     /// `skip_serializing_if` keeps the wire byte-identical when unset.
@@ -396,4 +373,13 @@ pub struct RunState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub tree_cost: Option<TreeCost>,
+    /// The **Coût de boucle** per loop region id, with its effective
+    /// **Plafond de coût**. Derived on read from the same fold as
+    /// [`Self::cost`], never persisted; empty for a Run with no loop region or
+    /// before a member's first execution. The interpreter also fills it on
+    /// the copy of the state it hands the scheduler at a re-entry, which reads
+    /// it to check the cap (ADR draft plafond-de-cout-de-boucle).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[ts(optional, as = "Option<HashMap<String, LoopCost>>")]
+    pub loop_costs: HashMap<String, LoopCost>,
 }

@@ -434,6 +434,7 @@ mod tests {
             wait_for_started_nodes: false,
         };
         let region = LoopRegion {
+            max_cost_usd: None,
             id: "review_loop".into(),
             kind: LoopKind::Bounded,
             members: vec!["impl".into(), "rev".into()],
@@ -569,6 +570,7 @@ mod tests {
             wait_for_started_nodes: false,
         };
         let region = LoopRegion {
+            max_cost_usd: None,
             id: "review_loop".into(),
             kind: LoopKind::Bounded,
             members: vec!["impl".into(), "rev".into()],
@@ -640,6 +642,7 @@ mod tests {
             wait_for_started_nodes: false,
         };
         let region = LoopRegion {
+            max_cost_usd: None,
             id: "spin".into(),
             kind: LoopKind::Bounded,
             members: vec!["worker".into()],
@@ -696,6 +699,7 @@ mod tests {
             wait_for_started_nodes: false,
         };
         let region = LoopRegion {
+            max_cost_usd: None,
             id: "review_loop".into(),
             kind: LoopKind::Bounded,
             members: vec!["impl".into(), "rev".into()],
@@ -835,6 +839,7 @@ mod tests {
             wait_for_started_nodes: false,
         };
         let region = LoopRegion {
+            max_cost_usd: None,
             id: "per-issue".into(),
             kind: LoopKind::Collection,
             members: vec!["fixer".into()],

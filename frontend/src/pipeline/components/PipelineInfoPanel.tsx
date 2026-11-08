@@ -215,6 +215,7 @@ export default function PipelineInfoPanel({
           pipelineId={run ? null : (assistantId ?? null)}
           hasAssistant={hasAssistant}
           onOpenDiff={() => selectTab("diff")}
+          onClose={onClose}
         />
       )}
 

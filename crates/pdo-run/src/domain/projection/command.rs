@@ -37,6 +37,7 @@ pub(super) fn apply_command_event(state: &mut RunState, event: &Event) {
             state.failure_reason = None;
             state.awaiting_reason = None;
             state.awaiting_reason_code = None;
+            state.awaiting_region_id = None;
             // Re-drive the interrupted work (ADR-0049 default: restart with the
             // partial artefacts, which persist in the sub-worktree). Drop each
             // `Interrupted` node from the projection — exactly like

@@ -149,3 +149,22 @@ describe("refresh models: the catalogue's size and age", () => {
     expect(catalog.builtin[1].probedAt).toBeNull();
   });
 });
+
+describe("harnessCatalog — whether PDO can read a harness's cost", () => {
+  it("carries the served can_cost, and treats an absent one as able", () => {
+    const catalog = harnessCatalog({
+      path: null,
+      names: ["claude", "opencode"],
+      harnesses: [
+        { name: "claude", source: "builtin", installed: true, can_cost: true },
+        { name: "opencode", source: "builtin", installed: true, can_cost: false },
+        { name: "aider", source: "descriptor", installed: true },
+      ],
+      rejected: [],
+      reason: null,
+    });
+    expect(findHarnessOption(catalog, "claude")?.canCost).toBe(true);
+    expect(findHarnessOption(catalog, "opencode")?.canCost).toBe(false);
+    expect(findHarnessOption(catalog, "aider")?.canCost).toBe(true);
+  });
+});

@@ -14,8 +14,9 @@ use crate::application::paths::run_scoped_pipeline_path;
 use crate::application::ports::{BoxFuture, LiveFacts};
 use crate::domain::event::{edge_info_from_pipeline, node_def_from_pipeline, Event};
 use crate::domain::prices::PriceTable;
+use crate::domain::run_cost::loop_cost::loop_costs;
 use crate::domain::run_refs;
-use crate::domain::state::{CostStat, LocStat, NodeCost, RunState};
+use crate::domain::state::{CostStat, LocStat, LoopCost, NodeCost, RunState};
 
 /// The disk of this daemon's Runs.
 pub struct DiskLiveFacts {
@@ -109,6 +110,18 @@ impl LiveFacts for DiskLiveFacts {
                 &prices,
             )
             .cost
+        })
+    }
+
+    fn loop_costs<'a>(
+        &'a self,
+        run: &'a RunState,
+        events: &'a [Event],
+        regions: &'a [pdo_pipeline::domain::pipeline::LoopRegion],
+    ) -> BoxFuture<'a, HashMap<String, LoopCost>> {
+        Box::pin(async move {
+            let breakdown = self.cost_breakdown(run, events);
+            loop_costs(&breakdown, events, regions)
         })
     }
 }
@@ -207,7 +220,7 @@ pub fn augment_run_state_from_disk(
         &run_state.run_id,
         prices,
     );
-    run_state.cost = breakdown.cost;
+    run_state.cost = breakdown.cost.clone();
 
     let mut node_costs: HashMap<String, (NodeCost, bool)> = HashMap::new();
     for contribution in breakdown
@@ -280,4 +293,17 @@ pub fn augment_run_state_from_disk(
 
     run_state.node_defs = pipe.nodes.iter().map(node_def_from_pipeline).collect();
     run_state.edges = pipe.edges.iter().map(edge_info_from_pipeline).collect();
+
+    // The Coût de boucle of each region, folded from the SAME breakdown the Run
+    // total and the node costs above were read from (ADR-0058), with the
+    // effective cap the scheduler applies at re-entry (`$var` resolved against
+    // the Run's variables).
+    run_state.loop_costs = loop_costs(&breakdown, events, &pipe.loops);
+    let vars = crate::application::scheduler::frontmatter::resolve_run_variables(pipe, events);
+    for region in &pipe.loops {
+        let cap = crate::domain::scheduler::effective_region_max_cost(region, &vars);
+        if let Some(cost) = run_state.loop_costs.get_mut(&region.id) {
+            cost.cap_usd = cap;
+        }
+    }
 }

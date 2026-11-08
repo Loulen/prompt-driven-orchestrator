@@ -562,13 +562,69 @@ describe("deriveLoopRegions — bounded region rendering (ADR-0011 / #148)", () 
     expect(regions[0].exhausted).toBe(false);
   });
 
-  it("marks the region exhausted at max_iter on a live run", () => {
+  it("never marks the region exhausted during its last lap or after a normal exit", () => {
+    const run = makeRunState({ impl: "completed", rev: "running" });
+    run.nodes.impl.iter = 3;
+    run.nodes.rev.iter = 3;
+    expect(deriveLoopRegions(regionPipeline(3), run)[0].exhausted).toBe(false);
+    run.nodes.rev.status = "completed";
+    run.status = "completed";
+    const regions = deriveLoopRegions(regionPipeline(3), run);
+    expect(regions[0].counterText).toBe("3/3");
+    expect(regions[0].exhausted).toBe(false);
+  });
+
+  it("marks the region exhausted while the Run is parked region_exhausted on it", () => {
     const run = makeRunState({ impl: "completed", rev: "completed" });
     run.nodes.impl.iter = 3;
     run.nodes.rev.iter = 3;
-    const regions = deriveLoopRegions(regionPipeline(3), run);
-    expect(regions[0].counterText).toBe("3/3");
-    expect(regions[0].exhausted).toBe(true);
+    run.status = "awaiting_user";
+    run.awaiting_reason_code = "region_exhausted";
+    run.awaiting_region_id = "review_loop";
+    expect(deriveLoopRegions(regionPipeline(3), run)[0].exhausted).toBe(true);
+    run.awaiting_region_id = "other_loop";
+    expect(deriveLoopRegions(regionPipeline(3), run)[0].exhausted).toBe(false);
+    // A historical park names no region: the counter decides.
+    delete run.awaiting_region_id;
+    expect(deriveLoopRegions(regionPipeline(3), run)[0].exhausted).toBe(true);
+  });
+
+  it("marks the region budget reached, never exhausted, on a budget park", () => {
+    const run = makeRunState({ impl: "completed", rev: "completed" });
+    run.nodes.impl.iter = 2;
+    run.nodes.rev.iter = 2;
+    run.status = "awaiting_user";
+    run.awaiting_reason_code = "region_budget_exhausted";
+    run.awaiting_region_id = "review_loop";
+    run.loop_costs = {
+      review_loop: {
+        usd: 5.12, estimated: true, partial: false, executions: 4, readable_executions: 4,
+        members: [], cap_usd: 5,
+      },
+    };
+    const r = deriveLoopRegions(regionPipeline(3), run)[0];
+    expect(r.budgetReached).toBe(true);
+    expect(r.exhausted).toBe(false);
+    expect(r.costWarn).toBe(true);
+    expect(r.cost?.text).toBe("~$5.12");
+    expect(r.cap?.text).toBe("$5");
+  });
+
+  it("makes room under the cards for the block of a parked region, so it never covers a card", () => {
+    // The cards end at y = 200 + 66; the block (20 px high, 4 px off the box's
+    // bottom) gets a 28 px band under the bottom pad.
+    const cardsBottom = 266;
+    const bottom = (r: ReturnType<typeof deriveLoopRegions>[number]) => r.box!.y + r.box!.height;
+    const run = makeRunState({ impl: "completed", rev: "completed" });
+    run.nodes.impl.iter = 2;
+    run.nodes.rev.iter = 2;
+    expect(bottom(deriveLoopRegions(regionPipeline(3), run)[0]) - cardsBottom).toBe(20);
+    run.status = "awaiting_user";
+    run.awaiting_reason_code = "region_budget_exhausted";
+    run.awaiting_region_id = "review_loop";
+    expect(bottom(deriveLoopRegions(regionPipeline(3), run)[0]) - cardsBottom).toBe(20 + 28);
+    run.awaiting_reason_code = "region_exhausted";
+    expect(bottom(deriveLoopRegions(regionPipeline(3), run)[0]) - cardsBottom).toBe(20 + 28);
   });
 
   it("renders a single-member region as a badge, not a box", () => {

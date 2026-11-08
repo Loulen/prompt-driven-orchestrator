@@ -1610,4 +1610,62 @@
     white-space: nowrap;
     pointer-events: none;
   }
+
+  /* ------------------------------------------- loop cost and cost cap (region) */
+  .ei-loopcost {
+    display: flex;
+    flex-direction: column;
+    gap: var(--g-2);
+    padding: 2px 0 4px;
+  }
+  .ei-loopcost__line {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--g-2);
+    min-width: 0;
+  }
+  .ei-loopcost__amount { color: var(--text-1); font-size: var(--fs-sm); }
+  .ei-loopcost__amount[data-warn] { color: var(--color-st-await); }
+  .ei-loopcost__meta { color: var(--text-3); font-size: var(--fs-xs); white-space: nowrap; }
+  .ei-loopcost__bar {
+    height: 3px;
+    overflow: hidden;
+    border-radius: 2px;
+    background: var(--hover);
+  }
+  .ei-loopcost__bar > span {
+    display: block;
+    height: 100%;
+    background: var(--primary);
+  }
+  .ei-loopcost__bar[data-warn] > span { background: var(--color-st-await); }
+  .ei-cap {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+  }
+  .ei-cap > .d-input { flex: 1 1 auto; min-width: 0; }
+  .ei-cap__prefix { flex: none; color: var(--text-3); font-size: var(--fs-xs); }
+  .ei-note--await { color: var(--color-st-await); }
+  .ei-note--info { color: var(--text-3); }
+  .ei-row__meta[data-await] { color: var(--color-st-await); }
+  .ei-budget {
+    margin: 0;
+    padding: var(--g-3) var(--g-4);
+    color: var(--text-2);
+    font-size: var(--fs-xs);
+    line-height: 1.5;
+  }
+  .ei-budget strong { color: var(--text-1); font-weight: var(--w-medium); }
+  .ei-budget__region {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--primary);
+    font: inherit;
+    cursor: pointer;
+  }
+  .ei-budget__region:hover { text-decoration: underline; }
 }

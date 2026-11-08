@@ -13,6 +13,7 @@ import type { LibraryPipelineEntry } from "../api/libraryPipelines";
 import RunShellModal from "../../session/components/RunShellModal";
 import RetryAllConfirmModal from "../../run/components/runsList/RetryAllConfirmModal";
 import { useCanvasNodePlay } from "../store/useCanvasNodePlay";
+import { useRegionSelectionClearsCards } from "../store/useRegionSelectionClearsCards";
 import { useCanvasChildRuns } from "../store/useCanvasChildRuns";
 import { useCanvasCompaction } from "../store/useCanvasCompaction";
 import { CanvasShiftContext, useStoredEdgeWrites } from "../store/useStoredEdgeWrites";
@@ -210,6 +211,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   useEffect(() => {
     setEdges(derivedEdges);
   }, [derivedEdges, setEdges]);
+  useRegionSelectionClearsCards(setNodes);
 
   const onNodeDragStop = useCanvasNodeDragStop(shift);
 
@@ -281,18 +283,16 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           onNodeClick={(_event, node) => {
-            // Region boxes are decorative; clicking one is a no-op (they fall
-            // back to the pane selection path via their pass-through body).
+            // Each click opens an inspector, which Pipeline info gives way to.
+            onCloseInfo?.();
+            // Only a region's corner and `raise cap` reach here: LoopRegionNode opens its inspector.
             if (node.type === "loopRegion") return;
-            // A note (#307) opens the NoteInspector, not the node inspector — it
-            // is a canvas concept, not a pipeline node.
+            // A note (#307), a canvas concept, opens the NoteInspector.
             if (node.type === "note") {
               setSelection({ kind: "note", id: null, noteId: node.id });
-              onCloseInfo?.();
               return;
             }
             setSelection({ kind: "node", id: node.id });
-            onCloseInfo?.();
           }}
           onEdgeClick={(_event, edge) => {
             // Clicking an edge opens the edge detail panel (#147), keyed by the

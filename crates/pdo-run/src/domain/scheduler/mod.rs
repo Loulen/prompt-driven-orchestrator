@@ -59,6 +59,11 @@ pub enum SchedulerAction {
         /// string-matching the prose (e.g. `unrouted`, `region_exhausted`).
         reason_code: String,
         message: String,
+        /// The loop region the park is about, when it is one
+        /// (`region_exhausted`, `region_ended_unrouted`,
+        /// `region_budget_exhausted`), so the canvas marks THAT region without
+        /// parsing the prose.
+        region_id: Option<String>,
     },
     Complete,
     SwitchRouted {
@@ -3181,6 +3186,7 @@ mod tests {
         over: &str,
     ) -> pdo_pipeline::domain::pipeline::LoopRegion {
         pdo_pipeline::domain::pipeline::LoopRegion {
+            max_cost_usd: None,
             id: id.into(),
             kind: pdo_pipeline::domain::pipeline::LoopKind::Collection,
             members: members.iter().map(|m| m.to_string()).collect(),
@@ -3817,6 +3823,7 @@ loops:
                 make_cond_edge("rev", "review", "impl", "task", None, true),
             ],
             loops: vec![pdo_pipeline::domain::pipeline::LoopRegion {
+                max_cost_usd: None,
                 id: "review_loop".into(),
                 kind: pdo_pipeline::domain::pipeline::LoopKind::Bounded,
                 members: vec!["impl".into(), "rev".into()],
@@ -4463,6 +4470,7 @@ loops:
                 make_cond_edge("tst", "verdict", "impl", "review", None, true),
             ],
             loops: vec![pdo_pipeline::domain::pipeline::LoopRegion {
+                max_cost_usd: None,
                 id: "fix_loop".into(),
                 kind: pdo_pipeline::domain::pipeline::LoopKind::Bounded,
                 members: vec!["impl".into(), "tst".into()],
@@ -4655,6 +4663,7 @@ loops:
         max_iter: i64,
     ) -> pdo_pipeline::domain::pipeline::LoopRegion {
         pdo_pipeline::domain::pipeline::LoopRegion {
+            max_cost_usd: None,
             id: id.into(),
             kind: pdo_pipeline::domain::pipeline::LoopKind::Bounded,
             members: members.iter().map(|m| (*m).into()).collect(),
@@ -5059,5 +5068,239 @@ loops:
             vec!["ship"],
             "an exhausted loop's unfired exit is settled — its target is unreachable"
         );
+    }
+
+    // ---- The Plafond de coût, checked at re-entry (ADR draft
+    // plafond-de-cout-de-boucle) ----
+
+    /// `review_loop_with_ship(max_iter)` capped at `cap`, both members
+    /// completed at `lap`, the region counter on `lap`, and the Coût de boucle
+    /// the interpreter would fold in (`spent`, `partial`).
+    fn capped_loop_at_lap(
+        max_iter: i64,
+        cap: serde_yaml::Value,
+        lap: i64,
+        spent: Option<f64>,
+        partial: bool,
+    ) -> (PipelineDef, RunState) {
+        let mut pipeline = review_loop_with_ship(max_iter);
+        pipeline.loops[0].max_cost_usd = Some(cap);
+        let mut rs = empty_run_state();
+        rs.nodes.insert(
+            "implementer".into(),
+            completed_node_iter("implementer", lap),
+        );
+        rs.nodes
+            .insert("tester".into(), completed_node_iter("tester", lap));
+        rs.loop_states.insert(
+            "review_loop".into(),
+            crate::domain::state::LoopState {
+                loop_node_id: "review_loop".into(),
+                current_iter: lap,
+                max_iter,
+                break_received: false,
+                done: false,
+            },
+        );
+        rs.loop_costs.insert(
+            "review_loop".into(),
+            crate::domain::state::LoopCost {
+                usd: spent,
+                estimated: true,
+                partial,
+                unpriced_models: Vec::new(),
+                unavailable_reasons: Vec::new(),
+                executions: 2 * lap,
+                readable_executions: if partial { lap } else { 2 * lap },
+                members: Vec::new(),
+                cap_usd: None,
+            },
+        );
+        (pipeline, rs)
+    }
+
+    fn usd(v: f64) -> serde_yaml::Value {
+        serde_yaml::to_value(v).unwrap()
+    }
+
+    fn reenter(
+        pipeline: &PipelineDef,
+        rs: &RunState,
+        vars: &HashMap<String, serde_yaml::Value>,
+    ) -> Vec<SchedulerAction> {
+        let fm = tester_verdict("Fail");
+        evaluate_outgoing_edges_full(pipeline, rs, "tester", vars, &fm["tester"], &fm)
+    }
+
+    fn budget_park(actions: &[SchedulerAction]) -> Option<(String, Option<String>)> {
+        actions.iter().find_map(|a| match a {
+            SchedulerAction::Interrupt {
+                reason_code,
+                message,
+                region_id,
+            } if reason_code == "region_budget_exhausted" => {
+                Some((message.clone(), region_id.clone()))
+            }
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn under_the_cost_cap_the_next_lap_starts() {
+        let (pipeline, rs) = capped_loop_at_lap(5, usd(5.0), 2, Some(4.99), false);
+        let actions = reenter(&pipeline, &rs, &HashMap::new());
+        assert!(budget_park(&actions).is_none(), "{actions:?}");
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "implementer".into(),
+                iter: 3
+            }),
+            "under the cap the loop takes lap 3: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn reaching_the_cost_cap_parks_the_run_and_never_follows_the_exit() {
+        let (pipeline, rs) = capped_loop_at_lap(5, usd(5.0), 4, Some(5.12), false);
+        let actions = reenter(&pipeline, &rs, &HashMap::new());
+        let (message, region_id) = budget_park(&actions).expect("budget park");
+        assert_eq!(region_id.as_deref(), Some("review_loop"));
+        assert!(
+            !actions.iter().any(|a| matches!(
+                a,
+                SchedulerAction::Spawn { .. }
+                    | SchedulerAction::LoopIterStarted { .. }
+                    | SchedulerAction::Complete
+                    | SchedulerAction::Halt { .. }
+            )),
+            "no lap, no exit, no terminal action: {actions:?}"
+        );
+        for needle in [
+            "budget reached",
+            "review_loop",
+            "~$5.12",
+            "of $5 after",
+            "lap 4/5",
+            "force_route",
+            "end_region",
+            "max_cost_usd",
+        ] {
+            assert!(
+                message.contains(needle),
+                "message names {needle}: {message}"
+            );
+        }
+        assert!(!message.contains("partial"), "{message}");
+    }
+
+    #[test]
+    fn exactly_at_the_cap_counts_as_reached() {
+        let (pipeline, rs) = capped_loop_at_lap(5, usd(1.0), 1, Some(1.0), false);
+        assert!(budget_park(&reenter(&pipeline, &rs, &HashMap::new())).is_some());
+    }
+
+    #[test]
+    fn the_wired_exhaustion_exit_is_not_followed_on_budget() {
+        let (mut pipeline, rs) = capped_loop_at_lap(5, usd(0.5), 2, Some(0.75), false);
+        pipeline.edges.push(make_cond_edge(
+            "tester",
+            "review",
+            "ship",
+            "review",
+            Some("iter: {gte: 5}"),
+            false,
+        ));
+        let actions = reenter(&pipeline, &rs, &HashMap::new());
+        assert!(budget_park(&actions).is_some(), "{actions:?}");
+        assert!(
+            !actions.contains(&SchedulerAction::Spawn {
+                node_id: "ship".into(),
+                iter: 1
+            }),
+            "the exhaustion exit is not followed: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn max_iter_wins_when_both_bounds_are_reached_together() {
+        let (pipeline, rs) = capped_loop_at_lap(3, usd(1.0), 3, Some(9.0), false);
+        let actions = reenter(&pipeline, &rs, &HashMap::new());
+        assert!(budget_park(&actions).is_none(), "{actions:?}");
+        assert!(
+            actions.iter().any(|a| matches!(
+                a,
+                SchedulerAction::Interrupt { reason_code, region_id, .. }
+                    if reason_code == "region_exhausted"
+                        && region_id.as_deref() == Some("review_loop")
+            )),
+            "max_iter exhaustion (unrouted here) owns the decision: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn a_partial_cost_counts_its_known_part_and_says_so() {
+        let (pipeline, rs) = capped_loop_at_lap(5, usd(2.0), 2, Some(2.5), true);
+        let (message, _) = budget_park(&reenter(&pipeline, &rs, &HashMap::new()))
+            .expect("the known part reaches the cap");
+        assert!(message.contains("partial cost"), "{message}");
+    }
+
+    #[test]
+    fn an_unknown_cost_never_blocks_the_loop() {
+        let (pipeline, rs) = capped_loop_at_lap(5, usd(0.01), 2, None, true);
+        let actions = reenter(&pipeline, &rs, &HashMap::new());
+        assert!(budget_park(&actions).is_none(), "{actions:?}");
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "implementer".into(),
+            iter: 3
+        }));
+    }
+
+    #[test]
+    fn no_loop_cost_input_never_parks() {
+        let (pipeline, mut rs) = capped_loop_at_lap(5, usd(0.01), 2, Some(9.0), false);
+        rs.loop_costs.clear();
+        assert!(budget_park(&reenter(&pipeline, &rs, &HashMap::new())).is_none());
+    }
+
+    #[test]
+    fn a_var_cost_cap_reads_the_runs_variables() {
+        let (pipeline, rs) = capped_loop_at_lap(
+            5,
+            serde_yaml::Value::String("$budget".into()),
+            2,
+            Some(3.0),
+            false,
+        );
+        let mut vars = HashMap::new();
+        vars.insert("budget".to_string(), usd(4.0));
+        assert!(budget_park(&reenter(&pipeline, &rs, &vars)).is_none());
+        vars.insert("budget".to_string(), usd(2.5));
+        assert!(budget_park(&reenter(&pipeline, &rs, &vars)).is_some());
+    }
+
+    #[test]
+    fn an_uncapped_loop_ignores_its_cost() {
+        let (mut pipeline, rs) = capped_loop_at_lap(5, usd(1.0), 2, Some(99.0), false);
+        pipeline.loops[0].max_cost_usd = None;
+        assert!(budget_park(&reenter(&pipeline, &rs, &HashMap::new())).is_none());
+    }
+
+    #[test]
+    fn an_ended_region_routes_its_exit_even_over_budget() {
+        // `end_region` on a budget-parked loop is the documented way out: the
+        // ended region exits, the cap is not consulted.
+        let (mut pipeline, mut rs) = capped_loop_at_lap(5, usd(1.0), 2, Some(3.0), false);
+        pipeline.edges.push(make_cond_edge(
+            "tester",
+            "review",
+            "ship",
+            "review",
+            Some("iter: {gte: 5}"),
+            false,
+        ));
+        rs.loop_states.get_mut("review_loop").unwrap().done = true;
+        let actions = reenter(&pipeline, &rs, &HashMap::new());
+        assert!(budget_park(&actions).is_none(), "{actions:?}");
     }
 }

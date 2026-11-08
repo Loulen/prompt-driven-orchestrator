@@ -82,6 +82,7 @@ pub fn materialize_missing_regions(pipeline: &PipelineDef) -> Vec<LoopRegion> {
             continue;
         }
         out.push(LoopRegion {
+            max_cost_usd: None,
             id: generated_region_id(&cycle),
             kind: LoopKind::Bounded,
             members: cycle,
@@ -158,6 +159,73 @@ pub fn resolve_region_max_iter(
         }
         _ => DEFAULT_MAX_ITER,
     }
+}
+
+/// The dollar amount of a **literal** `max_cost_usd` (ADR draft
+/// plafond-de-cout-de-boucle): a positive, finite number (a numeric string is
+/// accepted, as a YAML author may quote it). `Err` says why it is refused,
+/// worded to follow `max_cost_usd`.
+pub fn cost_cap_amount(value: &serde_yaml::Value) -> Result<f64, String> {
+    let amount = match value {
+        serde_yaml::Value::Number(n) => n.as_f64(),
+        serde_yaml::Value::String(s) => s.trim().parse::<f64>().ok(),
+        _ => None,
+    };
+    match amount {
+        Some(usd) if usd.is_finite() && usd > 0.0 => Ok(usd),
+        Some(usd) => Err(format!(
+            "must be a positive dollar amount, got {usd} (remove the field for no cap)"
+        )),
+        None => Err(format!(
+            "must be a positive dollar amount or a $variable, got {}",
+            serde_yaml::to_string(value).unwrap_or_default().trim()
+        )),
+    }
+}
+
+/// Resolves a bounded region's **Plafond de coût**: `Ok(None)` when no cap is
+/// set (or the region is a `collection`), the dollar amount otherwise. A `$var`
+/// reference reads `vars` (the Run's resolved variables, so it is fixed at
+/// launch). `Err` when the cap does not resolve to a positive amount: the
+/// launch refuses such a Run ([`cost_cap_errors_at_launch`]).
+pub fn resolve_region_max_cost(
+    region: &LoopRegion,
+    vars: &HashMap<String, serde_yaml::Value>,
+) -> Result<Option<f64>, String> {
+    if region.kind != LoopKind::Bounded {
+        return Ok(None);
+    }
+    let Some(cap) = &region.max_cost_usd else {
+        return Ok(None);
+    };
+    if let serde_yaml::Value::String(s) = cap {
+        if let Some(var_name) = s.strip_prefix('$') {
+            let value = vars
+                .get(var_name)
+                .ok_or_else(|| format!("references '{s}', which has no value at launch"))?;
+            return cost_cap_amount(value)
+                .map(Some)
+                .map_err(|why| format!("(from '{s}') {why}"));
+        }
+    }
+    cost_cap_amount(cap).map(Some)
+}
+
+/// The launch-time refusals of the regions' cost caps: one message per region
+/// whose `max_cost_usd` does not resolve against the Run's variables.
+pub fn cost_cap_errors_at_launch(
+    pipeline: &PipelineDef,
+    vars: &HashMap<String, serde_yaml::Value>,
+) -> Vec<String> {
+    pipeline
+        .loops
+        .iter()
+        .filter_map(|region| {
+            resolve_region_max_cost(region, vars)
+                .err()
+                .map(|why| format!("loop region '{}': max_cost_usd {why}", region.id))
+        })
+        .collect()
 }
 
 /// Resolves a legacy `type: loop` node's `max_iter`, with the same semantics
@@ -267,6 +335,7 @@ mod tests {
             wait_for_started_nodes: false,
         };
         let region = LoopRegion {
+            max_cost_usd: None,
             id: "review_loop".into(),
             kind: LoopKind::Bounded,
             members: vec!["impl".into(), "rev".into()],
@@ -277,6 +346,62 @@ mod tests {
     }
 
     // ── Destroy-vs-keep on edge removal (ADR-0011 / #150) ─────────────────────
+
+    #[test]
+    fn a_var_cost_cap_is_resolved_and_checked_at_launch() {
+        let (mut pipeline, mut region) = review_loop();
+        region.max_cost_usd = Some(serde_yaml::Value::String("$budget".into()));
+        pipeline.loops = vec![region];
+        let mut vars = HashMap::new();
+        vars.insert("budget".to_string(), serde_yaml::to_value(1.5).unwrap());
+        assert_eq!(
+            resolve_region_max_cost(&pipeline.loops[0], &vars),
+            Ok(Some(1.5))
+        );
+        assert!(cost_cap_errors_at_launch(&pipeline, &vars).is_empty());
+
+        vars.insert("budget".to_string(), serde_yaml::to_value(0).unwrap());
+        let errors = cost_cap_errors_at_launch(&pipeline, &vars);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("'review_loop'")
+                && errors[0].contains("max_cost_usd")
+                && errors[0].contains("$budget")
+                && errors[0].contains("positive"),
+            "{errors:?}"
+        );
+
+        vars.insert(
+            "budget".to_string(),
+            serde_yaml::Value::String("many".into()),
+        );
+        assert_eq!(cost_cap_errors_at_launch(&pipeline, &vars).len(), 1);
+    }
+
+    #[test]
+    fn an_uncapped_or_collection_region_has_no_cost_cap() {
+        let (_, mut region) = review_loop();
+        assert_eq!(resolve_region_max_cost(&region, &HashMap::new()), Ok(None));
+        region.kind = LoopKind::Collection;
+        region.max_cost_usd = Some(serde_yaml::to_value(1).unwrap());
+        assert_eq!(resolve_region_max_cost(&region, &HashMap::new()), Ok(None));
+    }
+
+    #[test]
+    fn a_literal_cost_cap_accepts_a_quoted_number_and_refuses_the_rest() {
+        assert_eq!(
+            cost_cap_amount(&serde_yaml::to_value(2.5).unwrap()),
+            Ok(2.5)
+        );
+        assert_eq!(
+            cost_cap_amount(&serde_yaml::Value::String(" 3 ".into())),
+            Ok(3.0)
+        );
+        for bad in ["0", "-1", "lots", "[1]"] {
+            let value: serde_yaml::Value = serde_yaml::from_str(bad).unwrap();
+            assert!(cost_cap_amount(&value).is_err(), "{bad} must be refused");
+        }
+    }
 
     #[test]
     fn deleting_the_only_back_edge_destroys_the_region() {
@@ -313,6 +438,7 @@ mod tests {
                 edge("mid", "more", "impl", "more"),          // 4 back-edge B
             ],
             loops: vec![LoopRegion {
+                max_cost_usd: None,
                 id: "review_loop".into(),
                 kind: LoopKind::Bounded,
                 members: vec!["impl".into(), "rev".into(), "mid".into()],
@@ -344,6 +470,7 @@ mod tests {
         // edge never pops the bounded-region destroy confirmation.
         let (mut pipeline, _region) = collection_fanout_convergence();
         pipeline.loops = vec![LoopRegion {
+            max_cost_usd: None,
             id: "per-issue".into(),
             kind: LoopKind::Collection,
             members: vec!["fixer".into()],
@@ -388,6 +515,7 @@ mod tests {
             wait_for_started_nodes: false,
         };
         let region = LoopRegion {
+            max_cost_usd: None,
             id: "per-issue".into(),
             kind: LoopKind::Collection,
             members: vec!["fixer".into()],

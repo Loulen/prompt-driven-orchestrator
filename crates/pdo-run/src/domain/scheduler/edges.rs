@@ -381,6 +381,7 @@ pub(super) fn route_outgoing_edges(
                 );
                 actions.push(SchedulerAction::Interrupt {
                     reason_code: "unrouted".to_string(),
+                    region_id: None,
                     message: format!(
                         "unrouted: node '{completed_node_id}' (iter {source_iter}) completed \
                          but conditional routing suppressed every path to End (no live branch \

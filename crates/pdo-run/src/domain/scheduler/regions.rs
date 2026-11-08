@@ -22,6 +22,86 @@ pub fn effective_region_max_iter(
         })
 }
 
+/// The bounded region's **effective** cost cap (ADR draft
+/// plafond-de-cout-de-boucle): its declared `max_cost_usd`, resolved against
+/// the Run's variables. `None` = no cap, also for a cap that does not resolve:
+/// the launch refuses those, so this only guards a hand-edited snapshot, and
+/// parking a Run on a value it cannot read would be worse.
+pub fn effective_region_max_cost(
+    region: &pdo_pipeline::domain::pipeline::LoopRegion,
+    resolved_vars: &HashMap<String, serde_yaml::Value>,
+) -> Option<f64> {
+    pdo_pipeline::domain::loops::resolve_region_max_cost(region, resolved_vars)
+        .ok()
+        .flatten()
+}
+
+/// `$1.20`, `$0.0084`: a spend in the budget message, with the front's
+/// adaptive precision (4 decimals under $1, `formatCostAmount`).
+fn usd_text(usd: f64) -> String {
+    if usd.abs() < 1.0 {
+        format!("${usd:.4}")
+    } else {
+        format!("${usd:.2}")
+    }
+}
+
+/// `$5`, `$2.50`, `$0.0050`: a cap as the region's corner writes it
+/// (`formatCostCap`), so the reason and the canvas name the same amount.
+fn cap_text(usd: f64) -> String {
+    if usd.fract() == 0.0 {
+        format!("${usd:.0}")
+    } else if usd < 0.01 {
+        format!("${usd:.4}")
+    } else {
+        format!("${usd:.2}")
+    }
+}
+
+/// The `region_budget_exhausted` park, or `None` when the region has no cap,
+/// no known cost yet, or is still under its cap.
+///
+/// PURE: the **Coût de boucle** is an INPUT, `run_state.loop_costs`, which the
+/// interpreter fills from the attributed cost fold (ADR-0058) right before it
+/// calls the scheduler. The scheduler never reads a transcript. An unknown cost
+/// (`usd: None`) never counts as `$0` and never blocks; a partial cost counts
+/// its known part, and the message says so.
+fn budget_exhausted(
+    run_state: &RunState,
+    region: &pdo_pipeline::domain::pipeline::LoopRegion,
+    current_iter: i64,
+    max_iter: i64,
+    resolved_vars: &HashMap<String, serde_yaml::Value>,
+) -> Option<SchedulerAction> {
+    let cap = effective_region_max_cost(region, resolved_vars)?;
+    let cost = run_state.loop_costs.get(region.id.as_str())?;
+    let spent = cost.usd?;
+    if spent < cap {
+        return None;
+    }
+    let approx = if cost.estimated { "~" } else { "" };
+    let partial = if cost.partial {
+        " (partial cost: a member execution has no readable cost, so the known part \
+         is a lower bound)"
+    } else {
+        ""
+    };
+    Some(SchedulerAction::Interrupt {
+        reason_code: "region_budget_exhausted".to_string(),
+        message: format!(
+            "budget reached: bounded region '{id}' reached its cost cap: \
+             {approx}{spent} spent of {cap} after lap {current_iter}/{max_iter}{partial}. \
+             Its exit was not followed. Raise max_cost_usd and resume, route the exit \
+             with force_route (source '{id}' -> a target), or end the region with \
+             end_region.",
+            id = region.id,
+            spent = usd_text(spent),
+            cap = cap_text(cap),
+        ),
+        region_id: Some(region.id.clone()),
+    })
+}
+
 pub(super) fn handle_region_reentry(
     pipeline: &PipelineDef,
     run_state: &RunState,
@@ -69,6 +149,16 @@ pub(super) fn handle_region_reentry(
     };
     match decision {
         crate::domain::loop_region::LapDecision::NextLap { iter, entry } => {
+            // The Plafond de coût is checked HERE, at the same decision point as
+            // `max_iter` (which wins when both are reached: the `Exhausted` arm
+            // below never consults the cap). Reached => park the Run, never
+            // follow the exhaustion exit: that would spend more.
+            if let Some(park) =
+                budget_exhausted(run_state, region, current_iter, max_iter, resolved_vars)
+            {
+                actions.push(park);
+                return actions;
+            }
             actions.push(SchedulerAction::LoopIterStarted {
                 loop_node_id: region.id.clone(),
                 iter,
@@ -168,6 +258,7 @@ pub(super) fn handle_region_reentry(
                     actions.push(SchedulerAction::Interrupt {
                         reason_code: reason_code.to_string(),
                         message,
+                        region_id: Some(region.id.clone()),
                     });
                 }
             }

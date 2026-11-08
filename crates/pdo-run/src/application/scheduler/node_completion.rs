@@ -65,9 +65,12 @@ pub async fn handle_node_completion(
     // edges and avoid a silent stall at a `Merge` fed by a suppressed branch.
     let frontmatter_by_node = resolve_completed_frontmatter(&pipeline, run_state, &artifacts_dir);
 
+    // The Coût de boucle is the scheduler's input for a capped region.
+    let scheduler_state =
+        super::with_loop_costs_for_caps(state, run_state, events, &pipeline).await;
     let actions = scheduler::evaluate_outgoing_edges_full(
         &pipeline,
-        run_state,
+        &scheduler_state,
         completed_node_id,
         &resolved_vars,
         &frontmatter_fields,

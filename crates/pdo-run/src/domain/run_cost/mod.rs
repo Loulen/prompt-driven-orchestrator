@@ -3,6 +3,7 @@
 //! the identity that tells two executions apart. The files it is read from are
 //! the adapters' (`adapters/run_cost/`); this is the shape and the arithmetic.
 
+pub mod loop_cost;
 pub mod tree;
 pub mod usage;
 
@@ -36,6 +37,11 @@ pub struct CostContribution {
     /// no cost source (absent from the axis, never a "default of X" bucket)
     /// and for a mute source with no requested model.
     pub model_slices: Vec<ModelEffortSlice>,
+    /// Index, in the Run's event slice, of the `NodeStarted` that opened this
+    /// execution. `None` for the infrastructure and unassigned buckets. What
+    /// the **Coût de boucle** windows on: an execution counts toward a loop
+    /// only when it started after the loop's last entry ([`loop_cost`]).
+    pub started_event: Option<usize>,
 }
 
 /// One model bucket of one execution's cost (ADR-0065). An execution with two

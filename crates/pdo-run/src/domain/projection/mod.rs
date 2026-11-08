@@ -1144,6 +1144,46 @@ mod tests {
     }
 
     #[test]
+    fn a_budget_park_projects_its_region_and_a_resume_clears_it() {
+        // `region_budget_exhausted` parks AwaitingUser (never Failed) and names
+        // its region; a resume clears both.
+        let mut payload = interrupt_payload("region_budget_exhausted", "budget reached: …");
+        payload["region_id"] = serde_json::json!("review_loop");
+        let mut events = vec![
+            make_event(EventKind::RunStarted, None, None),
+            make_event_with_payload(EventKind::RunInterrupted, None, payload),
+        ];
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::AwaitingUser);
+        assert_eq!(
+            state.awaiting_reason_code.as_deref(),
+            Some("region_budget_exhausted")
+        );
+        assert_eq!(state.awaiting_region_id.as_deref(), Some("review_loop"));
+        events.push(make_event(EventKind::RunResumed, None, None));
+        let state = project(&events).unwrap();
+        assert_eq!(state.awaiting_region_id, None);
+        assert_eq!(state.awaiting_reason_code, None);
+    }
+
+    #[test]
+    fn a_resume_run_command_clears_the_awaiting_region() {
+        let mut payload = interrupt_payload("region_budget_exhausted", "budget reached: …");
+        payload["region_id"] = serde_json::json!("review_loop");
+        let state = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            make_event_with_payload(EventKind::RunInterrupted, None, payload),
+            make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "resume_run" }),
+            ),
+        ])
+        .unwrap();
+        assert_eq!(state.awaiting_region_id, None);
+    }
+
+    #[test]
     fn run_interrupted_derives_the_code_from_a_legacy_prose_prefix() {
         // A historical log without the explicit reason_code key still surfaces a
         // machine code, parsed from the `<slug>: <prose>` prefix.

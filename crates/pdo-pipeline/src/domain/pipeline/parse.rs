@@ -7,7 +7,7 @@ use super::node::{NodeDef, NodeType, Port, PortType};
 use super::normalize::normalize_node_value;
 use super::references::{
     dangling_edge_references, live_artifact_names, live_artifacts_on_edges,
-    validate_switch_when_clauses,
+    validate_region_cost_caps, validate_switch_when_clauses,
 };
 
 /// Top-level YAML keys accepted by the unknown-field lint.
@@ -198,6 +198,7 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
     }
 
     validate_switch_when_clauses(&pipeline)?;
+    validate_region_cost_caps(&pipeline)?;
     live_artifact_names(&pipeline)?;
     live_artifacts_on_edges(&pipeline)?;
 

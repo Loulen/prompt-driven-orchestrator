@@ -33,6 +33,7 @@ impl RunState {
             failure_reason: None,
             awaiting_reason: None,
             awaiting_reason_code: None,
+            awaiting_region_id: None,
             wait_for_started_nodes: false,
             waiting_for_started_nodes: None,
             nodes: HashMap::new(),
@@ -77,6 +78,7 @@ impl RunState {
             loc: None,
             cost: None,
             tree_cost: None,
+            loop_costs: HashMap::new(),
         }
     }
 

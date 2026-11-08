@@ -7,6 +7,7 @@ import type { EdgeInfo } from "./EdgeInfo";
 import type { EndNodeInfo } from "./EndNodeInfo";
 import type { ForEachStateInfo } from "./ForEachStateInfo";
 import type { LocStat } from "./LocStat";
+import type { LoopCost } from "./LoopCost";
 import type { LoopStateInfo } from "./LoopStateInfo";
 import type { NodeDefInfo } from "./NodeDefInfo";
 import type { NodeState } from "./NodeState";
@@ -69,6 +70,14 @@ awaiting_reason?: string,
  * carries a reason that is machine-branchable, not only prose to grep.
  */
 awaiting_reason_code?: string, 
+/**
+ * The loop region a region park is about: projected from the
+ * `RunInterrupted` payload's `region_id` (`region_exhausted`,
+ * `region_ended_unrouted`, `region_budget_exhausted`), cleared with
+ * [`awaiting_reason_code`]. Lets the canvas mark THAT region « budget
+ * reached » without parsing the prose. Absent on historical logs.
+ */
+awaiting_region_id?: string, 
 /**
  * The « Attente des nœuds lancés » (ADR-0086) as the Run's snapshot froze
  * it: `true` ⇒ the Run waits at `End` for the nodes it launched.
@@ -333,4 +342,13 @@ cost?: CostStat,
 /**
  * The Coût de l'arbre, read by the detail; absent without descendant.
  */
-tree_cost?: TreeCost, };
+tree_cost?: TreeCost, 
+/**
+ * The **Coût de boucle** per loop region id, with its effective
+ * **Plafond de coût**. Derived on read from the same fold as
+ * [`Self::cost`], never persisted; empty for a Run with no loop region or
+ * before a member's first execution. The interpreter also fills it on
+ * the copy of the state it hands the scheduler at a re-entry, which reads
+ * it to check the cap (ADR draft plafond-de-cout-de-boucle).
+ */
+loop_costs?: { [key in string]: LoopCost }, };

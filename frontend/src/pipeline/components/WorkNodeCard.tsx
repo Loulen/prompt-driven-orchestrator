@@ -98,10 +98,24 @@ export function WorkNodeCard({
         <span
           data-testid={data.loopBadge.kind === "collection" ? "collection-badge" : "loop-badge"}
           className="cv-n__loop"
-          title={data.loopBadge.kind === "collection" ? "Collection region" : "Loop region"}
+          data-budget={data.loopBadge.budgetReached || undefined}
+          title={[
+            data.loopBadge.kind === "collection" ? "Collection region" : "Loop region",
+            data.loopBadge.costTitle,
+          ]
+            .filter(Boolean)
+            .join("\n")}
           {...loop}
         >
           {data.loopBadge.text}
+          {data.loopBadge.costText != null && (
+            <>
+              {" · "}
+              <span data-testid="loop-badge-cost" className="cv-n__loop-cost" data-warn={data.loopBadge.costWarn || undefined}>
+                {data.loopBadge.costText}
+              </span>
+            </>
+          )}
         </span>
       )}
     </>
@@ -119,6 +133,11 @@ export function WorkNodeCard({
       {lead}
       <NodeCardHead type={typeIcon} name={data.label} flags={flags} status={status} />
       <NodeMeta data={data} run={data.run} marks={marks} />
+      {data.loopBadge?.budgetReached && (
+        <div className="cv-n__budget" data-testid="loop-badge-budget">
+          budget reached · awaiting you
+        </div>
+      )}
       {/* #723 — a parent node's child runs (ADR-0064, toggle or not): « N runs »
           and the Orchestration tab's pastilles; omitted entirely without children. */}
       {runs}

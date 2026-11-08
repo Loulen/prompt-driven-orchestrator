@@ -53,6 +53,7 @@ impl Importer {
         let seed = format!("collection-{}", self.loop_ordinal);
         let region_id = self.unique_id(&seed);
         self.loops.push(LoopRegion {
+            max_cost_usd: None,
             id: region_id,
             kind: LoopKind::Collection,
             members,

@@ -118,8 +118,10 @@ const TRIGGER_ID = "trg-tour";
 
 const t = (id: string) => `[data-testid="${id}"]`;
 const RUN_ROW = `[data-run-row="${RUN_ID}"]`;
-/** The status-dot step's target: the row's leading slot, which keeps its box on hover. */
+/** The status-icon step's target: the row's leading slot, which keeps its box on hover. */
 const RUN_SELECT = `${RUN_ROW} ${t("run-select-control")}`;
+/** The same slot under the reader's pointer: what ends the status-icon step. */
+const RUN_SELECT_HOVERED = `${RUN_SELECT}:hover`;
 const TRIGGER_ROW = `[data-trigger-row="${TRIGGER_ID}"]`;
 const CANVAS = "[data-panel]#center";
 const LEFT = "[data-panel]#left";
@@ -293,6 +295,12 @@ class FakeApp {
     this.hide(EDGE_PANEL);
     this.show(START_INSPECTOR);
   }
+  hoverStatusIcon() {
+    this.show(RUN_SELECT_HOVERED);
+  }
+  leaveStatusIcon() {
+    this.hide(RUN_SELECT_HOVERED);
+  }
   openRunMenu() {
     this.show(CLEANUP_ITEM);
   }
@@ -333,7 +341,7 @@ function gestures(fake: FakeApp): Record<string, () => void> {
     "open-end-edge": () => fake.clickEndEdge(),
     "open-start": () => fake.clickStart(),
     "runs-tab": read,
-    "status-icon": read,
+    "status-icon": () => fake.hoverStatusIcon(),
     worktree: read,
     "archive-run": () => {
       fake.archive();
@@ -410,7 +418,7 @@ describe("walking the whole tour", () => {
     ]);
   });
 
-  it("is eighteen steps: nine gestures, and two that ask for a click only when their subject is hidden", () => {
+  it("is eighteen steps: twelve gestures, two of them asking for a click only when their subject is hidden", () => {
     expect(STEPS).toHaveLength(18);
     const gestures = STEPS.filter((s) => s.done).map((s) => s.id);
     expect(gestures).toEqual([
@@ -422,6 +430,7 @@ describe("walking the whole tour", () => {
       "open-end-edge",
       "open-start",
       "runs-tab",
+      "status-icon",
       "archive-run",
       "triggers-tab",
       "pipelines-tab",
@@ -671,7 +680,7 @@ describe("gestures advance only on the observed state", () => {
     expect(step.target(fake.obs())).toEqual([TRIGGERS_TAB]);
     fake.openTriggers();
     expect(step.target(fake.obs())).toEqual([TRIGGER_ROW]);
-    expect(stepBody(step, fake.obs())).toContain(MY_TRIGGER);
+    expect(stepBody(step, fake.obs())).toContain(`This is \`${MY_TRIGGER}\`, set up for the tour`);
   });
 
   it("re-aims the Pipelines step onto tutorial-overview, with one sentence for First pipeline", () => {
@@ -701,6 +710,29 @@ describe("gestures advance only on the observed state", () => {
     );
     expect(body).not.toMatch(/green|orange|blue|red|colou?r|dot/i);
     expect(step.waitingFor).toBe("the status icon of your Run");
+  });
+
+  it("advances once the reader hovers their Run's status icon, and says so in its footer", () => {
+    const step = stepById("status-icon");
+    // The mockup's footer: Skip on the left, the gesture on the right, no Next.
+    expect(step.skippable).toBe(true);
+    expect(step.advanceHint).toBe("Hover the status icon of your Run");
+    expect(step.confirm).toBeUndefined();
+
+    const fake = new FakeApp();
+    fake.openRunsTab();
+    const run = at("status-icon", fake);
+    expect(observeTour(TOUR, run, fake.obs(), 100).index, "waits while nothing is hovered").toBe(run.index);
+    fake.hoverStatusIcon();
+    expect(observeTour(TOUR, run, fake.obs(), 200).index).toBe(run.index + 1);
+  });
+
+  it("does not take another row's status icon for the reader's", () => {
+    const fake = new FakeApp();
+    fake.openRunsTab();
+    fake.show(`[data-run-row="run-other"] ${t("run-select-control")}:hover`);
+    const run = at("status-icon", fake);
+    expect(observeTour(TOUR, run, fake.obs(), 100).index).toBe(run.index);
   });
 
   it("draws four Status icons inside the card, each named by its shape", () => {
@@ -806,9 +838,9 @@ describe("the copy", () => {
 
   it("names this browser's Run in the open-run step", () => {
     const fake = new FakeApp();
-    expect(stepBody(stepById("open-run"), fake.obs())).toContain(`Click ${MY_RUN} in the list.`);
+    expect(stepBody(stepById("open-run"), fake.obs())).toContain(`Click \`${MY_RUN}\` in the list.`);
     fake.openRun();
-    expect(stepBody(stepById("open-run"), fake.obs())).toContain(`${MY_RUN} is open.`);
+    expect(stepBody(stepById("open-run"), fake.obs())).toContain(`\`${MY_RUN}\` is open.`);
   });
 });
 

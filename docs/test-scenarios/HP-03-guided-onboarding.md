@@ -82,7 +82,8 @@ Features validated while crossing the tour:
    card says first that it shows the prompt the Run was started with, and a bubble points at that
    input once it is open — read the Runs tab (the card sends you back to it if you left it) and the
    **status icon** (the card explains the shapes and draws four Status icons: a check, a turning
-   circle, a question mark, a cross; no colour is named), **archive** the Run (its row shows the
+   circle, a question mark, a cross; no colour is named; its footer says « Hover the status icon of
+   your Run », and hovering it moves on), **archive** the Run (its row shows the
    archive icon), open **Triggers** (the example Trigger is listed) and **Pipelines**
    (`tutorial-overview` is listed, without a reload), then Settings and Stats, lit but not opened.
    The gestures advance on the observed state — and stop for `Next` when the card has something new
@@ -139,7 +140,8 @@ Features validated while crossing the tour:
   changes nothing, and the progress reads *n / N* with the way out in the card's corner.
 - No step advances on a timer: leaving the screen alone never moves the tour on.
 - Hovering the tour Run's row on the status-icon card does **not** make the card jump: the lit
-  area keeps its place while the icon turns into the select ring.
+  area keeps its place while the icon turns into the select ring. Hovering the icon itself, and
+  only on the tour Run's row, moves the card on.
 - The panel a gesture opened is **not dimmed**: its tabs switch and it scrolls, yet typing into
   one of its fields, ticking a box or pressing one of its buttons changes nothing. Once the tour
   has moved past that step, the panel is editable again.

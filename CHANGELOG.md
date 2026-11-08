@@ -24,10 +24,12 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   identity: someone else's Launch or deletion no longer moves your tour on, and Overview never
   reuses another person's Run. The example Trigger left without a suffix is removed; the Overview Run
   left without one stays.
-- "Find your Run" names your row ("Your Run, my-first-run-k3x9, is lit in the list on the left…")
-  instead of calling it the top row, and the First run recap names the Run this browser launched.
+- "Find your Run" names your row ("Your Run, `my-first-run-k3x9`, is lit in the list on the
+  left…") instead of calling it the top row, and the First run recap names the Run this browser
+  launched. The step cards set the names a tour prepared in bold monospace.
 - The Overview step about status is now "The status icon": it explains the shapes (a check, a
   turning circle, a question mark, a cross) and draws the four Status icons instead of coloured dots.
+  It moves on when you hover the status icon of your Run, as its footer says, or with Skip.
 
 ## 2.74.0
 

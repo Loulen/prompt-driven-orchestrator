@@ -144,7 +144,9 @@ export interface TourStep extends TourStepPanels {
   /** Imperative — the one thing to do. */
   title: string;
   /**
-   * Two sentences max (CONTEXT.md § « Étape de tour »).
+   * Two sentences max (CONTEXT.md § « Étape de tour »). A `\`name\`` between
+   * backticks is set in code: the names a tour prepared carry the Identité de
+   * tour, and the card shows them the way the list spells them.
    *
    * A function when what there is to say depends on what happened: the wait step
    * of *First run* explains what to watch for while the node runs, and has

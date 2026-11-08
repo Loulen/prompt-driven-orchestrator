@@ -50,7 +50,9 @@ export const READING_STEPS: TourStep[] = [
     // later sits above yours. The card names your Run, the frame finds it
     // wherever it is, and both sentences stay true at any position.
     body: (o) => {
-      const name = o.app.myRun?.name ?? "your Run";
+      // The name in code, as the card sets it: the Identité de tour is only
+      // ever seen in names, so the name is what has to stand out.
+      const name = o.app.myRun ? `\`${o.app.myRun.name}\`` : "your Run";
       return runIsOpen(o.app)
         ? `Your Run, ${name}, is lit in the list on the left, and Launch already opened its tab. Every Run is a row here; the icon is its status.`
         : `Click ${name} in the list on the left. Every Run is a row here; the icon is its status.`;

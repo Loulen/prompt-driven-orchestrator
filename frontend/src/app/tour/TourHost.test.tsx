@@ -878,3 +878,18 @@ describe("a tour on a shared instance", () => {
     expect(screen.getByTestId("tour-end-card")).not.toHaveTextContent("zzzz");
   });
 });
+
+describe("the step body", () => {
+  it("sets a name between backticks in code, the way the card names it, without the backticks", async () => {
+    const tour: TourDef = {
+      ...TOUR,
+      steps: [{ ...TOUR.steps[0], body: "Your Run, `my-first-run-k3x9`, is lit in the list." }],
+    };
+    render(<Harness tour={tour} />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    const body = screen.getByTestId("tour-body");
+    expect(body).toHaveTextContent("Your Run, my-first-run-k3x9, is lit in the list.");
+    expect(body.querySelector("code")).toHaveTextContent(/^my-first-run-k3x9$/);
+  });
+});

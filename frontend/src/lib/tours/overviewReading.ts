@@ -106,6 +106,20 @@ export function runRow(id: string): string {
   return `[data-run-row="${cssEscape(id)}"]`;
 }
 
+/** A Run's leading slot (its status icon), on its own row. */
+export function runSelect(id: string): string {
+  return `${runRow(id)} ${RUN_SELECT}`;
+}
+
+/**
+ * The element while the reader's pointer is on it. The tour reads the DOM ten
+ * times a second, so a hover is observed like any other state; nothing in the
+ * app has to report it.
+ */
+export function hovered(selector: string): string {
+  return `${selector}:hover`;
+}
+
 export function triggerRow(id: string): string {
   return `[data-trigger-row="${cssEscape(id)}"]`;
 }

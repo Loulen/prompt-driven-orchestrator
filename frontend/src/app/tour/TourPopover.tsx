@@ -8,6 +8,7 @@ import { copyBlockOf } from "../../lib/tour";
 import type { TourIllustration } from "../../lib/tourPanels";
 import { copyToClipboard } from "../../shared/lib/clipboard";
 import { cssViewport } from "../../shared/ui/zoom";
+import { withCode } from "./tourCardText";
 
 /**
  * The instruction card of a running tour (#823).
@@ -121,7 +122,7 @@ export default function TourPopover({
       <div className="tr-title">{step.title}</div>
       {body && (
         <p className="tr-body" data-testid="tour-body">
-          {body}
+          {withCode(body)}
         </p>
       )}
 

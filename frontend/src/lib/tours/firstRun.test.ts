@@ -775,7 +775,7 @@ describe("finding the Run, and opening its node", () => {
     const fake = new FakeApp();
     fake.launch();
     const run = at(fake, "find-run");
-    expect(stepBody(stepById("find-run"), fake.obs())).toContain(`Click ${MY_RUN_NAME} in the list on the left.`);
+    expect(stepBody(stepById("find-run"), fake.obs())).toContain(`Click \`${MY_RUN_NAME}\` in the list on the left.`);
     expect(canAdvance(TOUR, run, fake.obs())).toBe(false);
     // …and no dead `Next` in the way of the instruction: the footer keeps the
     // waiting line the design drew, until there is something to confirm.
@@ -867,14 +867,14 @@ describe("finding the Run, and opening its node", () => {
     expect(step.target(fake.obs())).toEqual([runRow("r-new")]);
     const asked = stepBody(step, fake.obs());
     expect(asked).toBe(
-      `Click ${MY_RUN_NAME} in the list on the left. Every Run is a row here; the icon is its status.`,
+      `Click \`${MY_RUN_NAME}\` in the list on the left. Every Run is a row here; the icon is its status.`,
     );
     expect(asked).not.toMatch(/top/i);
 
     fake.openRun();
     expect(step.done!(fake.obs())).toBe(true);
     expect(stepBody(step, fake.obs())).toBe(
-      `Your Run, ${MY_RUN_NAME}, is lit in the list on the left, and Launch already opened its tab. Every Run is a row here; the icon is its status.`,
+      `Your Run, \`${MY_RUN_NAME}\`, is lit in the list on the left, and Launch already opened its tab. Every Run is a row here; the icon is its status.`,
     );
   });
 
@@ -890,7 +890,7 @@ describe("finding the Run, and opening its node", () => {
   it("names the Run by what the reader typed, suffixed or not", () => {
     const fake = new FakeApp();
     fake.launch("release-check");
-    expect(stepBody(stepById("find-run"), fake.obs())).toContain("Click release-check in the list");
+    expect(stepBody(stepById("find-run"), fake.obs())).toContain("Click `release-check` in the list");
   });
 
   it("says « your Run » while this browser has launched nothing", () => {

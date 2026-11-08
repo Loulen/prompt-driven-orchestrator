@@ -4,10 +4,11 @@
  * depth. It needs **no harness**: the Run it visits is a pipeline of `script`
  * nodes (ADR-0017), which finish in seconds and cost nothing.
  *
- * Eighteen steps, eleven of them gestures that advance only on the observed state
+ * Eighteen steps, twelve of them gestures that advance only on the observed state
  * (open the Run, click implementer, open its `code` output, close the viewer,
- * unfold the terminal, the reviewer → End edge, Start, back to Runs, archive,
- * Triggers, Pipelines); the other seven are read and acknowledged with Next. Two
+ * unfold the terminal, the reviewer → End edge, Start, back to Runs, hover the
+ * status icon, archive, Triggers, Pipelines); the other six are read and
+ * acknowledged with Next. Two
  * of the gestures ask for a click only when what they show is not on screen: the
  * folded terminal of a finished node, and the Runs tab a reader left.
  *
@@ -44,16 +45,17 @@ import {
   READING_TIMEOUT_MS,
   RUNS_TAB,
   RUNS_TAB_OPEN,
-  RUN_SELECT,
   SETTINGS_BUTTON,
   STATS_BUTTON,
   STATUS_ICONS,
   TRIGGERS_LIST,
   TRIGGERS_TAB,
   cleanupItem,
+  hovered,
   isArchived,
   readStep,
   runRow,
+  runSelect,
   triggerRow,
 } from "./overviewReading";
 
@@ -79,18 +81,27 @@ const APP_STEPS: TourStep[] = [
     done: (o) => o.present(RUNS_TAB_OPEN),
   },
   {
-    ...readStep({
-      id: "status-icon",
-      title: "The status icon",
-      body: "Its shape tells you where the Run is: a check means finished, a turning circle means running, a question mark means it waits for you. Hover it for details.",
-      target: () => {
-        const id = overviewRunId();
-        return id ? [`${runRow(id)} ${RUN_SELECT}`] : [];
-      },
-      waitingFor: "the status icon of your Run",
-      failureHint: "It is on your Run's row, in the Runs tab.",
-    }),
+    id: "status-icon",
+    title: "The status icon",
+    body: "Its shape tells you where the Run is: a check means finished, a turning circle means running, a question mark means it waits for you. Hover it for details.",
+    target: () => {
+      const id = overviewRunId();
+      return id ? [runSelect(id)] : [];
+    },
     illustration: STATUS_ICONS,
+    waitingFor: "the status icon of your Run",
+    failureHint: "It is on your Run's row, in the Runs tab.",
+    targetTimeoutMs: READING_TIMEOUT_MS,
+    skippable: true,
+    // The gesture the body asks for, named in the footer the way the other
+    // gestures are. Hover is the whole of it: there is nothing to click, and the
+    // details it shows are the row's own tooltip. Only this browser's Run counts
+    // (ADR-0071 §5): another player's row is not « your Run ».
+    advanceHint: "Hover the status icon of your Run",
+    done: (o) => {
+      const id = overviewRunId();
+      return id != null && o.present(hovered(runSelect(id)));
+    },
   },
   readStep({
     id: "worktree",
@@ -144,7 +155,7 @@ const APP_STEPS: TourStep[] = [
     title: "Open the Triggers tab",
     body: (o) =>
       o.present(TRIGGERS_LIST)
-        ? `This is ${exampleTriggerName()}, set up for the tour: every 15 minutes it would launch ${TUTORIAL_OVERVIEW_PIPELINE_ID}, but its guard always says no. A Trigger launches a pipeline on a schedule, when its guard agrees.`
+        ? `This is \`${exampleTriggerName()}\`, set up for the tour: every 15 minutes it would launch ${TUTORIAL_OVERVIEW_PIPELINE_ID}, but its guard always says no. A Trigger launches a pipeline on a schedule, when its guard agrees.`
         : "Click Triggers. A Trigger launches a pipeline on a schedule, when a condition holds.",
     // Re-aims onto the example row once the list is up, the way `open-output`
     // re-aims onto the file it opened.

@@ -9,7 +9,8 @@
 //!   [`completion_refusal`], [`retry_verdict`], [`restart_verdict`],
 //!   [`reap_policy`], [`auto_fail`], [`child_awaiting`].
 //! - [`review_comment`]: the review comments a Run folds.
-//! - [`run_summary`]: the Résumé de Run the lists read (ADR-0084).
+//! - [`run_summary`]: the Résumé de Run the lists read (ADR-0084), and
+//!   [`run_root`]: the Run at the top of a chain of parents.
 //! - [`live_session`]: a node's facts for the gestures that speak to its agent.
 //! - [`presence`]: who has a Run open in a browser (API 0.12).
 //! - What a Run costs: [`prices`] (the price table's tiers) and [`run_cost`]
@@ -41,6 +42,7 @@ pub mod review_comment;
 pub mod run_activity;
 pub mod run_cost;
 pub mod run_refs;
+pub mod run_root;
 pub mod run_stall;
 pub mod run_summary;
 pub mod scheduler;

@@ -19,6 +19,7 @@ use ts_rs::TS;
 use crate::application::paths::effective_repo_of;
 use crate::domain::child_awaiting;
 use crate::domain::run_activity::ActivitySpan;
+use crate::domain::run_root;
 use crate::domain::run_summary::NodeProgress;
 use crate::domain::state::RunStatus;
 use crate::Runs;
@@ -79,6 +80,13 @@ pub struct RunListEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub parent_node_id: Option<String>,
+    /// The Run at the top of its chain of parents, the one a person launched
+    /// (`crate::domain::run_root`); `None` on a root run. Climbs through the
+    /// parents the Actor may not read: the browser's Portée d'alerte judges a
+    /// descendant by its root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub root_run_id: Option<String>,
     /// Resolved target repo for "group by project": the run's `target_repo`, or
     /// the daemon's `repo_root` when unset. Only runs predating the hardened
     /// create boundary (ADR-0033) can be unset — this is a READ, so keep the
@@ -122,6 +130,12 @@ impl Runs {
         };
         // #588 / ADR-0069 §4: a child awaiting its user lifts its parent on read.
         child_awaiting::overlay(&mut summaries);
+        // Over every Run, before the reads the Actor may not see are dropped.
+        let mut roots = run_root::root_run_ids(
+            summaries
+                .iter()
+                .map(|s| (s.run_id.as_str(), s.parent_run_id.as_deref())),
+        );
         let attributed = AttributedList::read(self.extensions(), ResourceKind::Run, filter).await;
         summaries.retain(|summary| attributed.keeps(&summary.run_id));
         self.readable(actor).retain(&mut summaries).await;
@@ -133,6 +147,9 @@ impl Runs {
                     .to_string_lossy()
                     .into_owned();
                 let attributes = attributed.of(&summary.run_id);
+                let root_run_id = roots
+                    .remove(&summary.run_id)
+                    .filter(|root| *root != summary.run_id);
                 RunListEntry {
                     run_id: summary.run_id,
                     pipeline_name: summary.pipeline_name,
@@ -149,6 +166,7 @@ impl Runs {
                     created_by: summary.created_by,
                     parent_run_id: summary.parent_run_id,
                     parent_node_id: summary.parent_node_id,
+                    root_run_id,
                     effective_repo,
                     project_id: summary.project_id,
                     last_activity_at: summary.last_activity_at,

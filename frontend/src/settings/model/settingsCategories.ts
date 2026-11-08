@@ -8,6 +8,7 @@
 export type SettingsCategoryId =
   | "general"
   | "appearance"
+  | "notifications"
   | "agents"
   | "sandbox"
   | "projects"
@@ -18,6 +19,7 @@ export type SettingsSectionId =
   | "theme"
   | "appearance"
   | "interface"
+  | "waiting-alerts"
   | "public-url"
   | "runtime-limits"
   | "runs"
@@ -133,6 +135,20 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
       {
         id: "interface",
         label: "Interface",
+        deviceLocal: true,
+      },
+    ],
+  },
+  {
+    // The Alerte d'attente (CONTEXT.md): this browser's notification and sound, and
+    // its Portée d'alerte. Nothing here belongs to the instance form nor to the
+    // Actor: the permission and the sound are the device's.
+    id: "notifications",
+    label: "Notifications",
+    sections: [
+      {
+        id: "waiting-alerts",
+        label: "Waiting alerts",
         deviceLocal: true,
       },
     ],

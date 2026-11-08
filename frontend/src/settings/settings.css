@@ -336,6 +336,36 @@
   .set-row__note--failed {
     color: var(--color-st-failed);
   }
+  /* One line under a section's title: what the section does, before its rows. */
+  .set-sec__desc {
+    margin: 0;
+    padding: var(--g-2) var(--g-3) var(--g-2) var(--g-4);
+    border-bottom: 1px solid var(--line-soft);
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+  }
+  /* Settings › Notifications: a row's note runs under its name too, at the right
+     edge, so a long state line reads whole under the switch and its Test. */
+  [data-section-id="waiting-alerts"] .set-row__note {
+    grid-column: 1 / 3;
+    justify-content: flex-end;
+  }
+  .set-note-icon > svg {
+    margin-right: 4px;
+    vertical-align: -1px;
+  }
+  /* A list of boxes at the row end (the Projects of the Portée d'alerte). */
+  .set-checks {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    padding: 4px 0;
+  }
+  .set-checks__none {
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+  }
   .set-num {
     width: 76px;
     flex: none;

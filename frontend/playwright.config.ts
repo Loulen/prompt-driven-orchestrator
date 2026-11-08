@@ -1,3 +1,5 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig, devices } from "@playwright/test";
 
 // Layer 3b config (testing pyramid per ADR 0004). Boots the real daemon
@@ -7,6 +9,16 @@ import { defineConfig, devices } from "@playwright/test";
 
 const PORT = Number(process.env.PDO_E2E_PORT ?? 5273);
 const HOST = "127.0.0.1";
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// The binary the `webServer` below builds and runs is the `pdo` CLI itself: the
+// stub's `waiter` branch calls it.
+const PDO_BIN = path.join(
+  process.env.CARGO_TARGET_DIR ? path.resolve(REPO_ROOT, process.env.CARGO_TARGET_DIR) : path.join(REPO_ROOT, "target"),
+  "debug",
+  "pdo",
+);
+/** What the e2e `waiter` node asks its user (waiting-alert.spec.ts). */
+const E2E_WAITER_MESSAGE = "Which layout do you prefer?";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -84,6 +96,9 @@ export default defineConfig({
     //                   arrow-key translation activates (xterm-scroll-wheel).
     //   - `echoer`    → `cat`, so typed input echoes back through the PTY bridge
     //                   (terminal-preview's keystroke-echo assertion).
+    //   - `waiter`    → after a beat (the node is running), declares a wait on
+    //                   its user with the real CLI, `pdo wait-user --message …`,
+    //                   then keeps the PTY alive (waiting-alert.spec.ts).
     //   - everything else → `sleep 600`, a live PTY with the node kept "running".
     env: {
       ...process.env,
@@ -107,6 +122,7 @@ export default defineConfig({
         "i=1; while [ $i -le 80 ]; do printf 'MARKER_LINE_%d\\r\\n' \"$i\"; i=$((i+1)); done; " +
         "printf 'OUTPUT_DONE\\r\\n'; exec cat ;; " +
         "echoer) exec cat ;; " +
+        `waiter) sleep 1; '${PDO_BIN}' wait-user --message '${E2E_WAITER_MESSAGE}'; exec sleep 600 ;; ` +
         "*) exec sleep 600 ;; " +
         "esac",
     },

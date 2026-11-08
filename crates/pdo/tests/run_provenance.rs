@@ -231,6 +231,8 @@ async fn child_run_from_node_session_carries_mechanical_parent() {
         .expect("child run in list");
     assert_eq!(entry["parent_run_id"], parent);
     assert_eq!(entry["parent_node_id"], "worker");
+    // …and its root, the Run a person launched (the Portée d'alerte reads it).
+    assert_eq!(entry["root_run_id"], parent);
 
     // The root run itself carries no parent (root run).
     let root_entry = runs
@@ -244,6 +246,10 @@ async fn child_run_from_node_session_carries_mechanical_parent() {
         "a root run has no parent_run_id"
     );
     assert!(root_entry.get("parent_node_id").is_none());
+    assert!(
+        root_entry.get("root_run_id").is_none(),
+        "a root run is its own root: no root_run_id"
+    );
 }
 
 #[tokio::test]

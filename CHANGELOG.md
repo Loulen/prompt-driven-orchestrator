@@ -13,6 +13,30 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+### Waiting alerts: a notification and a sound when a node starts waiting for you
+
+- Settings has a new Notifications category (after Appearance) with a "Waiting alerts" section,
+  kept by this browser and saved at once, outside the Save of the instance settings. "Browser
+  notification" and "Sound" are two switches, off by default, each with a Test button. Turning the
+  notification on asks the browser for its permission; the line under the switch says where it
+  stands, and on http through a local network address it says notifications need https or
+  localhost, while the sound still works.
+- "Alert me for" chooses which Runs alert this browser: "Runs I launched" (the default, with the
+  Runs they launched), "Projects" (the Runs launched in the Projects you check) or "All I can see".
+  It only narrows what your rights already show.
+- When a node of such a Run starts waiting for you (a question, a completion to approve, a Run
+  paused on an incident) and no PDO tab of the browser is in view, one tab shows a notification
+  (the node's name, then "is waiting for you" or "is done, waiting for your go"; "Run paused on an
+  incident") and plays a chime of its reason, at most one chime every 10 s. Clicking the
+  notification brings the tab back on the Run with the node selected. A wait already there when
+  the page loads, or caught up after a reconnection, alerts nothing; neither does a parent node
+  waiting on its child runs.
+- `GET /runs` gives each child Run its `root_run_id`, the Run at the top of its chain of parents.
+- While an alert switch is on, a hidden PDO tab reopens its event stream after a drop (a daemon restart,
+  a network change) instead of waiting to be shown; `openProbedSocket` takes a `whileHidden` option.
+
 ## 2.74.0
 
 ### Approve ▾ beyond the node panel: enlarged terminal, command field, tour

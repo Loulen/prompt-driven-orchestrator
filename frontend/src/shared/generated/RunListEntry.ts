@@ -48,6 +48,13 @@ created_by?: Actor,
  */
 parent_run_id?: string, parent_node_id?: string, 
 /**
+ * The Run at the top of its chain of parents, the one a person launched
+ * (`crate::domain::run_root`); `None` on a root run. Climbs through the
+ * parents the Actor may not read: the browser's Portée d'alerte judges a
+ * descendant by its root.
+ */
+root_run_id?: string, 
+/**
  * Resolved target repo for "group by project": the run's `target_repo`, or
  * the daemon's `repo_root` when unset. Only runs predating the hardened
  * create boundary (ADR-0033) can be unset — this is a READ, so keep the

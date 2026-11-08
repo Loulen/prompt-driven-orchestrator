@@ -46,6 +46,7 @@ import StatusBar from "./StatusBar";
 import UpdateModals from "./UpdateModals";
 import EditorModals from "./EditorModals";
 import { usePaletteHostSync } from "./palette/usePaletteHostSync";
+import { useWaitingAlerts } from "../run/store/useWaitingAlerts";
 
 /** The app shell: the Runs, Triggers and Projets on the left, the canvas in the
  *  center, the inspector on the right, the status bar, and every global modal. */
@@ -220,6 +221,7 @@ export default function App() {
     bumpFiresRefreshKey,
   });
 
+  useWaitingAlerts({ subscribe, runs, leaveSurfaces: surfaces.closeSurfaces });
   const { layout, rightPane, frozen, left, center, right } = useShellLayout(rightPaneCollapsed);
 
   // CORE-112: what the command field lists and acts on.

@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { openProbedSocket, type ProbedSocket, type ProbedSocketState } from "../../shared/http/probedSocket";
 import type { WsMessage } from "../model/liveStream";
+import { waitingAlertsOn } from "./waitingAlertSettings";
 
 export type ConnectionStatus = "connected" | "reconnecting" | "disconnected";
 
@@ -119,7 +120,11 @@ function wake() {
 function acquire() {
   users += 1;
   if (stream) return;
-  const socket = openProbedSocket(`/ws?tab=${STREAM_TAB}`, { silenceMs: STREAM_SILENCE_MS });
+  const socket = openProbedSocket(`/ws?tab=${STREAM_TAB}`, {
+    silenceMs: STREAM_SILENCE_MS,
+    // A hidden tab keeps its stream coming back while the waiting alerts are on.
+    whileHidden: waitingAlertsOn,
+  });
   stream = socket;
   socket.onState((state) => {
     if (state === "ouvert") performance.mark?.(STREAM_OPEN_MARK);

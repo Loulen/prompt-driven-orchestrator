@@ -1,7 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
 import FullWindowShell from "../../shared/ui/FullWindowShell";
-import { EmptyState } from "../../shared/ui/kit";
 import { SettingsIcon } from "../../shared/ui/brand/AccentIcons";
 import { harnessCatalog } from "../../harness/model/catalog";
 import { useSkillBank } from "../../skill/store/useSkillBank";
@@ -20,12 +18,13 @@ import AgentsSections from "./settingsSurface/AgentsSections";
 import AppearanceCategory from "./settingsSurface/AppearanceCategory";
 import CategoryPage from "./settingsSurface/CategoryPage";
 import GeneralCategory from "./settingsSurface/GeneralCategory";
+import NotificationsCategory from "./settingsSurface/NotificationsCategory";
 import { DiagnosticsCategory } from "./settingsSurface/DiagnosticsRows";
 import { ConfirmCloseDialog } from "./settingsSurface/overlays";
 import SandboxSections from "./settingsSurface/SandboxSections";
 import ExtensionPanels from "./settingsSurface/ExtensionPanels";
 import { SearchContext, searching, type SettingsQuery } from "./settingsSurface/search";
-import { NoSettings, SearchLine } from "./settingsSurface/SearchLine";
+import { NoSettings, SearchLine, SettingsLoading } from "./settingsSurface/SearchLine";
 import SettingsRail from "./settingsSurface/SettingsRail";
 import { settingsRail } from "./settingsSurface/rail";
 import SettingsFooter from "./settingsSurface/SettingsFooter";
@@ -214,13 +213,7 @@ export default function SettingsSurface({
   });
 
   // Under a search, a category still loading shows nothing.
-  const loading = inSearch ? null : (
-    <div className="set-extra" data-testid="settings-loading">
-      <EmptyState icon={Loader2} spin layout="row">
-        Loading…
-      </EmptyState>
-    </div>
-  );
+  const loading = inSearch ? null : <SettingsLoading />;
 
   return (
     <>
@@ -296,6 +289,7 @@ export default function SettingsSurface({
                 )}
 
                 {item.id === "appearance" && <AppearanceCategory sections={item.sections} entities={entities} />}
+                {item.id === "notifications" && <NotificationsCategory sections={item.sections} projects={projects?.projects ?? []} />}
 
                 {item.id === "agents" &&
                   (formProps && catalog ? (

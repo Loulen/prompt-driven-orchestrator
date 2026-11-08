@@ -2410,6 +2410,7 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     expect(tabs.map((tab) => tab.textContent)).toEqual([
       "General",
       "Appearance",
+      "Notifications",
       "Agents",
       "Sandbox & worktrees",
       "Projects",
@@ -3889,6 +3890,7 @@ describe("SettingsSurface — the `settings/page` location (extensions' pages)",
     expect(await railLabels()).toEqual([
       "General",
       "Appearance",
+      "Notifications",
       "Agents",
       "Sandbox & worktrees",
       "Projects",
@@ -3905,6 +3907,7 @@ describe("SettingsSurface — the `settings/page` location (extensions' pages)",
       expect(await railLabels()).toEqual([
         "General",
         "Appearance",
+        "Notifications",
         "Agents",
         "Sandbox & worktrees",
         "Projects",

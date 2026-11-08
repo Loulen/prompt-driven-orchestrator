@@ -210,6 +210,22 @@ describe("openProbedSocket", () => {
     expect(FakeSocket.instances).toHaveLength(1);
   });
 
+  it("probes and reopens while hidden when the caller keeps it awake", async () => {
+    visibility = "hidden";
+    let awake = true;
+    const fetchMock = daemon(200);
+    socket = openProbedSocket("/ws", { whileHidden: () => awake });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(FakeSocket.instances).toHaveLength(1);
+    // Asleep again: a drop waits for the tab to show.
+    awake = false;
+    FakeSocket.instances[0].fire("open");
+    FakeSocket.instances[0].fire("close", { code: 1006 });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(FakeSocket.instances).toHaveLength(1);
+  });
+
   it("keeps an open socket open when the tab hides", async () => {
     daemon(200);
     const s = open();

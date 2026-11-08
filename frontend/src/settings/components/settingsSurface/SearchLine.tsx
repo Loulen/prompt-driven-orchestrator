@@ -1,5 +1,5 @@
 import { forwardRef } from "react";
-import { CircleDot, Search } from "lucide-react";
+import { CircleDot, Loader2, Search } from "lucide-react";
 import { Button, EmptyState, IconButton } from "../../../shared/ui/kit";
 
 /** The search line above the page: a few words, or only the changed settings. */
@@ -57,5 +57,16 @@ export function NoSettings({ onClear }: { onClear: () => void }) {
     >
       No settings
     </EmptyState>
+  );
+}
+
+/** A category whose content waits for `GET /settings`. */
+export function SettingsLoading() {
+  return (
+    <div className="set-extra" data-testid="settings-loading">
+      <EmptyState icon={Loader2} spin layout="row">
+        Loading…
+      </EmptyState>
+    </div>
   );
 }

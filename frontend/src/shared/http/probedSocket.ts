@@ -54,6 +54,13 @@ export interface ProbedSocketOptions {
    * coming back online probes at once. Unset (the default): no delay.
    */
   silenceMs?: number;
+  /**
+   * Probe and reopen even while the tab is hidden, when this says so at the
+   * moment of the attempt. Unset (the default): a hidden tab waits to show
+   * again. The event stream sets it while the Alerte d'attente is on: a hidden
+   * tab is the one that must hear a wait.
+   */
+  whileHidden?: () => boolean;
 }
 
 /** A WebSocket to the daemon, opened through the probe. */
@@ -123,7 +130,7 @@ function socketUrl(path: string): string {
   return `${protocol}//${window.location.host}${path}`;
 }
 
-function hidden(): boolean {
+function tabHidden(): boolean {
   return typeof document !== "undefined" && document.visibilityState === "hidden";
 }
 
@@ -131,6 +138,8 @@ function hidden(): boolean {
 export function openProbedSocket(path: string, options: ProbedSocketOptions = {}): ProbedSocket {
   const reconnect = options.reconnect ?? true;
   const silenceMs = options.silenceMs;
+  // Hidden, as far as probing goes: a hidden tab the caller does not keep awake.
+  const hidden = () => tabHidden() && !options.whileHidden?.();
   const messageListeners = new Set<(data: ProbedSocketData) => void>();
   const stateListeners = new Set<(state: ProbedSocketState) => void>();
   let state: ProbedSocketState = "connexion";
@@ -260,7 +269,7 @@ export function openProbedSocket(path: string, options: ProbedSocketOptions = {}
     // A hidden tab's timers are throttled: judge the silence again on return.
     if (
       silenceMs !== undefined &&
-      !hidden() &&
+      !tabHidden() &&
       socket?.readyState === WebSocket.OPEN &&
       Date.now() - lastHeard > silenceMs
     ) {

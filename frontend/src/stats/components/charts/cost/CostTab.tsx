@@ -4,14 +4,8 @@ import type { StatsCostEntity } from "../../../../shared/generated/StatsCostEnti
 import type { StatsEffortCostEntity } from "../../../../shared/generated/StatsEffortCostEntity";
 import type { StatsProjectCostEntity } from "../../../../shared/generated/StatsProjectCostEntity";
 import { useStatsAbsorption } from "../../../store/useStatsAbsorption";
-import {
-  coupleRows,
-  coupleScope,
-  hasExplicitEffort,
-  type CoupleRow,
-} from "../../../model/statsAbsorption";
-import { isCostNodeRow, type CostAxis } from "../../../model/cost";
-import { RUNS_COUNT } from "../../../model/rowCounts";
+import type { CoupleRow } from "../../../model/statsAbsorption";
+import type { CostAxis } from "../../../model/cost";
 import { Breadcrumb } from "../common/Breadcrumb";
 import type { TabFrame } from "../../StatsCharts";
 import { EmptyNote, Panel } from "../common/ChartPrimitives";
@@ -20,11 +14,14 @@ import {
   PipelineName,
   TableCombinedIcon,
 } from "../common/TableCombinedIcon";
-import type { CoupleSelection } from "../common/tableSelection";
 import { effortNameCell } from "./effortNameCell";
 import { CostRanking } from "./CostRanking";
 import { CostSummary } from "./CostSummary";
 import { CostTable } from "./CostTable";
+import type { CostTree } from "./costTree";
+import { costSelections, type NodeLevel } from "./costSelections";
+import { resolveRollUp, ROLL_UP_ROOT, type RollUpPath } from "./rollUp";
+import { RollUpBadge } from "./RollUpMarks";
 
 export function CostTab({
   cost,
@@ -32,14 +29,23 @@ export function CostTab({
   uncombined,
   onAbsorptionsChanged,
   frame,
+  axis,
+  onAxisChange: setAxis,
+  rolledUp = false,
 }: {
   cost: StatsCost | null;
   error: string | null;
   uncombined: boolean;
   onAbsorptionsChanged: () => void;
   frame: TabFrame;
+  /** The grouping, held by the shell: « roll up child runs » leaves the band
+   *  on « By model ». */
+  axis: CostAxis;
+  onAxisChange: (axis: CostAxis) => void;
+  /** « Roll up child runs » is in force: a root Pipeline opens on Parent run |
+   *  Child runs › Depth k › child Pipeline. */
+  rolledUp?: boolean;
 }) {
-  const [axis, setAxis] = useState<CostAxis>("pipeline");
   // #890 / #892: Pipelines on « By pipeline », Models on « By model », the Nodes
   // of the Pipeline on screen on every axis — never the Projects. #906: the
   // efforts of one model, and the couples of one Node. Switching the grouping
@@ -65,6 +71,8 @@ export function CostTab({
   const [selectedPipelineId, setSelectedPipelineId] = useState<string | null>(
     null,
   );
+  // Inside a root Pipeline whose row carries a roll-up.
+  const [rollUpPath, setRollUpPath] = useState<RollUpPath>(ROLL_UP_ROOT);
 
   if (error || !cost) {
     return (
@@ -89,6 +97,7 @@ export function CostTab({
     setSelectedModelId(null);
     setSelectedEffortId(null);
     setSelectedPipelineId(null);
+    setRollUpPath(ROLL_UP_ROOT);
   };
 
   // Model axis: resolve the drill path.
@@ -122,94 +131,54 @@ export function CostTab({
         ) ?? null)
       : null;
 
-  const aggregate =
-    axis === "model"
-      ? (modelPipeline ?? effort ?? model ?? cost.total)
-      : (drilledPipeline ?? selected ?? cost.total);
-  const periods =
-    axis === "model"
-      ? ((modelPipeline ?? effort ?? model)?.by_period ?? cost.by_period)
-      : drilledPipeline
-        ? drilledPipeline.by_period
-        : selected
-          ? selected.by_period
-          : cost.by_period;
+  // The Pipeline row on screen (By pipeline: the selected row; By project:
+  // the drilled one) and, under the roll-up, where its drill stands.
+  const pipelineRow =
+    axis === "pipeline" ? selected : axis === "project" ? drilledPipeline : null;
+  const rollUp =
+    rolledUp && pipelineRow?.roll_up
+      ? resolveRollUp(pipelineRow, pipelineRow.roll_up, rollUpPath, setRollUpPath)
+      : null;
 
+  const focus =
+    axis === "model"
+      ? (modelPipeline ?? effort ?? model)
+      : (rollUp?.focus ?? drilledPipeline ?? selected);
+  const aggregate = focus ?? cost.total;
+  const periods = focus?.by_period ?? cost.by_period;
+
+  // The Nodes the table shows, on whichever axis they were reached.
+  const nodePipeline =
+    axis === "model" ? modelPipeline : axis === "project" ? drilledPipeline : selected;
+  const nodeLevel: NodeLevel | null = rollUp
+    ? rollUp.nodeLevel
+    : nodePipeline && { pipeline: nodePipeline, nodes: nodePipeline.nodes };
   // The denominator the headline names (ADR-0065 §3): a model bucket counts
   // executions — the whole model axis reads "per execution" — and so does the
   // Node level of the other axes.
-  const atNodeLevel =
-    axis === "model"
-      ? true
-      : axis === "pipeline"
-        ? selected !== null
-        : drilledPipeline !== null;
+  const atNodeLevel = axis === "model" || nodeLevel !== null;
   const detailUnit: "Run" | "execution" = atNodeLevel ? "execution" : "Run";
 
-  const masterSelection =
-    axis === "pipeline"
-      ? absorption.selectionFor({
-          dimension: "pipeline",
-          rows: cost.by_pipeline,
-          count: RUNS_COUNT,
-        })
-      : axis === "model"
-        ? absorption.selectionFor({
-            dimension: "model",
-            rows: cost.by_model,
-            count: RUNS_COUNT,
-          })
-        : undefined;
-  // The Pipeline whose Nodes the table shows, on whichever axis it was reached.
-  const nodePipeline =
-    axis === "model"
-      ? modelPipeline
-      : axis === "project"
-        ? drilledPipeline
-        : selected;
-  const nodeSelection = nodePipeline
-    ? absorption.selectionFor({
-        dimension: "node",
-        scope: { key: nodePipeline.id, name: nodePipeline.name },
-        rows: nodePipeline.nodes,
-        count: RUNS_COUNT,
-        selectable: isCostNodeRow,
-      })
-    : undefined;
-  // #906: the efforts of the model on screen, and the couples of each Node.
-  const effortSelection =
-    model && !effort
-      ? absorption.selectionFor({
-          dimension: "effort",
-          scope: { key: model.id, name: model.name },
-          rows: model.efforts,
-          count: RUNS_COUNT,
-          preferred: hasExplicitEffort,
-        })
-      : undefined;
-  const coupleSelection: CoupleSelection | undefined = nodePipeline
-    ? (node) =>
-        absorption.selectionFor({
-          dimension: "couple",
-          scope: {
-            key: coupleScope(nodePipeline.id, node.id),
-            name: `${node.name} (${nodePipeline.name})`,
-          },
-          rows: coupleRows(
-            nodePipeline.nodes.find((item) => item.id === node.id)?.models ??
-              [],
-          ),
-          count: RUNS_COUNT,
-          // Infrastructure and Unassigned are no Node: their couples show the
-          // global mark, never a ring.
-          selectable: () => isCostNodeRow(node as StatsCostEntity),
-          preferred: hasExplicitEffort,
-        })
-    : undefined;
+  const selections = costSelections(absorption, {
+    axis,
+    cost,
+    nodeLevel,
+    model,
+    effortLevel: effort === null,
+  });
+  const masterSelection = selections.master;
+  // A Pipeline's name in a list, with the « ⑂ N » of a root under the roll-up.
+  const pipelineName = (row: StatsCostEntity) => (
+    <>
+      <PipelineName row={row} onOpenMembers={masterSelection?.onOpenMembers} />
+      {rolledUp && <RollUpBadge row={row} />}
+    </>
+  );
 
   let detailRows: StatsCostEntity[];
   let detailRenderName: ((row: StatsCostEntity) => React.ReactNode) | undefined;
   let onOpen: ((row: StatsCostEntity) => void) | undefined;
+  let tree: CostTree | undefined;
   if (axis === "model") {
     if (modelPipeline) {
       detailRows = modelPipeline.nodes;
@@ -236,21 +205,26 @@ export function CostTab({
       );
       onOpen = (row) => setSelectedModelId(row.id);
     }
+  } else if (rollUp) {
+    detailRows = rollUp.rows;
+    tree = rollUp.tree;
+    if (tree) {
+      const level = tree;
+      detailRenderName = level.renderName;
+      onOpen = (row) => level.open(row, level.base)?.();
+    }
   } else if (drilledPipeline) {
     detailRows = drilledPipeline.nodes;
   } else if (!selected) {
     detailRows = rows;
-    if (axis === "pipeline") {
-      detailRenderName = (row) => (
-        <PipelineName
-          row={row}
-          onOpenMembers={masterSelection?.onOpenMembers}
-        />
-      );
-    }
+    if (axis === "pipeline") detailRenderName = pipelineName;
   } else if (axis === "project") {
     detailRows = (selected as StatsProjectCostEntity).pipelines;
-    onOpen = (pipeline) => setDrilledPipelineId(pipeline.id);
+    detailRenderName = pipelineName;
+    onOpen = (pipeline) => {
+      setDrilledPipelineId(pipeline.id);
+      setRollUpPath(ROLL_UP_ROOT);
+    };
   } else {
     detailRows = selected.nodes;
   }
@@ -291,9 +265,17 @@ export function CostTab({
     if (selected)
       crumbs.push({
         label: selected.name,
-        onClick: () => setDrilledPipelineId(null),
+        onClick: () => {
+          setDrilledPipelineId(null);
+          setRollUpPath(ROLL_UP_ROOT);
+        },
       });
-    if (drilledPipeline) crumbs.push({ label: drilledPipeline.name });
+    if (drilledPipeline)
+      crumbs.push({
+        label: drilledPipeline.name,
+        onClick: () => setRollUpPath(ROLL_UP_ROOT),
+      });
+    if (rollUp) crumbs.push(...rollUp.crumbs);
   }
   // Every crumb but the last pops the levels it shadows (design: clickable
   // breadcrumb for all three axes once there are four levels).
@@ -324,6 +306,11 @@ export function CostTab({
             rows={rows}
             selected={axis === "model" ? selectedModelId : selectedId}
             selection={masterSelection}
+            badge={
+              rolledUp && axis === "pipeline"
+                ? (row) => <RollUpBadge row={row} />
+                : undefined
+            }
             onSelect={(id) => {
               if (axis === "model") {
                 setSelectedModelId(id);
@@ -332,6 +319,7 @@ export function CostTab({
               } else {
                 setSelectedId(id);
                 setDrilledPipelineId(null);
+                setRollUpPath(ROLL_UP_ROOT);
               }
             }}
           />
@@ -347,22 +335,23 @@ export function CostTab({
               flush
             >
               <CostTable
-                key={`${axis}-${selectedId ?? ""}-${drilledPipelineId ?? ""}-${selectedModelId ?? ""}-${selectedEffortId ?? "total"}-${selectedPipelineId ?? ""}`}
+                key={`${axis}-${selectedId ?? ""}-${drilledPipelineId ?? ""}-${selectedModelId ?? ""}-${selectedEffortId ?? "total"}-${selectedPipelineId ?? ""}-${rollUp ? JSON.stringify(rollUpPath) : ""}`}
                 rows={detailRows}
                 harnesses={tableHarnesses}
                 unit={detailUnit}
                 onOpen={onOpen}
                 renderName={detailRenderName}
                 expandablePairs={axis !== "model"}
+                tree={tree}
                 selection={
-                  detailRows === nodePipeline?.nodes
-                    ? nodeSelection
+                  detailRows === nodeLevel?.nodes
+                    ? selections.node
                     : detailRows === model?.efforts
-                      ? effortSelection
+                      ? selections.effort
                       : undefined
                 }
                 coupleSelection={
-                  detailRows === nodePipeline?.nodes ? coupleSelection : undefined
+                  detailRows === nodeLevel?.nodes ? selections.couple : undefined
                 }
               />
             </Panel>

@@ -28,6 +28,23 @@ export function coverage(metric: StatsHarnessCost, unit: "Run" | "execution"): s
   return parts.join(". ");
 }
 
+/** A cost row's own figures, read as the « total » column's cell. */
+export function rowMetric(row: StatsCostEntity): StatsHarnessCost {
+  return {
+    harness: "total",
+    usd: row.usd,
+    estimated: row.estimated,
+    partial: row.partial,
+    executions: row.executions,
+    readable: row.readable,
+    unknown: row.unknown,
+    average_usd: row.average_usd,
+    median_usd: row.median_usd,
+    unpriced_models: row.unpriced_models,
+    missing_reasons: row.missing_reasons,
+  };
+}
+
 export function pairMetric(pair: StatsModelEffortPair): StatsHarnessCost {
   return {
     harness: "total",

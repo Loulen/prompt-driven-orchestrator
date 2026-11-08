@@ -27,18 +27,31 @@ export function EmptyNote({ children }: { children: React.ReactNode }) {
  *  otherwise, and explicit about what was left out. */
 export function CohortLine({
   completedOnly,
+  rolledUp = false,
   note,
 }: {
   completedOnly: boolean;
+  /** « Roll up child runs »: the cohort is the root runs, each with its
+   *  tree — amber, like any cohort that is not the default one, and saying
+   *  the totals no longer match the default view. */
+  rolledUp?: boolean;
   /** An extra clause for a tab the cohort does not govern. */
   note?: string;
 }) {
   return (
     <div
       data-testid="stats-cohort-line"
-      className={completedOnly ? "sx-note sx-note--warn" : "sx-note"}
+      className={completedOnly || rolledUp ? "sx-note sx-note--warn" : "sx-note"}
     >
-      Cohort: runs started in the period
+      {rolledUp ? (
+        <>
+          Cohort: <span className="font-medium">root runs</span> started in the
+          period · child runs counted under their root run · totals per
+          pipeline and project differ from the default view
+        </>
+      ) : (
+        "Cohort: runs started in the period"
+      )}
       {completedOnly ? (
         <>
           {" · "}

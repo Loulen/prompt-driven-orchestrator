@@ -55,6 +55,12 @@ export function useStats(
    * so it travels to all three endpoints and sits in each request key.
    */
   uncombined: boolean = false,
+  /**
+   * « Roll up child runs »: Cost alone, so it travels to `/stats/cost` and
+   * sits in that request key only. The caller sends `false` on « By model »,
+   * which it does not concern.
+   */
+  costRollUp: boolean = false,
 ) {
   const {
     overview: overviewCompletedOnly = false,
@@ -71,7 +77,7 @@ export function useStats(
   const [overviewReloadKey, setOverviewReloadKey] = useState(0);
   const [costReloadKey, setCostReloadKey] = useState(0);
   const [performanceReloadKey, setPerformanceReloadKey] = useState(0);
-  const costRequestKey = `${from}\u0000${to}\u0000${bucket}\u0000${reloadKey}\u0000${costCompletedOnly}\u0000${absorptionsVersion}\u0000${uncombined}`;
+  const costRequestKey = `${from}\u0000${to}\u0000${bucket}\u0000${reloadKey}\u0000${costCompletedOnly}\u0000${absorptionsVersion}\u0000${uncombined}\u0000${costRollUp}`;
   const requestedCostKey = useRef<string | null>(null);
   const performanceRequestKey = `${from}\u0000${to}\u0000${reloadKey}\u0000${performanceCompletedOnly}\u0000${absorptionsVersion}\u0000${uncombined}`;
   const requestedPerformanceKey = useRef<string | null>(null);
@@ -105,7 +111,7 @@ export function useStats(
     if (!open || !costActive) return;
     if (requestedCostKey.current === costRequestKey) return;
     requestedCostKey.current = costRequestKey;
-    fetchStatsCost(from, to, bucket, costCompletedOnly, uncombined)
+    fetchStatsCost(from, to, bucket, costCompletedOnly, uncombined, costRollUp)
       .then((data) => {
         if (requestedCostKey.current === costRequestKey) {
           setCost(data);
@@ -129,6 +135,7 @@ export function useStats(
     reloadKey,
     costCompletedOnly,
     uncombined,
+    costRollUp,
     costRequestKey,
   ]);
 

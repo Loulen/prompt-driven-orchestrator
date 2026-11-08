@@ -15,6 +15,8 @@
  * the band) can never disagree about what « default » means.
  */
 
+import type { CostAxis } from "./cost";
+
 /** The node **genre** a Performance row can carry (CONTEXT.md § Genre de nœud).
  *  A node that is both interactive and orchestrator matches either chip;
  *  « standard » is the absence of both, never a third stored flag. */
@@ -90,3 +92,21 @@ export function performanceBandDeviates(
     band.axis !== DEFAULT_PERFORMANCE_BAND.axis
   );
 }
+
+/**
+ * The Cost tab's reading: its grouping, and « Roll up child runs » — every
+ * child run counted under the Pipeline, the Project and the period of its root
+ * run. Held by the shell, because the roll-up travels to `/stats/cost` and
+ * « By model » does not take it; off at each open, like every Stats setting.
+ */
+export interface CostView {
+  axis: CostAxis;
+  rollUp: boolean;
+}
+
+export const DEFAULT_COST_VIEW: CostView = { axis: "pipeline", rollUp: false };
+
+/** Is the roll-up in force? Never on « By model »: it has nothing to roll up,
+ *  and leaving it there gives it back, as it was, on the other groupings. */
+export const rollsUp = (view: CostView): boolean =>
+  view.rollUp && view.axis !== "model";

@@ -245,6 +245,14 @@ impl DaemonHandle {
         .await;
     }
 
+    /// Append `event` to the log as given — its `ts` included — without
+    /// touching the disk: a past the reads must interpret (a Run started last
+    /// month, a Node session, a completion).
+    #[doc(hidden)]
+    pub async fn seed_event(&self, event: Event) {
+        let _ = pdo_run::application::events::append_event(&self.run, &event).await;
+    }
+
     /// Seed the archival of `run_id` (`run_archived`), without touching the
     /// disk: an archived Run the reads still hold.
     #[doc(hidden)]

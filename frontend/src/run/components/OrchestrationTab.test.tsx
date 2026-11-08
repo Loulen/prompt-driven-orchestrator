@@ -110,7 +110,7 @@ describe("OrchestrationTab tree costs", () => {
       child("parent", { status: "completed", cost: usd(1.3), tree_cost: childTree }),
     ];
     render(
-      <OrchestrationTab childRuns={children} counts={countChildren(children)} nodeLive={false} nodeAwaiting={false} onOpenChild={() => {}} />,
+      <OrchestrationTab childRuns={children} nodeLive={false} onOpenChild={() => {}} />,
     );
     const rows = screen.getAllByTestId("orchestration-child");
     expect(rows[0]).toHaveTextContent("~$1.10");
@@ -132,9 +132,7 @@ describe("OrchestrationTab tree costs", () => {
     const { rerender } = render(
       <OrchestrationTab
         childRuns={children}
-        counts={countChildren(children)}
         nodeLive={false}
-        nodeAwaiting={false}
         onOpenChild={() => {}}
         runTreeCost={runTree}
       />,
@@ -143,7 +141,7 @@ describe("OrchestrationTab tree costs", () => {
     expect(foot).toHaveTextContent("Tree cost · parent run ~$0.8000 + child runs ~$3.40");
     expect(screen.getByTestId("orchestration-tree-cost-total")).toHaveTextContent("~$4.20");
     rerender(
-      <OrchestrationTab childRuns={children} counts={countChildren(children)} nodeLive={false} nodeAwaiting={false} onOpenChild={() => {}} />,
+      <OrchestrationTab childRuns={children} nodeLive={false} onOpenChild={() => {}} />,
     );
     expect(screen.queryByTestId("orchestration-tree-cost")).toBeNull();
   });
@@ -153,7 +151,7 @@ describe("OrchestrationTab tree costs", () => {
       child("p", { status: "completed", cost: usd(1.3), tree_cost: { ...childTree, total: null, children: null, unavailable_runs: 1 } }),
     ];
     render(
-      <OrchestrationTab childRuns={children} counts={countChildren(children)} nodeLive={false} nodeAwaiting={false} onOpenChild={() => {}} />,
+      <OrchestrationTab childRuns={children} nodeLive={false} onOpenChild={() => {}} />,
     );
     expect(screen.getByTestId("orchestration-child-cost")).toHaveTextContent("—");
     expect(screen.getByTestId("orchestration-sum")).toHaveTextContent("Σ —");

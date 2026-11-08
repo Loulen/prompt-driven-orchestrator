@@ -67,6 +67,8 @@ impl ExtensionHost for Host {
 pub struct Events {
     pub counts: BTreeMap<String, Vec<(String, i64)>>,
     pub run_starts: Vec<RunStart>,
+    /// The child Runs of the whole log (« Roll up child runs »).
+    pub child_run_starts: Vec<RunStart>,
     pub node_starts: Vec<NodeStart>,
     pub events: BTreeMap<String, Vec<Event>>,
     pub ran: BTreeMap<String, BTreeSet<String>>,
@@ -118,6 +120,10 @@ impl RunEvents for Events {
     fn events<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, anyhow::Result<Vec<Event>>> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move { Ok(self.events.get(run_id).cloned().unwrap_or_default()) })
+    }
+
+    fn child_run_starts(&self) -> BoxFuture<'_, anyhow::Result<Vec<RunStart>>> {
+        Box::pin(async move { Ok(self.child_run_starts.clone()) })
     }
 }
 

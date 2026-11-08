@@ -66,4 +66,8 @@ impl RunEvents for RunContextEvents {
     fn events<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, anyhow::Result<Vec<Event>>> {
         self.store.events(run_id)
     }
+
+    fn child_run_starts(&self) -> BoxFuture<'_, anyhow::Result<Vec<RunStart>>> {
+        self.windows.child_run_starts()
+    }
 }

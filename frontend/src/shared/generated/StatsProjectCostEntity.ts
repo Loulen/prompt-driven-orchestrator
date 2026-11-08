@@ -2,6 +2,7 @@
 import type { StatsAbsorbedMember } from "./StatsAbsorbedMember";
 import type { StatsCostEntity } from "./StatsCostEntity";
 import type { StatsCostPeriod } from "./StatsCostPeriod";
+import type { StatsCostRollUp } from "./StatsCostRollUp";
 import type { StatsHarnessCost } from "./StatsHarnessCost";
 import type { StatsModelEffortPair } from "./StatsModelEffortPair";
 
@@ -17,7 +18,15 @@ models?: Array<StatsModelEffortPair>,
  * counted, the most recent one's start, and — on an absorbent — its
  * absorbed members. Omitted on the other levels.
  */
-runs?: number, last_run?: string, absorbed?: Array<StatsAbsorbedMember>, usd: number | null, average_usd: number | null, 
+runs?: number, last_run?: string, absorbed?: Array<StatsAbsorbedMember>, 
+/**
+ * « Roll up child runs » (ADR draft-cout-de-l-arbre §2): on a root
+ * Pipeline row whose root runs orchestrated child runs, the split
+ * « Parent run » / « Child runs » › Depth k › child Pipeline › Node.
+ * Omitted everywhere else — and always when the roll-up is off, so that
+ * response stays the one it was.
+ */
+roll_up?: StatsCostRollUp, usd: number | null, average_usd: number | null, 
 /**
  * The **median** cost per readable execution (#811) — additive beside
  * `average_usd`, which stays for the tooltip and for any client that has

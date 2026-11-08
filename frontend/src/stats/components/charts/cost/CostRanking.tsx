@@ -17,6 +17,7 @@ export function CostRanking({
   selected,
   selection,
   onSelect,
+  badge,
 }: {
   axis: CostAxis;
   onAxisChange: (axis: CostAxis) => void;
@@ -26,6 +27,8 @@ export function CostRanking({
   selected: string | null;
   selection: MasterSelection | undefined;
   onSelect: (id: string | null) => void;
+  /** A discreet mark after a row's name (the « ⑂ N » of a root Pipeline). */
+  badge?: (row: StatsCostEntity) => React.ReactNode;
 }) {
   const axisNote = [
     "Model ids verbatim, one row per id — the same id run through two harnesses is one row, one column per harness. Hover a model or an effort for where the value was read and its provider.",
@@ -70,6 +73,7 @@ export function CostRanking({
         valueLabel={(row) => formatCostAmount(row.usd, row.partial, row.estimated)}
         selection={selection}
         onSelect={onSelect}
+        badge={badge}
       />
     </Panel>
   );

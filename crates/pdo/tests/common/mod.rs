@@ -1026,6 +1026,15 @@ impl TestDaemon {
             .await;
     }
 
+    /// Append `event` to the log as given, its `ts` included; nothing on disk.
+    pub async fn seed_event(&self, event: pdo_run::domain::event::Event) {
+        self.handle
+            .as_ref()
+            .expect("daemon handle")
+            .seed_event(event)
+            .await;
+    }
+
     /// Seed the archival of `run_id`, nothing on disk.
     pub async fn seed_run_archived(&self, run_id: &str) {
         self.handle

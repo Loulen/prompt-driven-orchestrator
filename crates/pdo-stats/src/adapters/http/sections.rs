@@ -39,6 +39,13 @@ pub struct StatsQuery {
     /// absorptions applied.
     #[serde(default)]
     pub uncombined: bool,
+    /// « Roll up child runs » (ADR draft-cout-de-l-arbre §2) — `/stats/cost`
+    /// only: recompose the cohort by **root** Run (roots started in the period,
+    /// each bringing its whole tree) and file every descendant under its
+    /// root's Pipeline and Project. Wire default `false` — the response is
+    /// then strictly the one without the parameter. « By model » ignores it.
+    #[serde(default)]
+    pub roll_up_children: bool,
 }
 
 impl StatsQuery {
@@ -100,7 +107,14 @@ pub(super) async fn overview(
 /// `~/.claude` corpus); fetched lazily by the client only when the cost tab is
 /// shown.
 pub(super) async fn cost(State(stats): State<Arc<Stats>>, Query(q): Query<StatsQuery>) -> Response {
-    match stats.read_cost().execute(&q.read()).await {
+    let roll_up = q.roll_up_children;
+    let read = q.read();
+    let cost = if roll_up {
+        stats.read_cost().execute_rolled_up(&read).await
+    } else {
+        stats.read_cost().execute(&read).await
+    };
+    match cost {
         Ok(cost) => Json(cost).into_response(),
         Err(e) => read_error(e),
     }

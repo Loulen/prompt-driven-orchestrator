@@ -12,6 +12,7 @@ export function MasterList<T extends AbsorbableRow>({
   ariaLabel = "Spenders",
   monoName = false,
   selection,
+  badge,
 }: {
   rows: T[];
   selected: string | null;
@@ -27,6 +28,9 @@ export function MasterList<T extends AbsorbableRow>({
    *  Ctrl/Cmd-click, Shift-click and Space select. Absent where the rows do not
    *  combine (« By project »). */
   selection?: MasterSelection;
+  /** A discreet mark after a row's name — the « ⑂ N » of a root Pipeline
+   *  under « roll up child runs ». */
+  badge?: (row: T) => React.ReactNode;
 }) {
   const options = [{ id: "__total__", name: "Total" } as T, ...rows];
   const order = rows.map((row) => row.id);
@@ -113,6 +117,7 @@ export function MasterList<T extends AbsorbableRow>({
             <span className={`sx-rank__name ${monoName ? "font-mono" : ""}`}>
               {row.name}
             </span>
+            {!isTotal && badge?.(row)}
             {selection && absorbed > 0 && (
               <CombinedIcon
                 count={absorbed}

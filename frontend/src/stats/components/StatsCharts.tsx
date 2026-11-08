@@ -1,9 +1,13 @@
+import { useState } from "react";
 import { useTheme } from "../../hooks/useTheme";
 import type { StatsCost } from "../../shared/generated/StatsCost";
 import type { StatsOverview } from "../../shared/generated/StatsOverview";
 import type { StatsPerformance } from "../../shared/generated/StatsPerformance";
 import {
+  DEFAULT_COST_VIEW,
   DEFAULT_PERFORMANCE_BAND,
+  rollsUp,
+  type CostView,
   type PerformanceBand,
 } from "../model/statsFilters";
 import { CohortLine, EmptyNote } from "./charts/common/ChartPrimitives";
@@ -52,6 +56,10 @@ export interface StatsChartsProps {
   uncombined?: boolean;
   onUncombinedChange?: (value: boolean) => void;
   showUncombined?: boolean;
+  /** Cost's grouping and « Roll up child runs », owned by the shell (the
+   *  roll-up is part of the cost request, and off at each open). */
+  costView?: CostView;
+  onCostViewChange?: (view: CostView) => void;
 }
 
 /** The legend each tab's band carries — it names the tab, not the endpoint. */
@@ -79,7 +87,13 @@ export default function StatsCharts({
   uncombined = false,
   onUncombinedChange = () => {},
   showUncombined = false,
+  costView: heldCostView,
+  onCostViewChange: onHeldCostViewChange,
 }: StatsChartsProps) {
+  // Held by the shell; a caller that does not hold it gets one of its own.
+  const [ownCostView, setOwnCostView] = useState<CostView>(DEFAULT_COST_VIEW);
+  const costView = heldCostView ?? ownCostView;
+  const onCostViewChange = onHeldCostViewChange ?? setOwnCostView;
   // #759, ADR-0093: subscribing here re-renders the whole chart subtree on a switch of Theme or mode,
   // so every `CHART.*` / `harnessColor()` read below resolves against the new
   // palette. Recharts bakes colours into props; nothing re-themes on its own.
@@ -106,6 +120,8 @@ export default function StatsCharts({
   }
   // The bar and the cohort line every tab but Performance opens with (#819):
   // the tab draws them, so the bar can carry its drill path on the left.
+  // « Roll up child runs » is Cost's, and leaves the bar on « By model ».
+  const rolledUp = tab === "cost" && rollsUp(costView);
   const frame: TabFrame = {
     band: (crumbs, controls) => (
       <CohortOnlyBand
@@ -119,6 +135,14 @@ export default function StatsCharts({
             ? { checked: uncombined, onChange: onUncombinedChange }
             : undefined
         }
+        rollUp={
+          tab === "cost" && costView.axis !== "model"
+            ? {
+                checked: costView.rollUp,
+                onChange: (rollUp) => onCostViewChange({ ...costView, rollUp }),
+              }
+            : undefined
+        }
       >
         {controls}
       </CohortOnlyBand>
@@ -126,6 +150,7 @@ export default function StatsCharts({
     cohort: (
       <CohortLine
         completedOnly={completedOnly}
+        rolledUp={rolledUp}
         note={
           // Trigger fires are not Runs: the cohort selects which Runs are
           // counted, and says so rather than implying it filtered the fires.
@@ -144,6 +169,9 @@ export default function StatsCharts({
         uncombined={uncombined}
         onAbsorptionsChanged={onAbsorptionsChanged}
         frame={frame}
+        axis={costView.axis}
+        onAxisChange={(axis) => onCostViewChange({ ...costView, axis })}
+        rolledUp={rolledUp}
       />
     );
   if (tab === "sessions" && overview)

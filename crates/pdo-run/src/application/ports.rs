@@ -111,6 +111,11 @@ pub trait EventWindows: Send + Sync {
         pipeline: &'a str,
         unknown: &'a str,
     ) -> BoxFuture<'a, anyhow::Result<Option<serde_json::Value>>>;
+    /// Every `run_started` of the whole log whose `parent_run_id` names a Run
+    /// the log still holds (archived included), oldest first, without period:
+    /// the child Runs a tree walk reaches. A child whose parent was forgotten
+    /// is not there — it went back to being a root.
+    fn child_run_starts(&self) -> BoxFuture<'_, anyhow::Result<Vec<RunStart>>>;
 }
 
 /// A `[from, to)` window over the events' `ts`.

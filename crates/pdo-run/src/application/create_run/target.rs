@@ -132,7 +132,8 @@ pub(super) async fn version_of(state: &Runs, req: &CreateRunRequest) -> Option<P
 }
 
 /// Load the pipeline and refuse one a Run cannot run: unreadable or
-/// unparsable, a dangling edge, an empty script, a required prompt missing.
+/// unparsable, a dangling edge, an empty script, a cost cap whose `$var` does
+/// not resolve to a positive amount, a required prompt missing.
 pub(super) fn load_pipeline(state: &Runs, req: &CreateRunRequest) -> Result<Launchable, Refusal> {
     let (yaml, pipeline_path) = if let Some(ref pipeline_id) = req.pipeline_id {
         let path = resolve_pipeline_path(&state.repo_root, pipeline_id);
@@ -184,6 +185,20 @@ pub(super) fn load_pipeline(state: &Runs, req: &CreateRunRequest) -> Result<Laun
         return Err(bad_request(format!(
             "cannot launch run: script node(s) have an empty body: {}",
             empty_scripts.join(", ")
+        )));
+    }
+
+    // A `$var` cost cap is resolved against the Run's variables HERE, at
+    // launch: a cap that does not resolve to a positive amount would otherwise
+    // silently leave the loop uncapped.
+    let mut launch_vars = pipeline.variable_defaults();
+    launch_vars.extend(req.variables.clone());
+    let cap_errors =
+        pdo_pipeline::domain::loops::cost_cap_errors_at_launch(&pipeline, &launch_vars);
+    if !cap_errors.is_empty() {
+        return Err(bad_request(format!(
+            "cannot launch run: {}",
+            cap_errors.join("; ")
         )));
     }
 

@@ -54,6 +54,10 @@ export interface HarnessListItem {
    *  effort axis at all. Drives the effort-picker greying, replacing the client's
    *  hard-coded map. */
   has_effort?: boolean;
+  /** Whether PDO can read this harness's cost. `false` ⇒ a member running on it
+   *  does not count toward a loop's cost cap (« Cap may be overshot »). Absent on
+   *  a daemon that predates it: treated as able. */
+  can_cost?: boolean;
   /** #616/ADR-0053: the probed binary version the catalogue was read at, for the
    *  picker's provenance line. `null` when the binary answered no `--version`. */
   version?: string | null;

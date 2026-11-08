@@ -16,7 +16,7 @@ use pdo_workspace::domain::provisioning::{ProvisioningRules, ScopedRules};
 
 use crate::domain::event::Event;
 use crate::domain::run_summary::RunSummary;
-use crate::domain::state::{CostStat, RunState};
+use crate::domain::state::{CostStat, LoopCost, RunState};
 
 /// The future an async port method returns (the ports are `dyn`, D23).
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -151,6 +151,19 @@ pub trait LiveFacts: Send + Sync {
         run: &'a RunState,
         events: &'a [Event],
     ) -> BoxFuture<'a, Option<CostStat>>;
+    /// The **Coût de boucle** of each of `regions` (ADR draft
+    /// plafond-de-cout-de-boucle), folded from the same breakdown as
+    /// [`Self::cost`]: the scheduler's input at a capped region's re-entry.
+    /// Empty when nothing is readable; the default reads nothing, so a Run
+    /// whose facts are not on disk is never parked on a cost.
+    fn loop_costs<'a>(
+        &'a self,
+        _run: &'a RunState,
+        _events: &'a [Event],
+        _regions: &'a [pdo_pipeline::domain::pipeline::LoopRegion],
+    ) -> BoxFuture<'a, HashMap<String, LoopCost>> {
+        Box::pin(async { HashMap::new() })
+    }
 }
 
 /// The Pipeline Manager's sessions, as a Run's detail observes them.

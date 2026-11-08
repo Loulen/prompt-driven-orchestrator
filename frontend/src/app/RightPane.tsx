@@ -291,7 +291,7 @@ export default function RightPane({
                 {selection.kind === "edge" ? (
                   <EdgeDetailPanel trigger={edgeTrigger} />
                 ) : selection.kind === "region" ? (
-                  <RegionInspector />
+                  <RegionInspector runState={isEditingRun ? selectedRun : null} locked={runLocked} />
                 ) : (
                   <NoteInspector />
                 )}

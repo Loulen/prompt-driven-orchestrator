@@ -41,6 +41,17 @@ const ANCHOR_HANDLE_SIDES: { side: PortSide; position: Position; style: React.CS
 /** A port as the card lists it: an output's line carries its type's icon. */
 export type CardPort = PortBrief & { port_type?: PortType };
 
+/** The badge of the one member of a loop region. */
+export interface LoopBadge {
+  text: string;
+  kind: LoopKind;
+  /** `~$1.20 / $5`, `≤ $5` off a Run. */
+  costText?: string;
+  costTitle?: string;
+  costWarn?: boolean;
+  budgetReached?: boolean;
+}
+
 export interface EditNodeData {
   label: string;
   nodeId: string;
@@ -58,7 +69,9 @@ export interface EditNodeData {
   // Compact badge when this node is the single member of a loop region: a
   // collection (`⇉ ...`, #151) or a single-member bounded loop (`↻ ...`, #173).
   // Absent on non-member nodes and on multi-member regions (boxed instead).
-  loopBadge?: { text: string; kind: LoopKind };
+  // With the region's money (ADR draft plafond-de-cout-de-boucle): the Coût de
+  // boucle and its cap after the counter, amber from 80 %, and « budget reached ».
+  loopBadge?: LoopBadge;
   agentMode?: "inherit" | "profile" | "custom" | "broken";
   /** #723: the node carries the « Orchestrator » toggle (ADR-0064). */
   orchestrator?: boolean;

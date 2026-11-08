@@ -1,5 +1,4 @@
 import type { Node } from "@xyflow/react";
-import type { LoopRegion } from "../../shared/generated/LoopRegion";
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
 import type { NodeType } from "../../shared/generated/NodeType";
 import type { RunState } from "../../shared/generated/RunState";
@@ -8,6 +7,8 @@ import { isNodeIsolated } from "../../lib/nodeIsolation";
 import { fallbackNodeSpot } from "../../lib/nodePlacement";
 import type { EditorPipelineDef } from "../model/pipeline";
 import { deriveLoopRegions } from "./loopRegionDerivation";
+import { regionCostText } from "./loopRegionCost";
+import type { LoopBadge } from "./EditNode";
 import { nodeAgentLabel } from "../model/nodeAgent";
 import type { AgentProfile } from "../../shared/generated/AgentProfile";
 
@@ -59,13 +60,19 @@ export function deriveEditNodes(
   // member, e.g. after a member is deleted — #173) reads `↻ <counter>`,
   // mirroring the box header — so a one-member loop is never invisible (it draws
   // no box). Keyed by member id; the kind drives the glyph and the title.
-  const loopBadgeByMember = new Map<string, { text: string; kind: LoopRegion["kind"] }>();
+  const loopBadgeByMember = new Map<string, LoopBadge>();
   for (const region of deriveLoopRegions(pipeline, runState)) {
     if (region.badgeMemberId == null) continue;
     const symbol = region.kind === "collection" ? "⇉" : "↻";
+    const costText = regionCostText(region);
     loopBadgeByMember.set(region.badgeMemberId, {
       text: `${symbol} ${region.counterText}`,
       kind: region.kind,
+      // The Coût de boucle follows the counter, as in a region's corner.
+      ...(costText != null ? { costText } : {}),
+      ...(region.cost ? { costTitle: region.cost.title } : {}),
+      ...(region.costWarn ? { costWarn: true } : {}),
+      ...(region.budgetReached ? { budgetReached: true } : {}),
     });
   }
   return pipeline.nodes.map((n, i) => {

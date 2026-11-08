@@ -8,6 +8,7 @@ mod regions;
 mod repo;
 mod run;
 mod status;
+mod views;
 
 pub use cost::*;
 pub use node::*;

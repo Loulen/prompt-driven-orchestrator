@@ -79,6 +79,9 @@ pub fn offer_entry(
         "model_efforts": cached.catalogue.model_efforts,
         "efforts": cached.catalogue.efforts,
         "has_effort": has_effort,
+        // Whether PDO can read this harness's cost: the region inspector warns
+        // that a capped loop cannot count a member running on it.
+        "can_cost": crate::domain::probes::can_cost(name),
         // When the catalogue ladder last ran: the « probed … » line of the
         // pickers and of Settings › Diagnostics. `null` when never probed.
         "probed_at": cached.probed_at,
@@ -155,5 +158,14 @@ mod tests {
         assert_eq!(entry["model_contexts"]["openrouter/openai/gpt-5.4"], "400K");
         assert_eq!(entry["efforts"].as_array().map(Vec::len), Some(7));
         assert_eq!(entry["probed_at"], "2026-10-19T08:00:00.000Z");
+        assert_eq!(entry["can_cost"], true, "pi reports its cost");
+    }
+
+    #[test]
+    fn offer_entry_says_whether_pdo_can_read_the_harness_cost() {
+        let entry =
+            |name: &str| offer_entry(name, "builtin", true, &CachedCatalogue::default(), false);
+        assert_eq!(entry("claude")["can_cost"], true);
+        assert_eq!(entry("opencode")["can_cost"], false);
     }
 }

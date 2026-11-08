@@ -105,3 +105,51 @@ pub struct HarnessCost {
     #[serde(default)]
     pub reported_in_usd: bool,
 }
+
+/// The **Coût de boucle** of one loop region (CONTEXT.md): the attributed cost
+/// of its member nodes' executions (sub-agents included) since the loop's last
+/// entry — the same fold as the Run total and the node costs (ADR-0058), so the
+/// three figures never diverge. Unlike [`crate::domain::state::NodeCost`], an
+/// unreadable member keeps the known part and sets `partial`; `usd` is `None`
+/// only when no member execution has a readable cost (the surfaces' `—`, never
+/// `$0`). Derived on read, never persisted.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LoopCost {
+    pub usd: Option<f64>,
+    /// `~`: false only when every readable contribution is exact reported dollars.
+    pub estimated: bool,
+    /// Lower bound (`†`): an unreadable member execution or an unpriced model.
+    pub partial: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<String>>")]
+    pub unpriced_models: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<String>>")]
+    pub unavailable_reasons: Vec<String>,
+    pub executions: i64,
+    pub readable_executions: i64,
+    /// Each member's share over the same window, in the region's `members`
+    /// order; a member with no execution in the window yet is omitted.
+    #[serde(default)]
+    pub members: Vec<LoopMemberCost>,
+    /// The region's effective **Plafond de coût** in dollars: its
+    /// `max_cost_usd` resolved against the Run's variables (a `$var` is fixed
+    /// at launch, which only the daemon knows). `None` = uncapped. Lets the
+    /// header say `~$1.20 / $5` and warn at 80 %.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cap_usd: Option<f64>,
+}
+
+/// One member's share of a [`LoopCost`], over the same window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LoopMemberCost {
+    pub node_id: String,
+    pub usd: Option<f64>,
+    /// `~` for this member's own share (false when exact reported dollars).
+    pub estimated: bool,
+    pub partial: bool,
+    pub executions: i64,
+}

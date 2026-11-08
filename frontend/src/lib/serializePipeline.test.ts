@@ -54,6 +54,29 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(yaml).toMatch(/members:/);
   });
 
+  it("serializes a bounded region's max_cost_usd only when it is set", () => {
+    const impl: EditorNodeDef = {
+      id: "impl", name: "implementer", type: "agent",
+      inputs: [], outputs: [{ name: "code" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const pipeline = makeFullPipeline([impl]);
+    pipeline.loops = [
+      { id: "fix", kind: "bounded", members: ["impl"], max_iter: 3, max_cost_usd: 2.5 },
+    ];
+    expect(serializePipeline(pipeline)).toContain("max_cost_usd: 2.5");
+    pipeline.loops = [
+      { id: "fix", kind: "bounded", members: ["impl"], max_iter: 3, max_cost_usd: "$budget" },
+    ];
+    expect(serializePipeline(pipeline)).toContain("max_cost_usd: $budget");
+    for (const unset of [null, undefined, ""]) {
+      pipeline.loops = [
+        { id: "fix", kind: "bounded", members: ["impl"], max_iter: 3, max_cost_usd: unset },
+      ];
+      expect(serializePipeline(pipeline)).not.toContain("max_cost_usd");
+    }
+  });
+
   it("serializes a collection loops: region with its over: field (#269)", () => {
     const worker: EditorNodeDef = {
       id: "worker", name: "worker", type: "agent",

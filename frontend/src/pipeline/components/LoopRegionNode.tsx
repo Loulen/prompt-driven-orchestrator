@@ -1,5 +1,5 @@
 import { type Node, type NodeProps } from "@xyflow/react";
-import { Repeat, Split } from "lucide-react";
+import { Repeat, Split, Wallet } from "lucide-react";
 import { Button } from "../../shared/ui/kit";
 import type { LoopKind } from "../../shared/generated/LoopKind";
 import { useEditStore } from "../store/editStore";
@@ -30,8 +30,20 @@ export interface LoopRegionNodeData {
    * canvas — the bound is edited in the RegionInspector, never inline here.
    */
   counterText: string;
-  /** True once the region reached `max_iter` with the loop still continuing. */
+  /** The Run is parked « exhausted — unrouted » on this region. */
   exhausted: boolean;
+  /**
+   * The corner's money (ADR draft plafond-de-cout-de-boucle): the Coût de
+   * boucle on a Run (`~$1.20`), with its cap (`~$1.20 / $5`), or the cap alone
+   * off a Run (`≤ $5`). Absent when there is nothing to say.
+   */
+  costText?: string | null;
+  /** The cost's tooltip: what it covers and each member's share. */
+  costTitle?: string | null;
+  /** The cost reached 80 % of the cap: only its text turns amber. */
+  costWarn?: boolean;
+  /** The Run is parked « budget reached » on this region. */
+  budgetReached?: boolean;
   /**
    * The live run this region belongs to, or `null` in a template view. Present
    * only when a run is active; the "route from manager" affordance (#152) on an
@@ -63,8 +75,10 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
   // CORE-42, CORE-205: « route from manager » greyed, with why, when the caller may not end the region.
   const endRegionRefused = useWhyNotOnRun(data.runId as string | null | undefined)("end_region");
   const collection = data.kind === "collection";
-  // A fan-out splits its members, a bounded loop repeats them.
-  const Glyph = collection ? Split : Repeat;
+  const budget = data.budgetReached === true;
+  // A fan-out splits its members, a bounded loop repeats them; a loop that
+  // reached its cost cap shows a wallet.
+  const Glyph = budget ? Wallet : collection ? Split : Repeat;
 
   const openInspector = () =>
     setSelection({ kind: "region", id: null, regionId: data.regionId });
@@ -77,6 +91,7 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
         data-testid="loop-region"
         data-region-id={data.regionId}
         data-exhausted={data.exhausted || undefined}
+        data-budget={budget || undefined}
         data-selected={selected || undefined}
         className="loop-region cv-region"
         style={{ width: data.width, height: data.height }}
@@ -86,9 +101,14 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
 
   // The chrome layer: same rectangle, transparent (it covers the cards),
   // `pointer-events: none` throughout except on the counter and the badge.
-  const title = `${collection ? "Collection region" : "Loop region"} ${data.regionId} · ${data.counterText}${
-    data.exhausted ? " · limit reached" : ""
-  }`;
+  const title = [
+    `${collection ? "Collection region" : "Loop region"} ${data.regionId} · ${data.counterText}${
+      data.exhausted ? " · limit reached" : budget ? " · budget reached" : ""
+    }`,
+    data.costTitle,
+  ]
+    .filter(Boolean)
+    .join("\n");
   return (
     <div
       data-testid="loop-region-chrome"
@@ -102,13 +122,61 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
         type="button"
         data-testid="loop-region-header"
         data-exhausted={data.exhausted || undefined}
+        data-budget={budget || undefined}
         onClick={openInspector}
         className="nodrag nopan cv-region__corner"
         title={title}
       >
         <Glyph size={11} strokeWidth={1.5} className="loop-region-glyph" aria-hidden />
         <span className="loop-region-count">{data.counterText}</span>
+        {data.costText != null && (
+          <>
+            <span aria-hidden className="cv-region__sep">
+              ·
+            </span>
+            <span
+              data-testid="loop-region-cost"
+              className="cv-region__cost"
+              data-warn={data.costWarn || undefined}
+            >
+              {data.costText}
+            </span>
+          </>
+        )}
       </button>
+      {budget && (
+        <div data-testid="loop-region-budget" className="cv-region__block" data-budget>
+          budget reached
+          {data.runId != null && (
+            <>
+              {/* Raising the cap is an edit of the Run's bounds: it starts in
+                  the region inspector. */}
+              <Button
+                size="sm"
+                data-testid="loop-region-raise-cap"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openInspector();
+                }}
+              >
+                raise cap
+              </Button>
+              <Button
+                size="sm"
+                tone="ghost"
+                data-testid="loop-region-end"
+                disabledReason={endRegionRefused}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  endRegion(data.runId as string, data.regionId).catch(toastRefusal);
+                }}
+              >
+                end region
+              </Button>
+            </>
+          )}
+        </div>
+      )}
       {data.exhausted && (
         <div data-testid="loop-region-block" className="cv-region__block">
           exhausted · unrouted

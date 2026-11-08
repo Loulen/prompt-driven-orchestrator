@@ -71,7 +71,7 @@ export const SEMANTIC_FIELDS: Record<SerializerScope, readonly string[]> = {
   // `repeated` (#149): the accumulation across iterations, which only the edge
   // carries.
   edge: ["source", "target", "when", "else", "repeated"] satisfies (keyof EdgeDef)[],
-  loopRegion: ["id", "kind", "members", "max_iter", "over"] satisfies (keyof LoopRegion)[],
+  loopRegion: ["id", "kind", "members", "max_iter", "max_cost_usd", "over"] satisfies (keyof LoopRegion)[],
   note: [], // the whole `notes` block is layout — no semantic note field
 };
 

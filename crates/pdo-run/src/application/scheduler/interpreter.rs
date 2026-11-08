@@ -165,6 +165,7 @@ pub async fn interpret(
         SchedulerAction::Interrupt {
             reason_code,
             message,
+            region_id,
         } => {
             // ADR-0049: `unrouted` parks the run `AwaitingUser`, never terminal.
             // The payload carries both a machine `reason_code` and a human
@@ -174,7 +175,14 @@ pub async fn interpret(
                 state,
                 run_id,
                 event::EventKind::RunInterrupted,
-                Some(projection::interrupt_payload(reason_code, message)),
+                Some({
+                    let mut payload = projection::interrupt_payload(reason_code, message);
+                    // The region a region park is about (`awaiting_region_id`).
+                    if let Some(region_id) = region_id {
+                        payload["region_id"] = serde_json::json!(region_id);
+                    }
+                    payload
+                }),
             )
             .await;
             ActionOutcome::Interrupted {

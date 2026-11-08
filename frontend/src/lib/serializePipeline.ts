@@ -261,6 +261,10 @@ export function pipelineToYamlObject(p: EditorPipelineDef): Record<string, unkno
       };
       if (r.max_iter !== undefined && r.max_iter !== null)
         region.max_iter = r.max_iter;
+      // The Plafond de coût of a bounded loop: emitted only when set, so an
+      // uncapped region keeps its exact YAML.
+      if (r.max_cost_usd !== undefined && r.max_cost_usd !== null && r.max_cost_usd !== "")
+        region.max_cost_usd = r.max_cost_usd;
       // A collection region's iterated field (#151 / #269) — without it, the
       // region round-trips as an over-less shell the daemon can't fan out.
       if (r.over) region.over = r.over;

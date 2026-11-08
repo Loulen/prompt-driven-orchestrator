@@ -79,6 +79,7 @@ pub(super) fn apply_run_event(state: &mut RunState, event: &Event) {
             // no longer waiting on that incident.
             state.awaiting_reason = None;
             state.awaiting_reason_code = None;
+            state.awaiting_region_id = None;
         }
         // The runtime gave up on driving the run forward for a non-deliberate
         // reason (ADR-0049): park it `AwaitingUser` with the reason, NEVER
@@ -92,6 +93,12 @@ pub(super) fn apply_run_event(state: &mut RunState, event: &Event) {
                 state.status = RunStatus::AwaitingUser;
                 state.awaiting_reason = run_event_reason(event);
                 state.awaiting_reason_code = run_event_reason_code(event);
+                state.awaiting_region_id = event
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.get("region_id"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
             }
         }
         EventKind::RunRenamed => {

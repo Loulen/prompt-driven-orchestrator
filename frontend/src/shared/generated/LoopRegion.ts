@@ -13,6 +13,14 @@ import type { LoopKind } from "./LoopKind";
  */
 export type LoopRegion = { id: string, kind: LoopKind, members: Array<string>, max_iter?: number | string | null, 
 /**
+ * The **Plafond de coût** of a `bounded` region (ADR draft
+ * plafond-de-cout-de-boucle): a dollar cap on its **Coût de boucle**,
+ * checked at each re-entry. A positive number or a `$var` reference;
+ * absent = no cap (no default). Refused on a `collection` region (no
+ * re-entry to check it at). Serialized only when set.
+ */
+max_cost_usd?: number | string | null, 
+/**
  * The frontmatter field naming the list a `collection` region fans out over
  * (ADR-0011 / #151). `None` for a `bounded` region.
  */

@@ -60,6 +60,14 @@ pub struct LoopRegion {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable, type = "number | string | null")]
     pub max_iter: Option<serde_yaml::Value>,
+    /// The **Plafond de coût** of a `bounded` region (ADR draft
+    /// plafond-de-cout-de-boucle): a dollar cap on its **Coût de boucle**,
+    /// checked at each re-entry. A positive number or a `$var` reference;
+    /// absent = no cap (no default). Refused on a `collection` region (no
+    /// re-entry to check it at). Serialized only when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable, type = "number | string | null")]
+    pub max_cost_usd: Option<serde_yaml::Value>,
     /// The frontmatter field naming the list a `collection` region fans out over
     /// (ADR-0011 / #151). `None` for a `bounded` region.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -24,6 +24,8 @@ pub struct Execution {
     pub project: Option<PathBuf>,
     pub legacy_claim: bool,
     pub unavailable_reason: Option<String>,
+    /// Index of the opening `NodeStarted` in the event slice.
+    pub started_event: usize,
 }
 
 /// The Run's **frozen executions** — one per distinct `NodeStarted` identity, with
@@ -189,6 +191,7 @@ pub fn collect_executions(
             project,
             legacy_claim,
             unavailable_reason,
+            started_event: order,
         });
     }
     executions

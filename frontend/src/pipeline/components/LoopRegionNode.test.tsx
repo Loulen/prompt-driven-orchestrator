@@ -290,3 +290,69 @@ describe("LoopRegionNode — box / chrome layer split (#455)", () => {
     expect(screen.getByTestId("loop-region-header").className).toContain("cv-region__corner");
   });
 });
+
+describe("LoopRegionNode corner — Coût de boucle and Plafond de coût", () => {
+  beforeEach(() => {
+    seedStore([reviewLoop]);
+    mockEndRegion.mockClear();
+  });
+
+  it.each([
+    ["3/5", "~$1.20 / $5"],
+    ["3/5", "~$1.20"],
+    ["max 5", "≤ $5"],
+    ["2/4 items", "~$0.8400"],
+  ])("shows `%s · %s` in the corner", (counterText, costText) => {
+    render(
+      <Wrapper>
+        <LoopRegionNode {...props({ counterText, costText, costTitle: "Loop cost, laps 1–3: …" })} />
+      </Wrapper>,
+    );
+    const corner = screen.getByTestId("loop-region-header");
+    expect(corner).toHaveTextContent(`${counterText}·${costText}`);
+    expect(corner.getAttribute("title")).toContain("Loop cost, laps 1–3: …");
+  });
+
+  it("shows no cost when there is none to say", () => {
+    render(
+      <Wrapper>
+        <LoopRegionNode {...props({ counterText: "max 3" })} />
+      </Wrapper>,
+    );
+    expect(screen.queryByTestId("loop-region-cost")).toBeNull();
+  });
+
+  it("turns only the cost text amber from 80 % of the cap", () => {
+    render(
+      <Wrapper>
+        <LoopRegionNode {...props({ counterText: "4/5", costText: "~$4.10 / $5", costWarn: true })} />
+      </Wrapper>,
+    );
+    expect(screen.getByTestId("loop-region-cost")).toHaveAttribute("data-warn");
+    expect(screen.getByTestId("loop-region-header")).not.toHaveAttribute("data-budget");
+  });
+
+  it("marks a budget-reached region amber with raise cap and end region, never « exhausted »", () => {
+    const { rerender } = render(
+      <Wrapper>
+        <LoopRegionNode
+          {...props({ counterText: "4/5", costText: "~$5.12 / $5", budgetReached: true, runId: "run-1" })}
+        />
+      </Wrapper>,
+    );
+    expect(screen.getByTestId("loop-region-header")).toHaveAttribute("data-budget");
+    expect(screen.getByTestId("loop-region-budget")).toHaveTextContent("budget reached");
+    expect(screen.queryByTestId("loop-region-block")).toBeNull();
+    fireEvent.click(screen.getByTestId("loop-region-end"));
+    expect(mockEndRegion).toHaveBeenCalledWith("run-1", "review_loop");
+    fireEvent.click(screen.getByTestId("loop-region-raise-cap"));
+    expect(useEditStore.getState().selection).toEqual({ kind: "region", id: null, regionId: "review_loop" });
+
+    rerender(
+      <Wrapper>
+        <LoopRegionNode {...props({ budgetReached: true, runId: "run-1", layer: "box" })} />
+      </Wrapper>,
+    );
+    expect(screen.getByTestId("loop-region")).toHaveAttribute("data-budget");
+  });
+});

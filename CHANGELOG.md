@@ -13,6 +13,32 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+### Loop cost and cost cap of a bounded loop
+
+- The corner of every loop region shows its loop cost after the counter, in the run cost's format
+  (`3/5 · ~$1.20`, `2/4 items · ~$0.84`, `~` an estimate, `†` a lower bound, `—` unknown), counted
+  since the loop was entered; its tooltip gives each member's share. A one-member loop shows it on
+  its card's badge.
+- A bounded loop takes a cost cap, `max_cost_usd` (a dollar amount or a `$variable` resolved at
+  launch), set in the region inspector: `$` prefix, "no cap" when empty, ✕ to remove it. A value
+  at or below 0, a value that is not a number, and a cap on a collection are refused with a
+  reason; a `$variable` that does not resolve to a positive amount refuses the launch.
+- The corner reads `~$1.20 / $5` on a run (`max 5 · ≤ $5` on a pipeline), and its cost turns
+  amber from 80 % of the cap. Once the loop's cost reaches the cap, the lap in progress finishes
+  and the next one does not start: the run waits "budget reached" (code `region_budget_exhausted`,
+  the region in `awaiting_region_id`), never failed, and the loop's exhaustion exit is not
+  followed. `max_iter` wins when both bounds fall on the same lap. The region turns amber with a
+  wallet, "raise cap" and "end region"; Run info explains the stop. A member running on a harness
+  with no cost source is flagged in the inspector ("Cap may be overshot").
+- The region inspector shows a "Loop cost" section on a run: the spend against the cap, its share,
+  and each member's cost.
+- "exhausted · unrouted" no longer shows during a loop's last lap nor after it left by its exit:
+  only while the run waits on that region.
+- New fields for extensions and the API: `max_cost_usd` on a loop region, `loop_costs` (with
+  `cap_usd`) and `awaiting_region_id` on a run, `can_cost` on each harness of `GET /settings`.
+
 ## 2.74.0
 
 ### Approve ▾ beyond the node panel: enlarged terminal, command field, tour

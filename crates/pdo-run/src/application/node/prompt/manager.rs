@@ -82,7 +82,10 @@ On `curl {daemon_url}/runs/{run_id}` a parked run carries:
 - **`awaiting_reason_code`** — a stable machine slug you branch on: `session_died`,
   `spawn_aborted`, `boot_recovery` (an infra incident on a node); `run_stalled` (nothing
   schedulable); `unrouted` / `region_exhausted` / `region_ended_unrouted` (routing left no
-  live path — route it with `end_region`/`bump_region` or the exit edge); `merge_conflict`,
+  live path — route it with `end_region`/`bump_region` or the exit edge);
+  `region_budget_exhausted` (a loop reached its `max_cost_usd` cost cap at re-entry, its exit
+  NOT followed — `awaiting_region_id` names it; raise the cap, `force_route` or `end_region`);
+  `merge_conflict`,
   `merge_resolution_failed`, `script_validation_failed`, `frontmatter_retry_exhausted`,
   `delivery_failed` (a completion give-up); `agent_fail_awaiting` (an agent `pdo fail`
   awaiting your confirmation).

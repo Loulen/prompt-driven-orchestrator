@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { deriveEditNodes, runReachedEnd } from "./editNodeDerivation";
+import type { LoopBadge } from "./EditNode";
 import { deriveEditEdges, EDGE_ABOVE_NODES, EDGE_UNDER_NODES } from "./editEdgeDerivation";
 import { deriveLoopRegions } from "./loopRegionDerivation";
 import type { LoopRegion } from "../../shared/generated/LoopRegion";
@@ -417,6 +418,44 @@ describe("deriveLoopRegions — collection regions (#151)", () => {
     // projected state — the only value that says how much work the region owes.
     const regions = deriveLoopRegions(collectionPipeline(), liveRun(1, 2));
     expect(regions[0].counterText).toBe("1/2 items");
+  });
+
+  it("puts the loop cost and its cap on a one-member loop's badge", () => {
+    const p = pipelineWith(
+      [node("fixer", "agent", ["fix"])],
+      [{ id: "spin", kind: "bounded", members: ["fixer"], max_iter: 5, max_cost_usd: 5 }],
+    );
+    const idle = deriveEditNodes(p, null).find((c) => c.id === "fixer")!.data.loopBadge as LoopBadge;
+    expect(idle.text).toBe("↻ max 5");
+    expect(idle.costText).toBe("≤ $5");
+
+    const run = liveRun(3);
+    run.loop_costs = {
+      spin: { usd: 4.1, estimated: true, partial: false, executions: 3, readable_executions: 3, members: [], cap_usd: 5 },
+    };
+    const live = deriveEditNodes(p, run).find((c) => c.id === "fixer")!.data.loopBadge as LoopBadge;
+    expect(live.text).toBe("↻ 3/5");
+    expect(live.costText).toBe("~$4.10 / $5");
+    expect(live.costWarn).toBe(true);
+    expect(live.budgetReached).toBeUndefined();
+
+    run.status = "awaiting_user";
+    run.awaiting_reason_code = "region_budget_exhausted";
+    run.awaiting_region_id = "spin";
+    const parked = deriveEditNodes(p, run).find((c) => c.id === "fixer")!.data.loopBadge as LoopBadge;
+    expect(parked.budgetReached).toBe(true);
+  });
+
+  it("shows the loop cost of a collection without a cap", () => {
+    const run = liveRun(2, 4);
+    run.loop_costs = {
+      "per-issue": { usd: 0.84, estimated: true, partial: false, executions: 2, readable_executions: 2, members: [] },
+    };
+    const r = deriveLoopRegions(collectionPipeline(), run)[0];
+    expect(r.counterText).toBe("2/4 items");
+    expect(r.cost?.text).toBe("~$0.8400");
+    expect(r.cost?.title).toMatch(/^Loop cost, 2 items:/);
+    expect(r.cap).toBeNull();
   });
 
   it("distinguishes a region wedged at lap 1 of 2 from a finished 1-item region", () => {

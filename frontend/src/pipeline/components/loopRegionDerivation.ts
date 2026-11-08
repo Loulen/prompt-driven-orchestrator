@@ -5,6 +5,7 @@ import type { LoopRegion } from "../../shared/generated/LoopRegion";
 import type { RunState } from "../../shared/generated/RunState";
 import type { EditorPipelineDef } from "../model/pipeline";
 import type { Box } from "../../lib/compactLayout";
+import { deriveRegionCost, parkedOn, regionCostText, type RegionCost } from "./loopRegionCost";
 
 /**
  * Layout + label for a bounded loop region (ADR-0011 / #148) rendered on the
@@ -15,7 +16,7 @@ import type { Box } from "../../lib/compactLayout";
  * `i` is the region-wide iteration, taken as the max `iter` across the member
  * nodes — the daemon stamps every member with the region iter for the lap).
  */
-export interface LoopRegionLayout {
+export interface LoopRegionLayout extends RegionCost {
   id: string;
   kind: LoopRegion["kind"];
   /** Region members that actually exist as nodes, in pipeline order. */
@@ -25,7 +26,11 @@ export interface LoopRegionLayout {
    * on the canvas; the raw bound is edited in the RegionInspector, not inline.
    */
   counterText: string;
-  /** True once the region has reached `max_iter` on a live run. */
+  /**
+   * True while the Run is parked « exhausted — unrouted » on this region: never
+   * during its last lap, never after it left by its exit, never together with
+   * « budget reached ».
+   */
   exhausted: boolean;
   /** Translucent-box geometry. Present iff `kind` renders as a box (>= 2 members). */
   box: { x: number; y: number; width: number; height: number } | null;
@@ -86,8 +91,16 @@ export function deriveLoopRegions(
     // A collection region (#151) never "exhausts" — the lap count is the
     // collection size, not a bounded cap. Idle shows the `over` driver.
     const isCollection = region.kind === "collection";
+    // « exhausted — unrouted » is a PARK, not a lap count: the last lap reads
+    // `max/max` while it runs, and so does a region that left by its exit. Only
+    // the daemon's `region_exhausted` park on THIS region marks it; a historical
+    // run without `awaiting_region_id` falls back to the counter.
+    const money = deriveRegionCost(region, pipeline, runState, currentIter);
     const exhausted =
-      !isCollection && live && maxNum != null && currentIter >= maxNum;
+      !isCollection &&
+      live &&
+      !money.budgetReached &&
+      parkedOn(runState, "region_exhausted", region, maxNum != null && currentIter >= maxNum);
     // #453: on a live run the collection badge reads `laps/total`, where the
     // total is the region's RESOLVED size (`collection_states[id].total_items`),
     // not `max(iter)` across members. `max(iter)` is the last lap *reached*, so
@@ -117,6 +130,7 @@ export function deriveLoopRegions(
         memberIds: members.map((n) => n.id),
         counterText,
         exhausted,
+        ...money,
         box: null,
         badgeMemberId: members[0].id,
       });
@@ -142,6 +156,7 @@ export function deriveLoopRegions(
       memberIds: members.map((n) => n.id),
       counterText,
       exhausted,
+      ...money,
       badgeMemberId: null,
       box: {
         x: minX - REGION_PAD,
@@ -205,6 +220,10 @@ export function buildLoopRegionNodes(
         kind: r.kind,
         counterText: r.counterText,
         exhausted: r.exhausted,
+        costText: regionCostText(r),
+        costTitle: r.cost?.title ?? null,
+        costWarn: r.costWarn,
+        budgetReached: r.budgetReached,
         // The live run id (or null in a template view) so an exhausted-unrouted
         // region can offer "route from manager" (ADR-0011 / #152).
         runId: runState?.run_id ?? null,

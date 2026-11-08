@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::definition::PipelineDef;
+use super::definition::{LoopKind, PipelineDef};
 use super::diagnostic::ParseError;
 use super::edge::EdgeDef;
 use super::node::{FrontmatterFieldDecl, NodeDef, NodeType, Port, LIVE_DIR};
@@ -157,6 +157,44 @@ pub(crate) fn live_artifact_names(pipeline: &PipelineDef) -> Result<(), ParseErr
                     node.id
                 )));
             }
+        }
+    }
+    Ok(())
+}
+
+/// A region's `max_cost_usd` (ADR draft plafond-de-cout-de-boucle) must be a
+/// positive dollar amount or a reference to a declared variable, and only on a
+/// `bounded` region: a `collection` has no re-entry to check it at. The `$var`
+/// itself is resolved and checked at Run launch
+/// ([`crate::domain::loops::cost_cap_errors_at_launch`]).
+pub(crate) fn validate_region_cost_caps(pipeline: &PipelineDef) -> Result<(), ParseError> {
+    for region in &pipeline.loops {
+        let Some(cap) = &region.max_cost_usd else {
+            continue;
+        };
+        if region.kind == LoopKind::Collection {
+            return Err(ParseError::InvalidField(format!(
+                "loop region '{}': max_cost_usd is only allowed on a bounded loop \
+                 (a collection region cannot be capped); remove it",
+                region.id
+            )));
+        }
+        if let serde_yaml::Value::String(s) = cap {
+            if let Some(var_name) = s.strip_prefix('$') {
+                if !pipeline.variables.contains_key(var_name) {
+                    return Err(ParseError::InvalidField(format!(
+                        "loop region '{}': max_cost_usd references undeclared variable '{s}'",
+                        region.id
+                    )));
+                }
+                continue;
+            }
+        }
+        if let Err(why) = crate::domain::loops::cost_cap_amount(cap) {
+            return Err(ParseError::InvalidField(format!(
+                "loop region '{}': max_cost_usd {why}",
+                region.id
+            )));
         }
     }
     Ok(())

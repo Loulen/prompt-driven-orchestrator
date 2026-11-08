@@ -63,7 +63,11 @@ Each loop shows what it spent since it was entered, after its counter (`↻ 3/5 
 member's share in the tooltip. A bounded loop also takes a cost cap, `max_cost_usd` (a dollar amount
 or a `$variable`): once the loop's cost reaches it, the lap in progress finishes, the next one does
 not start, and the run waits « budget reached » for you to raise the cap or end the region. It never
-follows the loop's exhaustion exit and never fails the run.
+follows the loop's exhaustion exit and never fails the run. The cap changes live: « raise cap »
+opens « Edit for this run » on it, and saving a higher cap starts the next lap at once; a cap
+lowered under what the loop already spent stops it at its next re-entry, never mid-lap. The same
+lever is `pdo run region <run> <region> --max-cost <usd|none>` and the `set_region_max_cost` run
+command.
 
 Branches converge on any node: wire several edges into an `agent` and it waits until each incoming
 edge has fired or died, receives only the outputs of the branches that fired (same-named edges group

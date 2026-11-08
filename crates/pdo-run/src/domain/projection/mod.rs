@@ -4898,6 +4898,62 @@ mod tests {
         assert!(state.region_max_iter_overrides.is_empty());
     }
 
+    fn fold_cost_cap(state: &mut RunState, value: serde_json::Value) {
+        apply_command_event(
+            state,
+            &make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "set_region_max_cost", "region_id": "R", "max_cost_usd": value }),
+            ),
+        );
+    }
+
+    #[test]
+    fn set_region_max_cost_folds_an_absolute_override_last_write_wins_and_null_removes() {
+        let mut state = RunState::new("r".into(), String::new());
+        fold_cost_cap(&mut state, serde_json::json!(8.0));
+        assert_eq!(state.region_max_cost_overrides.get("R"), Some(&Some(8.0)));
+        fold_cost_cap(&mut state, serde_json::json!(4));
+        assert_eq!(
+            state.region_max_cost_overrides.get("R"),
+            Some(&Some(4.0)),
+            "last write wins, not accumulated; no floor"
+        );
+        fold_cost_cap(&mut state, serde_json::Value::Null);
+        assert_eq!(
+            state.region_max_cost_overrides.get("R"),
+            Some(&None),
+            "null removes the cap, and the removal is kept"
+        );
+    }
+
+    #[test]
+    fn set_region_max_cost_ignores_a_non_positive_or_non_numeric_cap() {
+        let mut state = RunState::new("r".into(), String::new());
+        for bad in [
+            serde_json::json!(0),
+            serde_json::json!(-1.5),
+            serde_json::json!("five"),
+        ] {
+            fold_cost_cap(&mut state, bad);
+        }
+        assert!(state.region_max_cost_overrides.is_empty());
+    }
+
+    #[test]
+    fn a_runs_cost_cap_overrides_are_absent_on_the_wire_until_one_is_set() {
+        let mut state = RunState::new("r".into(), String::new());
+        let wire = serde_json::to_value(&state).unwrap();
+        assert!(wire.get("region_max_cost_overrides").is_none(), "{wire}");
+        fold_cost_cap(&mut state, serde_json::Value::Null);
+        let wire = serde_json::to_value(&state).unwrap();
+        assert_eq!(
+            wire["region_max_cost_overrides"],
+            serde_json::json!({ "R": null })
+        );
+    }
+
     #[test]
     fn force_route_folds_a_forced_target_keyed_by_source() {
         // #600: a `force_route` is keyed by its source (node OR region id) → target.

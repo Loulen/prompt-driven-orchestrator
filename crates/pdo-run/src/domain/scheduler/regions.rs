@@ -23,17 +23,43 @@ pub fn effective_region_max_iter(
 }
 
 /// The bounded region's **effective** cost cap (ADR draft
-/// plafond-de-cout-de-boucle): its declared `max_cost_usd`, resolved against
-/// the Run's variables. `None` = no cap, also for a cap that does not resolve:
-/// the launch refuses those, so this only guards a hand-edited snapshot, and
-/// parking a Run on a value it cannot read would be worse.
+/// plafond-de-cout-de-boucle): the live `set_region_max_cost` override first,
+/// read off `run_state` (folded from the append-only log), so it beats a
+/// literal and a `$var` cap alike and survives a reopen; an override of `null`
+/// means the cap was removed. Else the declared `max_cost_usd`, resolved
+/// against the Run's variables. `None` = no cap, also for a cap that does not
+/// resolve: the launch refuses those, so this only guards a hand-edited
+/// snapshot, and parking a Run on a value it cannot read would be worse. A
+/// `collection` is never capped, whatever the log says.
 pub fn effective_region_max_cost(
+    run_state: &RunState,
     region: &pdo_pipeline::domain::pipeline::LoopRegion,
     resolved_vars: &HashMap<String, serde_yaml::Value>,
 ) -> Option<f64> {
+    if region.kind != pdo_pipeline::domain::pipeline::LoopKind::Bounded {
+        return None;
+    }
+    if let Some(over) = run_state.region_max_cost_overrides.get(region.id.as_str()) {
+        return *over;
+    }
     pdo_pipeline::domain::loops::resolve_region_max_cost(region, resolved_vars)
         .ok()
         .flatten()
+}
+
+/// Whether a bounded region has a cost cap at all, before its `$var` is
+/// resolved: the live override when there is one (`null`: removed), else its
+/// declared `max_cost_usd`. What decides if the scheduler needs the Coût de
+/// boucle as an input.
+pub fn region_has_cost_cap(
+    run_state: &RunState,
+    region: &pdo_pipeline::domain::pipeline::LoopRegion,
+) -> bool {
+    region.kind == pdo_pipeline::domain::pipeline::LoopKind::Bounded
+        && match run_state.region_max_cost_overrides.get(region.id.as_str()) {
+            Some(over) => over.is_some(),
+            None => region.max_cost_usd.is_some(),
+        }
 }
 
 /// `$1.20`, `$0.0084`: a spend in the budget message, with the front's
@@ -73,7 +99,7 @@ fn budget_exhausted(
     max_iter: i64,
     resolved_vars: &HashMap<String, serde_yaml::Value>,
 ) -> Option<SchedulerAction> {
-    let cap = effective_region_max_cost(region, resolved_vars)?;
+    let cap = effective_region_max_cost(run_state, region, resolved_vars)?;
     let cost = run_state.loop_costs.get(region.id.as_str())?;
     let spent = cost.usd?;
     if spent < cap {
@@ -91,9 +117,9 @@ fn budget_exhausted(
         message: format!(
             "budget reached: bounded region '{id}' reached its cost cap: \
              {approx}{spent} spent of {cap} after lap {current_iter}/{max_iter}{partial}. \
-             Its exit was not followed. Raise max_cost_usd and resume, route the exit \
-             with force_route (source '{id}' -> a target), or end the region with \
-             end_region.",
+             Its exit was not followed. Raise the cap with set_region_max_cost \
+             (max_cost_usd), route the exit with force_route (source '{id}' -> a \
+             target), or end the region with end_region.",
             id = region.id,
             spent = usd_text(spent),
             cap = cap_text(cap),

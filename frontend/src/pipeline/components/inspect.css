@@ -1668,4 +1668,34 @@
     cursor: pointer;
   }
   .ei-budget__region:hover { text-decoration: underline; }
+
+  /* --------------------------- « Edit for this run » on a region (raise cap) */
+  .ei[data-run-edit] {
+    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--color-st-await) 55%, transparent);
+  }
+  .ei-runedit {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 4px;
+    height: 18px;
+    margin-left: auto;
+    padding: 0 6px;
+    border: 1px solid color-mix(in oklch, var(--color-st-await) 45%, transparent);
+    border-radius: var(--radius-ui);
+    background: color-mix(in oklch, var(--color-st-await) 14%, transparent);
+    color: var(--color-st-await);
+    font-size: var(--fs-2xs);
+    font-weight: var(--w-medium);
+    white-space: nowrap;
+  }
+  .ei-budgetnote {
+    padding: var(--g-3) var(--pad-x);
+    border-bottom: 1px solid var(--line);
+  }
+  .ei-foot {
+    display: flex;
+    padding: var(--g-3) var(--pad-x);
+    border-top: 1px solid var(--line);
+  }
 }

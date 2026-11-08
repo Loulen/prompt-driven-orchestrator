@@ -76,7 +76,7 @@ describe("BudgetReachedBanner", () => {
     );
   });
 
-  it("selects the region from its name and from raise cap, giving the panel way to its inspector", () => {
+  it("selects the region from its name, giving the panel way to its inspector", () => {
     const onShowRegion = vi.fn();
     render(
       <BudgetReachedBanner run={parkedRun()} regionId="review-loop" pipeline={PIPELINE} onShowRegion={onShowRegion} />,
@@ -84,10 +84,74 @@ describe("BudgetReachedBanner", () => {
     fireEvent.click(screen.getByTestId("run-budget-region"));
     expect(useEditStore.getState().selection).toEqual({ kind: "region", id: null, regionId: "review-loop" });
     expect(onShowRegion).toHaveBeenCalledTimes(1);
-    useEditStore.setState({ selection: { kind: "none", id: null } });
+  });
+
+  it("raise cap edits the Run for itself, on the region's max_cost_usd, from the cap the Run applies", () => {
+    const onShowRegion = vi.fn();
+    useEditStore.setState({
+      openTabs: [
+        {
+          id: "__run__run-1",
+          scope: "run",
+          pipeline: structuredClone(PIPELINE),
+          prompts: {},
+          diagnostics: [],
+          dirty: false,
+          externalDirty: false,
+          runId: "run-1",
+          libraryId: null,
+          libraryScope: null,
+        },
+      ],
+      activeTabId: "__run__run-1",
+      selection: { kind: "none", id: null },
+    });
+    render(
+      <BudgetReachedBanner
+        run={parkedRun({ region_max_cost_overrides: { "review-loop": 4 } })}
+        regionId="review-loop"
+        pipeline={PIPELINE}
+        onShowRegion={onShowRegion}
+      />,
+    );
     fireEvent.click(screen.getByTestId("run-budget-raise-cap"));
-    expect(useEditStore.getState().selection).toEqual({ kind: "region", id: null, regionId: "review-loop" });
-    expect(onShowRegion).toHaveBeenCalledTimes(2);
+    expect(useEditStore.getState().selection).toEqual({
+      kind: "region",
+      id: null,
+      regionId: "review-loop",
+      focusField: "max_cost_usd",
+    });
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.runEditing).toBe(true);
+    expect(tab.pipeline.loops?.[0].max_cost_usd).toBe(4);
+    expect(tab.dirty).toBe(false);
+    expect(onShowRegion).toHaveBeenCalledTimes(1);
+  });
+
+  it("raise cap brings the Run's tab to the front when another tab is", () => {
+    const runTab = {
+      id: "__run__run-1",
+      scope: "run" as const,
+      pipeline: structuredClone(PIPELINE),
+      prompts: {},
+      diagnostics: [],
+      dirty: false,
+      externalDirty: false,
+      runId: "run-1",
+      libraryId: null,
+      libraryScope: null,
+    };
+    useEditStore.setState({
+      openTabs: [runTab, { ...runTab, id: "other", scope: "repo" as const, runId: undefined }],
+      activeTabId: "other",
+      selection: { kind: "none", id: null },
+    });
+    render(<BudgetReachedBanner run={parkedRun()} regionId="review-loop" pipeline={PIPELINE} />);
+    fireEvent.click(screen.getByTestId("run-budget-raise-cap"));
+    const state = useEditStore.getState();
+    expect(state.activeTabId).toBe("__run__run-1");
+    expect(state.openTabs[0].runEditing).toBe(true);
+    expect(state.selection).toMatchObject({ regionId: "review-loop", focusField: "max_cost_usd" });
   });
 
   it("ends the region from end region", () => {

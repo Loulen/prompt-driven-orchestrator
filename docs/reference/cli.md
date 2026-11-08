@@ -82,7 +82,7 @@ Run `pdo service install` to start PDO at boot and keep it running after logout.
 | `pdo run repos <run-id> [--add <repo>]… [--read-only] [--remove <repo>]… [--json]` | Add or remove secondary repositories of a running Run. Paths are made absolute like `pdo project`'s. |
 | `pdo run inject <run-id> <path> --content <text>\|--file <path> [--json]` | Write an artifact into the Run's blackboard, a path under its artifacts. |
 | `pdo run force-route <run-id> --from <node-or-region> --to <node> [--json]` | Leave a node or a loop region through `--to`, past its conditions (`--to end` completes the Run). |
-| `pdo run region <run-id> <region-id> --end\|--bump <n>\|--max <n> [--json]` | End a loop region, run it `n` more laps, or set its lap cap. |
+| `pdo run region <run-id> <region-id> --end\|--bump <n>\|--max <n>\|--max-cost <usd\|none> [--json]` | End a loop region, run it `n` more laps, set its lap cap, or set its cost cap in dollars (`none` removes it; under the spend, the loop stops at its next re-entry). |
 | `pdo run manager start\|stop <run-id> [--json]` | Start or stop the Run's Pipeline Manager. |
 | `pdo run events <run-id> [--json]` | The Run's event log, one tab-separated line per event: time, kind, node, iteration, and who made it (the Actor's display name, else its id; empty for the Run's own transitions). |
 | `pdo run costs <run-id>… [--json]` | The cost of Runs, one line each: id and USD (`?` unknown, `≥` a lower bound). |

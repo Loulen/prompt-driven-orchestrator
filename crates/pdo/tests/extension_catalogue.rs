@@ -254,3 +254,57 @@ async fn an_extension_fills_the_projets_of_its_own_operations() {
     assert_eq!(creation.resource, ResourceKind::extension("a", "item"));
     assert_eq!(creation.projects, vec!["p1".to_string(), "p2".to_string()]);
 }
+
+#[tokio::test]
+async fn the_cost_cap_of_a_loop_is_a_run_operation_with_the_same_right_as_its_lap_cap() {
+    let catalogue = core_resources();
+    let run = catalogue.iter().find(|r| r.resource == "run").unwrap();
+    for verb in ["set_region_max_iter", "set_region_max_cost"] {
+        assert!(
+            run.verbs.iter().any(|v| v == verb),
+            "{verb}: {:?}",
+            run.verbs
+        );
+    }
+
+    // Refused: the extension is asked about it as a Run Operation, before the
+    // command reads the pipeline, and nothing is recorded.
+    let (ext, control) = TestExtension::new(Refusal::Only(
+        ResourceKind::Run,
+        Verb::Action("set_region_max_cost".into()),
+    ));
+    let daemon = TestDaemon::spawn_with_extensions(seed, ext.boxed())
+        .await
+        .unwrap();
+    let (status, run_id) = create_run_on(&daemon, &daemon.target_repo(), None).await;
+    assert_eq!(status, 201);
+    let run_id = run_id.unwrap();
+
+    let (status, body) = post(
+        &daemon,
+        &format!("/runs/{run_id}/commands"),
+        json!({ "kind": "set_region_max_cost", "region_id": "any", "max_cost_usd": 5 }),
+    )
+    .await;
+    assert_eq!(status, 403, "{body}");
+    let asked = Operation::new(
+        ResourceKind::Run,
+        Verb::Action("set_region_max_cost".into()),
+    );
+    assert!(
+        control
+            .seen()
+            .iter()
+            .any(|(_, op)| op.resource == asked.resource && op.verb == asked.verb),
+        "{:?}",
+        control.seen()
+    );
+    // Its sibling is not refused: the daemon gets to the pipeline (no such region).
+    let (status, body) = post(
+        &daemon,
+        &format!("/runs/{run_id}/commands"),
+        json!({ "kind": "set_region_max_iter", "region_id": "any", "max_iter": 5 }),
+    )
+    .await;
+    assert_eq!(status, 400, "{body}");
+}

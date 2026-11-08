@@ -9,16 +9,19 @@ import { fetchRunPipeline, overwriteDefaultPipelineFromRun } from "../../run/api
 import { hasUnsavedWork } from "./editState";
 import type { EditState } from "./editState";
 import { clearedHistory } from "./tabHistory";
+import { foldCostCapOverrides, type CostCapOverrides } from "../model/runCostCaps";
 
 type Set = StoreApi<EditState>["setState"];
 type Get = StoreApi<EditState>["getState"];
 
 export function runEditSlice(set: Set, get: Get): Partial<EditState> {
   return {
-    startRunEditing: (id: string) => {
+    startRunEditing: (id: string, capOverrides?: CostCapOverrides | null) => {
       set((s) => ({
         openTabs: s.openTabs.map((t) =>
-          t.id === id && t.runId != null ? { ...t, runEditing: true } : t,
+          t.id === id && t.runId != null && !t.runEditing
+            ? { ...t, pipeline: foldCostCapOverrides(t.pipeline, capOverrides), runEditing: true }
+            : t,
         ),
       }));
     },

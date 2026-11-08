@@ -22,6 +22,7 @@ mod lifecycle;
 mod loops;
 mod nodes;
 mod parse;
+mod parse_cost_cap;
 mod recover;
 mod reeval;
 mod reeval_pass;
@@ -167,6 +168,10 @@ async fn dispatch(state: Arc<Runs>, run_id: String, cmd: RunCommand) -> Response
             region_id,
             max_iter,
         } => loops::set_region_max_iter(state, run_id, region_id, max_iter).await,
+        RunCommand::SetRegionMaxCost {
+            region_id,
+            max_cost_usd,
+        } => loops::set_region_max_cost(state, run_id, region_id, max_cost_usd).await,
         RunCommand::ForceRoute { from, target } => {
             routing::force_route(state, run_id, from, target).await
         }
@@ -235,6 +240,63 @@ mod tests {
                 region_id: "R".into(),
                 max_iter: 8
             })
+        );
+    }
+
+    #[test]
+    fn set_region_max_cost_parses_a_dollar_cap_and_null_as_removal() {
+        assert_eq!(
+            parse(serde_json::json!({
+                "kind": "set_region_max_cost", "region_id": "R", "max_cost_usd": 8.5
+            })),
+            Ok(RunCommand::SetRegionMaxCost {
+                region_id: "R".into(),
+                max_cost_usd: Some(8.5)
+            })
+        );
+        assert_eq!(
+            parse(serde_json::json!({
+                "kind": "set_region_max_cost", "region_id": "R", "max_cost_usd": 3
+            })),
+            Ok(RunCommand::SetRegionMaxCost {
+                region_id: "R".into(),
+                max_cost_usd: Some(3.0)
+            })
+        );
+        assert_eq!(
+            parse(serde_json::json!({
+                "kind": "set_region_max_cost", "region_id": "R", "max_cost_usd": null
+            })),
+            Ok(RunCommand::SetRegionMaxCost {
+                region_id: "R".into(),
+                max_cost_usd: None
+            })
+        );
+    }
+
+    #[test]
+    fn set_region_max_cost_refuses_a_missing_non_positive_or_non_numeric_cap() {
+        assert_eq!(
+            reject(serde_json::json!({ "kind": "set_region_max_cost" })),
+            "region_id required for set_region_max_cost"
+        );
+        assert!(
+            reject(serde_json::json!({ "kind": "set_region_max_cost", "region_id": "R" }))
+                .starts_with("max_cost_usd required for set_region_max_cost")
+        );
+        for bad in [serde_json::json!(0), serde_json::json!(-2)] {
+            assert_eq!(
+                reject(serde_json::json!({
+                    "kind": "set_region_max_cost", "region_id": "R", "max_cost_usd": bad
+                })),
+                "max_cost_usd must be a positive amount in dollars"
+            );
+        }
+        assert_eq!(
+            reject(serde_json::json!({
+                "kind": "set_region_max_cost", "region_id": "R", "max_cost_usd": "five"
+            })),
+            "max_cost_usd must be a positive amount in dollars, or null"
         );
     }
 
@@ -606,6 +668,8 @@ mod tests {
             "extend_cycle",
             "bump_region",
             "end_region",
+            "set_region_max_iter",
+            "set_region_max_cost",
             "pause_run",
             "resume_run",
             "cancel_run",
@@ -622,6 +686,8 @@ mod tests {
                 "node_id": "n1",
                 "region_id": "r1",
                 "additional_iter": 1,
+                "max_iter": 2,
+                "max_cost_usd": 5,
                 "path": "a.md",
                 "content": "x",
             }))

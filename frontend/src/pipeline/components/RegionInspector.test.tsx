@@ -259,3 +259,105 @@ describe("RegionInspector — Plafond de coût", () => {
     expect(screen.queryByTestId("region-loop-cost")).toBeNull();
   });
 });
+
+vi.mock("../../run/api/commands", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  endRegion: vi.fn().mockResolvedValue(undefined),
+}));
+
+describe("RegionInspector — the cost cap edited for this run", () => {
+  const capped: LoopRegion = { ...reviewLoop, max_iter: 5, max_cost_usd: 5 };
+  const spent = (cap_usd?: number) => ({
+    review_loop: {
+      usd: 5.12, estimated: true, partial: false, executions: 8, readable_executions: 8, cap_usd,
+      members: [],
+      unpriced_models: [],
+      unavailable_reasons: [],
+    },
+  });
+  const parked = (over: Partial<RunState> = {}) =>
+    runWith({
+      status: "awaiting_user",
+      awaiting_reason_code: "region_budget_exhausted",
+      awaiting_region_id: "review_loop",
+      loop_costs: spent(5),
+      ...over,
+    } as Partial<RunState>);
+
+  function selectOnRun(region: LoopRegion, focus = false) {
+    selectRegion([region], "review_loop");
+    useEditStore.setState({
+      selection: { kind: "region", id: null, regionId: "review_loop", ...(focus ? { focusField: "max_cost_usd" as const } : {}) },
+    });
+  }
+
+  beforeEach(() => {
+    useEditStore.setState({ openTabs: [], activeTabId: null, selection: { kind: "none", id: null } });
+  });
+
+  it("wears the amber outline and « Editing for this run », and says how to go on once the budget is reached", () => {
+    selectOnRun(capped);
+    render(<RegionInspector runState={parked()} />);
+    expect(screen.getByTestId("region-inspector")).toHaveAttribute("data-run-edit");
+    expect(screen.getByTestId("region-run-editing")).toHaveTextContent("Editing for this run");
+    expect(screen.getByTestId("region-budget-reached-note")).toHaveTextContent(
+      "Budget reached · Run awaiting you. Raise max_cost_usd and save to run the next lap, or end the region.",
+    );
+    expect(screen.getByTestId("region-run-edit-note")).toHaveTextContent(
+      "Applies live. Saving resumes the Run at the next lap.",
+    );
+    // The cap the Run applies, under the spend, is not « below the spend »: no edit yet.
+    expect(screen.queryByTestId("region-cost-below-spent")).toBeNull();
+  });
+
+  it("ends the region from the bottom of the inspector", async () => {
+    const { endRegion } = await import("../../run/api/commands");
+    selectOnRun(capped);
+    render(<RegionInspector runState={parked()} />);
+    fireEvent.click(screen.getByTestId("region-end-region"));
+    expect(endRegion).toHaveBeenCalledWith("run-1", "review_loop");
+  });
+
+  it("reads the cap being typed in the header and Loop cost, before Save", () => {
+    selectOnRun(capped);
+    render(<RegionInspector runState={parked()} />);
+    fireEvent.change(screen.getByTestId("region-max-cost"), { target: { value: "8" } });
+    expect(screen.getByText(/max 5 · ≤ \$8/)).toBeInTheDocument();
+    expect(screen.getByTestId("region-loop-cost")).toHaveTextContent("~$5.12 / $8");
+    expect(screen.getByTestId("region-run-edit-note")).toHaveTextContent("Saving resumes the Run at the next lap.");
+    // Raised: the « budget reached » way out is no longer what to do.
+    expect(screen.queryByTestId("region-budget-reached-note")).toBeNull();
+    expect(screen.queryByTestId("region-end-region")).toBeNull();
+  });
+
+  it("says in amber that a cap typed under the spend stops the loop at the next re-entry", () => {
+    selectOnRun({ ...capped, max_cost_usd: 10 });
+    render(<RegionInspector runState={runWith({ loop_costs: spent(10) })} />);
+    expect(screen.getByTestId("region-run-edit-note")).toHaveTextContent(
+      "Applies live. A cap under the spend stops the loop at its next re-entry; the lap in progress always finishes.",
+    );
+    fireEvent.change(screen.getByTestId("region-max-cost"), { target: { value: "4" } });
+    expect(screen.getByTestId("region-cost-below-spent")).toHaveTextContent(
+      "Below the ~$5.12 already spent: the loop will stop at the next re-entry.",
+    );
+    expect(screen.queryByTestId("region-run-edit-note")).toBeNull();
+    expect(screen.queryByTestId("region-budget-reached-note")).toBeNull();
+  });
+
+  it("focuses max_cost_usd when raise cap opened it, once editable", () => {
+    selectOnRun(capped, true);
+    const { rerender } = render(<RegionInspector runState={parked()} locked />);
+    expect(screen.getByTestId("region-max-cost")).not.toHaveFocus();
+    expect(screen.queryByTestId("region-run-editing")).toBeNull();
+    rerender(<RegionInspector runState={parked()} />);
+    expect(screen.getByTestId("region-max-cost")).toHaveFocus();
+  });
+
+  it("reads the Run's live override in the header while the Run is followed", () => {
+    selectOnRun(capped);
+    render(<RegionInspector runState={parked({ region_max_cost_overrides: { review_loop: 4 }, loop_costs: undefined })} locked />);
+    expect(screen.getByText(/max 5 · ≤ \$4/)).toBeInTheDocument();
+    expect(screen.queryByTestId("region-budget-reached-note")).toBeNull();
+    expect(screen.queryByTestId("region-end-region")).toBeNull();
+  });
+});

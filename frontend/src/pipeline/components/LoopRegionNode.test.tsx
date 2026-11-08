@@ -346,7 +346,13 @@ describe("LoopRegionNode corner — Coût de boucle and Plafond de coût", () =>
     fireEvent.click(screen.getByTestId("loop-region-end"));
     expect(mockEndRegion).toHaveBeenCalledWith("run-1", "review_loop");
     fireEvent.click(screen.getByTestId("loop-region-raise-cap"));
-    expect(useEditStore.getState().selection).toEqual({ kind: "region", id: null, regionId: "review_loop" });
+    // `raise cap` opens the inspector on the cap, focused once editable.
+    expect(useEditStore.getState().selection).toEqual({
+      kind: "region",
+      id: null,
+      regionId: "review_loop",
+      focusField: "max_cost_usd",
+    });
 
     rerender(
       <Wrapper>

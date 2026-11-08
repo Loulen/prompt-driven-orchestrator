@@ -780,6 +780,37 @@ async fn get_run(daemon_url: &str, run_id: &str) -> serde_json::Value {
         .unwrap()
 }
 
+/// Drive lap `lap` of the capped loop to its end through the command surface:
+/// `impl` then `rev` write their output and are marked done.
+async fn finish_lap(url: &str, run_id: &str, lap: i64) {
+    for (node_id, port) in [("impl", "code"), ("rev", "review")] {
+        wait_until(&format!("{node_id} iter {lap} to start"), || async {
+            started_pairs(url, run_id)
+                .await
+                .contains(&(node_id.to_string(), lap))
+        })
+        .await;
+        let (status, body) = post_command(
+            url,
+            run_id,
+            serde_json::json!({
+                "kind": "inject_artifact",
+                "path": format!("{node_id}/iter-{lap}/{port}/output.md"),
+                "content": "# done\n",
+            }),
+        )
+        .await;
+        assert_eq!(status, 200, "inject_artifact for {node_id}: {body}");
+        let (status, body) = post_command(
+            url,
+            run_id,
+            serde_json::json!({ "kind": "mark_node_done", "node_id": node_id, "iter": lap }),
+        )
+        .await;
+        assert_eq!(status, 200, "mark_node_done for {node_id}: {body}");
+    }
+}
+
 #[tokio::test]
 async fn a_loop_at_its_cost_cap_parks_budget_reached_and_never_starts_the_next_lap() {
     let daemon = TestDaemon::spawn_with_home_override(seed, Some("exec sleep 600".to_string()))
@@ -805,30 +836,7 @@ async fn a_loop_at_its_cost_cap_parks_budget_reached_and_never_starts_the_next_l
     assert_eq!(cost["members"][0]["node_id"], "impl");
 
     // Drive lap 1 to its end through the command surface.
-    for (node_id, port) in [("impl", "code"), ("rev", "review")] {
-        wait_until(&format!("{node_id} iter 1 to start"), || async {
-            node_started_count(&url, &run_id, node_id).await >= 1
-        })
-        .await;
-        let (status, body) = post_command(
-            &url,
-            &run_id,
-            serde_json::json!({
-                "kind": "inject_artifact",
-                "path": format!("{node_id}/iter-1/{port}/output.md"),
-                "content": "# done\n",
-            }),
-        )
-        .await;
-        assert_eq!(status, 200, "inject_artifact for {node_id}: {body}");
-        let (status, body) = post_command(
-            &url,
-            &run_id,
-            serde_json::json!({ "kind": "mark_node_done", "node_id": node_id, "iter": 1 }),
-        )
-        .await;
-        assert_eq!(status, 200, "mark_node_done for {node_id}: {body}");
-    }
+    finish_lap(&url, &run_id, 1).await;
 
     wait_until("the run to park awaiting-user (budget reached)", || async {
         run_status(&url, &run_id).await == "awaiting_user"
@@ -896,5 +904,294 @@ async fn a_cost_cap_var_that_is_not_a_positive_amount_refuses_the_launch() {
             && error.contains("max_cost_usd")
             && error.contains("$budget"),
         "names the region, the field and the variable: {body}"
+    );
+}
+
+// ---- `set_region_max_cost`: the Plafond de coût edited in flight ----
+
+#[tokio::test]
+async fn set_region_max_cost_refuses_an_unknown_region_or_a_non_positive_cap_without_a_trace() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
+    let url = daemon.url();
+
+    for (body, error) in [
+        (
+            serde_json::json!({ "kind": "set_region_max_cost", "region_id": "ghost", "max_cost_usd": 5 }),
+            "region 'ghost' not found in pipeline",
+        ),
+        (
+            serde_json::json!({ "kind": "set_region_max_cost", "region_id": "review_loop", "max_cost_usd": 0 }),
+            "max_cost_usd must be a positive amount in dollars",
+        ),
+        (
+            serde_json::json!({ "kind": "set_region_max_cost", "region_id": "review_loop", "max_cost_usd": -3 }),
+            "max_cost_usd must be a positive amount in dollars",
+        ),
+    ] {
+        let (status, answer) = post_command(&url, &run_id, body.clone()).await;
+        assert_eq!(status, 400, "{body} must be refused, got {answer}");
+        assert_eq!(answer["error"], error, "{body}");
+    }
+    assert!(
+        command_events(&url, &run_id, "set_region_max_cost")
+            .await
+            .is_empty(),
+        "a refused set_region_max_cost must not append a CommandIssued"
+    );
+}
+
+#[tokio::test]
+async fn set_region_max_cost_refuses_a_collection_region_without_a_trace() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
+    let url = daemon.url();
+    // The Run's snapshot is what the command validates against: turn its
+    // region into a collection there.
+    let snapshot = daemon
+        .repo_root()
+        .join(".pdo/runs")
+        .join(&run_id)
+        .join("pipeline.yaml");
+    let yaml = std::fs::read_to_string(&snapshot).unwrap();
+    assert!(yaml.contains("kind: bounded"), "{yaml}");
+    std::fs::write(
+        &snapshot,
+        yaml.replace("kind: bounded", "kind: collection\n    over: items")
+            .replace("max_iter: 3", ""),
+    )
+    .unwrap();
+
+    let (status, body) = post_command(
+        &url,
+        &run_id,
+        serde_json::json!({ "kind": "set_region_max_cost", "region_id": "review_loop", "max_cost_usd": 5 }),
+    )
+    .await;
+
+    assert_eq!(status, 400, "a collection is never capped, got {body}");
+    assert_eq!(
+        body["error"],
+        "region 'review_loop' is a collection: cost caps apply to bounded loops only"
+    );
+    assert!(command_events(&url, &run_id, "set_region_max_cost")
+        .await
+        .is_empty());
+}
+
+#[tokio::test]
+async fn set_region_max_cost_null_removes_the_cap_and_the_override_is_on_the_run() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, CAPPED_PIPELINE_NAME).await;
+    let url = daemon.url();
+
+    let (status, body) = post_command(
+        &url,
+        &run_id,
+        serde_json::json!({ "kind": "set_region_max_cost", "region_id": "review_loop", "max_cost_usd": null }),
+    )
+    .await;
+
+    assert_eq!(status, 200, "null removes the cap, got {body}");
+    let events = command_events(&url, &run_id, "set_region_max_cost").await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0]["payload"]["max_cost_usd"],
+        serde_json::Value::Null
+    );
+    let run = get_run(&url, &run_id).await;
+    assert_eq!(
+        run["region_max_cost_overrides"],
+        serde_json::json!({ "review_loop": null }),
+        "{run}"
+    );
+}
+
+#[tokio::test]
+async fn raising_the_cost_cap_of_a_budget_parked_run_starts_the_next_lap_and_lowering_it_stops_the_loop_at_the_next_reentry(
+) {
+    let daemon = TestDaemon::spawn_with_home_override(seed, Some("exec sleep 600".to_string()))
+        .await
+        .unwrap();
+    let run_id = create_run(&daemon, CAPPED_PIPELINE_NAME).await;
+    let url = daemon.url();
+    wait_until("impl iter 1 to start", || async {
+        node_started_count(&url, &run_id, "impl").await >= 1
+    })
+    .await;
+    plant_five_dollars(&daemon, &run_id, "impl").await;
+    finish_lap(&url, &run_id, 1).await;
+    wait_until("the run to park « budget reached »", || async {
+        get_run(&url, &run_id).await["awaiting_reason_code"] == "region_budget_exhausted"
+    })
+    .await;
+
+    // Raise the cap over the $5 spent: the park lifts and lap 2 starts now.
+    let (status, body) = post_command(
+        &url,
+        &run_id,
+        serde_json::json!({ "kind": "set_region_max_cost", "region_id": "review_loop", "max_cost_usd": 8 }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        body["spawned"]
+            .as_array()
+            .is_some_and(|s| s.iter().any(|e| e["node_id"] == "impl" && e["iter"] == 2)),
+        "the raised cap starts lap 2 at once: {body}"
+    );
+    let run = get_run(&url, &run_id).await;
+    assert_eq!(run["status"], "running", "{run}");
+    assert_eq!(
+        run["loop_costs"]["review_loop"]["cap_usd"], 8.0,
+        "the header reads the new cap: {run}"
+    );
+
+    // Lower it under the spend while lap 2 runs: nothing is killed.
+    let (status, body) = post_command(
+        &url,
+        &run_id,
+        serde_json::json!({ "kind": "set_region_max_cost", "region_id": "review_loop", "max_cost_usd": 1 }),
+    )
+    .await;
+    assert_eq!(
+        status, 200,
+        "no floor: a cap under the spend is accepted: {body}"
+    );
+    let run = get_run(&url, &run_id).await;
+    assert_eq!(
+        run["status"], "running",
+        "the lap in progress goes on: {run}"
+    );
+    assert_eq!(run["nodes"]["impl"]["status"], "running", "{run}");
+
+    // The lap finishes; the next one does not start.
+    finish_lap(&url, &run_id, 2).await;
+    wait_until("the run to park again", || async {
+        run_status(&url, &run_id).await == "awaiting_user"
+    })
+    .await;
+    let run = get_run(&url, &run_id).await;
+    assert_eq!(
+        run["awaiting_reason_code"], "region_budget_exhausted",
+        "{run}"
+    );
+    let reason = run["awaiting_reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.contains("of $1 after lap 2/5") && reason.contains("set_region_max_cost"),
+        "{reason}"
+    );
+    assert_eq!(node_started_count(&url, &run_id, "impl").await, 2);
+
+    // The override is the Run's, not the YAML's: a reopen keeps it.
+    let (status, body) =
+        post_command(&url, &run_id, serde_json::json!({ "kind": "reopen_run" })).await;
+    assert_eq!(status, 200, "reopen_run: {body}");
+    wait_until("the reopened run to park again", || async {
+        get_run(&url, &run_id).await["awaiting_reason_code"] == "region_budget_exhausted"
+    })
+    .await;
+    let run = get_run(&url, &run_id).await;
+    assert_eq!(
+        run["region_max_cost_overrides"],
+        serde_json::json!({ "review_loop": 1.0 }),
+        "{run}"
+    );
+    assert_eq!(run["loop_costs"]["review_loop"]["cap_usd"], 1.0, "{run}");
+    assert_eq!(node_started_count(&url, &run_id, "impl").await, 2);
+}
+
+#[tokio::test]
+async fn the_cli_sets_and_removes_a_loops_cost_cap_through_pdo_run_region() {
+    use crate::cli_operator::pdo;
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, CAPPED_PIPELINE_NAME).await;
+    let url = daemon.url();
+
+    assert_eq!(
+        pdo(
+            &daemon,
+            &["run", "region", &run_id, "review_loop", "--max-cost", "8"]
+        )
+        .await
+        .ok(),
+        "review_loop cost capped at $8\n"
+    );
+    let run = get_run(&url, &run_id).await;
+    assert_eq!(
+        run["region_max_cost_overrides"],
+        serde_json::json!({ "review_loop": 8.0 })
+    );
+
+    assert_eq!(
+        pdo(
+            &daemon,
+            &[
+                "run",
+                "region",
+                &run_id,
+                "review_loop",
+                "--max-cost",
+                "none"
+            ]
+        )
+        .await
+        .ok(),
+        "review_loop cost cap removed\n"
+    );
+    let run = get_run(&url, &run_id).await;
+    assert_eq!(
+        run["region_max_cost_overrides"],
+        serde_json::json!({ "review_loop": null })
+    );
+
+    // The daemon's refusal, in its words, exit 1, and nothing recorded.
+    let zero = pdo(
+        &daemon,
+        &["run", "region", &run_id, "review_loop", "--max-cost", "0"],
+    )
+    .await;
+    assert_eq!(zero.code, Some(1), "{}{}", zero.stdout, zero.stderr);
+    assert!(
+        zero.stderr
+            .contains("max_cost_usd must be a positive amount"),
+        "{}",
+        zero.stderr
+    );
+    // Not an amount: clap refuses it before any request.
+    let word = pdo(
+        &daemon,
+        &[
+            "run",
+            "region",
+            &run_id,
+            "review_loop",
+            "--max-cost",
+            "lots",
+        ],
+    )
+    .await;
+    assert_eq!(word.code, Some(2), "{}{}", word.stdout, word.stderr);
+    // `--max-cost` is one gesture: not with `--max`.
+    let both = pdo(
+        &daemon,
+        &[
+            "run",
+            "region",
+            &run_id,
+            "review_loop",
+            "--max",
+            "4",
+            "--max-cost",
+            "8",
+        ],
+    )
+    .await;
+    assert_eq!(both.code, Some(2), "{}{}", both.stdout, both.stderr);
+    assert_eq!(
+        command_events(&url, &run_id, "set_region_max_cost")
+            .await
+            .len(),
+        2
     );
 }

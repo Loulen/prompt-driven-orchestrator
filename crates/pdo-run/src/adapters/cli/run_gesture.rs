@@ -113,16 +113,25 @@ pub enum RunGesture {
         #[arg(long)]
         json: bool,
     },
-    /// End a loop region, run it N more laps (`--bump`), or set its cap (`--max`).
+    /// End a loop region, run it N more laps (`--bump`), set its lap cap
+    /// (`--max`) or its cost cap in dollars (`--max-cost`, `none` removes it).
     Region {
         run_id: String,
         region_id: String,
-        #[arg(long, conflicts_with_all = ["bump", "max"], required_unless_present_any = ["bump", "max"])]
+        #[arg(
+            long,
+            conflicts_with_all = ["bump", "max", "max_cost"],
+            required_unless_present_any = ["bump", "max", "max_cost"]
+        )]
         end: bool,
-        #[arg(long, conflicts_with = "max")]
+        #[arg(long, conflicts_with_all = ["max", "max_cost"])]
         bump: Option<i64>,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "max_cost")]
         max: Option<i64>,
+        /// The loop's cost cap in dollars, `none` to remove it. Applies live:
+        /// under what the loop already spent, it stops at its next re-entry.
+        #[arg(long, value_name = "USD|none", value_parser = cost_cap)]
+        max_cost: Option<CostCap>,
         #[arg(long)]
         json: bool,
     },
@@ -268,18 +277,26 @@ pub fn run_run_gesture(gesture: RunGesture) -> Result<()> {
             end: _,
             bump,
             max,
+            max_cost,
             json,
         } => {
-            let (body, line) = match (bump, max) {
-                (Some(n), _) => (
+            let (body, line) = match (bump, max, max_cost) {
+                (_, _, Some(CostCap(usd))) => (
+                    json!({ "kind": "set_region_max_cost", "region_id": region_id, "max_cost_usd": usd }),
+                    match usd {
+                        Some(usd) => format!("{region_id} cost capped at ${usd}"),
+                        None => format!("{region_id} cost cap removed"),
+                    },
+                ),
+                (Some(n), _, _) => (
                     json!({ "kind": "bump_region", "region_id": region_id, "additional_iter": n }),
                     format!("{region_id} runs {n} more lap(s)"),
                 ),
-                (None, Some(n)) => (
+                (None, Some(n), _) => (
                     json!({ "kind": "set_region_max_iter", "region_id": region_id, "max_iter": n }),
                     format!("{region_id} capped at {n} lap(s)"),
                 ),
-                (None, None) => (
+                (None, None, None) => (
                     json!({ "kind": "end_region", "region_id": region_id }),
                     format!("{region_id} ended"),
                 ),
@@ -310,6 +327,25 @@ pub fn run_run_gesture(gesture: RunGesture) -> Result<()> {
         RunGesture::Pipeline { action } => run_run_pipeline(&daemon, action)?,
     }
     Ok(())
+}
+
+/// A `--max-cost` value: a dollar amount, or `None` for `none` (remove the cap).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CostCap(pub Option<f64>);
+
+/// `--max-cost`'s parser: `none`, or a number. Whether the amount is above 0
+/// is the daemon's call, so the CLI answers its words.
+fn cost_cap(raw: &str) -> std::result::Result<CostCap, String> {
+    let raw = raw.trim();
+    if raw.eq_ignore_ascii_case("none") {
+        return Ok(CostCap(None));
+    }
+    raw.trim_start_matches('$')
+        .parse::<f64>()
+        .ok()
+        .filter(|usd| usd.is_finite())
+        .map(|usd| CostCap(Some(usd)))
+        .ok_or_else(|| format!("`{raw}` is not an amount in dollars nor `none`"))
 }
 
 /// One Pipeline Manager command on `run_id`, as the UI sends it.

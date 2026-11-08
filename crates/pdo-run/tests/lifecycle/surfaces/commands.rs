@@ -67,7 +67,7 @@ async fn every_kind_status_and_content_type_on_an_unstarted_run() {
     let state = test_state_with_dir(tmp.path()).await;
 
     // (body, status, content-type, body, does it leave events behind?)
-    let matrix: [(&str, StatusCode, &str, &str, bool); 14] = [
+    let matrix: [(&str, StatusCode, &str, &str, bool); 15] = [
         (
             r#"{"kind":"mark_node_done","node_id":"n1"}"#,
             StatusCode::OK,
@@ -91,6 +91,13 @@ async fn every_kind_status_and_content_type_on_an_unstarted_run() {
         ),
         (
             r#"{"kind":"end_region","region_id":"r1"}"#,
+            StatusCode::NOT_FOUND,
+            JSON_CT,
+            r#"{"error":"run not found"}"#,
+            false,
+        ),
+        (
+            r#"{"kind":"set_region_max_cost","region_id":"r1","max_cost_usd":5}"#,
             StatusCode::NOT_FOUND,
             JSON_CT,
             r#"{"error":"run not found"}"#,

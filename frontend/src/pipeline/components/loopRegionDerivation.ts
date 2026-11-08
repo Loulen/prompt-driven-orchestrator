@@ -80,6 +80,8 @@ export function deriveLoopRegions(
   pipeline: EditorPipelineDef,
   runState: RunState | null | undefined,
   cards?: Readonly<Record<string, Box>>,
+  /** The Run is edited for itself: its caps read the tab, edits included. */
+  editingRun = false,
 ): LoopRegionLayout[] {
   const regions = pipeline.loops ?? [];
   const byId = new Map(pipeline.nodes.map((n) => [n.id, n]));
@@ -107,7 +109,7 @@ export function deriveLoopRegions(
     // `max/max` while it runs, and so does a region that left by its exit. Only
     // the daemon's `region_exhausted` park on THIS region marks it; a historical
     // run without `awaiting_region_id` falls back to the counter.
-    const money = deriveRegionCost(region, pipeline, runState, currentIter);
+    const money = deriveRegionCost(region, pipeline, runState, currentIter, editingRun);
     const exhausted =
       !isCollection &&
       live &&
@@ -223,8 +225,9 @@ export function buildLoopRegionNodes(
   pipeline: EditorPipelineDef,
   runState: RunState | null | undefined,
   cards?: Readonly<Record<string, Box>>,
+  editingRun = false,
 ): Node[] {
-  return deriveLoopRegions(pipeline, runState, cards)
+  return deriveLoopRegions(pipeline, runState, cards, editingRun)
     .filter((r) => r.box != null)
     .flatMap((r) => {
       const position = { x: r.box!.x, y: r.box!.y };
@@ -240,6 +243,8 @@ export function buildLoopRegionNodes(
         // The live run id (or null in a template view) so an exhausted-unrouted
         // region can offer "route from manager" (ADR-0011 / #152).
         runId: runState?.run_id ?? null,
+        // `raise cap` starts « Edit for this run » from the caps the Run applies.
+        capOverrides: runState?.region_max_cost_overrides ?? null,
         width: r.box!.width,
         height: r.box!.height,
       };

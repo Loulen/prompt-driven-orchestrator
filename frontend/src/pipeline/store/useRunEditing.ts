@@ -65,7 +65,7 @@ export function useRunEditing(tab: OpenPipeline | undefined, activeRunState: Run
     tab?.runId != null && activeRunState != null && !archived
       ? {
           editing: !isRunTabLocked(tab),
-          onEditForRun: () => startRunEditing(tab.id),
+          onEditForRun: () => startRunEditing(tab.id, activeRunState.region_max_cost_overrides),
           onEditSource: () => void sourcePipelineId(activeRunState).then((id) => openPipeline(id)),
           onFinishEditing: handleFinishEditing,
         }
@@ -89,5 +89,7 @@ export function useRunEditing(tab: OpenPipeline | undefined, activeRunState: Run
         }
       : null;
 
-  return { readOnly, runEdit, finishConfirm };
+  // Edited for itself: what the canvas reads a loop's cap from is the tab.
+  const editingRun = activeRunState != null && tab?.runEditing === true;
+  return { readOnly, runEdit, finishConfirm, editingRun };
 }

@@ -160,7 +160,9 @@ describe("CORE-217 — a loop region's inspector takes the pane", () => {
 
     fireEvent.click(document.querySelector<HTMLElement>('[data-testid="loop-region-raise-cap"]')!);
 
-    expect(useEditStore.getState().selection).toEqual(REGION);
+    // CORE-218: on the cap, focused, with the Run's tab edited for itself.
+    expect(useEditStore.getState().selection).toEqual({ ...REGION, focusField: "max_cost_usd" });
+    expect(useEditStore.getState().openTabs[0].runEditing).toBe(true);
     expect(nodeEl("ship")).not.toHaveClass("selected");
     expect(onCloseInfo).toHaveBeenCalled();
   });

@@ -7,6 +7,7 @@ import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry
 import type { PipelineScope } from "../model/pipeline";
 import { ApiError } from "../../shared/http/client";
 import { fetchRunPipeline, saveRunPipeline } from "../../run/api/runPipeline";
+import { appliedCostCaps, applyCostCaps } from "./runCostCapSave";
 import { fetchPipeline, savePipeline, deletePipeline as apiDeletePipeline, renamePipeline as apiRenamePipeline } from "../api/pipelines";
 import { serializePipeline } from "../../lib/serializePipeline";
 import type { EditState } from "./editState";
@@ -36,6 +37,12 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
     } catch {
       // keep the lint
     }
+  };
+  const sayCostCaps = (id: string, message: string | null) => {
+    if (message == null) return;
+    set((s) => ({
+      openTabs: s.openTabs.map((t) => (t.id === id ? { ...t, saveError: { message } } : t)),
+    }));
   };
   return {
   undo: () => set((s) => {
@@ -157,6 +164,11 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
     try {
       const yaml = serializePipeline(tab.pipeline);
       if (tab.runId) {
+        // A cost cap changed for this run goes through `set_region_max_cost`
+        // (an override the Run keeps), which is also what resumes a Run
+        // parked « budget reached ». What the Run applied before the save
+        // tells which caps this save changes.
+        const before = await appliedCostCaps(tab.runId, tab.pipeline);
         await saveRunPipeline(tab.runId, yaml, tab.prompts);
         set((s) => ({
           openTabs: s.openTabs.map((t) =>
@@ -164,6 +176,7 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
           ),
           lastSavedAt: { ...s.lastSavedAt, [id]: Date.now() },
         }));
+        sayCostCaps(id, await applyCostCaps(tab.runId, before, tab.pipeline));
         await refreshStaleLint(id);
         return { ok: true, id };
       } else {

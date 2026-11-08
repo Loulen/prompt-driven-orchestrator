@@ -1,6 +1,6 @@
 //! `GET /runs/{run_id}/children` (ADR-0064): every Run whose mechanical
 //! `parent_run_id` is this Run, grouped by parent node, with a cost derived on
-//! read (ADR-0052).
+//! read (ADR-0052) and, for a child that has its own children, its tree cost.
 
 use std::collections::HashMap;
 
@@ -12,9 +12,10 @@ use serde::Serialize;
 use ts_rs::TS;
 
 use crate::application::events::reload_run_state_with;
+use crate::application::tree_cost::TreeCosts;
 use crate::domain::child_awaiting;
 use crate::domain::projection::project;
-use crate::domain::state::{CostStat, RunStatus};
+use crate::domain::state::{CostStat, RunStatus, TreeCost};
 use crate::Runs;
 
 /// One child Run of `GET /runs/{run_id}/children` — the read model the
@@ -48,6 +49,12 @@ pub struct RunChildEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub cost: Option<CostStat>,
+    /// The child's Coût de l'arbre (ADR draft-cout-de-l-arbre): its own cost
+    /// plus every one of its descendants, grandchildren included. Absent for a
+    /// child without descendant: its tree cost is `cost`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tree_cost: Option<TreeCost>,
 }
 
 /// One group of `GET /runs/{run_id}/children`: all children spawned by ONE
@@ -97,12 +104,18 @@ impl Runs {
         // #588 / ADR-0069 §4: a grandchild's wait shows on the child row too, so
         // the Orchestration tab and the run list agree about the same child.
         child_awaiting::overlay(&mut summaries);
+        // The tree of every Run, read before the list narrows to the children:
+        // a child's tree cost reaches its grandchildren (ADR draft-cout-de-l-arbre),
+        // readable by this caller or not, as an aggregate.
+        let mut tree_costs =
+            TreeCosts::new(state.store().as_ref(), self.live_facts.as_ref(), &summaries);
         summaries.retain(|child| child.parent_run_id.as_deref() == Some(run_id.as_str()));
         self.readable(actor).retain(&mut summaries).await;
 
         let mut by_node: HashMap<Option<String>, Vec<RunChildEntry>> = HashMap::new();
         for child in summaries {
-            let cost = self.cost_of(&child.run_id).await;
+            let cost = tree_costs.cost(&child.run_id).await;
+            let tree_cost = tree_costs.tree_cost(&child.run_id).await;
             let entry = RunChildEntry {
                 run_id: child.run_id,
                 pipeline_name: child.pipeline_name,
@@ -112,6 +125,7 @@ impl Runs {
                 started_at: child.started_at,
                 completed_at: child.completed_at,
                 cost,
+                tree_cost,
             };
             by_node.entry(child.parent_node_id).or_default().push(entry);
         }

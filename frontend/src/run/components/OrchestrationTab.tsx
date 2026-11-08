@@ -1,7 +1,9 @@
 // #723 — Orchestration tab of the NodeRun detail panel + the shared count pastilles.
 import { useEffect, useState } from "react";
 import { ArrowRight, ExternalLink, GitFork } from "lucide-react";
-import { Button, EmptyState, StatusIcon } from "../../shared/ui/kit";
+import { Button, Chip, EmptyState, StatusIcon } from "../../shared/ui/kit";
+import { Tooltip } from "../../shared/ui/tooltip";
+import type { TreeCost } from "../../shared/generated/TreeCost";
 import NodeBanner from "./nodeDetail/NodeBanner";
 import { isLiveRun } from "../model/runStatus";
 import { formatDuration } from "../model/runDuration";
@@ -9,10 +11,12 @@ import { formatCostAmount } from "../model/costLabel";
 import {
   childCostKnown,
   childCostText,
+  childTreeCost,
   type ChildCounts,
   type RunChildEntry,
   totalChildren,
 } from "../model/orchestration";
+import { amountText, childTreeCostLines, treeCostLabel } from "../model/treeCost";
 
 /**
  * The green / red / orange / blue counters (« compteurs d'enfants », #723/#783):
@@ -120,6 +124,61 @@ function useNow(live: boolean): number | null {
   return live ? now : null;
 }
 
+/**
+ * « ⑂ N » beside a child's amount when that child has child runs of its own:
+ * the amount is then its tree cost, and the tooltip splits it into Parent run
+ * / Child runs (N).
+ */
+function TreeCostChip({ tree }: { tree: TreeCost }) {
+  const lines = childTreeCostLines(treeCostLabel(tree));
+  return (
+    <Tooltip
+      content={
+        <span className="ri-tree-tip" data-testid="orchestration-child-tree-tooltip">
+          {lines.map((line) => (
+            <span key={line}>{line}</span>
+          ))}
+        </span>
+      }
+    >
+      <span
+        role="img"
+        aria-label={lines.join(" ")}
+        data-testid="orchestration-child-tree-badge"
+        className="ri-orch__tree"
+      >
+        <Chip mono icon={GitFork}>
+          {tree.descendants}
+        </Chip>
+      </span>
+    </Tooltip>
+  );
+}
+
+/**
+ * The Run's Coût de l'arbre under the children's Σ: « Tree cost · parent run
+ * ~$x + child runs ~$y », the total at the right. The same figure as Run info.
+ */
+function TreeCostFoot({ tree }: { tree: TreeCost }) {
+  const label = treeCostLabel(tree);
+  const breakdown = `parent run ${amountText(label.parent)} + child runs ${amountText(label.children)}`;
+  // Why the total is « — » or a lower bound, on the total itself.
+  const reason = [label.unavailable, label.lowerBound].filter(Boolean).join(" ");
+  const total = (
+    <span className="ri-orch__treetotal" data-testid="orchestration-tree-cost-total" tabIndex={reason ? 0 : undefined}>
+      {amountText(label.total)}
+    </span>
+  );
+  return (
+    <div className="ri-orch__foot ri-orch__foot--tree" data-testid="orchestration-tree-cost">
+      <GitFork size={12} strokeWidth={1.5} aria-hidden />
+      <span className="ri-orch__treeline">Tree cost · {breakdown}</span>
+      <span className="ri-orch__fill" />
+      {reason ? <Tooltip content={reason}>{total}</Tooltip> : total}
+    </div>
+  );
+}
+
 function ChildRow({
   child,
   onOpen,
@@ -184,8 +243,9 @@ function ChildRow({
               </span>
             )}
           </span>
-          <span data-testid="orchestration-child-cost" className="ri-orch__cost">
-            {childCostText(child.cost)}
+          <span className="ri-orch__cost">
+            {child.tree_cost && <TreeCostChip tree={child.tree_cost} />}
+            <span data-testid="orchestration-child-cost">{childCostText(childTreeCost(child))}</span>
           </span>
         </div>
       </div>
@@ -199,6 +259,7 @@ export function OrchestrationTab({
   nodeLive,
   nodeAwaiting,
   onOpenChild,
+  runTreeCost = null,
 }: {
   childRuns: RunChildEntry[];
   counts: ChildCounts;
@@ -207,6 +268,8 @@ export function OrchestrationTab({
   /** The node is `awaiting_user` — with a failed child, the tab says why. */
   nodeAwaiting: boolean;
   onOpenChild: (runId: string) => void;
+  /** The Run's Coût de l'arbre, the footer's « Tree cost » line; `null` when the Run has no child. */
+  runTreeCost?: TreeCost | null;
 }) {
   if (childRuns.length === 0) {
     return (
@@ -245,10 +308,10 @@ export function OrchestrationTab({
           {childRuns.length} child run{childRuns.length > 1 ? "s" : ""}
         </span>
         <span className="ri-orch__fill" />
-        <span title="Sum of the children's estimated costs">
+        <span title="Sum of the children's tree costs (grandchildren included)" data-testid="orchestration-sum">
           Σ{" "}
           {(() => {
-            const known = childRuns.map((c) => childCostKnown(c.cost));
+            const known = childRuns.map((c) => childCostKnown(childTreeCost(c)));
             const summable = known.filter((v): v is number => v != null);
             if (summable.length === 0) return "—";
             const sum = summable.reduce((acc, v) => acc + v, 0);
@@ -257,6 +320,7 @@ export function OrchestrationTab({
           })()}
         </span>
       </div>
+      {runTreeCost && <TreeCostFoot tree={runTreeCost} />}
     </div>
   );
 }

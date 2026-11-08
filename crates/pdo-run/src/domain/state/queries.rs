@@ -76,6 +76,7 @@ impl RunState {
             sessions_spawned: 0,
             loc: None,
             cost: None,
+            tree_cost: None,
         }
     }
 

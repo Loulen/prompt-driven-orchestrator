@@ -292,4 +292,51 @@ describe("PipelineInfoPanel — Stats block (#100)", () => {
     );
     expect(screen.getByTestId("stat-cost")).toHaveTextContent("~$1.50 via claude");
   });
+
+  describe("a Run with child runs: its tree cost", () => {
+    const usd = (amount: number) => ({ usd: amount, partial: false, unpriced_models: [], uncosted_harnesses: [], by_harness: [] });
+    const tree = {
+      total: usd(4.2),
+      parent: usd(1.2345),
+      children: usd(2.9655),
+      descendants: 4,
+      by_depth: [
+        { depth: 1, runs: 3, cost: usd(2.1) },
+        { depth: 2, runs: 1, cost: usd(0.8655) },
+      ],
+      unavailable_runs: 0,
+    };
+
+    it("shows the tree cost and ⑂ N in Est. cost, broken down in its accessible text", () => {
+      renderPanel(makeRun({ tree_cost: tree }));
+      const cost = screen.getByTestId("stat-cost");
+      expect(screen.getByTestId("stat-cost-total")).toHaveTextContent("~$4.20");
+      expect(screen.getByTestId("stat-cost-descendants")).toHaveTextContent("4");
+      expect(cost).toHaveTextContent("Parent run ~$1.23");
+      expect(cost).toHaveTextContent("Child runs (4) ~$2.97");
+      expect(cost).toHaveTextContent("Depth 1 ~$2.10 · Depth 2 ~$0.8655");
+      expect(cost).toHaveTextContent("Includes this run and its 4 child runs.");
+    });
+
+    it("reads « — » with the count of uncomputable Runs, the known slices kept", () => {
+      renderPanel(makeRun({ tree_cost: { ...tree, total: null, children: null, unavailable_runs: 1 } }));
+      expect(screen.getByTestId("stat-cost-total")).toHaveTextContent("—");
+      // « — » alone: the count goes with an amount.
+      expect(screen.queryByTestId("stat-cost-descendants")).toBeNull();
+      const cost = screen.getByTestId("stat-cost");
+      expect(cost).toHaveTextContent("The cost of 1 run in this tree cannot be computed.");
+      expect(cost).toHaveTextContent("Parent run ~$1.23");
+    });
+
+    it("marks a lower-bound tree with the amber dagger", () => {
+      renderPanel(makeRun({ tree_cost: { ...tree, total: { ...usd(4.2), partial: true, unpriced_models: ["mystery"] } } }));
+      expect(screen.getByTestId("stat-cost-total").querySelector(".ei-warn")).toHaveTextContent("†");
+    });
+
+    it("leaves a Run without child as it was: no ⑂", () => {
+      renderPanel(makeRun());
+      expect(screen.queryByTestId("stat-cost-descendants")).toBeNull();
+      expect(screen.getByTestId("stat-cost")).toHaveTextContent("~$1.23");
+    });
+  });
 });

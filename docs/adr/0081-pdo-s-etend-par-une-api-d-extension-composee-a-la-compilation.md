@@ -827,3 +827,21 @@ verrait ni ne corrigerait rien avant le lancement) ; une donnée d'extension env
 passer par la Section (deux chemins pour la même valeur, et une Section qui n'en saurait rien) ; un
 lien profond `#/new-run?…` (une donnée d'extension arbitraire ne tient pas dans une URL, et
 n'importe quelle page pourrait l'ouvrir au nom d'une extension).
+
+## Amendement CORE-215 : le Coût de l'arbre d'un Run vu par une extension
+
+Un Run qui lance des Runs enfants n'exposait que son propre coût : une extension qui agrège des
+coûts sous-estimait une orchestration. `Host::run_cost` porte désormais le **Coût de l'arbre**
+(ADR draft-cout-de-l-arbre), le même que l'onglet Info.
+
+- **Champ additif** : `RunCost.tree`, absent pour un Run sans enfant, porte un `RunTreeCost` :
+  `total` (le Run et tous ses descendants, archivés compris), `parent` (le Coût du Run parent, le
+  même montant que `usd`), `children` (« Child runs (N) »), `descendants` (N) et `by_depth`
+  (`RunDepthCost { depth, runs, cost }`, profondeur 1 pour les enfants directs).
+- **Mêmes règles que le coût d'un Run** : chaque montant est un `RunCost` ; un descendant sans
+  coût rend inconnue chaque somme qui le contient, sans effacer les autres tranches ; une borne
+  inférieure rend borne inférieure chaque somme qui la contient. Un descendant oublié n'a plus de
+  journal et sort de l'arbre.
+- **Version** : mineure, par ajout (un champ optionnel de `RunCost`, deux types) ; le numéro est
+  posé à la fusion vers `main` (ADR-0095). Une extension antérieure compile et tourne sans
+  changement : `RunCost` est `non_exhaustive` et le champ manque à sa lecture JSON.

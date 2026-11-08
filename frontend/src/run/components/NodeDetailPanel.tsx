@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { ScopedProvisioningRules } from "../../shared/generated/ScopedProvisioningRules";
 import type { NodeState } from "../../shared/generated/NodeState";
 import type { RunStatus } from "../../shared/generated/RunStatus";
+import type { TreeCost } from "../../shared/generated/TreeCost";
 import { useNodeRun } from "../store/useNodeRun";
 import MarkdownArtifactModal from "./MarkdownArtifactModal";
 import type { ArtifactSource } from "./MarkdownArtifactModal";
@@ -55,6 +56,8 @@ interface Props {
   initialDetailTab?: "io" | "transcript" | "orchestration";
   /** ADR-0086: the node is an on-demand node — its Start is its ▶. */
   isOnDemand?: boolean;
+  /** The Run's Coût de l'arbre, at the foot of the Orchestration tab. */
+  runTreeCost?: TreeCost | null;
 }
 
 export default function NodeDetailPanel({
@@ -72,6 +75,7 @@ export default function NodeDetailPanel({
   onOpenChildRun,
   initialDetailTab = "io",
   isOnDemand = false,
+  runTreeCost = null,
 }: Props) {
   const [modal, setModal] = useState<ModalState | null>(null);
   // #588: whether the inline terminal has a live PTY socket (the banner's hint
@@ -343,6 +347,7 @@ export default function NodeDetailPanel({
             childCounts={childCounts}
             nodeChildren={nodeChildren}
             onOpenChildRun={onOpenChildRun}
+            runTreeCost={runTreeCost}
             inputs={inputs}
             outputs={outputs}
             live={live}

@@ -1006,6 +1006,17 @@
     color: var(--text-3);
     font-size: var(--fs-xs);
   }
+  .pi-stats__tree {
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+    color: var(--text-3);
+  }
+  .pi-tree-tip {
+    display: grid;
+    gap: 1px;
+    text-align: left;
+  }
   .pi-var {
     display: flex;
     align-items: center;

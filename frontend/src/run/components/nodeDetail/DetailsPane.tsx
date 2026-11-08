@@ -8,6 +8,7 @@ import type { NodeState } from "../../../shared/generated/NodeState";
 import type { PortIO, FileInfo } from "../../api/nodes";
 import type { PortType } from "../../../shared/generated/PortType";
 import type { ChildCounts, RunChildEntry } from "../../model/orchestration";
+import type { TreeCost } from "../../../shared/generated/TreeCost";
 // #723 — Orchestration tab + pastilles.
 import { ChildCountPills, OrchestrationTab } from "../OrchestrationTab";
 import IOSection from "./IOSection";
@@ -36,6 +37,7 @@ export default function DetailsPane({
   childCounts,
   nodeChildren,
   onOpenChildRun,
+  runTreeCost = null,
   inputs,
   outputs,
   live = [],
@@ -58,6 +60,8 @@ export default function DetailsPane({
   childCounts: ChildCounts;
   nodeChildren: RunChildEntry[];
   onOpenChildRun?: (childRunId: string) => void;
+  /** The Run's Coût de l'arbre, at the foot of the Orchestration tab. */
+  runTreeCost?: TreeCost | null;
   inputs: PortIO[];
   outputs: PortIO[];
   /** ADR-0089: the iteration's live artifacts. */
@@ -167,6 +171,7 @@ export default function DetailsPane({
           nodeLive={node.status === "running" || node.status === "awaiting_user"}
           nodeAwaiting={node.status === "awaiting_user"}
           onOpenChild={(id) => onOpenChildRun?.(id)}
+          runTreeCost={runTreeCost}
         />
       ) : (
         <>

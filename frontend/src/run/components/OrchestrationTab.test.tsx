@@ -94,3 +94,70 @@ describe("OrchestrationTab with an awaiting child (#588)", () => {
     expect(countChildren(children)).toEqual({ finished: 0, failed: 0, stale: 0, running: 2 });
   });
 });
+
+describe("OrchestrationTab tree costs", () => {
+  const usd = (amount: number) => ({ usd: amount, partial: false, unpriced_models: [], uncosted_harnesses: [], by_harness: [] });
+  const childTree = {
+    total: usd(2.3),
+    parent: usd(1.3),
+    children: usd(1),
+    descendants: 1,
+    by_depth: [{ depth: 1, runs: 1, cost: usd(1) }],
+    unavailable_runs: 0,
+  };
+
+  it("shows a child's tree cost with a ⑂ N chip, and its own cost without one", () => {
+    const children = [
+      child("leaf", { status: "completed", cost: usd(1.1) }),
+      child("parent", { status: "completed", cost: usd(1.3), tree_cost: childTree }),
+    ];
+    render(
+      <OrchestrationTab childRuns={children} counts={countChildren(children)} nodeLive={false} nodeAwaiting={false} onOpenChild={() => {}} />,
+    );
+    const rows = screen.getAllByTestId("orchestration-child");
+    expect(rows[0]).toHaveTextContent("~$1.10");
+    expect(rows[0].querySelector("[data-testid=orchestration-child-tree-badge]")).toBeNull();
+    expect(rows[1].querySelector("[data-testid=orchestration-child-cost]")).toHaveTextContent("~$2.30");
+    const badge = rows[1].querySelector("[data-testid=orchestration-child-tree-badge]")!;
+    expect(badge).toHaveTextContent("1");
+    expect(badge.getAttribute("aria-label")).toContain("Parent run ~$1.30 · Child runs (1) ~$1.00");
+    expect(badge.getAttribute("aria-label")).toContain("Tree cost: this child run and its descendants.");
+    // Σ sums the children's tree costs, grandchildren included.
+    const sum = screen.getByTestId("orchestration-sum");
+    expect(sum).toHaveTextContent("Σ ~$3.40");
+    expect(sum).toHaveAttribute("title", "Sum of the children's tree costs (grandchildren included)");
+  });
+
+  it("adds the Run's Tree cost line under Σ when the Run has a tree cost", () => {
+    const children = [child("a", { status: "completed", cost: usd(3.4) })];
+    const runTree = { ...childTree, total: usd(4.2), parent: usd(0.8), children: usd(3.4) };
+    const { rerender } = render(
+      <OrchestrationTab
+        childRuns={children}
+        counts={countChildren(children)}
+        nodeLive={false}
+        nodeAwaiting={false}
+        onOpenChild={() => {}}
+        runTreeCost={runTree}
+      />,
+    );
+    const foot = screen.getByTestId("orchestration-tree-cost");
+    expect(foot).toHaveTextContent("Tree cost · parent run ~$0.8000 + child runs ~$3.40");
+    expect(screen.getByTestId("orchestration-tree-cost-total")).toHaveTextContent("~$4.20");
+    rerender(
+      <OrchestrationTab childRuns={children} counts={countChildren(children)} nodeLive={false} nodeAwaiting={false} onOpenChild={() => {}} />,
+    );
+    expect(screen.queryByTestId("orchestration-tree-cost")).toBeNull();
+  });
+
+  it("reads « — » for a child whose tree total is unavailable", () => {
+    const children = [
+      child("p", { status: "completed", cost: usd(1.3), tree_cost: { ...childTree, total: null, children: null, unavailable_runs: 1 } }),
+    ];
+    render(
+      <OrchestrationTab childRuns={children} counts={countChildren(children)} nodeLive={false} nodeAwaiting={false} onOpenChild={() => {}} />,
+    );
+    expect(screen.getByTestId("orchestration-child-cost")).toHaveTextContent("—");
+    expect(screen.getByTestId("orchestration-sum")).toHaveTextContent("Σ —");
+  });
+});

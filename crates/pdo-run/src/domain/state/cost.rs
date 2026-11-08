@@ -105,3 +105,41 @@ pub struct HarnessCost {
     #[serde(default)]
     pub reported_in_usd: bool,
 }
+
+/// One depth level of a Run's tree (ADR draft-cout-de-l-arbre): `depth` 1 is
+/// the direct children, 2 the grandchildren, and so on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DepthCost {
+    pub depth: u32,
+    /// How many Runs sit at this depth.
+    pub runs: u32,
+    /// Their summed cost; `None` when one of them has no cost ("—").
+    pub cost: Option<CostStat>,
+}
+
+/// The **Coût de l'arbre** of a Run that has at least one descendant (ADR
+/// draft-cout-de-l-arbre): its own cost, the **Coût du Run parent** (the Run's
+/// `cost`, untouched), plus the own cost of every descendant, archived ones
+/// included, summed on read and never persisted. A forgotten descendant has no
+/// log left and is out of the tree. A Run without descendant has none: its
+/// surfaces stay as they were.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TreeCost {
+    /// Parent run + every descendant. `None` ("—") when a Run of the tree has
+    /// no cost; a lower bound (`partial`) as soon as one of them is.
+    pub total: Option<CostStat>,
+    /// The Coût du Run parent: the same figure as the Run's `cost`.
+    pub parent: Option<CostStat>,
+    /// Every descendant summed, « Child runs (N) ». `None` when one of them has
+    /// no cost.
+    pub children: Option<CostStat>,
+    /// N: how many descendants, every depth included.
+    pub descendants: u32,
+    /// The descendants per depth, shallowest first.
+    pub by_depth: Vec<DepthCost>,
+    /// How many Runs of the tree (the parent included) have no cost at all:
+    /// what a `None` total owes its "—" to.
+    pub unavailable_runs: u32,
+}

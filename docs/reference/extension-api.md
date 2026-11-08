@@ -230,7 +230,12 @@ core's mechanisms (amendment #34):
   when unknown (show « — », never `0`), `partial` when a model without a price was left out (a
   lower bound), `uncosted_harnesses` the harnesses without a cost source that make it unknown.
   `None` for a Run the core does not know; the breakdown by harness the Info tab may add is not
-  part of it. Await it from a route or a task. An extension that
+  part of it. For a Run that has child Runs, `tree` (`RunTreeCost`) carries its tree cost, the one
+  its Info tab shows: `total` (this Run and every descendant, archived ones included), `parent`
+  (this Run alone, the same as `usd`), `children` (every descendant), `descendants` (how many) and
+  `by_depth` (`RunDepthCost { depth, runs, cost }`, the direct children at depth 1). Each amount
+  follows the rules of a `RunCost`: one descendant without a cost makes every sum it belongs to
+  unknown, one lower bound makes them lower bounds. `tree` is absent for a Run without child Run. Await it from a route or a task. An extension that
   aggregates costs reads them so, without reading the transcripts.
 - `triggers_changed()` (0.11): the suspensions of the Triggers changed for a cause outside a
   Trigger's mutation, one the extension holds itself. The core announces

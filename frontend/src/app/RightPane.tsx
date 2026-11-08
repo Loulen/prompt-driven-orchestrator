@@ -173,6 +173,7 @@ export default function RightPane({
           isOrchestratorNode={selectedRun.node_defs?.find((d) => d.id === selection.id)?.orchestrator ?? false}
           isOnDemand={editNode?.on_demand ?? false}
           onOpenChildRun={handleOpenChildRun}
+          runTreeCost={selectedRun.tree_cost ?? null}
           initialDetailTab={landOnOrchestration === runNode.node_id ? "orchestration" : "io"}
         />
       );
@@ -346,6 +347,7 @@ export default function RightPane({
                 isOrchestratorNode={selectedRun.node_defs?.find((d) => d.id === selectedNodeId)?.orchestrator ?? false}
                 isOnDemand={selectedRun.node_defs?.find((d) => d.id === selectedNodeId)?.on_demand ?? false}
                 onOpenChildRun={handleOpenChildRun}
+                runTreeCost={selectedRun.tree_cost ?? null}
                 initialDetailTab={landOnOrchestration === selectedNode.node_id ? "orchestration" : "io"}
               />
             )}

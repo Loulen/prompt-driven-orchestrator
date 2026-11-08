@@ -602,3 +602,13 @@ button.ri-port__name:hover { text-decoration: underline; }
 .ri-tx__new[data-edge="bottom"] { bottom: var(--g-2); }
 .ri-tx__new:hover { background: var(--hover); }
 .ri-port__sub > .fmv { flex: 1 1 100%; }
+
+/* ------------------------------------------------------------ tree cost (Orchestration tab) */
+.ri-orch__cost { display: inline-flex; align-items: center; gap: var(--g-3); }
+.ri-orch__tree { display: inline-flex; }
+.ri-orch__tree .d-chip { height: 16px; padding: 0 4px; }
+.ri-orch__foot--tree { height: auto; min-height: var(--h-row); padding-top: 3px; padding-bottom: 3px; border-top: 0; }
+.ri-orch__foot--tree > svg { flex: none; color: var(--text-3); }
+.ri-orch__treeline { min-width: 0; }
+.ri-orch__treetotal { flex: none; color: var(--text); font-weight: 600; }
+.ri-tree-tip { display: grid; gap: 1px; text-align: left; }

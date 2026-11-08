@@ -56,7 +56,7 @@ pub trait RunEvents: Send + Sync {
     fn events<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, anyhow::Result<Vec<Event>>>;
     /// The child Runs of the whole log — a `run_started` whose parent the log
     /// still holds — whatever their own start: what « Roll up child runs »
-    /// walks from each root (ADR draft-cout-de-l-arbre).
+    /// walks from each root (ADR-0101).
     fn child_run_starts(&self) -> BoxFuture<'_, anyhow::Result<Vec<RunStart>>>;
 }
 

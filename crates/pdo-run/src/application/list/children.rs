@@ -49,7 +49,7 @@ pub struct RunChildEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub cost: Option<CostStat>,
-    /// The child's Coût de l'arbre (ADR draft-cout-de-l-arbre): its own cost
+    /// The child's Coût de l'arbre (ADR-0101): its own cost
     /// plus every one of its descendants, grandchildren included. Absent for a
     /// child without descendant: its tree cost is `cost`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -105,7 +105,7 @@ impl Runs {
         // the Orchestration tab and the run list agree about the same child.
         child_awaiting::overlay(&mut summaries);
         // The tree of every Run, read before the list narrows to the children:
-        // a child's tree cost reaches its grandchildren (ADR draft-cout-de-l-arbre),
+        // a child's tree cost reaches its grandchildren (ADR-0101),
         // readable by this caller or not, as an aggregate.
         let mut tree_costs =
             TreeCosts::new(state.store().as_ref(), self.live_facts.as_ref(), &summaries);

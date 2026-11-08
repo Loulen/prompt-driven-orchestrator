@@ -51,7 +51,7 @@ impl ReadCost {
         Ok(self.fold(read).await?.cost)
     }
 
-    /// « Roll up child runs » (ADR draft-cout-de-l-arbre §2): the cohort is
+    /// « Roll up child runs » (ADR-0101 §2): the cohort is
     /// recomposed by **root** — every root Run of the window (« completed runs
     /// only » judging the root) brings its whole tree, archived descendants
     /// included, each member in its root's period and Project. « By model »

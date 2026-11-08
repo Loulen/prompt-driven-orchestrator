@@ -3,8 +3,7 @@ import type { CostStat } from "./CostStat";
 import type { DepthCost } from "./DepthCost";
 
 /**
- * The **Coût de l'arbre** of a Run that has at least one descendant (ADR
- * draft-cout-de-l-arbre): its own cost, the **Coût du Run parent** (the Run's
+ * The **Coût de l'arbre** of a Run that has at least one descendant (ADR-0101): its own cost, the **Coût du Run parent** (the Run's
  * `cost`, untouched), plus the own cost of every descendant, archived ones
  * included, summed on read and never persisted. A forgotten descendant has no
  * log left and is out of the tree. A Run without descendant has none: its

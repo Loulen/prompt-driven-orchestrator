@@ -1,4 +1,4 @@
-//! « Roll up child runs » (ADR draft-cout-de-l-arbre §2): Stats › Cost files
+//! « Roll up child runs » (ADR-0101 §2): Stats › Cost files
 //! every descendant's cost under the Pipeline and the Project of its **root**,
 //! split « Parent run » / « Child runs » › Depth k › child Pipeline › Node, and
 //! recomposes the cohort by root — the whole tree enters its root's period,

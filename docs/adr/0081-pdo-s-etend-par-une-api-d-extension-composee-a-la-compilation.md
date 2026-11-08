@@ -832,7 +832,7 @@ n'importe quelle page pourrait l'ouvrir au nom d'une extension).
 
 Un Run qui lance des Runs enfants n'exposait que son propre coût : une extension qui agrège des
 coûts sous-estimait une orchestration. `Host::run_cost` porte désormais le **Coût de l'arbre**
-(ADR draft-cout-de-l-arbre), le même que l'onglet Info.
+(ADR-0101), le même que l'onglet Info.
 
 - **Champ additif** : `RunCost.tree`, absent pour un Run sans enfant, porte un `RunTreeCost` :
   `total` (le Run et tous ses descendants, archivés compris), `parent` (le Coût du Run parent, le

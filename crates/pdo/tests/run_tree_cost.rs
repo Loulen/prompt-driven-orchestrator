@@ -1,4 +1,4 @@
-//! The Coût de l'arbre (ADR draft-cout-de-l-arbre) against the real daemon,
+//! The Coût de l'arbre (ADR-0101) against the real daemon,
 //! over a real tree of Runs in its log, each costed from its own transcript:
 //!
 //! - `GET /runs/{id}` carries an additive `tree_cost`: the total, `parent`

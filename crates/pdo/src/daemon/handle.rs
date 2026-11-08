@@ -213,8 +213,7 @@ impl DaemonHandle {
 
     /// Seed a `run_started` event of a child Run of `parent_run_id`, created
     /// from its `parent_node_id` session, working in `target_repo`: a tree of
-    /// Runs without spawning any session (the tree cost, ADR
-    /// draft-cout-de-l-arbre).
+    /// Runs without spawning any session (the tree cost, ADR-0101).
     #[doc(hidden)]
     pub async fn seed_child_run_in(
         &self,

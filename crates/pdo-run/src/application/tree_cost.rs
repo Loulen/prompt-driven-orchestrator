@@ -1,4 +1,4 @@
-//! The **Coût de l'arbre** of a Run, read (ADR draft-cout-de-l-arbre): the
+//! The **Coût de l'arbre** of a Run, read (ADR-0101): the
 //! Résumés give the tree, each member's own log gives its cost through the
 //! memoized per-Run fold, and [`tree_cost`](crate::domain::run_cost::tree)
 //! sums them. Nothing is written.

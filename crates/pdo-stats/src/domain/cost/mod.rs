@@ -121,7 +121,7 @@ pub struct StatsCostEntity {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[ts(optional = nullable)]
     pub absorbed: Vec<AbsorbedMember>,
-    /// « Roll up child runs » (ADR draft-cout-de-l-arbre §2): on a root
+    /// « Roll up child runs » (ADR-0101 §2): on a root
     /// Pipeline row whose root runs orchestrated child runs, the split
     /// « Parent run » / « Child runs » › Depth k › child Pipeline › Node.
     /// Omitted everywhere else — and always when the roll-up is off, so that

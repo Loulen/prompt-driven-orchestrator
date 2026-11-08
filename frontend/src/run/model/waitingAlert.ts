@@ -1,6 +1,6 @@
 /**
  * The **Alerte d'attente** decider (CONTEXT.md « Alerte d'attente »,
- * ADR draft-alertes-d-attente).
+ * ADR-0100).
  *
  * Pure: one live `/ws` message, where the tabs stand, this browser's switches,
  * the permission and the clock in; an alert (a notification and/or a sound) or

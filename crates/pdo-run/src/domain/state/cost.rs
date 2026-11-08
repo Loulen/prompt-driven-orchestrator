@@ -106,7 +106,7 @@ pub struct HarnessCost {
     pub reported_in_usd: bool,
 }
 
-/// One depth level of a Run's tree (ADR draft-cout-de-l-arbre): `depth` 1 is
+/// One depth level of a Run's tree (ADR-0101): `depth` 1 is
 /// the direct children, 2 the grandchildren, and so on.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -118,8 +118,7 @@ pub struct DepthCost {
     pub cost: Option<CostStat>,
 }
 
-/// The **Coût de l'arbre** of a Run that has at least one descendant (ADR
-/// draft-cout-de-l-arbre): its own cost, the **Coût du Run parent** (the Run's
+/// The **Coût de l'arbre** of a Run that has at least one descendant (ADR-0101): its own cost, the **Coût du Run parent** (the Run's
 /// `cost`, untouched), plus the own cost of every descendant, archived ones
 /// included, summed on read and never persisted. A forgotten descendant has no
 /// log left and is out of the tree. A Run without descendant has none: its

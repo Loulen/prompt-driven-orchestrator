@@ -1,4 +1,4 @@
-// The Coût de l'arbre (ADR draft-cout-de-l-arbre) as Run info and the
+// The Coût de l'arbre (ADR-0101) as Run info and the
 // Orchestration tab say it: the total, « Parent run » / « Child runs (N) » and,
 // for a tree deeper than one level, each depth. Same markers as a Run's cost
 // (`~` estimated, `†` lower bound, `—` unavailable), through `formatEstCost`.

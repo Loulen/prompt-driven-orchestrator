@@ -1,4 +1,4 @@
-//! « Roll up child runs » on Stats › Cost (ADR draft-cout-de-l-arbre §2)
+//! « Roll up child runs » on Stats › Cost (ADR-0101 §2)
 //! against the real daemon, over trees of Runs in its log, each Node session
 //! costed from its own transcript:
 //!

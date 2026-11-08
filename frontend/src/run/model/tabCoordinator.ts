@@ -1,6 +1,5 @@
 /**
- * The PDO tabs of one browser, coordinated for the Alerte d'attente (ADR
- * draft-alertes-d-attente §5). Every tab opens its own `/ws` and sees every
+ * The PDO tabs of one browser, coordinated for the Alerte d'attente (ADR-0100 §5). Every tab opens its own `/ws` and sees every
  * transition: alone, N tabs would ring N times. The tabs talk over a local
  * channel (`BroadcastChannel`, else the `storage` event) to:
  *

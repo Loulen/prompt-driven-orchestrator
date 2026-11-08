@@ -25,7 +25,7 @@ stalled: boolean, started_at?: string, completed_at?: string,
  */
 cost?: CostStat, 
 /**
- * The child's Coût de l'arbre (ADR draft-cout-de-l-arbre): its own cost
+ * The child's Coût de l'arbre (ADR-0101): its own cost
  * plus every one of its descendants, grandchildren included. Absent for a
  * child without descendant: its tree cost is `cost`.
  */

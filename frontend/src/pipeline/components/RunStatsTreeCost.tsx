@@ -1,6 +1,6 @@
 /**
  * The Est. cost cell of Run info for a Run that has child runs: its Coût de
- * l'arbre (ADR draft-cout-de-l-arbre), then « ⑂ N », the number of
+ * l'arbre (ADR-0101), then « ⑂ N », the number of
  * descendants. The tooltip breaks it into Parent run / Child runs (N), and
  * each depth when the tree is deeper than one level. A Run without child runs
  * keeps the plain cell.

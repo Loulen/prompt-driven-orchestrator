@@ -1,4 +1,4 @@
-//! The **Coût de l'arbre** (ADR draft-cout-de-l-arbre): a Run's own cost, the
+//! The **Coût de l'arbre** (ADR-0101): a Run's own cost, the
 //! **Coût du Run parent** (ADR-0058, untouched), plus the own cost of every
 //! descendant, summed **on read**. Never persisted.
 //!

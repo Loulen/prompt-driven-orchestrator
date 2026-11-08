@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { cleanupRuns, runMultipart } from "./helpers";
 
-// Layer 3b — the Alerte d'attente (ADR draft-alertes-d-attente): Settings ›
+// Layer 3b — the Alerte d'attente (ADR-0100): Settings ›
 // Notifications, the notification and the chime of a live wait, its click, the
 // Portée d'alerte, and one emitting tab per browser.
 //

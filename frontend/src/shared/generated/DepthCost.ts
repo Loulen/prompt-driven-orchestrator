@@ -2,7 +2,7 @@
 import type { CostStat } from "./CostStat";
 
 /**
- * One depth level of a Run's tree (ADR draft-cout-de-l-arbre): `depth` 1 is
+ * One depth level of a Run's tree (ADR-0101): `depth` 1 is
  * the direct children, 2 the grandchildren, and so on.
  */
 export type DepthCost = { depth: number, 

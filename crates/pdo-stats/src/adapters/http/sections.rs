@@ -39,7 +39,7 @@ pub struct StatsQuery {
     /// absorptions applied.
     #[serde(default)]
     pub uncombined: bool,
-    /// « Roll up child runs » (ADR draft-cout-de-l-arbre §2) — `/stats/cost`
+    /// « Roll up child runs » (ADR-0101 §2) — `/stats/cost`
     /// only: recompose the cohort by **root** Run (roots started in the period,
     /// each bringing its whole tree) and file every descendant under its
     /// root's Pipeline and Project. Wire default `false` — the response is

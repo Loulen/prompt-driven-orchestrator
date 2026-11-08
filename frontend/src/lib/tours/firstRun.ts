@@ -15,7 +15,7 @@
  *   **Run**, so the tour says Run (design Q1).
  */
 
-import type { TourDef, TourStep } from "../tourDef";
+import type { TourDef, TourObservation, TourStep } from "../tourDef";
 import {
   TUTORIAL_OUT_PORT,
   TUTORIAL_PROJECT_NAME,
@@ -61,6 +61,16 @@ import {
   skillRow,
 } from "./firstRunReading";
 import { READING_STEPS } from "./firstRunReadingSteps";
+
+/**
+ * This browser's Launch got an id back since the tour started. Not « the button
+ * was clicked », and not « one more Run in the list » either: on a shared
+ * instance a neighbour's Launch adds a Run too. A replay of the tour launches a
+ * new Run, so a new id.
+ */
+function launched(o: TourObservation): boolean {
+  return o.app.launchedRunId != null && o.app.launchedRunId !== o.baseline.launchedRunId;
+}
 
 // ---- the steps ------------------------------------------------------------
 
@@ -187,7 +197,14 @@ const STEPS: TourStep[] = [
   {
     id: "launch",
     title: "Launch the Run",
-    body: "Click Run. A worktree of the training repository is created, the node starts in its own session, and the Run appears in the list on the left.",
+    // Replayed with `Previous` once the Run is launched (CONTEXT.md § « Rejeu
+    // d'étape »), the step holds and the form is gone: the card says what the
+    // click did instead of asking for a button nobody can see. Opening New Run
+    // again and launching anew is allowed: the tour then follows the new Run.
+    body: (o) =>
+      launched(o)
+        ? "Launched: a worktree of the training repository was created, the node started in its own session, and the Run is in the list on the left."
+        : "Click Run. A worktree of the training repository is created, the node starts in its own session, and the Run appears in the list on the left.",
     target: () => [LAUNCH_BUTTON],
     waitingFor: "the Run button",
     // The whole tour exists for this click, so there is no Skip on it.
@@ -198,11 +215,7 @@ const STEPS: TourStep[] = [
     refusalTitle: "The Run could not be launched",
     refusalHint:
       "Your form is still open with everything filled. Fix the cause, then press Run again; the tour will not restart.",
-    // Not "the button was clicked", and not « one more Run in the list » either:
-    // on a shared instance a neighbour's Launch adds a Run too. Done when the id
-    // THIS browser's Launch received differs from the one the tour started with;
-    // a replay of the tour launches a new Run, so a new id.
-    done: (o) => o.app.launchedRunId != null && o.app.launchedRunId !== o.baseline.launchedRunId,
+    done: launched,
   },
 
   ...READING_STEPS,

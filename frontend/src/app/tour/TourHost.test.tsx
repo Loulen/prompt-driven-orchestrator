@@ -893,3 +893,415 @@ describe("the step body", () => {
     expect(body.querySelector("code")).toHaveTextContent(/^my-first-run-k3x9$/);
   });
 });
+
+// ---- Rejeu d'étape: Previous replays the step before -----------------------
+
+/** Step one points into a pane the test can take away, as a dialog that closes. */
+const PREV_TOUR: TourDef = {
+  id: "prev",
+  title: "Prev",
+  blurb: "",
+  minutes: 1,
+  recapIntro: "",
+  recap: [],
+  steps: [
+    {
+      id: "one",
+      title: "Click the thing",
+      body: "The first step.",
+      target: () => ["#pane"],
+      waitingFor: "the pane",
+      done: (o) => o.present("#opened"),
+    },
+    { id: "two", title: "Read this", body: "The second step.", target: () => ["#always"], waitingFor: "always" },
+    { id: "three", title: "And this", body: "The third step.", target: () => ["#always"], waitingFor: "always" },
+  ],
+};
+
+function PrevHarness() {
+  const controller = useTour([]);
+  const [pane, setPane] = useState(true);
+  const [opened, setOpened] = useState(false);
+  return (
+    <>
+      <button data-testid="start" onClick={() => controller.start(PREV_TOUR)}>
+        start
+      </button>
+      <div id="always">
+        <button data-testid="undo-it" onClick={() => setOpened(false)}>
+          undo it
+        </button>
+        <button data-testid="close-pane" onClick={() => setPane(false)}>
+          close pane
+        </button>
+      </div>
+      {pane && (
+        <div id="pane">
+          <button data-testid="do-it" onClick={() => setOpened(true)}>
+            do it
+          </button>
+        </div>
+      )}
+      {opened && <div id="opened" />}
+      <TourHost controller={controller} showWelcome={false} onWelcomeAnswered={() => {}} onOpenTutorials={() => {}} />
+    </>
+  );
+}
+
+const progress = () => screen.getByTestId("tour-progress");
+
+/** Walk PREV_TOUR to step 2, then take step 1's screen away and undo its gesture. */
+async function withStepOneGone() {
+  render(<PrevHarness />);
+  await user().click(screen.getByTestId("start"));
+  tick();
+  await user().click(screen.getByTestId("do-it"));
+  tick();
+  await user().click(screen.getByTestId("undo-it"));
+  await user().click(screen.getByTestId("close-pane"));
+  tick();
+}
+
+describe("Previous replays the step before", () => {
+  it("is absent on step 1, and replays a satisfied step that waits for Next", async () => {
+    render(<PrevHarness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    expect(progress()).toHaveTextContent("1/3");
+    expect(screen.queryByTestId("tour-back")).not.toBeInTheDocument();
+
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    expect(progress()).toHaveTextContent("2/3");
+    const back = screen.getByTestId("tour-back");
+    expect(back).toHaveTextContent("Previous");
+    expect(back).not.toHaveAttribute("aria-disabled");
+    // On the left of the footer, before Skip or nothing: the first control of the row.
+    expect(screen.getByTestId("tour-popover").querySelector(".tr-cfoot button")).toBe(back);
+    await user().hover(back);
+    tick(400);
+    expect(await screen.findByTestId("tooltip-content")).toHaveTextContent("Previous step (←)");
+
+    await user().click(back);
+    tick();
+    expect(screen.getByTestId("tour-popover")).toHaveAttribute("data-step", "one");
+    expect(progress()).toHaveTextContent("1/3");
+    expect(screen.getByTestId("tour-body")).toHaveTextContent("The first step.");
+    // It holds: shown again, waiting for Next, not sliding past on its own.
+    tick(6_000);
+    expect(progress()).toHaveTextContent("1/3");
+    expect(screen.queryByTestId("tour-failed-card")).not.toBeInTheDocument();
+    expect(screen.getByTestId("tour-next")).toBeEnabled();
+    expect(screen.getByTestId("tour-next")).toHaveAttribute("title", "Next (→)");
+
+    await user().click(screen.getByTestId("tour-next"));
+    tick();
+    expect(progress()).toHaveTextContent("2/3");
+  });
+
+  it("replays an unsatisfied step whose screen is there: the reader makes the gesture again", async () => {
+    render(<PrevHarness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    await user().click(screen.getByTestId("undo-it"));
+    tick();
+
+    await user().click(screen.getByTestId("tour-back"));
+    tick();
+    expect(screen.getByTestId("tour-popover")).toHaveAttribute("data-step", "one");
+    expect(screen.queryByTestId("tour-next")).not.toBeInTheDocument();
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    expect(progress()).toHaveTextContent("2/3");
+  });
+
+  it("is greyed out with a reason when the step before can't be replayed, and does nothing", async () => {
+    await withStepOneGone();
+
+    const back = screen.getByTestId("tour-back");
+    expect(back).toHaveAttribute("aria-disabled", "true");
+    // aria-disabled, not disabled: the tooltip saying why must still open.
+    expect(back).not.toBeDisabled();
+    await user().hover(back);
+    tick(400);
+    expect(await screen.findByTestId("tooltip-content")).toHaveTextContent(
+      "This step's screen is gone: it can't be replayed",
+    );
+
+    await user().click(back);
+    tick();
+    expect(progress()).toHaveTextContent("2/3");
+    expect(screen.queryByTestId("tour-failed-card")).not.toBeInTheDocument();
+  });
+
+  it("keeps the keyboard focus when it turns greyed", async () => {
+    render(<PrevHarness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    const back = screen.getByTestId("tour-back");
+    act(() => back.focus());
+
+    // Step 1's screen goes away: the same button greys, focus still on it.
+    await user().click(screen.getByTestId("undo-it"));
+    await user().click(screen.getByTestId("close-pane"));
+    act(() => back.focus());
+    tick();
+    expect(screen.getByTestId("tour-back")).toBe(back);
+    expect(back).toHaveAttribute("aria-disabled", "true");
+    expect(document.activeElement).toBe(back);
+  });
+
+  it("is absent on the end card", async () => {
+    render(<PrevHarness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    await user().click(screen.getByTestId("tour-next"));
+    tick();
+    await user().click(screen.getByTestId("tour-next"));
+    tick();
+    expect(screen.getByTestId("tour-end-card")).toBeInTheDocument();
+    expect(screen.queryByTestId("tour-back")).not.toBeInTheDocument();
+  });
+
+  it("is absent on step 1 of the next leg of a Full tour: no going back into the previous tour", async () => {
+    render(<Harness chain={[NEXT_TOUR]} />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    expect(screen.getByTestId("tour-back")).toBeInTheDocument();
+    await user().click(screen.getByTestId("tour-next"));
+    await user().click(screen.getByTestId("tour-finish"));
+    tick();
+    expect(screen.getByTestId("tour-popover")).toHaveTextContent("First run");
+    expect(progress()).toHaveTextContent("1/1");
+    expect(screen.queryByTestId("tour-back")).not.toBeInTheDocument();
+  });
+});
+
+// ---- ← / → drive the tour --------------------------------------------------
+
+/**
+ * Four steps, one per shape of footer: an acknowledge step (`Next` live), a free
+ * input (`Next` shown, disabled until its condition holds), a live gesture (no
+ * `Next` at all), and a last acknowledge step.
+ */
+const KEY_TOUR: TourDef = {
+  id: "keys",
+  title: "Keys",
+  blurb: "",
+  minutes: 1,
+  recapIntro: "",
+  recap: [],
+  steps: [
+    { id: "read", title: "Read this", body: "Acknowledge.", target: () => ["#stage"], waitingFor: "the stage" },
+    {
+      id: "type",
+      title: "Type something",
+      body: "Free input.",
+      target: () => ["#stage"],
+      waitingFor: "the stage",
+      confirm: true,
+      done: (o) => o.present("#typed"),
+    },
+    {
+      id: "click",
+      title: "Click the thing",
+      body: "A gesture.",
+      target: () => ["#stage"],
+      waitingFor: "the stage",
+      done: (o) => o.present("#clicked"),
+    },
+    { id: "last", title: "And this", body: "The end.", target: () => ["#stage"], waitingFor: "the stage" },
+  ],
+};
+
+function KeyHarness() {
+  const controller = useTour([]);
+  const [typed, setTyped] = useState(false);
+  return (
+    <>
+      <button data-testid="start" onClick={() => controller.start(KEY_TOUR)}>
+        start
+      </button>
+      <div id="stage">
+        <button data-testid="type-it" onClick={() => setTyped(true)}>
+          type it
+        </button>
+        <input data-testid="field" defaultValue="some text" />
+        <div data-testid="tmux-terminal">
+          <textarea data-testid="xterm" />
+        </div>
+        <div className="react-flow">
+          <div className="react-flow__node" data-id="n1" tabIndex={0} data-testid="canvas-node">
+            node
+          </div>
+          <button data-testid="canvas-zoom">zoom</button>
+        </div>
+        <button data-run-row="r1" data-testid="run-row">
+          a Run
+        </button>
+        <div role="listbox" aria-label="list">
+          <div role="option" aria-selected="false" tabIndex={0} data-testid="list-option">
+            an option
+          </div>
+        </div>
+      </div>
+      {typed && <div id="typed" />}
+      <TourHost controller={controller} showWelcome={false} onWelcomeAnswered={() => {}} onOpenTutorials={() => {}} />
+    </>
+  );
+}
+
+/** Start the key tour and move it to step 2 (`type`), whose Next is disabled. */
+async function onStepTwo() {
+  render(<KeyHarness />);
+  await user().click(screen.getByTestId("start"));
+  tick();
+  await user().keyboard("{ArrowRight}");
+  tick();
+  expect(progress()).toHaveTextContent("2/4");
+}
+
+describe("← and → drive the tour", () => {
+  it("→ presses Next and ← replays the step before, with the focus outside any field", async () => {
+    render(<KeyHarness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    expect(progress()).toHaveTextContent("1/4");
+
+    await user().keyboard("{ArrowRight}");
+    tick();
+    expect(progress()).toHaveTextContent("2/4");
+
+    await user().keyboard("{ArrowLeft}");
+    tick();
+    expect(progress()).toHaveTextContent("1/4");
+    expect(screen.getByTestId("tour-popover")).toHaveAttribute("data-step", "read");
+  });
+
+  it("→ does nothing while Next is disabled, and presses it once it is live", async () => {
+    await onStepTwo();
+    expect(screen.getByTestId("tour-next")).toBeDisabled();
+    await user().keyboard("{ArrowRight}");
+    tick();
+    expect(progress()).toHaveTextContent("2/4");
+
+    await user().click(screen.getByTestId("type-it"));
+    tick();
+    expect(screen.getByTestId("tour-next")).toBeEnabled();
+    (document.activeElement as HTMLElement | null)?.blur();
+    await user().keyboard("{ArrowRight}");
+    tick();
+    expect(progress()).toHaveTextContent("3/4");
+  });
+
+  it("→ does nothing on a step that shows no Next: it advances on its gesture", async () => {
+    await onStepTwo();
+    await user().click(screen.getByTestId("type-it"));
+    tick();
+    await user().keyboard("{ArrowRight}");
+    tick();
+    expect(progress()).toHaveTextContent("3/4");
+    expect(screen.queryByTestId("tour-next")).not.toBeInTheDocument();
+
+    await user().keyboard("{ArrowRight}");
+    tick();
+    expect(progress()).toHaveTextContent("3/4");
+  });
+
+  it("← does nothing on step 1", async () => {
+    render(<KeyHarness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().keyboard("{ArrowLeft}");
+    tick();
+    expect(progress()).toHaveTextContent("1/4");
+  });
+
+  it("← does nothing when Previous is greyed out", async () => {
+    await withStepOneGone();
+    expect(screen.getByTestId("tour-back")).toHaveAttribute("aria-disabled", "true");
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    await user().keyboard("{ArrowLeft}");
+    tick();
+    expect(progress()).toHaveTextContent("2/3");
+    expect(screen.queryByTestId("tour-failed-card")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["a field", "field"],
+    ["the terminal", "xterm"],
+    ["a node of the canvas", "canvas-node"],
+    ["a control of the canvas", "canvas-zoom"],
+    ["a Run row of the left panel", "run-row"],
+    ["an option of a list", "list-option"],
+  ])("leaves both keys to %s that has the focus", async (_where, testId) => {
+    await onStepTwo();
+    await user().click(screen.getByTestId("type-it"));
+    tick();
+    // Step 2 now offers both Previous and a live Next.
+    expect(screen.getByTestId("tour-back")).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByTestId("tour-next")).toBeEnabled();
+
+    act(() => screen.getByTestId(testId).focus());
+    await user().keyboard("{ArrowLeft}");
+    tick();
+    expect(progress()).toHaveTextContent("2/4");
+    await user().keyboard("{ArrowRight}");
+    tick();
+    expect(progress()).toHaveTextContent("2/4");
+
+    // …and the same keys, with the focus back outside, drive the tour again.
+    act(() => (document.activeElement as HTMLElement).blur());
+    await user().keyboard("{ArrowRight}");
+    tick();
+    expect(progress()).toHaveTextContent("3/4");
+  });
+
+  it("ignores a keystroke a surface already handled", async () => {
+    await onStepTwo();
+    const claim = (event: KeyboardEvent) => event.preventDefault();
+    // Capture phase: it runs before the tour's bubble-phase listener.
+    window.addEventListener("keydown", claim, true);
+    await user().keyboard("{ArrowLeft}");
+    tick();
+    expect(progress()).toHaveTextContent("2/4");
+    window.removeEventListener("keydown", claim, true);
+  });
+
+  it.each([
+    ["an open menu", (el: HTMLElement) => el.setAttribute("role", "menu")],
+    ["an open dropdown", (el: HTMLElement) => el.classList.add("d-pop")],
+    ["the artifact viewer", (el: HTMLElement) => el.classList.add("art-scrim")],
+    ["the image lightbox", (el: HTMLElement) => el.setAttribute("data-testid", "image-lightbox")],
+  ])("leaves the arrows to %s", async (_what, mark) => {
+    await onStepTwo();
+    const surface = document.createElement("div");
+    mark(surface);
+    document.body.appendChild(surface);
+    await user().keyboard("{ArrowLeft}");
+    tick();
+    expect(progress()).toHaveTextContent("2/4");
+    surface.remove();
+  });
+
+  it("ignores a held key and a modified one", async () => {
+    await onStepTwo();
+    await user().keyboard("{Alt>}{ArrowLeft}{/Alt}");
+    tick();
+    expect(progress()).toHaveTextContent("2/4");
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", repeat: true, bubbles: true }));
+    });
+    tick();
+    expect(progress()).toHaveTextContent("2/4");
+  });
+});

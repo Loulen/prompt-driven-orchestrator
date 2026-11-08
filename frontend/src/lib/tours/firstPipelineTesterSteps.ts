@@ -5,7 +5,7 @@
  * first half in `firstPipeline.ts`; the copy rules there apply here too.
  */
 
-import type { TourStep } from "../tourDef";
+import type { TourObservation, TourStep } from "../tourDef";
 import {
   ADD_MENU_NODE,
   DELETE_CONFIRM,
@@ -18,6 +18,7 @@ import {
   VALIDATE_MODAL,
   agent,
   agents,
+  builtPipelineId,
   carryOutEdgeStep,
   conditionStep,
   cssEscape,
@@ -37,6 +38,16 @@ Put verdict: pass in your output's frontmatter when it holds up, verdict: fail o
 const TESTER_OUT = "A short verdict, and what failed if anything did";
 const TESTER_SHOT = "Annotated screenshot of the feature";
 
+/** The pipeline is saved, and the Library lists it. */
+function saved(o: TourObservation): boolean {
+  return !o.app.dirty && !!o.app.pipelineId && o.app.libraryPipelineIds.includes(o.app.pipelineId);
+}
+
+/** The Validate modal is closed, and the tab bar shows the pipeline validated. */
+function validated(o: TourObservation): boolean {
+  return !o.present(VALIDATE_MODAL) && (o.present(VALIDATED_FOR_ALL) || o.present(VALIDATED_FOR_PROJECTS));
+}
+
 export const TESTER_STEPS: TourStep[] = [
   {
     id: "open-add-menu-2",
@@ -54,6 +65,8 @@ export const TESTER_STEPS: TourStep[] = [
     waitingFor: "the Node entry of the Add menu",
     soft: true,
     done: (o) => agents(o.app).length >= 2,
+    // Same as the first « Choose Node »: the menu closes on the pick.
+    replayNeedsTarget: true,
   },
   {
     id: "select-tester",
@@ -180,7 +193,7 @@ export const TESTER_STEPS: TourStep[] = [
     title: "Select the edge back to implementer",
     body: (o) =>
       edgeSelected(o.app, agent(o.app, 0))
-        ? "The edge is already selected, since you just fixed its outputs. Its inspector on the right is where a condition is authored."
+        ? "The edge is already selected. Its inspector on the right is where a condition is authored."
         : "Click the edge you just drew. Its inspector opens on the right, where a condition is authored.",
     target: (o) => edgeSel(o.app, agent(o.app, 1), agent(o.app, 0), OUT_PORT),
     waitingFor: "the tester → implementer edge",
@@ -208,7 +221,7 @@ export const TESTER_STEPS: TourStep[] = [
     title: "Select the edge to End",
     body: (o) =>
       edgeSelected(o.app, endNode(o.app))
-        ? "The edge is already selected, since you just fixed its outputs. Same inspector, one more condition to write."
+        ? "The edge is already selected. Same inspector, one more condition to write."
         : "Click that last edge. Same inspector, one more condition to write.",
     target: (o) => edgeSel(o.app, agent(o.app, 1), endNode(o.app), OUT_PORT),
     waitingFor: "the tester → End edge",
@@ -224,11 +237,17 @@ export const TESTER_STEPS: TourStep[] = [
   {
     id: "save",
     title: "Save the pipeline",
-    body: "Click Save. Until you do, all of this lives only in this browser tab.",
+    // The step slides on once saved, so the first body is only seen on a replay
+    // with `Previous` (CONTEXT.md § « Rejeu d'étape »): it says what was done
+    // rather than asking for a click that is already made.
+    body: (o) =>
+      saved(o)
+        ? "Saved: the pipeline is in your Library. Until you save, changes live only in this browser tab."
+        : "Click Save. Until you do, all of this lives only in this browser tab.",
     target: () => ['[data-testid="save-button"]'],
     waitingFor: "the Save button",
     // Not skippable: everything after this reads the saved file.
-    done: (o) => !o.app.dirty && !!o.app.pipelineId && o.app.libraryPipelineIds.includes(o.app.pipelineId),
+    done: saved,
   },
   {
     // A pipeline PDO creates is born a test pipeline: New Run offers it only
@@ -238,7 +257,9 @@ export const TESTER_STEPS: TourStep[] = [
     title: "Validate the pipeline",
     // Two beats, one card: the button, then the modal it opens.
     body: (o) =>
-      o.present(VALIDATE_MODAL)
+      validated(o)
+        ? "Validated: New Run offers it to the projects you chose. Validate, next to Save, changes them."
+        : o.present(VALIDATE_MODAL)
         ? "Tick All projects, or the projects that should see it, then Save validation. Leaving everything unticked keeps it a test pipeline."
         : "Click Validate, next to Save. A new pipeline is a test pipeline: New Run hides it until you validate it for a project, or for all of them.",
     target: (o) => (o.present(VALIDATE_MODAL) ? [VALIDATE_MODAL] : [VALIDATE_BUTTON]),
@@ -248,9 +269,7 @@ export const TESTER_STEPS: TourStep[] = [
     // A reader who keeps a test pipeline skips; the recap says what that means.
     skippable: true,
     advanceHint: "advances once validated",
-    done: (o) =>
-      !o.present(VALIDATE_MODAL) &&
-      (o.present(VALIDATED_FOR_ALL) || o.present(VALIDATED_FOR_PROJECTS)),
+    done: validated,
   },
   {
     id: "keep-or-delete",
@@ -266,12 +285,15 @@ export const TESTER_STEPS: TourStep[] = [
     // back as the projecteur's blocker (FP finding, #825).
     target: (o) => {
       if (o.present(DELETE_CONFIRM)) return [DELETE_CONFIRM];
-      return o.app.pipelineId
-        ? [`[data-testid="library-row-${cssEscape(o.app.pipelineId)}"]`]
-        : [];
+      const id = builtPipelineId(o);
+      return id ? [`[data-testid="library-row-${cssEscape(id)}"]`] : [];
     },
     waitingFor: "the pipeline's row in the Library",
     skippable: true,
-    done: (o) => !!o.app.pipelineId && !o.app.libraryPipelineIds.includes(o.app.pipelineId),
+    // Gone from the Library. Not read off the active tab: deleting the pipeline
+    // closes its tab in the same store update, so a tour whose pipeline was the
+    // only open tab saw `pipelineId` go null and waited on a row that was
+    // already gone.
+    done: (o) => builtPipelineId(o) === null,
   },
 ];

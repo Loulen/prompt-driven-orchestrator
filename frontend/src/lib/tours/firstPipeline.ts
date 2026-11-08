@@ -30,22 +30,11 @@ import {
   outputSlot,
   pipelineCreated,
   selected,
+  tutorialPipelineName,
 } from "./firstPipelineReading";
 import { TESTER_STEPS } from "./firstPipelineTesterSteps";
-import { withTourIdentity } from "../tourMemory";
 
-/** The pipeline's name, before this browser's Identité de tour. */
-export const TUTORIAL_PIPELINE_ID = "tutorial-implement-test";
-
-/**
- * The name the tour asks the user to paste for the pipeline itself:
- * `tutorial-implement-test-k3x9`. Two people building it on one instance would
- * otherwise both ask for the same YAML file, and the second Create would be
- * refused.
- */
-export function tutorialPipelineName(): string {
-  return withTourIdentity(TUTORIAL_PIPELINE_ID);
-}
+export { TUTORIAL_PIPELINE_ID, tutorialPipelineName } from "./firstPipelineReading";
 
 const IMPLEMENTER_PROMPT = `Implement what the user asked for, then run the project's tests.
 Write the test results and a mermaid diagram of your change into your output file.`;
@@ -90,16 +79,23 @@ const STEPS: TourStep[] = [
     // which is entered satisfied and says so.
     confirm: (o) => o.present(NEW_PIPELINE_DIALOG),
     done: (o) => pipelineCreated(o) || filled(o, NEW_PIPELINE_NAME),
+    // That condition holds for good once the pipeline exists, but the step's
+    // whole point is a field that leaves with the dialog: `Previous` from
+    // `Create it` is greyed out rather than replaying « paste the name » over a
+    // screen with nothing to paste into (CONTEXT.md § « Rejeu d'étape »).
+    replayNeedsTarget: true,
   },
   {
     id: "create-pipeline",
     title: "Create it",
-    // Entered satisfied when Enter already did the work (see the step above):
-    // the card then says what happened rather than instructing a click that
-    // nobody can make — the button is gone.
+    // Entered satisfied when Enter already did the work (see the step above),
+    // or replayed with `Previous` after the click: the card then says what
+    // happened rather than instructing a click that nobody can make — the
+    // button is gone. It does not say HOW it was created: on a replay that was
+    // the click, and « Enter already created it » would be false.
     body: (o) =>
       pipelineCreated(o)
-        ? "Enter already created it: the file is written and open in the editor, with a Start and an End marker already in place."
+        ? "Already created: the file is written and open in the editor, with a Start and an End marker already in place."
         : "Click Create. The file is written and opened in the editor, with a Start and an End marker already in place.",
     target: () => ['[data-testid="new-pipeline-create"]'],
     waitingFor: "the Create button",
@@ -129,6 +125,9 @@ const STEPS: TourStep[] = [
     waitingFor: "the Node entry of the Add menu",
     soft: true,
     done: (o) => agents(o.app).length >= 1,
+    // « Pick Node in the menu » only makes sense with the menu open, and it
+    // closes on the pick: replayed without it, the card would point at nothing.
+    replayNeedsTarget: true,
   },
   {
     id: "select-implementer",

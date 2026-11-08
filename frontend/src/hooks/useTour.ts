@@ -18,8 +18,10 @@ import { canvasNodeIdOf, revealCanvasNode } from "../lib/canvasReveal";
 import {
   beginSteps,
   canAdvance,
+  canGoBack,
   confirmStep,
   currentStep,
+  goBack,
   needsConfirm,
   observeTour,
   skipStep,
@@ -76,6 +78,7 @@ export function useTour(
   const [asides, setAsides] = useState<TourAsideView[]>(NO_ASIDES);
   const [ready, setReady] = useState(false);
   const [awaitingConfirm, setAwaitingConfirm] = useState(false);
+  const [backable, setBackable] = useState(false);
   const [body, setBody] = useState("");
   const [note, setNote] = useState<string | null>(null);
   const [checklist, setChecklist] = useState<TourChecklistItem[]>([]);
@@ -219,6 +222,11 @@ export function useTour(
     commit(tour, confirmStep(tour, run, observe()));
   }, [tour, run, observe, commit]);
 
+  const back = useCallback(() => {
+    if (!tour || !run) return;
+    commit(tour, goBack(tour, run, observe()));
+  }, [tour, run, observe, commit]);
+
   const skip = useCallback(() => {
     if (!tour || !run) return;
     commit(tour, skipStep(tour, run, observe()));
@@ -286,6 +294,7 @@ export function useTour(
 
       setReady(canAdvance(tour, active, obs));
       setAwaitingConfirm(needsConfirm(tour, active, obs));
+      setBackable(canGoBack(tour, active, obs));
       setBody(stepBody(step, obs));
       setNote(stepNote(step, obs));
       // Compared item by item: a fresh array every tick would re-render the
@@ -375,6 +384,7 @@ export function useTour(
       asides,
       ready,
       awaitingConfirm,
+      canGoBack: backable,
       body,
       note,
       checklist,
@@ -382,7 +392,7 @@ export function useTour(
       nextTour: chain[0] ?? null,
       tidyUpFailure,
     };
-  }, [tour, run, hole, zone, wideZone, lit, asides, ready, awaitingConfirm, body, note, checklist, prep, chain, tidyUpFailure]);
+  }, [tour, run, hole, zone, wideZone, lit, asides, ready, awaitingConfirm, backable, body, note, checklist, prep, chain, tidyUpFailure]);
 
-  return { view, start, quit, next, skip, finish, finishHere, continueChain, begin, retryPrep };
+  return { view, start, quit, next, back, skip, finish, finishHere, continueChain, begin, retryPrep };
 }

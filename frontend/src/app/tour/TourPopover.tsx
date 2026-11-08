@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import { Check, Circle, Copy, LoaderCircle, X } from "lucide-react";
+import { Check, ChevronLeft, Circle, Copy, LoaderCircle, X } from "lucide-react";
 import { placePopover } from "../../lib/tourPlacement";
-import { Button, IconButton, StatusIcon } from "../../shared/ui/kit";
+import { Button, IconButton, StatusIcon, Tooltip } from "../../shared/ui/kit";
 import type { TourRect } from "../../hooks/tour/tourView";
 import type { TourChecklistItem, TourDef, TourStep } from "../../lib/tourDef";
 import { copyBlockOf } from "../../lib/tour";
@@ -22,6 +22,10 @@ import { withCode } from "./tourCardText";
  * progress and the way out (`✕`, an icon with its tooltip — *reachable*, not
  * prominent); the footer carries `Skip` on the left and, on the right, either
  * `Next` or the one grey line that says what the tour is waiting for.
+ *
+ * From step 2 on, `‹ Previous` opens the left side of the footer, before `Skip`.
+ * It **replays** the step before (CONTEXT.md § « Rejeu d'étape »), and is greyed
+ * out with a tooltip saying why when that step's screen is gone.
  */
 
 interface Props {
@@ -40,12 +44,18 @@ interface Props {
   awaitingConfirm: boolean;
   /** Live sub-conditions of a step that asks for more than one gesture (#824). */
   checklist: TourChecklistItem[];
+  /** `Previous` would replay the step before. Ignored on step 1. */
+  canGoBack?: boolean;
   onNext: () => void;
+  /** `Previous`. The button is only rendered from step 2 on, and only with a handler. */
+  onBack?: () => void;
   onSkip: () => void;
   onQuit: () => void;
 }
 
 const WIDTH = 266;
+
+const PREVIOUS_GONE = "This step's screen is gone: it can't be replayed";
 
 export default function TourPopover({
   tour,
@@ -58,7 +68,9 @@ export default function TourPopover({
   ready,
   awaitingConfirm,
   checklist,
+  canGoBack = false,
   onNext,
+  onBack,
   onSkip,
   onQuit,
 }: Props) {
@@ -78,6 +90,9 @@ export default function TourPopover({
   // Skip is for a gesture not yet made: once the step's action is done, only Next
   // is left. A reading step (no `done`) has no gesture, so Skip stays beside Next.
   const skippable = step.skippable && !(step.done && ready);
+  // No Previous on step 1: nothing before it, and a Full tour's legs are
+  // independent, so there is no going back into the previous tour.
+  const showBack = stepNumber > 1 && onBack !== undefined;
 
   // Measure after paint and re-place: the card's height depends on its body and
   // on whether it carries a copy block, so a fixed estimate would flip it on the
@@ -191,18 +206,19 @@ export default function TourPopover({
       {/* Not rendered at all when the step has neither: a step that is simply
           waiting for the right click says so in its title, and an empty row
           under the progress bar would be a control that is not there. */}
-      {(skippable || awaitingConfirm || step.advanceHint) && (
+      {(showBack || skippable || awaitingConfirm || step.advanceHint) && (
         <div className="tr-cfoot">
+          {showBack && <PreviousButton enabled={canGoBack} onBack={onBack} />}
           {skippable ? (
             <Button tone="ghost" size="sm" onClick={onSkip} data-testid="tour-skip">
               Skip
             </Button>
           ) : (
-            <span />
+            !showBack && <span />
           )}
           <span className="d-grow" />
           {awaitingConfirm ? (
-            <Button tone="primary" size="sm" onClick={onNext} disabled={!ready} data-testid="tour-next" title="Next (Enter)">
+            <Button tone="primary" size="sm" onClick={onNext} disabled={!ready} data-testid="tour-next" title="Next (→)">
               Next
             </Button>
           ) : (
@@ -215,6 +231,34 @@ export default function TourPopover({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * `‹ Previous`: ghost, like `Skip`, so it stays secondary to `Next`.
+ *
+ * Not replayable → greyed the way the kit's `disabledReason` greys a control
+ * (`aria-disabled`, still focusable, a click that does nothing, the reason in
+ * its tooltip), **not** `disabled`: a disabled button gets neither hover nor
+ * focus, so the tooltip explaining why would never open. Written out rather
+ * than passed as `disabledReason` so the element keeps one shape: the button
+ * flips state as the reader works, and a shape change would remount it under a
+ * keyboard user's focus.
+ */
+function PreviousButton({ enabled, onBack }: { enabled: boolean; onBack?: () => void }) {
+  return (
+    <Tooltip label={enabled ? "Previous step" : PREVIOUS_GONE} kbd={enabled ? "←" : undefined}>
+      <Button
+        tone="ghost"
+        size="sm"
+        icon={ChevronLeft}
+        onClick={enabled ? onBack : undefined}
+        aria-disabled={enabled ? undefined : true}
+        data-testid="tour-back"
+      >
+        Previous
+      </Button>
+    </Tooltip>
   );
 }
 

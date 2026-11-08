@@ -352,7 +352,10 @@
     gap: var(--g-3);
     min-width: 0;
   }
-  .tr-cfoot > .d-btn--ghost {
+  /* The first ghost of the row bleeds into the card's padding: Skip alone, or
+     Previous before it (wrapped in its tooltip's `display: contents` span). */
+  .tr-cfoot > .d-btn--ghost:first-child,
+  .tr-cfoot > :first-child > .d-btn--ghost {
     margin-left: -6px;
   }
   /* Wraps rather than cuts: the hint is the only word on what the step waits for. */

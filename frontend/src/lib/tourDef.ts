@@ -245,6 +245,16 @@ export interface TourStep extends TourStepPanels {
    */
   done?: (o: TourObservation) => boolean;
   /**
+   * Replaying this step with `Previous` needs its target on screen, even when its
+   * condition still holds (CONTEXT.md § « Rejeu d'étape »). For a step whose
+   * instruction only makes sense on a screen that is gone: « Name the pipeline »
+   * holds for good once the pipeline exists, but replayed after the dialog closed
+   * it would ask to paste into a field nobody can see. Without the flag, a
+   * satisfied step is replayable on its condition alone: « Create it » comes back
+   * with `Next` live.
+   */
+  replayNeedsTarget?: boolean;
+  /**
    * A live checklist under the body (#824), for the one step that asks for **two**
    * gestures at once (tick both PDO skills). Splitting it in two steps would spend
    * a whole card on "now tick the other one"; showing nothing would make the first

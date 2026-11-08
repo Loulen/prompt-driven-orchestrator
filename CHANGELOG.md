@@ -15,6 +15,24 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 
 ## Unreleased
 
+### Tours: Previous replays the step before, and the arrow keys drive the card
+
+- From step 2 on, a tour card shows "‹ Previous" on the left of its footer, before Skip. It
+  replays the step before as an ordinary step: shown again and waiting for Next when what it asked
+  for is already done, or live on its target when the gesture has to be made again. When that
+  step's screen is gone (a dialog, a menu or a viewer closed since), Previous is greyed out and its
+  tooltip says "This step's screen is gone: it can't be replayed"; the tour reopens and undoes
+  nothing. There is no Previous on a tour's first step, on its intro, stop and end cards, nor from
+  one leg of the full tour back into the one before.
+- ← presses Previous and → presses Next, each only when the card shows it live, and only while no
+  field, terminal, canvas, list, menu or viewer has the focus or is open. Next's tooltip reads
+  "Next (→)".
+- *First pipeline*: a condition step replayed while another edge is selected lights its own edge and
+  says when its condition is already set; "Create it" says "Already created" however the
+  pipeline was created, and Save and Validate replayed say they are done; the last step notices the
+  pipeline is deleted even when its tab closed with it. *First run*: Launch replayed after the
+  launch says what the click did.
+
 ### Waiting alerts: a notification and a sound when a node starts waiting for you
 
 - Settings has a new Notifications category (after Appearance) with a "Waiting alerts" section,

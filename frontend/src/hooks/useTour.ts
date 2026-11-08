@@ -65,6 +65,7 @@ const NO_ASIDES: TourAsideView[] = [];
 export function useTour(
   runs: TourRunsInput,
   runDetail: TourRunDetailInput | null = null,
+  launchedRunId: string | null = null,
 ): TourController {
   const [tour, setTour] = useState<TourDef | null>(null);
   const [run, setRun] = useState<TourRun | null>(null);
@@ -91,6 +92,7 @@ export function useTour(
   const tourRef = useRef<TourDef | null>(null);
   const runsRef = useRef<TourRunsInput>(runs);
   const runDetailRef = useRef<TourRunDetailInput | null>(runDetail);
+  const launchedRunIdRef = useRef<string | null>(launchedRunId);
   /** What the read-only guard protects right now (#911), refreshed by the pump. */
   const guardRef = useRef<ReadOnlyScope | null>(null);
   /** The last aim scrolled to — step and selectors both (see the pump's scroll block). */
@@ -112,13 +114,18 @@ export function useTour(
   useEffect(() => {
     runDetailRef.current = runDetail;
   }, [runDetail]);
+  useEffect(() => {
+    launchedRunIdRef.current = launchedRunId;
+  }, [launchedRunId]);
 
   const observe = useCallback(
     () =>
       observation(
         runsRef.current,
         runDetailRef.current,
-        baselineRef.current ?? readTourAppState(runsRef.current, runDetailRef.current),
+        launchedRunIdRef.current,
+        baselineRef.current ??
+          readTourAppState(runsRef.current, runDetailRef.current, launchedRunIdRef.current),
       ),
     [],
   );
@@ -144,9 +151,12 @@ export function useTour(
     // the first step asks for. Settings closes itself for the same reason; this
     // is that rule for the surfaces that cannot see a tour coming.
     dismissTransientOverlays();
-    const baseline = readTourAppState(runsRef.current, runDetailRef.current);
+    const baseline = readTourAppState(runsRef.current, runDetailRef.current, launchedRunIdRef.current);
     baselineRef.current = baseline;
-    const first = startTour(next, observation(runsRef.current, runDetailRef.current, baseline));
+    const first = startTour(
+      next,
+      observation(runsRef.current, runDetailRef.current, launchedRunIdRef.current, baseline),
+    );
     scrolledFor.current = null;
     tourRef.current = next;
     runRef.current = first;

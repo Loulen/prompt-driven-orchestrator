@@ -73,9 +73,10 @@ function cssEscape(value: string): string {
   return value.replace(/["\\]/g, "\\$&");
 }
 
-/** The row of the Run this tour launched, in the left panel. */
+/** The row of the Run this browser launched, in the left panel, wherever it sits
+ *  in the list: a neighbour's Run may well be above it. */
 export function runRowSel(app: TourAppState): string | null {
-  const id = app.latestRun?.id;
+  const id = app.myRun?.id;
   return id ? `[data-run-row="${cssEscape(id)}"]` : null;
 }
 
@@ -85,7 +86,7 @@ export function runRowSel(app: TourAppState): string | null {
  * *say* whether it already happened.
  */
 export function runIsOpen(app: TourAppState): boolean {
-  return app.latestRun != null && app.activeRunId === app.latestRun.id;
+  return app.myRun != null && app.activeRunId === app.myRun.id;
 }
 
 /**
@@ -98,7 +99,7 @@ export function runIsOpen(app: TourAppState): boolean {
  * loads, which is exactly what step 10 asks the user to trigger.
  */
 export function followedNode(app: TourAppState): TourRunNode | null {
-  return app.latestRun?.nodes.find((n) => n.type === "agent") ?? null;
+  return app.myRun?.nodes.find((n) => n.type === "agent") ?? null;
 }
 
 /** xyflow stamps `data-id` with the node id — the one canvas target that is stable. */

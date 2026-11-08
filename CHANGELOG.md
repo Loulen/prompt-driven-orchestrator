@@ -117,6 +117,21 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   only while the run waits on that region.
 - New fields for extensions and the API: `max_cost_usd` on a loop region, `loop_costs` (with
   `cap_usd`) and `awaiting_region_id` on a run, `can_cost` on each harness of `GET /settings`.
+### Tours playable by several people on one instance, and the Status icon in the Overview tour
+
+- Each browser draws a tour identity (four characters, `[0-9a-z]`) once and keeps it. The Runs,
+  pipelines and Triggers the tours prepare or have you paste carry it as a suffix:
+  `tour-overview-k3x9`, `tutorial-example-trigger-k3x9`, `my-first-run-k3x9`,
+  `tutorial-implement-test-k3x9`. A tour only points at, advances on and tidies up what carries its
+  identity: someone else's Launch or deletion no longer moves your tour on, and Overview never
+  reuses another person's Run. The example Trigger left without a suffix is removed; the Overview Run
+  left without one stays.
+- "Find your Run" names your row ("Your Run, `my-first-run-k3x9`, is lit in the list on the
+  left…") instead of calling it the top row, and the First run recap names the Run this browser
+  launched. The step cards set the names a tour prepared in bold monospace.
+- The Overview step about status is now "The status icon": it explains the shapes (a check, a
+  turning circle, a question mark, a cross) and draws the four Status icons instead of coloured dots.
+  It moves on when you hover the status icon of your Run, as its footer says, or with Skip.
 
 ## 2.74.0
 

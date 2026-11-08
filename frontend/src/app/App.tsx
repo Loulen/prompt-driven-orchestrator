@@ -83,7 +83,7 @@ export default function App() {
   const { setChangelogOpen, setUpdateConfirmOpen } = updates;
   const surfaces = useSurfaces();
   const { openSettings, openStats } = surfaces;
-  const { tour, showWelcome, setTourOffered, startTourById, startFullTour } = useAppTour(
+  const { tour, showWelcome, setTourOffered, startTourById, startFullTour, noteLaunchedRun } = useAppTour(
     runs,
     runsLoaded,
     selectedRun,
@@ -348,6 +348,7 @@ export default function App() {
         open={launch.newRunModalOpen}
         onClose={handleCloseNewRunModal}
         onCreated={(runId) => {
+          noteLaunchedRun(runId);
           handleCloseNewRunModal();
           handleRunCreated(runId);
         }}

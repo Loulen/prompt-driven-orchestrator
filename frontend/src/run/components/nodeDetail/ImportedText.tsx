@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { importedFilePhrase } from "../../model/nodeImport";
 import { copyToClipboard } from "../../../shared/lib/clipboard";
@@ -8,10 +8,18 @@ import { copyToClipboard } from "../../../shared/lib/clipboard";
 export default function ImportedText({ paths, text }: { paths: string[]; text: string }) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
+  // The feedback goes back to idle after a beat. The timer belongs to the
+  // feedback it resets, and dies with the component: a timer left running past
+  // an unmount would set state on a tree that no longer exists.
+  useEffect(() => {
+    if (copyState === "idle") return;
+    const timer = window.setTimeout(() => setCopyState("idle"), 1500);
+    return () => window.clearTimeout(timer);
+  }, [copyState]);
+
   const copyText = async () => {
     const ok = await copyToClipboard(text);
     setCopyState(ok ? "copied" : "failed");
-    window.setTimeout(() => setCopyState("idle"), 1500);
   };
 
   return (

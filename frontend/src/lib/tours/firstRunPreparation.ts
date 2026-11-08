@@ -20,6 +20,7 @@ import {
 import { addProjectMember, createProject, fetchProjects } from "../../workspace/api/projects";
 import { writeLastProject } from "../../run/model/launchProject";
 import { createRepo } from "../../workspace/api/repos";
+import { withTourIdentity } from "../tourMemory";
 
 /** Where the training repository is created, and the folder the explorer opens on. */
 export const TUTORIAL_REPO_PARENT = "/tmp";
@@ -34,6 +35,19 @@ export const TUTORIAL_RUN_PIPELINE_ID = "tutorial-interactive";
  *  pipeline is validated for (CONTEXT.md « Pipeline validé »): it heads the New
  *  Run menu on the training repository, and no other Projet is offered it. */
 export const TUTORIAL_PROJECT_NAME = "Tutorial";
+
+/** What the name step suggests, before this browser's Identité de tour. */
+export const FIRST_RUN_NAME = "my-first-run";
+
+/**
+ * The name the tour has the reader paste: `my-first-run-k3x9`. On a shared
+ * instance the suffix keeps it apart from a neighbour's in the list, though the
+ * tour does not FIND the Run by its name: it follows the id its Launch received,
+ * whatever name the reader actually typed.
+ */
+export function firstRunName(): string {
+  return withTourIdentity(FIRST_RUN_NAME);
+}
 
 /** The block step 8 asks the user to paste. Deliberately concrete: the agent edits
  *  `notes.txt` and writes its output file, which the reading tour then shows. */

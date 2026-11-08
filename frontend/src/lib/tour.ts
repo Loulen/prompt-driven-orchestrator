@@ -58,6 +58,12 @@ export function stepAsides(step: TourStep, o: TourObservation): TourAside[] {
   return step.asides(o);
 }
 
+/** The step's block to paste, resolved: `null` when it has none. */
+export function copyBlockOf(step: TourStep): string | null {
+  const block = typeof step.copyBlock === "function" ? step.copyBlock() : step.copyBlock;
+  return block || null;
+}
+
 /** Resolve the two end-card fields, which a tour may make depend on what it saw. */
 export function recapIntroOf(tour: TourDef, app: TourAppState): string {
   return typeof tour.recapIntro === "function" ? tour.recapIntro(app) : tour.recapIntro;
@@ -241,7 +247,7 @@ export function observeTour(tour: TourDef, run: TourRun, o: TourObservation, now
         total: tour.steps.length,
         kind: "refused",
         waitingFor: step.waitingFor,
-        hint: step.refusalHint,
+        hint: typeof step.refusalHint === "function" ? step.refusalHint() : step.refusalHint,
         reason: refusal,
         title: step.refusalTitle,
       },

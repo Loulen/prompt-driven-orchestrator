@@ -13,6 +13,8 @@ import { registerTransientOverlay } from "../../lib/overlays";
 import { registerCanvasReveal } from "../../lib/canvasReveal";
 import { FIRST_PIPELINE_TOUR, OVERVIEW_TOUR } from "../../lib/tours";
 import type { TourDef } from "../../lib/tourDef";
+import type { TourRunEntry } from "../../hooks/tour/tourObservation";
+import { firstRunName } from "../../lib/tours/firstRunPreparation";
 
 /** Two steps, so the first can complete without ending the tour. */
 const TOUR: TourDef = {
@@ -774,5 +776,120 @@ describe("a panel the gesture opened", () => {
     expect(asides).toHaveLength(1);
     expect(asides[0]).toHaveTextContent("The input this Run was started with.");
     expect(screen.queryByText("Never shown.")).not.toBeInTheDocument();
+  });
+});
+
+// ---- a shared instance: the Identité de tour ------------------------------
+
+/**
+ * Two steps of *First run*'s shape: paste a name that carries this browser's
+ * Identité de tour, then Launch. The Launch step reads the id THIS browser's
+ * New Run form received, the way the real one does.
+ */
+const SHARED_TOUR: TourDef = {
+  id: "first-run",
+  title: "First run",
+  blurb: "",
+  minutes: 1,
+  recapIntro: (app) => `You ran ${app.myRun?.name ?? "a Run"}.`,
+  recap: (app) => [{ label: app.myRun?.name ?? "your Run", text: "yours" }],
+  steps: [
+    {
+      id: "name",
+      title: "Name the Run",
+      body: "Paste the name.",
+      target: () => ["#target"],
+      waitingFor: "the thing",
+      copyBlock: firstRunName,
+    },
+    {
+      id: "launch",
+      title: "Launch the Run",
+      body: "Click Run.",
+      target: () => ["#target"],
+      waitingFor: "the thing",
+      done: (o) => o.app.launchedRunId != null && o.app.launchedRunId !== o.baseline.launchedRunId,
+    },
+  ],
+};
+
+/** The app on a shared instance: the Run list everybody fills, and the id this
+ *  browser's own Launch received. */
+function SharedHarness() {
+  const [runs, setRuns] = useState<TourRunEntry[]>([{ run_id: "r-old", name: "older" }]);
+  const [launched, setLaunched] = useState<string | null>(null);
+  const controller = useTour(runs, null, launched);
+  return (
+    <>
+      <button data-testid="start" onClick={() => controller.start(SHARED_TOUR)}>
+        start
+      </button>
+      <div id="target" />
+      <button
+        data-testid="neighbour-launches"
+        onClick={() => setRuns((r) => [{ run_id: "r-theirs", name: "my-first-run-zzzz" }, ...r])}
+      >
+        neighbour
+      </button>
+      <button
+        data-testid="i-launch"
+        onClick={() => {
+          setRuns((r) => [{ run_id: "r-mine", name: firstRunName() }, ...r]);
+          setLaunched("r-mine");
+        }}
+      >
+        me
+      </button>
+      <TourHost controller={controller} showWelcome={false} onWelcomeAnswered={() => {}} onOpenTutorials={() => {}} />
+    </>
+  );
+}
+
+describe("a tour on a shared instance", () => {
+  it("hands over the name suffixed with this browser's Identité de tour", async () => {
+    localStorage.setItem("pdo.tour.identity", "k3x9");
+    render(<SharedHarness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    expect(screen.getByTestId("tour-copy-block")).toHaveTextContent("my-first-run-k3x9");
+  });
+
+  it("does not advance on a neighbour's Launch, only on this browser's", async () => {
+    localStorage.setItem("pdo.tour.identity", "k3x9");
+    render(<SharedHarness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("tour-next"));
+    tick();
+    expect(screen.getByTestId("tour-popover")).toHaveAttribute("data-step", "launch");
+
+    await user().click(screen.getByTestId("neighbour-launches"));
+    tick();
+    expect(screen.getByTestId("tour-popover"), "a foreign Run on top is not yours").toHaveAttribute(
+      "data-step",
+      "launch",
+    );
+
+    await user().click(screen.getByTestId("i-launch"));
+    tick();
+    expect(screen.queryByTestId("tour-popover")).not.toBeInTheDocument();
+    // The end card names this browser's Run, not the newest one of the list.
+    expect(screen.getByTestId("tour-end-card")).toHaveTextContent("my-first-run-k3x9");
+    expect(screen.getByTestId("tour-end-card")).not.toHaveTextContent("zzzz");
+  });
+});
+
+describe("the step body", () => {
+  it("sets a name between backticks in code, the way the card names it, without the backticks", async () => {
+    const tour: TourDef = {
+      ...TOUR,
+      steps: [{ ...TOUR.steps[0], body: "Your Run, `my-first-run-k3x9`, is lit in the list." }],
+    };
+    render(<Harness tour={tour} />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    const body = screen.getByTestId("tour-body");
+    expect(body).toHaveTextContent("Your Run, my-first-run-k3x9, is lit in the list.");
+    expect(body.querySelector("code")).toHaveTextContent(/^my-first-run-k3x9$/);
   });
 });

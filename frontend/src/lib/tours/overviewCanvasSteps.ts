@@ -8,7 +8,7 @@
  */
 
 import type { TourStep } from "../tourDef";
-import { OVERVIEW_RUN_NAME, TUTORIAL_OVERVIEW_PIPELINE_ID } from "./overviewPipeline";
+import { TUTORIAL_OVERVIEW_PIPELINE_ID, overviewRunName } from "./overviewPipeline";
 import { overviewRunId } from "./overviewPreparation";
 import {
   CANVAS_PANEL,
@@ -48,8 +48,8 @@ export const CANVAS_STEPS: TourStep[] = [
     title: "Open your Run",
     body: (o) =>
       runIsOpen(o.app)
-        ? `${OVERVIEW_RUN_NAME} is open. Every Run is a row in this list; clicking one opens it on the canvas.`
-        : `Click ${OVERVIEW_RUN_NAME} in the list. The tour just ran it for you: a real Run of the ${TUTORIAL_OVERVIEW_PIPELINE_ID} pipeline, already finished.`,
+        ? `\`${overviewRunName()}\` is open. Every Run is a row in this list; clicking one opens it on the canvas.`
+        : `Click \`${overviewRunName()}\` in the list. The tour just ran it for you: a real Run of the ${TUTORIAL_OVERVIEW_PIPELINE_ID} pipeline, already finished.`,
     // The row only exists on the Runs tab: a reader who is elsewhere is sent there.
     target: (o) => {
       const id = overviewRunId();

@@ -240,6 +240,16 @@
     line-height: 1.45;
     overflow-wrap: anywhere;
   }
+  /* A name the tour prepared (`my-first-run-k3x9`): the Identité de tour only
+     shows in names, so a name reads as one — bold mono, no chip, and free to
+     wrap on a narrow card rather than push it wider. */
+  .tr-body .d-code {
+    padding: 0;
+    background: none;
+    font-size: inherit;
+    font-weight: 600;
+    white-space: normal;
+  }
   .tr-note {
     margin: 0;
     color: var(--text-3);
@@ -355,7 +365,7 @@
     text-align: right;
   }
 
-  /* An example inside a step: rows of the Runs list, framed as a small panel. */
+  /* An example inside a step: a legend of the Status icon, framed as a small panel. */
   .tr-illus {
     display: flex;
     flex-direction: column;

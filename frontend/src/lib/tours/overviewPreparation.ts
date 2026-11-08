@@ -4,6 +4,11 @@
  * the `tutorial-overview` pipeline, an example Trigger that is harmless by
  * construction, and a completed Run. The teardown removes the Trigger at any
  * exit; the pipeline and the Run stay the user's, as after *First run*.
+ *
+ * The Run and the Trigger belong to this browser's **Identité de tour**
+ * (ADR-0071 §5): both are named with its suffix, and the tour only reuses and
+ * tidies up its own. Two people playing *Overview* on one instance never share a
+ * Run nor remove each other's Trigger. The repository and the pipeline stay common.
  */
 
 import { ApiError } from "../../shared/http/client";
@@ -21,9 +26,10 @@ import {
   IMPLEMENTER_SCRIPT,
   OVERVIEW_PIPELINE_YAML,
   OVERVIEW_PROMPT,
-  OVERVIEW_RUN_NAME,
   REVIEWER_SCRIPT,
   TUTORIAL_OVERVIEW_PIPELINE_ID,
+  exampleTriggerName,
+  overviewRunName,
 } from "./overviewPipeline";
 
 
@@ -99,14 +105,16 @@ export async function preparePipelineStep(): Promise<void> {
 }
 
 /**
- * The example Trigger, active, picked up by its name when a previous pass left
- * it behind (a tab closed mid-tour skips the teardown). A picked-up Trigger is
- * put back in the shape the tour shows — active, guard `false` — because it is the
- * tour's object, not the user's.
+ * This browser's example Trigger, active, picked up by its name when a previous
+ * pass left it behind (a tab closed mid-tour skips the teardown). A picked-up
+ * Trigger is put back in the shape the tour shows — active, guard `false` —
+ * because it is the tour's object, not the user's. Another identity's Trigger is
+ * not ours to pick up: it is left alone, and this browser gets its own.
  */
 export async function prepareExampleTrigger(): Promise<void> {
   await Promise.all([repoReady(), pipelineReady()]);
-  const existing = (await fetchTriggers()).find((t) => t.name === EXAMPLE_TRIGGER_NAME);
+  const name = exampleTriggerName();
+  const existing = (await fetchTriggers()).find((t) => t.name === name);
   if (existing) {
     if (!existing.enabled || (existing.guard_command ?? "").trim() !== EXAMPLE_TRIGGER_GUARD) {
       await updateTrigger(existing.id, { enabled: true, guard_command: EXAMPLE_TRIGGER_GUARD });
@@ -115,7 +123,7 @@ export async function prepareExampleTrigger(): Promise<void> {
     return;
   }
   const created = await createTrigger({
-    name: EXAMPLE_TRIGGER_NAME,
+    name,
     pipeline_id: TUTORIAL_OVERVIEW_PIPELINE_ID,
     cron: EXAMPLE_TRIGGER_CRON,
     input_template: EXAMPLE_TRIGGER_INPUT,
@@ -182,17 +190,23 @@ async function waitForCompleted(runId: string, signal?: AbortSignal): Promise<vo
 }
 
 /**
- * The Run the tour visits (spec #910, design Q8): the newest `tutorial-overview`
- * Run that is `completed` and not archived — so replaying the tour does not stack
- * identical Runs — else a fresh one, waited for until `completed`.
+ * The Run the tour visits (spec #910, design Q8): the newest Run of this
+ * Identité de tour (`tour-overview-<id>`) that is `completed` and not archived —
+ * so replaying the tour does not stack identical Runs — else a fresh one, waited
+ * for until `completed`.
  *
  * One still `running` (a previous pass closed before it finished) is waited for
- * rather than doubled.
+ * rather than doubled. Another identity's Run, however recent, and a
+ * `tour-overview` Run left from before identities are never taken: archiving it
+ * would end someone else's tour, or find it already archived.
  */
 export async function prepareCompletedRun(signal?: AbortSignal): Promise<void> {
   prepared.runId = null;
+  const name = overviewRunName();
   const runs = await fetchRuns();
-  const ours = runs.filter((r) => r.pipeline_name === TUTORIAL_OVERVIEW_PIPELINE_ID && !r.triggered_by);
+  const ours = runs.filter(
+    (r) => r.pipeline_name === TUTORIAL_OVERVIEW_PIPELINE_ID && !r.triggered_by && r.name === name,
+  );
   const reusable = ours.find((r) => r.status === "completed") ?? ours.find((r) => r.status === "running");
   let runId = reusable?.run_id ?? null;
   if (!runId) {
@@ -204,7 +218,7 @@ export async function prepareCompletedRun(signal?: AbortSignal): Promise<void> {
       input: OVERVIEW_PROMPT,
       variables: {},
       target_repo: TUTORIAL_REPO_PATH,
-      name: OVERVIEW_RUN_NAME,
+      name,
       auto_name: false,
       // No sandbox: two bash scripts that echo and write their outputs need no
       // container, and an instance without Docker must still play the tour.
@@ -219,13 +233,15 @@ export async function prepareCompletedRun(signal?: AbortSignal): Promise<void> {
 // ---- teardown ---------------------------------------------------------------
 
 /**
- * Remove the example Trigger — every one of that name, so a Trigger a previous
- * pass left behind goes too. A 404 is a success (`deleteTrigger` says so).
+ * Remove this browser's example Trigger — every one of its name, so a Trigger a
+ * previous pass left behind goes too — and the unsuffixed one the tour installed
+ * before identities existed, which belongs to nobody now. Another identity's
+ * Trigger stays: its tour may still be showing it. A 404 is a success
+ * (`deleteTrigger` says so).
  */
 export async function removeExampleTrigger(): Promise<void> {
+  const names = new Set([exampleTriggerName(), EXAMPLE_TRIGGER_NAME]);
   const triggers = await fetchTriggers();
-  await Promise.all(
-    triggers.filter((t) => t.name === EXAMPLE_TRIGGER_NAME).map((t) => deleteTrigger(t.id)),
-  );
+  await Promise.all(triggers.filter((t) => names.has(t.name)).map((t) => deleteTrigger(t.id)));
   prepared.triggerId = null;
 }

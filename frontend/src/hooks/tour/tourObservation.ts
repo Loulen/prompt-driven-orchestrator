@@ -72,11 +72,15 @@ function runNodes(detail: TourRunDetailInput): TourRunNode[] {
 export function readTourAppState(
   runs: TourRunsInput,
   detail: TourRunDetailInput | null = null,
+  launchedRunId: string | null = null,
 ): TourAppState {
   const s = useEditStore.getState();
   const tab = s.openTabs.find((t) => t.id === s.activeTabId) ?? null;
-  // `GET /runs` answers newest-first, so `[0]` is the Run a tour just caused.
-  const newest = runs[0] ?? null;
+  // Your Run is the one your Launch got back, never `runs[0]`: on a shared
+  // instance the head of the list is whoever launched last.
+  const mine = launchedRunId
+    ? (Array.from(runs).find((r) => r.run_id === launchedRunId) ?? null)
+    : null;
   return {
     pipelineId: tab?.id ?? null,
     pipeline: tab?.pipeline ?? null,
@@ -95,14 +99,17 @@ export function readTourAppState(
       pipeline: r.pipeline_name ?? "",
       status: r.status ?? "",
     })),
-    latestRun: newest
+    launchedRunId,
+    myRun: launchedRunId
       ? {
-          id: newest.run_id,
-          name: newest.name?.trim() || newest.run_id,
+          id: launchedRunId,
+          // The list refreshes a beat after the Launch answered: until it has,
+          // the id is the only name there is.
+          name: mine?.name?.trim() || launchedRunId,
           // Only the detail OF THAT Run: the inspector may well be showing
           // another one, and a tour reading a stranger's nodes would advance on
           // somebody else's progress.
-          nodes: detail?.run_id === newest.run_id ? runNodes(detail) : [],
+          nodes: detail?.run_id === launchedRunId ? runNodes(detail) : [],
         }
       : null,
     activeRunId: tab?.runId ?? null,
@@ -112,10 +119,11 @@ export function readTourAppState(
 export function observation(
   runs: TourRunsInput,
   detail: TourRunDetailInput | null,
+  launchedRunId: string | null,
   baseline: TourAppState,
 ): TourObservation {
   return {
-    app: readTourAppState(runs, detail),
+    app: readTourAppState(runs, detail, launchedRunId),
     baseline,
     present: (selector) => {
       try {

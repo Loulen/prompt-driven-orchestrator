@@ -1,6 +1,6 @@
 ---
 id: HP-03
-covers: [tour, tour-step, projecteur, training-repository, welcome-modal, run, interactive-node, completion-guard, artifact, script-node, trigger, tidy-up, pipeline-validation]
+covers: [tour, tour-step, projecteur, training-repository, welcome-modal, run, interactive-node, completion-guard, artifact, script-node, trigger, tidy-up, pipeline-validation, tour-identity, status-icon]
 ---
 
 # HP-03 — A newcomer takes the full tour
@@ -42,8 +42,11 @@ Features validated while crossing the tour:
 - **Preparation and tidy-up** (#911, ADR-0071 §4): *Overview* prepares the `tutorial-overview`
   pipeline (two `script` nodes), an example Trigger whose guard always refuses, and a Run it waits
   for until `completed` — then removes the example Trigger when the tour ends.
-- **Archiving a Run** (#911): the tour's Run is archived by the real gesture; its dot turns grey and
-  its outputs stay readable.
+- **Archiving a Run** (#911): the tour's Run is archived by the real gesture; its row shows the
+  archive icon and its outputs stay readable.
+- **Identité de tour** (ADR-0071 §5): this browser draws a four-character identity once
+  (`[0-9a-z]`), and every object a tour prepares or has you paste carries it as a suffix — written
+  `<id>` below.
 - **Read-only panels** (#911): the panel a gesture opens (node inspector, edge panel, Start
   inspector) stays lit; its tabs switch, it scrolls and unfolds, but nothing in it can be edited
   while the tour shows it.
@@ -64,7 +67,8 @@ Features validated while crossing the tour:
 1. Open the app on a Run-less instance in a fresh browser → the **welcome modal** offers the full
    tour, each tour on its own, and « later ».
 2. Choose the **full tour** → the *Overview* tour opens on its card, with a line per
-   **preparation**: training repository, `tutorial-overview` pipeline, example Trigger, and a Run.
+   **preparation**: training repository, `tutorial-overview` pipeline, example Trigger
+   `tutorial-example-trigger-<id>`, and a Run `tour-overview-<id>`.
    `Start` stays dead until the Run is `completed` (a few seconds: its nodes are scripts, no harness
    involved).
 3. Walk *Overview*'s eighteen cards: open the tour's Run from the list, read the canvas and both
@@ -77,8 +81,10 @@ Features validated while crossing the tour:
    click the **reviewer → End** edge (a bubble points at `verdict eq pass`), click **Start** — the
    card says first that it shows the prompt the Run was started with, and a bubble points at that
    input once it is open — read the Runs tab (the card sends you back to it if you left it) and the
-   status dot (the card draws the three colours: orange, blue, green), **archive** the Run (the dot
-   turns grey), open **Triggers** (the example Trigger is listed) and **Pipelines**
+   **status icon** (the card explains the shapes and draws four Status icons: a check, a turning
+   circle, a question mark, a cross; no colour is named; its footer says « Hover the status icon of
+   your Run », and hovering it moves on), **archive** the Run (its row shows the
+   archive icon), open **Triggers** (the example Trigger is listed) and **Pipelines**
    (`tutorial-overview` is listed, without a reload), then Settings and Stats, lit but not opened.
    The gestures advance on the observed state — and stop for `Next` when the card has something new
    to say; the rest take `Next`.
@@ -89,7 +95,8 @@ Features validated while crossing the tour:
    three have answered.
 5. `Start` → the first step lights the **New Run** button and nothing else; a click anywhere else
    does nothing at all.
-6. Walk the form, doing exactly what each card asks: name the Run, pick the training repository
+6. Walk the form, doing exactly what each card asks: name the Run (the block to paste is
+   `my-first-run-<id>`), pick the training repository
    through the **magnifier** (the explorer opens on the folder the tour created), choose the tutorial
    pipeline in the **pipeline menu** — it heads the menu under « Project pipelines · Tutorial », before
    « Global pipelines » — pick the `Default` agent profile, tick **both** PDO skills in
@@ -97,8 +104,9 @@ Features validated while crossing the tour:
    and folds back to « 2 active skills » — paste the prompt → each step advances **on the gesture**,
    with no extra confirmation but the ones the card asks for.
 7. **Run** → the Run appears in the list on the left and the tour points at its row. The launch also
-   opens the Run's tab by itself, so the card says so and waits for a `Next` — the step is shown,
-   never skipped past.
+   opens the Run's tab by itself, so the card says so, **naming the Run** (« Your Run,
+   my-first-run-<id>, is lit in the list on the left… », never « the top row »), and waits for a
+   `Next` — the step is shown, never skipped past.
 8. Open the **node** on the canvas → the inspector shows its live terminal.
 9. **Talk to the agent**: the card hands over a line to copy; paste it into the terminal and press
    Enter. **Escape inside the terminal belongs to the agent** — it must not end the tour.
@@ -111,7 +119,8 @@ Features validated while crossing the tour:
 13. The **intermediate card** says how far along the full tour is, recaps what was actually observed,
     and offers *Finish here* or **Continue** (next: *First pipeline*).
 14. **Continue** → the artifact modal closes and the *First pipeline* tour starts on a clear screen.
-    Carry it to its end card and `Finish`. Right after **Save**, the card asks to **Validate the
+    Carry it to its end card and `Finish`; the name to paste is `tutorial-implement-test-<id>`.
+    Right after **Save**, the card asks to **Validate the
     pipeline**: Validate (next to Save) opens the modal; tick **All projects (current and future)**
     and **Save validation** → the modal closes, the tab bar's indicator turns to the globe « All »,
     and the tour moves on. The step is skippable: skipping it leaves a test pipeline (flask, 0). Every card the tour has you create must be **on screen**
@@ -130,8 +139,9 @@ Features validated while crossing the tour:
 - At every step: the target is lit, the rest of the window is dimmed, a click outside the target
   changes nothing, and the progress reads *n / N* with the way out in the card's corner.
 - No step advances on a timer: leaving the screen alone never moves the tour on.
-- Hovering the tour Run's row on the status-dot card does **not** make the card jump: the lit
-  area keeps its place while the dot turns into the select ring.
+- Hovering the tour Run's row on the status-icon card does **not** make the card jump: the lit
+  area keeps its place while the icon turns into the select ring. Hovering the icon itself, and
+  only on the tour Run's row, moves the card on.
 - The panel a gesture opened is **not dimmed**: its tabs switch and it scrolls, yet typing into
   one of its fields, ticking a box or pressing one of its buttons changes nothing. Once the tour
   has moved past that step, the panel is editable again.
@@ -151,6 +161,9 @@ Features validated while crossing the tour:
   canvas takes `implement-review`'s layout, and the Run takes reviewer → End.
 - The example Trigger is **active** while the tour shows it, yet never creates a Run, and it is gone
   from the Triggers tab once *Overview* ends. The `tutorial-overview` pipeline stays in the Library.
+- Every name the tours prepare or hand over carries the **same** `<id>` suffix (`tour-overview-<id>`,
+  `tutorial-example-trigger-<id>`, `my-first-run-<id>`, `tutorial-implement-test-<id>`), and a
+  reload keeps it.
 - **The handover leaves nothing behind**: after *Continue*, no artifact modal is still up, and the
   first step of *First pipeline* takes a real click — an overlay that survived the chain would dim
   into the background and eat every click the next tour asks for.

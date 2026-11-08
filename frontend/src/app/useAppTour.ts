@@ -14,7 +14,11 @@ export function useAppTour(runs: RunListEntry[], runsLoaded: boolean, selectedRu
   // #825 adds the selected Run's detail, for the same reason and on the same
   // terms: the reading steps need a node's status and its completion guard, and
   // the inspector is already polling both.
-  const tour = useTour(runs, selectedRun);
+  // The id this browser's last Launch received: on a shared instance « your
+  // Run » is the one your Launch created, not the head of the list (CONTEXT.md
+  // § « Identité de tour »).
+  const [launchedRunId, setLaunchedRunId] = useState<string | null>(null);
+  const tour = useTour(runs, selectedRun, launchedRunId);
   const [tourOffered, setTourOffered] = useState(loadTourOffered);
   const showWelcome = shouldOfferWelcome({
     offered: tourOffered,
@@ -40,5 +44,5 @@ export function useAppTour(runs: RunListEntry[], runsLoaded: boolean, selectedRu
     const [first, ...rest] = fullTourSequence();
     if (first) tour.start(first, rest);
   }, [tour]);
-  return { tour, showWelcome, setTourOffered, startTourById, startFullTour };
+  return { tour, showWelcome, setTourOffered, startTourById, startFullTour, noteLaunchedRun: setLaunchedRunId };
 }

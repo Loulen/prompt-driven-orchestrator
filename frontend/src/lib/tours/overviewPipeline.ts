@@ -6,18 +6,39 @@
  * live in `overviewPreparation.ts`.
  */
 
+import { withTourIdentity } from "../tourMemory";
+
 /** The pipeline the tour's Run executes. A normal Library pipeline, kept after the tour. */
 export const TUTORIAL_OVERVIEW_PIPELINE_ID = "tutorial-overview";
 
-/** The name the tour gives its Run, so the list says what the row is. */
+/**
+ * The base of the name the tour gives its Run, so the list says what the row is.
+ * The Run itself carries the Identité de tour: {@link overviewRunName}.
+ */
 export const OVERVIEW_RUN_NAME = "tour-overview";
+
+/** This browser's Run name, e.g. `tour-overview-k3x9`: the only Run the tour reuses. */
+export function overviewRunName(): string {
+  return withTourIdentity(OVERVIEW_RUN_NAME);
+}
 
 /** The Run's prompt — fixed, and what the Start step shows the reader. */
 export const OVERVIEW_PROMPT =
   "Show me around Acogni Driver: implement a tiny change, then review it and hand back a verdict.";
 
-/** The Trigger the tour installs to be shown, and removes on the way out. */
+/**
+ * The base of the example Trigger's name, and the whole name of the Trigger the
+ * tour installed before it had an identity, which the teardown removes too.
+ */
 export const EXAMPLE_TRIGGER_NAME = "tutorial-example-trigger";
+
+/**
+ * This browser's example Trigger, e.g. `tutorial-example-trigger-k3x9`: installed
+ * to be shown, removed on the way out, never someone else's.
+ */
+export function exampleTriggerName(): string {
+  return withTourIdentity(EXAMPLE_TRIGGER_NAME);
+}
 
 /** Every 15 minutes — a schedule anyone can read at a glance. */
 export const EXAMPLE_TRIGGER_CRON = "*/15 * * * *";

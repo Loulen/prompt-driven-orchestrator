@@ -4,17 +4,19 @@
  * depth. It needs **no harness**: the Run it visits is a pipeline of `script`
  * nodes (ADR-0017), which finish in seconds and cost nothing.
  *
- * Eighteen steps, eleven of them gestures that advance only on the observed state
+ * Eighteen steps, twelve of them gestures that advance only on the observed state
  * (open the Run, click implementer, open its `code` output, close the viewer,
- * unfold the terminal, the reviewer → End edge, Start, back to Runs, archive,
- * Triggers, Pipelines); the other seven are read and acknowledged with Next. Two
+ * unfold the terminal, the reviewer → End edge, Start, back to Runs, hover the
+ * status icon, archive, Triggers, Pipelines); the other six are read and
+ * acknowledged with Next. Two
  * of the gestures ask for a click only when what they show is not on screen: the
  * folded terminal of a finished node, and the Runs tab a reader left.
  *
  * Its intro card prepares four things (`overviewPreparation.ts`): the training
  * repository, the `tutorial-overview` pipeline, an example Trigger that is
  * harmless by construction, and a completed Run. Its teardown removes the
- * Trigger at any exit; the pipeline and the Run stay the user's.
+ * Trigger at any exit; the pipeline and the Run stay the user's. The Run and the
+ * Trigger carry this browser's Identité de tour (ADR-0071 §5).
  *
  * Copy rules inherited from the other tours: title is an imperative, body is two
  * sentences at most, and the other tours are pointed to in one sentence, never a
@@ -24,7 +26,7 @@
 import type { TourDef, TourStep } from "../tourDef";
 import { TUTORIAL_REPO_PATH } from "./firstRunPreparation";
 import { CANVAS_STEPS } from "./overviewCanvasSteps";
-import { EXAMPLE_TRIGGER_NAME, OVERVIEW_RUN_NAME, TUTORIAL_OVERVIEW_PIPELINE_ID } from "./overviewPipeline";
+import { TUTORIAL_OVERVIEW_PIPELINE_ID, exampleTriggerName, overviewRunName } from "./overviewPipeline";
 import {
   exampleTriggerId,
   overviewRunId,
@@ -43,16 +45,17 @@ import {
   READING_TIMEOUT_MS,
   RUNS_TAB,
   RUNS_TAB_OPEN,
-  RUN_SELECT,
   SETTINGS_BUTTON,
   STATS_BUTTON,
-  STATUS_DOTS,
+  STATUS_ICONS,
   TRIGGERS_LIST,
   TRIGGERS_TAB,
   cleanupItem,
+  hovered,
   isArchived,
   readStep,
   runRow,
+  runSelect,
   triggerRow,
 } from "./overviewReading";
 
@@ -78,18 +81,27 @@ const APP_STEPS: TourStep[] = [
     done: (o) => o.present(RUNS_TAB_OPEN),
   },
   {
-    ...readStep({
-      id: "status-dots",
-      title: "The status dot",
-      body: "Green means finished. Orange means the Run waits for you, blue means it is running.",
-      target: () => {
-        const id = overviewRunId();
-        return id ? [`${runRow(id)} ${RUN_SELECT}`] : [];
-      },
-      waitingFor: "the status dot of your Run",
-      failureHint: "It is on your Run's row, in the Runs tab.",
-    }),
-    illustration: STATUS_DOTS,
+    id: "status-icon",
+    title: "The status icon",
+    body: "Its shape tells you where the Run is: a check means finished, a turning circle means running, a question mark means it waits for you. Hover it for details.",
+    target: () => {
+      const id = overviewRunId();
+      return id ? [runSelect(id)] : [];
+    },
+    illustration: STATUS_ICONS,
+    waitingFor: "the status icon of your Run",
+    failureHint: "It is on your Run's row, in the Runs tab.",
+    targetTimeoutMs: READING_TIMEOUT_MS,
+    skippable: true,
+    // The gesture the body asks for, named in the footer the way the other
+    // gestures are. Hover is the whole of it: there is nothing to click, and the
+    // details it shows are the row's own tooltip. Only this browser's Run counts
+    // (ADR-0071 §5): another player's row is not « your Run ».
+    advanceHint: "Hover the status icon of your Run",
+    done: (o) => {
+      const id = overviewRunId();
+      return id != null && o.present(hovered(runSelect(id)));
+    },
   },
   readStep({
     id: "worktree",
@@ -143,7 +155,7 @@ const APP_STEPS: TourStep[] = [
     title: "Open the Triggers tab",
     body: (o) =>
       o.present(TRIGGERS_LIST)
-        ? `This is ${EXAMPLE_TRIGGER_NAME}, set up for the tour: every 15 minutes it would launch ${TUTORIAL_OVERVIEW_PIPELINE_ID}, but its guard always says no. A Trigger launches a pipeline on a schedule, when its guard agrees.`
+        ? `This is \`${exampleTriggerName()}\`, set up for the tour: every 15 minutes it would launch ${TUTORIAL_OVERVIEW_PIPELINE_ID}, but its guard always says no. A Trigger launches a pipeline on a schedule, when its guard agrees.`
         : "Click Triggers. A Trigger launches a pipeline on a schedule, when a condition holds.",
     // Re-aims onto the example row once the list is up, the way `open-output`
     // re-aims onto the file it opened.
@@ -217,17 +229,27 @@ export const OVERVIEW_TOUR: TourDef = {
         failureTitle: "The tour's pipeline could not be created",
         run: preparePipelineStep,
       },
+      // Getters: the names carry the Identité de tour, read when the card shows
+      // them rather than when this module loads.
       {
         id: "trigger",
-        pending: `Example Trigger ${EXAMPLE_TRIGGER_NAME}…`,
-        ready: `Example Trigger ${EXAMPLE_TRIGGER_NAME} active (it never fires a Run)`,
+        get pending() {
+          return `Example Trigger ${exampleTriggerName()}…`;
+        },
+        get ready() {
+          return `Example Trigger ${exampleTriggerName()} active (it never fires a Run)`;
+        },
         failureTitle: "The example Trigger could not be created",
         run: prepareExampleTrigger,
       },
       {
         id: "run",
-        pending: `Run ${OVERVIEW_RUN_NAME} running…`,
-        ready: `Run ${OVERVIEW_RUN_NAME} completed`,
+        get pending() {
+          return `Run ${overviewRunName()} running…`;
+        },
+        get ready() {
+          return `Run ${overviewRunName()} completed`;
+        },
         failureTitle: "The tour's Run did not complete",
         run: prepareCompletedRun,
       },
@@ -236,7 +258,9 @@ export const OVERVIEW_TOUR: TourDef = {
   teardown: [
     {
       id: "example-trigger",
-      failureTitle: `The example Trigger ${EXAMPLE_TRIGGER_NAME} could not be removed`,
+      get failureTitle() {
+        return `The example Trigger ${exampleTriggerName()} could not be removed`;
+      },
       run: removeExampleTrigger,
     },
   ],

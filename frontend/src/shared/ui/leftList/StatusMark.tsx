@@ -1,12 +1,15 @@
-import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
+import type { CSSProperties, KeyboardEvent, MouseEvent, ReactNode } from "react";
 import { Check } from "lucide-react";
+import { toneColor, type Tone } from "../kit/tones";
 
 interface Props {
   /** The row's status as an icon (`StatusIcon`), or any 14 px glyph. */
   glyph: ReactNode;
+  /** The tone of that status: the colour of the ring on hover. None: a neutral ring. */
+  tone?: Tone;
   /** Ticked for the bulk bar. */
   selected: boolean;
-  /** Some row of the list is ticked: every mark shows its box. */
+  /** Some row of the list is ticked: every mark shows its ring. */
   selecting?: boolean;
   /** Accessible name of the control: « Select <row> ». */
   label: string;
@@ -18,11 +21,13 @@ interface Props {
 }
 
 /**
- * The leading mark of a row of the left panel: the status at rest, a box on
- * hover, while some row is ticked, and once ticked (#577). One target: the
+ * The leading mark of a row of the left panel, the Contrôle de sélection d'une
+ * liste (#577): the status at rest; a ring in the status's colour while the
+ * row is hovered and while some row is ticked; a full round of the accent with
+ * a check once ticked. Round, as `SelectControl` draws it. One target: the
  * click selects, it never opens the row.
  */
-export default function StatusMark({ glyph, selected, selecting, label, title, onSelect, testId }: Props) {
+export default function StatusMark({ glyph, tone = "neutral", selected, selecting, label, title, onSelect, testId }: Props) {
   return (
     <span
       role="checkbox"
@@ -32,6 +37,8 @@ export default function StatusMark({ glyph, selected, selecting, label, title, o
       tabIndex={0}
       className="lp-mark"
       data-selecting={selecting || undefined}
+      data-tone={tone}
+      style={{ "--mark-tone": toneColor(tone) } as CSSProperties}
       data-testid={testId}
       onClick={(e) => {
         e.stopPropagation();
@@ -46,7 +53,7 @@ export default function StatusMark({ glyph, selected, selecting, label, title, o
     >
       <span className="lp-mark__glyph">{glyph}</span>
       <span className="lp-mark__box" aria-hidden="true">
-        {selected && <Check size={10} strokeWidth={2.5} data-testid="select-check" />}
+        {selected && <Check size={11} strokeWidth={3} data-testid="select-check" />}
       </span>
     </span>
   );

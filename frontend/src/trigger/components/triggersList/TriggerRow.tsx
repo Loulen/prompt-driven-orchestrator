@@ -133,6 +133,7 @@ export default function TriggerRow({
           )}
         </span>
       }
+      tone={tone ?? "neutral"}
       selected={rowSelected}
       selecting={selecting}
       label={rowSelected ? `Deselect ${t.name}` : `Select ${t.name}`}

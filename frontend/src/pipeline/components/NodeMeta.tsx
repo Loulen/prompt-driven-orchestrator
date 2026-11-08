@@ -14,19 +14,6 @@ import { RUN_CARD } from "../model/runCardElements";
 import type { EditNodeData } from "./EditNode";
 import { nodeTypeGlyph } from "../model/nodeTypeGlyph";
 
-/** Images uploaded with the Run's input, named, on the Start marker (#145). */
-export function InputImages({ names }: { names: string[] }) {
-  return (
-    <div className="cv-n__images" data-testid="start-node-images">
-      {names.map((name) => (
-        <div key={name} data-testid="start-node-image-chip" title={name} className="cv-n__img">
-          <span>{name}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 /** One cell of the card's meta grid: an icon, a value, the name in the tooltip. */
 function Cell({
   icon: Icon,

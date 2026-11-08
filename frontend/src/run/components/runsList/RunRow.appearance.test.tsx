@@ -264,7 +264,11 @@ describe("the Runs list on one line", () => {
     expect(onSelectRun).toHaveBeenCalledWith("lone");
     fireEvent.keyDown(row("child"), { key: "Enter" });
     expect(onSelectRun).toHaveBeenCalledWith("child");
-    fireEvent.click(within(row("parent")).getByTestId("run-select-control"));
+    const mark = within(row("parent")).getByTestId("run-select-control");
+    // Its ring takes the colour of the Run's status.
+    expect(mark).toHaveAttribute("data-tone", "running");
+    expect(within(row("child")).getByTestId("run-select-control")).toHaveAttribute("data-tone", "done");
+    fireEvent.click(mark);
     expect(useSelectionStore.getState().runs).toEqual(["parent"]);
   });
 

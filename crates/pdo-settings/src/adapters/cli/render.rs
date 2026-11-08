@@ -60,7 +60,7 @@ pub(super) fn appearance_lines(document: &Value) -> String {
         return "the interface's defaults (never written)\n".to_string();
     }
     let mut out = String::new();
-    for key in ["theme", "dark_mode", "compact_nodes"] {
+    for key in ["theme", "dark_mode", "colour_blind_status", "compact_nodes"] {
         out.push_str(&format!("{key}\t{}\n", inline(&document[key])));
     }
     if let Some(elements) = document["elements"].as_object() {
@@ -180,7 +180,7 @@ mod tests {
         }));
         assert_eq!(
             lines,
-            "theme\tclassic\ndark_mode\ttrue\ncompact_nodes\t-\nelement\truns.cost\thidden\n"
+            "theme\tclassic\ndark_mode\ttrue\ncolour_blind_status\t-\ncompact_nodes\t-\nelement\truns.cost\thidden\n"
         );
     }
 

@@ -14,8 +14,10 @@
  *
  * Two attributes select the palette: `data-theme` (`acogni`, the default, or
  * `classic`) on `<html>`, and `data-mode` (`dark`, the default, or `light`) on
- * `<html>` or on any container, which switches what is under it. The theme
- * script `/shared/theme.js` stamps both before the first paint. Only the
+ * `<html>` or on any container, which switches what is under it. A third,
+ * `data-status-palette="colour-blind"` on `<html>`, swaps four status colours
+ * for the Palette daltonienne, in each Theme and mode. The theme script
+ * `/shared/theme.js` stamps them before the first paint. Only the
  * palette changes with them: type, sizes, corners stay. The fonts ship with
  * the binary under `/shared/fonts/`, with their licence (SIL OFL 1.1).
  */
@@ -264,6 +266,45 @@
   --shadow: oklch(20.8% 0.015 262 / 0.16);
   --dim: oklch(20.8% 0.015 262 / 0.45);
   --dim-soft: oklch(20.8% 0.015 262 / 0.32);
+}
+
+/* ------------------------------------------------------------ the Palette daltonienne
+ * « Colour-blind friendly status colours » (Settings › Appearance), stamped on
+ * <html>. Awaiting, done, failed and blocked move apart for red-green colour
+ * blindness (deutan, protan): yellow, teal, rose and beige. Running and skipped,
+ * blue and grey, already stay apart; the Status icon keeps its shape. One set
+ * per Theme and mode, each a step more specific than the one it overrides, so
+ * a container that carries the other mode gets its own. */
+[data-status-palette="colour-blind"],
+[data-status-palette="colour-blind"] [data-mode="dark"] {
+  --color-st-await: oklch(85% 0.15 95);
+  --color-st-done: oklch(82% 0.09 190);
+  --color-st-failed: oklch(70% 0.16 5);
+  --color-st-blocked: oklch(80% 0.045 75);
+}
+
+[data-status-palette="colour-blind"][data-mode="light"],
+[data-status-palette="colour-blind"] [data-mode="light"] {
+  --color-st-await: oklch(52% 0.13 55);
+  --color-st-done: oklch(47% 0.08 188);
+  --color-st-failed: oklch(41% 0.13 22);
+  --color-st-blocked: oklch(49% 0.06 55);
+}
+
+[data-status-palette="colour-blind"][data-theme="classic"],
+[data-status-palette="colour-blind"][data-theme="classic"] [data-mode="dark"] {
+  --color-st-await: oklch(86.5% 0.177 90);
+  --color-st-done: oklch(91% 0.09 180);
+  --color-st-failed: oklch(71% 0.19 13);
+  --color-st-blocked: oklch(82% 0.04 80);
+}
+
+[data-status-palette="colour-blind"][data-theme="classic"][data-mode="light"],
+[data-status-palette="colour-blind"][data-theme="classic"] [data-mode="light"] {
+  --color-st-await: oklch(49% 0.14 45);
+  --color-st-done: oklch(46% 0.08 185);
+  --color-st-failed: oklch(39% 0.13 25);
+  --color-st-blocked: oklch(46% 0.06 55);
 }
 
 /* ------------------------------------------------------------ roles */

@@ -58,7 +58,7 @@ interface Props {
    * "selected ≠ open" second channel.
    */
   checked?: boolean;
-  /** Some pipeline of the list is ticked: every lead shows its box. */
+  /** Some pipeline of the list is ticked: every lead shows its ring. */
   selecting?: boolean;
   onToggleSelect?: (e: MouseEvent | KeyboardEvent) => void;
   /** Why its file does not parse: the row is marked invalid, the lint in its tooltip. */

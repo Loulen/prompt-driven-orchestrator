@@ -1116,15 +1116,17 @@ copies it.
 | `--radius-ui`, `--radius-pop` | 2 px corners; 6 px for the floating toolbar of a row only |
 | `--font-ui`, `--font-code` | Archivo and Geist Mono, served by the binary under `/shared/fonts/` with their licence (SIL OFL 1.1) |
 
-Two attributes select the palette (since 0.20, ADR-0093):
+Two attributes select the palette (since 0.20, ADR-0093), and a third swaps the status colours:
 
 | Attribute | Values | Where |
 | --- | --- | --- |
 | `data-theme` | `acogni` (the default), `classic` | `<html>` |
 | `data-mode` | `dark` (the default), `light` | `<html>`, or any container: it repaints what is under it in the other mode |
+| `data-status-palette` | `colour-blind`, absent by default | `<html>`: the Palette daltonienne, « Colour-blind friendly status colours » of Settings › Appearance. It changes `--color-st-await`, `-done`, `-failed` and `-blocked` in every Theme and mode |
 
 A **Theme** changes the palette only, in each mode: the roles keep their names and their meaning,
-and type, sizes and corners stay. An extension paints with the roles and reads neither attribute:
+and type, sizes and corners stay. An extension paints with the roles and the `--color-st-*`
+tokens and reads none of these attributes:
 its interface follows a switch at once. One that needs to know the mode (a library that takes
 `light` or `dark`) reads `data-mode`. Before 0.20 `data-theme` carried the mode (`dark`, `light`):
 it now carries the Theme, without an alias.

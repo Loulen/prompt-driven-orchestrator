@@ -114,8 +114,8 @@ export default function SettingsSurface({
   const pagesRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const found = useFound(pagesRef, searching(query) && open);
-  /** #823 — a Tutorials Start waiting for this surface to actually close. */
-  const pendingTour = useRef<(() => void) | null>(null);
+  /** What waits for this surface to actually close: a tour (#823), Update, What's new. */
+  const afterClose = useRef<(() => void) | null>(null);
 
   // The surface is unmounted-by-render (`if (!open) return null`), so its state SURVIVES
   // a close: the position on purpose (story 17), the draft and the drawer on purpose NOT.
@@ -125,11 +125,10 @@ export default function SettingsSurface({
     setConfirmClose(false);
     leaveSettingsPage();
     onClose();
-    // #823: a tour parked by `startTourAfterClose` runs once the surface is
-    // actually gone — a Projecteur aiming at the app under a full-window
-    // Settings would point at nothing.
-    const parked = pendingTour.current;
-    pendingTour.current = null;
+    // What `leaveThen` parked runs once the surface is gone: a tour aims at the app
+    // (#823), and Update or What's new opens over the app alone.
+    const parked = afterClose.current;
+    afterClose.current = null;
     parked?.();
   };
 
@@ -140,19 +139,21 @@ export default function SettingsSurface({
   };
   const extensionPages = useSettingsExtensionPages({ open, category, setCategory, requestClose });
   useCloseRequest(closeRequest, open, requestClose);
-  /** The confirm answered by staying: a parked tour (#823) or switch (CORE-183) is cancelled. */
+  /** The confirm answered by staying: a parked action or switch (CORE-183) is cancelled. */
   const keepEditing = () => {
     setConfirmClose(false);
-    pendingTour.current = null;
+    afterClose.current = null;
     onCloseCancelled?.();
   };
 
-  /** #823 — Tutorials › Start / Replay, through the SAME dirty guard as every exit: a
-   *  half-edited form is not dropped because the reader clicked "Replay" (kept: no tour). */
-  const startTourAfterClose = (run: () => void) => {
-    pendingTour.current = run;
+  /** Leave Settings through the SAME dirty guard as every exit, then `run` (kept: nothing
+   *  runs): a tour (#823), Update, What's new. */
+  const leaveThen = (run: () => void) => {
+    afterClose.current = run;
     requestClose();
   };
+  /** An entry that opens over the app: it leaves Settings first. Absent, it stays absent. */
+  const leavingFor = (run?: () => void) => run && (() => leaveThen(run));
 
   // Escape order: tooltip (Radix, before us) → skill bank if open → confirm-close if dirty
   // → close.
@@ -279,12 +280,12 @@ export default function SettingsSurface({
                     loading={loading}
                     liveSessions={liveSessions}
                     active={open}
-                    onRequestUpdate={onRequestUpdate}
-                    onOpenChangelog={onOpenChangelog}
-                    // #823 — guided tours. Every entry closes this surface first: a tour
-                    // points at the app, which is underneath it.
-                    onStartTour={(tourId) => startTourAfterClose(() => onStartTour?.(tourId))}
-                    onStartFullTour={() => startTourAfterClose(() => onStartFullTour?.())}
+                    // Every entry closes this surface first: a tour points at the app (#823),
+                    // Update and What's new show alone over it, and Settings does not come back.
+                    onRequestUpdate={leavingFor(onRequestUpdate)}
+                    onOpenChangelog={leavingFor(onOpenChangelog)}
+                    onStartTour={(tourId) => leaveThen(() => onStartTour?.(tourId))}
+                    onStartFullTour={() => leaveThen(() => onStartFullTour?.())}
                   />
                 )}
 

@@ -1557,6 +1557,7 @@ describe("SettingsSurface — Settings › Appearance", () => {
       (await screen.findByTestId(`setting-row-${id}`)).querySelector("[data-scope]")?.getAttribute("data-scope");
     expect(await scope("theme")).toBe("account");
     expect(await scope("dark-mode")).toBe("account");
+    expect(await scope("colour-blind-status")).toBe("account");
     expect(await scope("ui-scale")).toBe("device");
     for (const id of ["tabs-disabled", "child-runs", "wiring-grid", "wiring-grid-size"]) expect(await scope(id)).toBe("device");
     // The Appearance section wears « Your account » on its title, not on each row.
@@ -1574,7 +1575,12 @@ describe("SettingsSurface — Settings › Appearance", () => {
       Array.from(screen.getByTestId(`settings-section-body-${section}`).querySelectorAll('[data-testid^="setting-row-"]')).map((r) =>
         r.getAttribute("data-testid"),
       );
-    expect(rows("theme")).toEqual(["setting-row-theme", "setting-row-dark-mode", "setting-row-ui-scale"]);
+    expect(rows("theme")).toEqual([
+      "setting-row-theme",
+      "setting-row-dark-mode",
+      "setting-row-colour-blind-status",
+      "setting-row-ui-scale",
+    ]);
     expect(rows("interface")).toEqual([
       "setting-row-tabs-disabled",
       "setting-row-child-runs",
@@ -1585,6 +1591,25 @@ describe("SettingsSurface — Settings › Appearance", () => {
     for (const id of ["theme", "dark-mode", "ui-scale", "compact-nodes", "tabs-disabled", "child-runs", "wiring-grid"]) {
       expect(within(general).queryByTestId(`setting-row-${id}`)).toBeNull();
     }
+  });
+
+  it("« Colour-blind friendly status colours », off by default, saved to the Actor and painted at the change", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    openAppearance();
+    const row = await screen.findByTestId("setting-row-colour-blind-status");
+    expect(row).toHaveTextContent("Colour-blind friendly status colours");
+    expect(row).toHaveAccessibleDescription(expect.stringContaining("Status shapes do not change."));
+    const toggle = within(row).getByRole("switch", { name: "Colour-blind friendly status colours" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(document.documentElement.hasAttribute("data-status-palette")).toBe(false);
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(document.documentElement.getAttribute("data-status-palette")).toBe("colour-blind");
+    expect(localStorage.getItem("pdo.ui.colourBlindStatus")).toBe("true");
+    expect(saveAppearanceMock).toHaveBeenCalledWith({ version: 1, colour_blind_status: true, elements: {} });
+    expect(updateSettingsMock).not.toHaveBeenCalled();
+    fireEvent.click(toggle);
+    expect(document.documentElement.hasAttribute("data-status-palette")).toBe(false);
   });
 
   it("shows even when GET /settings fails", async () => {

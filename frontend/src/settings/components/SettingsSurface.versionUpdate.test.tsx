@@ -184,6 +184,55 @@ describe("Settings › General › Version & update — Update (#699)", () => {
     expect(screen.queryByTestId("setting-version-apply-blocked")).not.toBeInTheDocument();
   });
 
+  it("Update and What's new close Settings first, then open: the modal shows alone over the app", async () => {
+    fetchUpdateStatusMock.mockResolvedValue(status());
+    const onClose = vi.fn();
+    const onRequestUpdate = vi.fn();
+    const onOpenChangelog = vi.fn();
+    render(
+      <SettingsSurface
+        open
+        onClose={onClose}
+        initialPosition={{ category: "general", section: "version-update" }}
+        onRequestUpdate={onRequestUpdate}
+        onOpenChangelog={onOpenChangelog}
+      />,
+    );
+    fireEvent.click(await screen.findByTestId("setting-version-whats-new"));
+    expect(onOpenChangelog).toHaveBeenCalledTimes(1);
+    expect(onClose.mock.invocationCallOrder[0]).toBeLessThan(onOpenChangelog.mock.invocationCallOrder[0]);
+    const update = await screen.findByTestId("setting-version-update-button");
+    await waitFor(() => expect(update).not.toBeDisabled());
+    fireEvent.click(update);
+    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
+    expect(onClose.mock.invocationCallOrder[1]).toBeLessThan(onRequestUpdate.mock.invocationCallOrder[0]);
+  });
+
+  it("with a modified form, What's new asks through the draft guard; Keep editing opens nothing", async () => {
+    fetchUpdateStatusMock.mockResolvedValue(status());
+    const onClose = vi.fn();
+    const onOpenChangelog = vi.fn();
+    render(
+      <SettingsSurface
+        open
+        onClose={onClose}
+        initialPosition={{ category: "general", section: "version-update" }}
+        onOpenChangelog={onOpenChangelog}
+      />,
+    );
+    fireEvent.change(await screen.findByTestId("setting-session-cap"), { target: { value: "12" } });
+    fireEvent.click(await screen.findByTestId("setting-version-whats-new"));
+    expect(screen.getByTestId("settings-confirm-close")).toHaveTextContent("Close settings?");
+    fireEvent.click(screen.getByTestId("settings-confirm-keep"));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onOpenChangelog).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("setting-version-whats-new"));
+    fireEvent.click(screen.getByTestId("settings-confirm-discard"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onOpenChangelog).toHaveBeenCalledTimes(1);
+  });
+
   it("unknown install method: Update disabled with the reason, manual command shown", async () => {
     fetchUpdateStatusMock.mockResolvedValue(
       status({

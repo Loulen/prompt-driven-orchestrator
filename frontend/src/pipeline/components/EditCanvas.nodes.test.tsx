@@ -1,4 +1,4 @@
-import { render, screen, within, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, afterEach } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
 import { EditNode } from "./EditNode";
@@ -34,17 +34,15 @@ interface MarkerOpts {
   nodeType: NodeType;
   reached?: boolean;
   status?: NodeStatus;
-  inputImages?: string[];
 }
 
-function markerProps({ nodeType, reached = false, status = "pending", inputImages }: MarkerOpts) {
+function markerProps({ nodeType, reached = false, status = "pending" }: MarkerOpts) {
   const data = {
     label: nodeType,
     nodeId: nodeType,
     nodeType,
     status,
     reached,
-    inputImages,
     inputs: nodeType === "end" ? [{ name: "in" }] : [],
     outputs: nodeType === "start" ? [{ name: "out" }] : [],
     interactive: false,
@@ -271,32 +269,16 @@ describe("EditNode script node card (#248)", () => {
   });
 });
 
-describe("EditNode Start marker — input images on the canvas (issue #145)", () => {
-  it("renders one image chip per uploaded image, tagged by filename", () => {
-    render(
-      <EditNode {...markerProps({ nodeType: "start", inputImages: ["ui-bug.png", "trace.png"] })} />,
-      { wrapper: Wrapper },
-    );
-    const strip = screen.getByTestId("start-node-images");
-    const chips = within(strip).getAllByTestId("start-node-image-chip");
-    expect(chips).toHaveLength(2);
-    expect(strip.textContent).toContain("ui-bug.png");
-    expect(strip.textContent).toContain("trace.png");
-  });
-
-  it("renders no image strip when the run has no input images", () => {
-    render(<EditNode {...markerProps({ nodeType: "start", inputImages: [] })} />, {
-      wrapper: Wrapper,
-    });
+describe("EditNode Start marker — no input images on the canvas", () => {
+  it("shows no image strip nor file name on the Start card, even when the Run carries images", () => {
+    const props = markerProps({ nodeType: "start" });
+    // A Run launched with images: whatever the data carries, the card stays a bare Start.
+    const data = { ...props.data, inputImages: ["ui-bug.png", "trace.png"] };
+    render(<EditNode {...props} data={data} />, { wrapper: Wrapper });
     expect(screen.queryByTestId("start-node-images")).toBeNull();
-  });
-
-  it("renders no image strip on a non-start node even if images are passed", () => {
-    render(
-      <EditNode {...markerProps({ nodeType: "end", inputImages: ["ui-bug.png"] })} />,
-      { wrapper: Wrapper },
-    );
-    expect(screen.queryByTestId("start-node-images")).toBeNull();
+    expect(screen.queryByTestId("start-node-image-chip")).toBeNull();
+    expect(screen.queryByText("ui-bug.png")).toBeNull();
+    expect(screen.getByText("start")).toBeInTheDocument();
   });
 });
 

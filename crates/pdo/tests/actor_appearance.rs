@@ -6,6 +6,8 @@
 //! - each Actor reads what it wrote, never another's;
 //! - without an identity extension, every call is the Opérateur local's;
 //! - a malformed or too large document is refused and stores nothing;
+//! - the Palette daltonienne is one more field of it, found again from another
+//!   browser of the same Actor;
 //! - the document survives a restart of the daemon.
 
 use pdo::extension_api::Extension;
@@ -94,6 +96,32 @@ async fn without_an_identity_extension_the_local_operator_reads_what_it_wrote() 
     let (status, _) = write(&url, None, document.to_string()).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(read(&url, None).await, json!({ "appearance": document }));
+}
+
+#[tokio::test]
+async fn the_colour_blind_palette_follows_the_actor_to_another_browser() {
+    let daemon = TestDaemon::spawn_with_extensions(
+        |repo| flow::seed_solo(repo, &[("solo", false)]),
+        extensions(),
+    )
+    .await
+    .unwrap();
+    let url = daemon.url();
+    // One browser of Alice turns on « Colour-blind friendly status colours ».
+    let on = json!({ "version": 1, "colour_blind_status": true, "elements": {} });
+    let (status, kept) = write(&url, Some("alice"), on.to_string()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(kept, json!({ "appearance": on }));
+    // Her other browser reads it back; Bob keeps the default palette.
+    assert_eq!(read(&url, Some("alice")).await, json!({ "appearance": on }));
+    assert_eq!(read(&url, Some("bob")).await, json!({ "appearance": null }));
+    // A value that is not a switch is refused, and the palette stays on.
+    let bad = json!({ "version": 1, "colour_blind_status": "yes" });
+    assert_eq!(
+        write(&url, Some("alice"), bad.to_string()).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(read(&url, Some("alice")).await, json!({ "appearance": on }));
 }
 
 #[tokio::test]

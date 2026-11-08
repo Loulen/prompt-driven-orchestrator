@@ -1,6 +1,7 @@
 /**
  * The Apparence of an Actor (CONTEXT.md « Apparence », ADR-0096): the
- * Theme, the Mode sombre, Nodes compactes and the deviations of the Éléments masquables.
+ * Theme, the Mode sombre, the Palette daltonienne, Nodes compactes and the
+ * deviations of the Éléments masquables.
  * Pure: no store, no request. The store is `hooks/useAppearance.ts`.
  *
  *  - **The document** the daemon keeps (`AppearanceDocument`) holds only the
@@ -9,8 +10,9 @@
  *    it and the {@link Appearance} the interface reads.
  *  - **The local copy**: this browser keeps the last Apparence it saw under
  *    the storage keys of before (`pdo.ui.theme`, `pdo.ui.mode`,
- *    `pdo.ui.compactNodes`), so the theme script (`public/shared/theme.js`)
- *    paints the Theme and the mode before the first paint, in the interface
+ *    `pdo.ui.compactNodes`) and `pdo.ui.colourBlindStatus`, so the theme
+ *    script (`public/shared/theme.js`) paints the Theme, the mode and the
+ *    status palette before the first paint, in the interface
  *    and on a page an extension serves outside it, without a change; and the
  *    element deviations under `pdo.ui.appearance.elements`, so the other tabs
  *    follow at once.
@@ -31,6 +33,7 @@
 
 import type { AppearanceDocument } from "../shared/generated/AppearanceDocument";
 import { COMPACT_NODES_STORAGE_KEY, loadCompactNodes, saveCompactNodes } from "./compactNodes";
+import { loadColourBlindStatus, saveColourBlindStatus, STATUS_PALETTE_STORAGE_KEY } from "./statusPalette";
 import {
   DEFAULT_THEME_CHOICE,
   loadThemeChoice,
@@ -55,6 +58,7 @@ export const LOCAL_COPY_KEYS: readonly string[] = [
   THEME_STORAGE_KEY,
   MODE_STORAGE_KEY,
   COMPACT_NODES_STORAGE_KEY,
+  STATUS_PALETTE_STORAGE_KEY,
   ELEMENTS_STORAGE_KEY,
 ];
 
@@ -64,12 +68,15 @@ export type ElementDeviations = Readonly<Record<string, boolean>>;
 export interface Appearance {
   theme: Theme;
   mode: Mode;
+  /** The Palette daltonienne: « Colour-blind friendly status colours ». */
+  colourBlindStatus: boolean;
   compactNodes: boolean;
   elements: ElementDeviations;
 }
 
 export const DEFAULT_APPEARANCE: Appearance = {
   ...DEFAULT_THEME_CHOICE,
+  colourBlindStatus: false,
   compactNodes: false,
   elements: {},
 };
@@ -163,6 +170,7 @@ export function fromDocument(document: AppearanceDocument): Appearance {
   return {
     theme: isTheme(document.theme) ? document.theme : DEFAULT_APPEARANCE.theme,
     mode: document.dark_mode == null ? DEFAULT_APPEARANCE.mode : document.dark_mode ? "dark" : "light",
+    colourBlindStatus: document.colour_blind_status ?? DEFAULT_APPEARANCE.colourBlindStatus,
     compactNodes: document.compact_nodes ?? DEFAULT_APPEARANCE.compactNodes,
     elements: cleanElements(document.elements),
   };
@@ -173,6 +181,8 @@ export function toDocument(appearance: Appearance): AppearanceDocument {
   const document: AppearanceDocument = { version: APPEARANCE_VERSION, elements: { ...appearance.elements } };
   if (appearance.theme !== DEFAULT_APPEARANCE.theme) document.theme = appearance.theme;
   if (appearance.mode !== DEFAULT_APPEARANCE.mode) document.dark_mode = appearance.mode === "dark";
+  if (appearance.colourBlindStatus !== DEFAULT_APPEARANCE.colourBlindStatus)
+    document.colour_blind_status = appearance.colourBlindStatus;
   if (appearance.compactNodes !== DEFAULT_APPEARANCE.compactNodes) document.compact_nodes = appearance.compactNodes;
   return document;
 }
@@ -208,20 +218,26 @@ export function isChanged(appearance: Appearance, id: string): boolean {
 
 /**
  * How many choices of Settings › Appearance › Appearance differ from the
- * defaults: Nodes compactes and each element deviation. The Theme and the
- * mode are not counted: their own section sets them.
+ * defaults: Nodes compactes and each element deviation. The Theme, the mode
+ * and the status palette are not counted: their own section sets them.
  */
 export function deviationCount(appearance: Appearance): number {
   return Object.keys(appearance.elements).length + (appearance.compactNodes !== DEFAULT_APPEARANCE.compactNodes ? 1 : 0);
 }
 
-/** « Reset to defaults »: Nodes compactes and every element back to their default; the Theme and the mode stay. */
+/** « Reset to defaults »: Nodes compactes and every element back to their default; the Theme, the mode and the palette stay. */
 export function resetToDefaults(appearance: Appearance): Appearance {
   return { ...appearance, compactNodes: DEFAULT_APPEARANCE.compactNodes, elements: {} };
 }
 
 export function sameAppearance(a: Appearance, b: Appearance): boolean {
-  if (a.theme !== b.theme || a.mode !== b.mode || a.compactNodes !== b.compactNodes) return false;
+  if (
+    a.theme !== b.theme ||
+    a.mode !== b.mode ||
+    a.colourBlindStatus !== b.colourBlindStatus ||
+    a.compactNodes !== b.compactNodes
+  )
+    return false;
   const keys = Object.keys(a.elements);
   return keys.length === Object.keys(b.elements).length && keys.every((key) => a.elements[key] === b.elements[key]);
 }
@@ -243,15 +259,21 @@ function readElements(): ElementDeviations {
   }
 }
 
-/** The Apparence this browser last saw: its Theme, mode, Nodes compactes and element deviations. */
+/** The Apparence this browser last saw: its Theme, mode, palette, Nodes compactes and element deviations. */
 export function readLocalCopy(systemDark: boolean = systemPrefersDark()): Appearance {
-  return { ...loadThemeChoice(systemDark), compactNodes: loadCompactNodes(), elements: readElements() };
+  return {
+    ...loadThemeChoice(systemDark),
+    colourBlindStatus: loadColourBlindStatus(),
+    compactNodes: loadCompactNodes(),
+    elements: readElements(),
+  };
 }
 
 /** Keep `appearance` as this browser's copy, under the keys the theme script reads. */
 export function writeLocalCopy(appearance: Appearance): void {
   saveTheme(appearance.theme);
   saveMode(appearance.mode);
+  saveColourBlindStatus(appearance.colourBlindStatus);
   saveCompactNodes(appearance.compactNodes);
   try {
     if (Object.keys(appearance.elements).length === 0) localStorage.removeItem(ELEMENTS_STORAGE_KEY);

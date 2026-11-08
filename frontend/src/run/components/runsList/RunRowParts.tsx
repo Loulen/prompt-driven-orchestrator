@@ -1,14 +1,59 @@
+import type { KeyboardEvent, MouseEvent } from "react";
 import { Zap } from "lucide-react";
 import type { ElementMarks } from "../../../hooks/useElementMarks";
 import type { NodeProgress } from "../../../shared/generated/NodeProgress";
 import type { RunListEntry } from "../../../shared/generated/RunListEntry";
 import { StatusIcon, Tooltip } from "../../../shared/ui/kit";
 import type { StatusTone } from "../../../shared/ui/kit";
+import { runStatusTone } from "../../../shared/ui/kit/statusMeta";
+import StatusMark from "../../../shared/ui/leftList/StatusMark";
 import { fmtCost, fmtSpan, spanOf } from "../../../shared/ui/leftList/format";
 import { useListClock } from "../../../shared/ui/leftList/clock";
 import type { ChildCounts } from "../../model/orchestration";
 import { isLiveRun } from "../../model/runStatus";
 import { useRunCost } from "../../store/runCosts";
+
+/**
+ * #577 — the status mark of a Run's row, which doubles as its select control:
+ * the status at rest, a ring of the status's colour on the row's hover, an
+ * accent round once ticked.
+ */
+export function RunStatusMark({
+  status,
+  word,
+  reason,
+  name,
+  selected,
+  selecting,
+  onSelect,
+}: {
+  status: RunListEntry["status"] | "stalled";
+  /** The status in words, first line of the tooltip. */
+  word: string;
+  /** Why it failed or waits, after the word. */
+  reason?: string;
+  name: string;
+  selected: boolean;
+  selecting: boolean;
+  onSelect: (e: MouseEvent | KeyboardEvent) => void;
+}) {
+  return (
+    <StatusMark
+      glyph={
+        <span data-testid="run-status-dot" data-status={status}>
+          <StatusIcon kind="run" status={status} title={reason} />
+        </span>
+      }
+      tone={runStatusTone(status)}
+      selected={selected}
+      selecting={selecting}
+      label={selected ? `Deselect ${name}` : `Select ${name}`}
+      title={`${word}${reason ? `: ${reason}` : ""}\nClick to select, Shift+click for a range`}
+      testId="run-select-control"
+      onSelect={onSelect}
+    />
+  );
+}
 
 /** The most node squares a row draws; the rest is a count. */
 const MAX_PIPS = 8;

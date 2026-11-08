@@ -9,7 +9,9 @@
  *  - every ink that carries text holds the WCAG 2.1 AA floor (4.5:1) on every
  *    surface, in each of them;
  *  - the status colours and the accent, which carry icons and outlines but
- *    also words (an error line, a status label, a link), hold the same 4.5:1.
+ *    also words (an error line, a status label, a link), hold the same 4.5:1;
+ *  - the Palette daltonienne swaps only awaiting, done, failed and blocked, in
+ *    each Theme × mode, and holds the same floor.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -62,6 +64,49 @@ describe.each(PALETTES)("%s palette", (_, palette) => {
 
   it("writes legible text on the accent (a primary button)", () => {
     expect(contrastRatio(palette["accent-ink"], palette.accent)).toBeGreaterThanOrEqual(AA_TEXT);
+  });
+});
+
+/** The Palette daltonienne of each Theme × mode: its own block over the standard palette. */
+const COLOUR_BLIND: [string, Record<string, string>, Record<string, string>][] = [
+  [
+    "Acogni dark",
+    PALETTES[0][1],
+    paletteOf('[data-status-palette="colour-blind"],\n[data-status-palette="colour-blind"] [data-mode="dark"] {'),
+  ],
+  [
+    "Acogni light",
+    PALETTES[1][1],
+    paletteOf('[data-status-palette="colour-blind"][data-mode="light"],\n[data-status-palette="colour-blind"] [data-mode="light"] {'),
+  ],
+  [
+    "Classic dark",
+    PALETTES[2][1],
+    paletteOf(
+      '[data-status-palette="colour-blind"][data-theme="classic"],\n[data-status-palette="colour-blind"][data-theme="classic"] [data-mode="dark"] {',
+    ),
+  ],
+  [
+    "Classic light",
+    PALETTES[3][1],
+    paletteOf(
+      '[data-status-palette="colour-blind"][data-theme="classic"][data-mode="light"],\n[data-status-palette="colour-blind"][data-theme="classic"] [data-mode="light"] {',
+    ),
+  ],
+];
+
+describe.each(COLOUR_BLIND)("%s colour-blind status palette", (_, standard, swap) => {
+  it("swaps awaiting, done, failed and blocked only", () => {
+    expect(Object.keys(swap).sort()).toEqual(["st-await", "st-blocked", "st-done", "st-failed"]);
+    for (const token of Object.keys(swap)) expect(swap[token]).not.toBe(standard[token]);
+  });
+
+  it("holds AA (4.5:1) for every status colour", () => {
+    const palette = { ...standard, ...swap };
+    const failures = TONES.filter((token) => worst(palette, token) < AA_TEXT).map(
+      (token) => `${token}: ${worst(palette, token).toFixed(2)}`,
+    );
+    expect(failures).toEqual([]);
   });
 });
 

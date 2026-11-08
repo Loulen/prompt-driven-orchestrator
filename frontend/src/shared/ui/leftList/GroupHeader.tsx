@@ -121,7 +121,7 @@ export default function GroupHeader({
           onSelectAll();
         }}
       >
-        {allSelected && <Check size={9} strokeWidth={3} aria-hidden />}
+        {allSelected && <Check size={11} strokeWidth={3} aria-hidden />}
       </span>
       <span className="d-chip lp-group__count" data-testid={`${testPrefix}-count`}>
         {count}

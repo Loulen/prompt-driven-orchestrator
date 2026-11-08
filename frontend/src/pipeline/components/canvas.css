@@ -125,28 +125,6 @@
 .cv-n__runs:focus-visible { outline: 1px solid var(--focus-ring); outline-offset: -1px; }
 .cv-n__runs-n { flex: none; font-family: var(--font-code); font-size: var(--fs-xs); }
 .cv-n__runs .cv-kids { margin-left: auto; flex-wrap: nowrap; }
-.cv-n__images { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 6px 4px; }
-.cv-n__img {
-  position: relative;
-  width: 46px;
-  height: 30px;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-ui);
-  background: var(--surface-0);
-}
-.cv-n__img span {
-  position: absolute;
-  inset: auto 0 0;
-  padding: 0 2px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  background: color-mix(in oklab, var(--surface-0) 70%, transparent);
-  font-family: var(--font-code);
-  font-size: var(--fs-2xs);
-  color: var(--text-3);
-}
 /* The ▶ of an on-demand or skipped node, outside the card so its dimming leaves it. */
 .cv-n__play {
   position: absolute;

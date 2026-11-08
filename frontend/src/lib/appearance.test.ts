@@ -19,19 +19,32 @@ import {
 beforeEach(() => localStorage.clear());
 
 describe("the Apparence module", () => {
-  it("defaults to Acogni, dark, detailed cards and no deviation", () => {
-    expect(DEFAULT_APPEARANCE).toEqual({ theme: "acogni", mode: "dark", compactNodes: false, elements: {} });
+  it("defaults to Acogni, dark, the standard status palette, detailed cards and no deviation", () => {
+    expect(DEFAULT_APPEARANCE).toEqual({
+      theme: "acogni",
+      mode: "dark",
+      colourBlindStatus: false,
+      compactNodes: false,
+      elements: {},
+    });
     expect(fromDocument({ version: 1, elements: {} })).toEqual(DEFAULT_APPEARANCE);
   });
 
   it("writes only the deviations, and reads them back", () => {
     expect(toDocument(DEFAULT_APPEARANCE)).toEqual({ version: 1, elements: {} });
-    const mine: Appearance = { theme: "classic", mode: "light", compactNodes: true, elements: { "runs.list.cost": true } };
+    const mine: Appearance = {
+      theme: "classic",
+      mode: "light",
+      colourBlindStatus: true,
+      compactNodes: true,
+      elements: { "runs.list.cost": true },
+    };
     const document = toDocument(mine);
     expect(document).toEqual({
       version: 1,
       theme: "classic",
       dark_mode: false,
+      colour_blind_status: true,
       compact_nodes: true,
       elements: { "runs.list.cost": true },
     });
@@ -97,18 +110,37 @@ describe("the Apparence module", () => {
     expect(toDocument(changed).elements).toEqual({ "runs.list.ext.gone:mark": false, "runs.list.cost": true });
   });
 
-  it("counts and resets Compact nodes and the elements, never the Theme nor the mode", () => {
-    const mine: Appearance = { theme: "classic", mode: "light", compactNodes: true, elements: { "runs.list.cost": true } };
+  it("counts and resets Compact nodes and the elements, never the Theme, the mode nor the palette", () => {
+    const mine: Appearance = {
+      theme: "classic",
+      mode: "light",
+      colourBlindStatus: true,
+      compactNodes: true,
+      elements: { "runs.list.cost": true },
+    };
     expect(deviationCount(mine)).toBe(2);
-    expect(deviationCount({ ...DEFAULT_APPEARANCE, theme: "classic" })).toBe(0);
-    expect(resetToDefaults(mine)).toEqual({ theme: "classic", mode: "light", compactNodes: false, elements: {} });
+    expect(deviationCount({ ...DEFAULT_APPEARANCE, theme: "classic", colourBlindStatus: true })).toBe(0);
+    expect(resetToDefaults(mine)).toEqual({
+      theme: "classic",
+      mode: "light",
+      colourBlindStatus: true,
+      compactNodes: false,
+      elements: {},
+    });
   });
 
   it("migrates the values this browser held", () => {
     localStorage.setItem("pdo.ui.theme", "classic");
     localStorage.setItem("pdo.ui.mode", "light");
     localStorage.setItem("pdo.ui.compactNodes", "true");
-    expect(readLocalCopy()).toEqual({ theme: "classic", mode: "light", compactNodes: true, elements: {} });
+    localStorage.setItem("pdo.ui.colourBlindStatus", "true");
+    expect(readLocalCopy()).toEqual({
+      theme: "classic",
+      mode: "light",
+      colourBlindStatus: true,
+      compactNodes: true,
+      elements: {},
+    });
     // A value of before 2.68 is migrated on the way, as the theme script does.
     localStorage.clear();
     localStorage.setItem("pdo.ui.theme", "light");
@@ -116,14 +148,22 @@ describe("the Apparence module", () => {
   });
 
   it("keeps its local copy under the keys the theme script reads", () => {
-    writeLocalCopy({ theme: "classic", mode: "light", compactNodes: true, elements: { "runs.list.cost": true } });
+    writeLocalCopy({
+      theme: "classic",
+      mode: "light",
+      colourBlindStatus: true,
+      compactNodes: true,
+      elements: { "runs.list.cost": true },
+    });
     expect(localStorage.getItem("pdo.ui.theme")).toBe("classic");
     expect(localStorage.getItem("pdo.ui.mode")).toBe("light");
+    expect(localStorage.getItem("pdo.ui.colourBlindStatus")).toBe("true");
     expect(localStorage.getItem("pdo.ui.compactNodes")).toBe("true");
     expect(JSON.parse(localStorage.getItem(ELEMENTS_STORAGE_KEY)!)).toEqual({ "runs.list.cost": true });
     expect(readLocalCopy().elements).toEqual({ "runs.list.cost": true });
     writeLocalCopy(DEFAULT_APPEARANCE);
     expect(localStorage.getItem(ELEMENTS_STORAGE_KEY)).toBeNull();
+    expect(localStorage.getItem("pdo.ui.colourBlindStatus")).toBeNull();
     localStorage.setItem(ELEMENTS_STORAGE_KEY, "{not json");
     expect(readLocalCopy().elements).toEqual({});
   });

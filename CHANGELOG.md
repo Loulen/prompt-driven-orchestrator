@@ -71,6 +71,25 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   on the toggle.
 - A node held by its child runs is no longer marked interrupted when the daemon restarts without
   its session: it keeps waiting on its children and completes once they end.
+### Finishing touches: Start card, Settings guard, round selection, colour-blind palette
+
+- The Start card of a Run's canvas no longer shows the input images; their thumbnails and the
+  lightbox stay in the Start inspector.
+- Update and What's new in Settings › Version & update leave Settings through its draft guard:
+  with a modified form, "Close settings?" asks first (Keep editing leaves Settings open). Once
+  Settings is closed, the update confirmation or the changelog shows alone, and closing it goes
+  back to the app, not to Settings.
+- The select control of the Runs, Triggers and Pipelines lists is round: hovering a row shows a
+  ring in the colour of its status, a ticked row a full accent round with its check. The
+  "select all" of a group header is round too.
+- "Colour-blind friendly status colours" in Settings › Appearance › Theme, off by default, part
+  of your Apparence: saved to your account, found on every device you sign in from and applied
+  before the first paint. It swaps the awaiting, done, failed and blocked colours for yellow,
+  teal, rose and beige in Acogni and Classic, light and dark; status shapes do not change.
+- Seams: the Apparence document takes an optional `colour_blind_status` (`PUT
+  /actors/me/appearance`, `pdo settings appearance`); `/shared/theme.js` stamps
+  `data-status-palette="colour-blind"` on `<html>`, and `/shared/tokens.css` swaps the
+  `--color-st-*` tokens under it, so an extension page follows without a change.
 
 ## 2.74.0
 

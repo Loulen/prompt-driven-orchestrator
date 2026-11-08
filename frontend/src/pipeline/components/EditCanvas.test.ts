@@ -280,15 +280,9 @@ describe("deriveEditNodes — start/end green-on-complete flag (issue #105, inli
     expect(r.end).toBe(false);
   });
 
-  // issue #145 — input images uploaded with the run ride along on the start node.
-  function startDataWith(run: RunState | null) {
-    const nodes = deriveEditNodes(makeStartEndPipeline(), run);
-    return nodes.find((n) => n.id === "start")?.data as {
-      inputImages?: string[];
-    };
-  }
-
-  it("wires the run's input images onto the start node data", () => {
+  // The Start card of a Run's canvas carries no input images: they stay in the
+  // Start inspector (thumbnails and lightbox).
+  it("leaves the run's input images off the start node data", () => {
     const run: RunState = {
       ...makeRunState({}),
       start_node: { input_files: [],
@@ -298,25 +292,11 @@ describe("deriveEditNodes — start/end green-on-complete flag (issue #105, inli
         input_images: ["ui-bug.png", "trace.png"],
       },
     };
-    expect(startDataWith(run).inputImages).toEqual(["ui-bug.png", "trace.png"]);
+    const start = deriveEditNodes(makeStartEndPipeline(), run).find((n) => n.id === "start");
+    expect(start?.data).not.toHaveProperty("inputImages");
+    expect(JSON.stringify(start?.data)).not.toContain("ui-bug.png");
   });
 
-  it("leaves the start node with no input images when the run has none", () => {
-    const run: RunState = {
-      ...makeRunState({}),
-      start_node: { input_files: [],
-        input_path: "_input/output.md",
-        started_at: "2026-01-01T00:00:00.000Z",
-        target_node_ids: ["work"],
-        input_images: [],
-      },
-    };
-    expect(startDataWith(run).inputImages ?? []).toEqual([]);
-  });
-
-  it("leaves the start node with no input images when editing a template (no run state)", () => {
-    expect(startDataWith(null).inputImages ?? []).toEqual([]);
-  });
 });
 
 describe("formatWhenPill — condition pill text (ADR-0011)", () => {

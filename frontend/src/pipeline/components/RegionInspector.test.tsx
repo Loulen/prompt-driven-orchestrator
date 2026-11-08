@@ -360,4 +360,23 @@ describe("RegionInspector — the cost cap edited for this run", () => {
     expect(screen.queryByTestId("region-budget-reached-note")).toBeNull();
     expect(screen.queryByTestId("region-end-region")).toBeNull();
   });
+
+  it("shows the amount a $var cap resolves to in the field, the YAML keeping the expression until retyped", () => {
+    selectOnRun({ ...capped, max_cost_usd: "$budget" }, true);
+    const tab = useEditStore.getState().openTabs[0];
+    useEditStore.setState({
+      openTabs: [{ ...tab, pipeline: { ...tab.pipeline, variables: { budget: { type: "float", default: 2 } } } }],
+    });
+    render(<RegionInspector runState={parked({ variables: { budget: 5 } })} />);
+    const input = screen.getByTestId("region-max-cost");
+    expect(input).toHaveValue("5");
+    expect(input).toHaveAttribute("title", "$budget = 5");
+    expect(input).toHaveFocus();
+    expect(regionOf()!.max_cost_usd).toBe("$budget");
+    // Not a change: the Run still waits « budget reached ».
+    expect(screen.getByTestId("region-budget-reached-note")).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "8" } });
+    expect(regionOf()!.max_cost_usd).toBe(8);
+    expect(input).toHaveValue("8");
+  });
 });

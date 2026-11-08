@@ -7,7 +7,8 @@ import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry
 import type { PipelineScope } from "../model/pipeline";
 import { ApiError } from "../../shared/http/client";
 import { fetchRunPipeline, saveRunPipeline } from "../../run/api/runPipeline";
-import { appliedCostCaps, applyCostCaps } from "./runCostCapSave";
+import { appliedCostCaps, applyCostCaps, keepFollowed, type CostCapsApplied } from "./runCostCapSave";
+import type { RunCostCapBaseline } from "../model/runCostCaps";
 import { fetchPipeline, savePipeline, deletePipeline as apiDeletePipeline, renamePipeline as apiRenamePipeline } from "../api/pipelines";
 import { serializePipeline } from "../../lib/serializePipeline";
 import type { EditState } from "./editState";
@@ -38,10 +39,20 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
       // keep the lint
     }
   };
-  const sayCostCaps = (id: string, message: string | null) => {
-    if (message == null) return;
+  // `took`: the tab's baseline when the save started. A loop the tab followed
+  // meanwhile (the Run moved during the save) keeps what it followed.
+  const sayCostCaps = (id: string, took: RunCostCapBaseline | undefined, { message, baseline }: CostCapsApplied) => {
+    if (message == null && baseline == null) return;
     set((s) => ({
-      openTabs: s.openTabs.map((t) => (t.id === id ? { ...t, saveError: { message } } : t)),
+      openTabs: s.openTabs.map((t) =>
+        t.id === id
+          ? {
+              ...t,
+              ...(message != null ? { saveError: { message } } : {}),
+              ...(baseline && t.runEditing ? { runCostCaps: keepFollowed(baseline, took, t.runCostCaps) } : {}),
+            }
+          : t,
+      ),
     }));
   };
   return {
@@ -176,7 +187,7 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
           ),
           lastSavedAt: { ...s.lastSavedAt, [id]: Date.now() },
         }));
-        sayCostCaps(id, await applyCostCaps(tab.runId, before, tab.pipeline));
+        sayCostCaps(id, tab.runCostCaps, await applyCostCaps(tab.runId, before, tab.pipeline, tab.runCostCaps));
         await refreshStaleLint(id);
         return { ok: true, id };
       } else {

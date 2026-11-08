@@ -41,7 +41,7 @@ export function BudgetReachedBanner({
   };
   // « Edit for this run » on the region's `max_cost_usd`, focused.
   const raise = () => {
-    raiseCap(run.run_id, regionId, run.region_max_cost_overrides);
+    raiseCap(run.run_id, regionId, run);
     onShowRegion?.();
   };
   const cost = run.loop_costs?.[regionId];

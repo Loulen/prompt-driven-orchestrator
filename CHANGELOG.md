@@ -20,7 +20,11 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - "raise cap", on a loop region that reached its cost cap or in Run info's "Budget reached"
   banner, opens Edit › Edit for this run with the region inspector on `max_cost_usd`, focused. The
   inspector takes an amber outline and an "Editing for this run" pill; its header reads the cap the
-  run applies.
+  run applies. A cap given as a `$variable` shows the amount the run resolved (`$ 5`); the YAML
+  keeps the variable until you type another cap.
+- A run open in "Edit for this run" follows a cap changed outside it (the CLI, an extension, another
+  browser): an untouched cap takes the new value, and Save only sends a cap you changed, so it
+  never puts the old one back. A cap you already typed keeps your draft.
 - While editing a run, the cap field says "Applies live. Saving resumes the Run at the next lap."
   A cap under what the loop already spent is allowed, with an amber note: the loop stops at its
   next re-entry and the lap in progress always finishes. ✕ removes the cap. On a run waiting
@@ -34,6 +38,9 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   `set_region_max_iter`; the Pipeline Manager's guide documents both.
 - `pdo run region <run> <region> --max-cost <usd|none>` sets or removes the cost cap from a shell.
 - The "budget reached" reason now names `set_region_max_cost` as the way to raise the cap.
+- The "budget reached" and "exhausted · unrouted" blocks of a loop region stay clickable when an
+  exit edge's condition label sits on them. An edge whose `when` is a bare string shows that
+  string, no longer "0 and 1 and 2 …", and renaming a port no longer rewrites it.
 
 ### Waiting alerts: a notification and a sound when a node starts waiting for you
 

@@ -4,6 +4,7 @@ import { Button } from "../../shared/ui/kit";
 import type { LoopKind } from "../../shared/generated/LoopKind";
 import { useEditStore } from "../store/editStore";
 import { useRaiseCap } from "../store/useRaiseCap";
+import type { RunCapSource } from "../model/runCostCaps";
 import { endRegion } from "../../run/api/commands";
 import { useWhyNotOnRun } from "../../run/store/gestureRightsStore";
 import { toastRefusal } from "../../shared/authorization/refusal";
@@ -51,8 +52,8 @@ export interface LoopRegionNodeData {
    * exhausted-unrouted region targets this run.
    */
   runId: string | null;
-  /** The Run's live cost-cap overrides: `raise cap` starts editing from them. */
-  capOverrides?: Record<string, number | null> | null;
+  /** What the Run says about its caps: `raise cap` starts editing from them. */
+  capSource?: RunCapSource | null;
   width: number;
   height: number;
   /**
@@ -160,7 +161,7 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
               <Button
                 size="sm"
                 data-testid="loop-region-raise-cap"
-                onClick={() => raiseCap(data.runId as string, data.regionId, data.capOverrides)}
+                onClick={() => raiseCap(data.runId as string, data.regionId, data.capSource)}
               >
                 raise cap
               </Button>

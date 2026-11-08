@@ -1,6 +1,7 @@
 // The canvas side of a pipeline's bounded loop regions (ADR-0011 / #148): the
 // layout and label of each region, and the xyflow nodes that draw it.
 import type { Node } from "@xyflow/react";
+import { EDGE_LABELS_ABOVE_NODES } from "./editEdgeDerivation";
 import type { LoopRegion } from "../../shared/generated/LoopRegion";
 import type { RunState } from "../../shared/generated/RunState";
 import type { EditorPipelineDef } from "../model/pipeline";
@@ -193,6 +194,14 @@ export function deriveLoopRegions(
 const REGION_CHROME_Z = 1001;
 
 /**
+ * A region whose chrome asks for a click (« budget reached │ raise cap │ end
+ * region », « exhausted · unrouted » and its route button) also clears the
+ * labels of edges drawn above the cards: an exit edge leaves the region right
+ * where that block sits, and its condition pill would take the buttons' clicks.
+ */
+const REGION_ACTION_CHROME_Z = EDGE_LABELS_ABOVE_NODES + 1;
+
+/**
  * Builds the decorative xyflow `loopRegion` nodes that back each box-form
  * bounded region (ADR-0011 / #148). TWO nodes per `>= 2`-member region; single-
  * member regions render as a badge on the member card (no box) and produce
@@ -231,6 +240,7 @@ export function buildLoopRegionNodes(
     .filter((r) => r.box != null)
     .flatMap((r) => {
       const position = { x: r.box!.x, y: r.box!.y };
+      const chromeZ = r.budgetReached || r.exhausted ? REGION_ACTION_CHROME_Z : REGION_CHROME_Z;
       const data = {
         regionId: r.id,
         kind: r.kind,
@@ -244,7 +254,13 @@ export function buildLoopRegionNodes(
         // region can offer "route from manager" (ADR-0011 / #152).
         runId: runState?.run_id ?? null,
         // `raise cap` starts « Edit for this run » from the caps the Run applies.
-        capOverrides: runState?.region_max_cost_overrides ?? null,
+        capSource: runState
+          ? {
+              region_max_cost_overrides: runState.region_max_cost_overrides,
+              loop_costs: runState.loop_costs,
+              variables: runState.variables,
+            }
+          : null,
         width: r.box!.width,
         height: r.box!.height,
       };
@@ -268,8 +284,8 @@ export function buildLoopRegionNodes(
           ...inert,
           id: `region-chrome-${r.id}`,
           data: { ...data, layer: "chrome" as const },
-          zIndex: REGION_CHROME_Z,
-          style: { zIndex: REGION_CHROME_Z, pointerEvents: "none" },
+          zIndex: chromeZ,
+          style: { zIndex: chromeZ, pointerEvents: "none" },
         },
       ];
     });

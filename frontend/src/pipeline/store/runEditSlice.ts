@@ -8,22 +8,57 @@ import type { StoreApi } from "zustand";
 import { fetchRunPipeline, overwriteDefaultPipelineFromRun } from "../../run/api/runPipeline";
 import { hasUnsavedWork } from "./editState";
 import type { EditState } from "./editState";
+import type { EditorPipelineDef } from "../model/pipeline";
 import { clearedHistory } from "./tabHistory";
-import { foldCostCapOverrides, type CostCapOverrides } from "../model/runCostCaps";
+import {
+  costCapBaseline,
+  foldCostCapOverrides,
+  followCostCaps,
+  followCostCapsIn,
+  runAppliedCaps,
+  type CostCapOverrides,
+  type RunCapSource,
+} from "../model/runCostCaps";
 
 type Set = StoreApi<EditState>["setState"];
 type Get = StoreApi<EditState>["getState"];
 
 export function runEditSlice(set: Set, get: Get): Partial<EditState> {
   return {
-    startRunEditing: (id: string, capOverrides?: CostCapOverrides | null) => {
+    startRunEditing: (id: string, run?: RunCapSource | null) => {
       set((s) => ({
-        openTabs: s.openTabs.map((t) =>
-          t.id === id && t.runId != null && !t.runEditing
-            ? { ...t, pipeline: foldCostCapOverrides(t.pipeline, capOverrides), runEditing: true }
-            : t,
-        ),
+        openTabs: s.openTabs.map((t) => {
+          if (t.id !== id || t.runId == null || t.runEditing) return t;
+          // The overrides only: a `$var` cap keeps its expression in the YAML
+          // (the inspector shows what it resolves to).
+          const pipeline = foldCostCapOverrides(t.pipeline, run?.region_max_cost_overrides);
+          return {
+            ...t,
+            pipeline,
+            runCostCaps: costCapBaseline(pipeline, runAppliedCaps(t.pipeline, run)),
+            runEditing: true,
+          };
+        }),
       }));
+    },
+
+    followRunCostCaps: (id: string, overrides: CostCapOverrides | null | undefined) => {
+      const tab = get().openTabs.find((t) => t.id === id);
+      if (!tab?.runEditing) return;
+      const baseline = tab.runCostCaps ?? {};
+      const moved = followCostCaps(tab.pipeline, baseline, overrides);
+      if (!moved) return;
+      // The undo history follows too, or an undo would bring the stale cap back.
+      const follow = (p: EditorPipelineDef) => followCostCapsIn(p, baseline, overrides);
+      set((s) => {
+        const h = s.history[id];
+        return {
+          openTabs: s.openTabs.map((t) =>
+            t.id === id ? { ...t, pipeline: moved.pipeline, runCostCaps: moved.baseline } : t,
+          ),
+          history: h ? { ...s.history, [id]: { ...h, past: h.past.map(follow), future: h.future.map(follow) } } : s.history,
+        };
+      });
     },
 
     finishRunEditing: async (id: string) => {
@@ -31,7 +66,7 @@ export function runEditSlice(set: Set, get: Get): Partial<EditState> {
       if (!tab?.runId) return;
       if (!hasUnsavedWork(tab)) {
         set((s) => ({
-          openTabs: s.openTabs.map((t) => (t.id === id ? { ...t, runEditing: false } : t)),
+          openTabs: s.openTabs.map((t) => (t.id === id ? { ...t, runEditing: false, runCostCaps: undefined } : t)),
           history: clearedHistory(s.history, id),
         }));
         return;
@@ -55,6 +90,7 @@ export function runEditSlice(set: Set, get: Get): Partial<EditState> {
                 dirty: false,
                 saveError: undefined,
                 runEditing: false,
+                runCostCaps: undefined,
               }
             : t,
         ),

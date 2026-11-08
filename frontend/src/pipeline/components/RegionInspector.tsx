@@ -176,6 +176,7 @@ export default function RegionInspector({
               variables={Object.keys(tab.pipeline.variables ?? {})}
               onChange={(value) => updateRegion(region.id, { max_cost_usd: value })}
               inputRef={capInputRef}
+              resolved={onRun ? capUsd : null}
             />
             {belowSpent ? (
               <RegionAwaitNote testid="region-cost-below-spent">

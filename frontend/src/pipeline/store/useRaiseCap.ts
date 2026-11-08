@@ -7,26 +7,26 @@
  */
 
 import { useCallback } from "react";
-import type { CostCapOverrides } from "../model/runCostCaps";
+import type { RunCapSource } from "../model/runCostCaps";
 import { useEditStore } from "./editStore";
 
 export function useRaiseCap(): (
   runId: string,
   regionId: string,
-  capOverrides: CostCapOverrides | null | undefined,
+  run: RunCapSource | null | undefined,
 ) => void {
   const startRunEditing = useEditStore((s) => s.startRunEditing);
   const setActiveTab = useEditStore((s) => s.setActiveTab);
   const setSelection = useEditStore((s) => s.setSelection);
   return useCallback(
-    (runId, regionId, capOverrides) => {
+    (runId, regionId, run) => {
       const { openTabs, activeTabId } = useEditStore.getState();
       // The Run's tab, brought to the front when another one is.
       const tab =
         openTabs.find((t) => t.id === activeTabId && t.runId === runId) ?? openTabs.find((t) => t.runId === runId);
       if (tab) {
         if (tab.id !== activeTabId) setActiveTab(tab.id);
-        startRunEditing(tab.id, capOverrides);
+        startRunEditing(tab.id, run);
       }
       setSelection({ kind: "region", id: null, regionId, focusField: "max_cost_usd" });
     },

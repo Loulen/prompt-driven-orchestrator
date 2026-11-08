@@ -33,6 +33,7 @@ export async function sourcePipelineId(run: RunState): Promise<string> {
 
 export function useRunEditing(tab: OpenPipeline | undefined, activeRunState: RunState | null) {
   const startRunEditing = useEditStore((s) => s.startRunEditing);
+  const followRunCostCaps = useEditStore((s) => s.followRunCostCaps);
   const finishRunEditing = useEditStore((s) => s.finishRunEditing);
   const saveTab = useEditStore((s) => s.save);
   const openPipeline = useEditStore((s) => s.openPipeline);
@@ -52,6 +53,16 @@ export function useRunEditing(tab: OpenPipeline | undefined, activeRunState: Run
     if (editingArchived) void finishRunEditing(editingArchived);
   }, [editingArchived, finishRunEditing]);
 
+  // A cap changed outside the tab while it is edited (the CLI, an extension,
+  // another browser) reaches it: an untouched cap follows, so a Save does not
+  // silently put the old one back.
+  const followedTab = tab?.runEditing === true ? tab.id : null;
+  // A refresh with the same overrides moves nothing (the store returns early).
+  const overrides = activeRunState?.region_max_cost_overrides;
+  useEffect(() => {
+    if (followedTab && overrides) followRunCostCaps(followedTab, overrides);
+  }, [followedTab, overrides, followRunCostCaps]);
+
   const handleFinishEditing = useCallback(() => {
     if (!tab) return;
     if (hasUnsavedWork(tab)) {
@@ -65,7 +76,7 @@ export function useRunEditing(tab: OpenPipeline | undefined, activeRunState: Run
     tab?.runId != null && activeRunState != null && !archived
       ? {
           editing: !isRunTabLocked(tab),
-          onEditForRun: () => startRunEditing(tab.id, activeRunState.region_max_cost_overrides),
+          onEditForRun: () => startRunEditing(tab.id, activeRunState),
           onEditSource: () => void sourcePipelineId(activeRunState).then((id) => openPipeline(id)),
           onFinishEditing: handleFinishEditing,
         }

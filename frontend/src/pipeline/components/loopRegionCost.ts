@@ -4,6 +4,7 @@
 import type { LoopRegion } from "../../shared/generated/LoopRegion";
 import type { RunState } from "../../shared/generated/RunState";
 import type { EditorPipelineDef } from "../model/pipeline";
+import { resolveCapVariable } from "../model/runCostCaps";
 import {
   costNearCap,
   formatCostCap,
@@ -48,14 +49,8 @@ export function regionCapUsd(
   }
   const cap = region.max_cost_usd;
   if (cap == null || cap === "") return null;
-  const name = typeof cap === "string" && cap.startsWith("$") ? cap.slice(1) : null;
-  const raw =
-    name == null
-      ? cap
-      : runState?.variables?.[name] !== undefined
-        ? runState.variables[name]
-        : pipeline.variables?.[name]?.default;
-  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+  if (typeof cap === "string" && cap.startsWith("$")) return resolveCapVariable(cap.slice(1), pipeline, runState);
+  const n = typeof cap === "number" ? cap : typeof cap === "string" ? Number(cap) : NaN;
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 

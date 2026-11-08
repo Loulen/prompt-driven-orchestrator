@@ -67,6 +67,7 @@ export function CostCapField({
   variables,
   onChange,
   inputRef,
+  resolved = null,
 }: {
   region: LoopRegion;
   /** The pipeline's declared variables, for a `$var`. */
@@ -74,8 +75,15 @@ export function CostCapField({
   onChange: (value: number | string | null) => void;
   /** The input, for `raise cap` to focus it. */
   inputRef?: React.Ref<HTMLInputElement>;
+  /**
+   * On a Run, the amount a `$var` cap resolves to: the field shows it (`5`,
+   * not `$budget`), while the YAML keeps the expression until it is retyped.
+   */
+  resolved?: number | null;
 }) {
-  const stored = region.max_cost_usd == null ? "" : String(region.max_cost_usd);
+  const declared = region.max_cost_usd == null ? "" : String(region.max_cost_usd);
+  const showsResolved = resolved != null && declared.startsWith("$");
+  const stored = showsResolved ? String(resolved) : declared;
   // What the author is typing, while it differs from the pipeline: kept while
   // it is refused, dropped on blur once valid so an undo shows through.
   const [draft, setDraft] = useState<string | null>(null);
@@ -93,6 +101,7 @@ export function CostCapField({
           value={text}
           placeholder="no cap"
           data-testid="region-max-cost"
+          title={showsResolved ? `${declared} = ${resolved}` : undefined}
           onChange={(e) => {
             const next = e.target.value;
             setDraft(next);

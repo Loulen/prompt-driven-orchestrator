@@ -124,6 +124,15 @@ export function rowsToWhen(
 }
 
 /**
+ * The grammar's map of field → predicate. A `when` the YAML holds as anything
+ * else (a bare string) is the author's: passed through as is, never walked
+ * key by key — a string would come back as `{"0": "i", "1": "t", …}`.
+ */
+function isClauseMap(when: unknown): when is Record<string, unknown> {
+  return when != null && typeof when === "object" && !Array.isArray(when);
+}
+
+/**
  * Re-encodes a clause for a new set of carried ports (#843). Called when the
  * Outputs section ticks or unticks a port, and when a port rename reaches the
  * edges: the qualification changes shape (bare ⇄ `port.field`), and a key
@@ -136,11 +145,13 @@ export function rowsToWhen(
  * doesn't render.
  */
 export function requalifyWhen(
-  when: Record<string, unknown> | null | undefined,
+  when: unknown,
   fromPorts: string[],
   toPorts: string[],
 ): Record<string, unknown> | null {
-  if (!when || Object.keys(when).length === 0) return null;
+  // Not a map: returned as the edge holds it (typed as the grammar's map, like `EdgeDef.when`).
+  if (!isClauseMap(when)) return (when ?? null) as Record<string, unknown> | null;
+  if (Object.keys(when).length === 0) return null;
   const fallback = defaultConditionPort(toPorts);
   const out: Record<string, unknown> = {};
   for (const [key, predicate] of Object.entries(when)) {
@@ -160,11 +171,13 @@ export function requalifyWhen(
  * Keys only, like `requalifyWhen` — the row model is lossy.
  */
 export function renameWhenPorts(
-  when: Record<string, unknown> | null | undefined,
+  when: unknown,
   ports: string[],
   rename: Map<string, string>,
 ): Record<string, unknown> | null {
-  if (!when || Object.keys(when).length === 0) return null;
+  // Not a map: returned as the edge holds it (typed as the grammar's map, like `EdgeDef.when`).
+  if (!isClauseMap(when)) return (when ?? null) as Record<string, unknown> | null;
+  if (Object.keys(when).length === 0) return null;
   if (rename.size === 0) return when;
   const renamed = ports.map((p) => rename.get(p) ?? p);
   const out: Record<string, unknown> = {};

@@ -300,9 +300,19 @@ pub fn augment_run_state_from_disk(
     // the Run's variables).
     run_state.loop_costs = loop_costs(&breakdown, events, &pipe.loops);
     let vars = crate::application::scheduler::frontmatter::resolve_run_variables(pipe, events);
-    for region in &pipe.loops {
-        let cap = crate::domain::scheduler::effective_region_max_cost(region, &vars);
-        if let Some(cost) = run_state.loop_costs.get_mut(&region.id) {
+    // The live `set_region_max_cost` override wins, as it does at re-entry.
+    let caps: Vec<(String, Option<f64>)> = pipe
+        .loops
+        .iter()
+        .map(|region| {
+            (
+                region.id.clone(),
+                crate::domain::scheduler::effective_region_max_cost(run_state, region, &vars),
+            )
+        })
+        .collect();
+    for (region_id, cap) in caps {
+        if let Some(cost) = run_state.loop_costs.get_mut(&region_id) {
             cost.cap_usd = cap;
         }
     }

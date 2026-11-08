@@ -136,6 +136,7 @@ fn core_entry(
                 "bump_region",
                 "end_region",
                 "set_region_max_iter",
+                "set_region_max_cost",
                 "force_route",
                 "pause_run",
                 "resume_run",

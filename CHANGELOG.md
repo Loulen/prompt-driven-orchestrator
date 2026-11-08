@@ -32,6 +32,32 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   pipeline was created, and Save and Validate replayed say they are done; the last step notices the
   pipeline is deleted even when its tab closed with it. *First run*: Launch replayed after the
   launch says what the click did.
+### Cost cap of a loop changed while the run goes on
+
+- "raise cap", on a loop region that reached its cost cap or in Run info's "Budget reached"
+  banner, opens Edit › Edit for this run with the region inspector on `max_cost_usd`, focused. The
+  inspector takes an amber outline and an "Editing for this run" pill; its header reads the cap the
+  run applies. A cap given as a `$variable` shows the amount the run resolved (`$ 5`); the YAML
+  keeps the variable until you type another cap.
+- A run open in "Edit for this run" follows a cap changed outside it (the CLI, an extension, another
+  browser): an untouched cap takes the new value, and Save only sends a cap you changed, so it
+  never puts the old one back. A cap you already typed keeps your draft.
+- While editing a run, the cap field says "Applies live. Saving resumes the Run at the next lap."
+  A cap under what the loop already spent is allowed, with an amber note: the loop stops at its
+  next re-entry and the lap in progress always finishes. ✕ removes the cap. On a run waiting
+  "budget reached", a note says how to go on, with "end region" at the bottom.
+- Save applies each changed cap to the run: raised over the spend, the next lap starts at once.
+- New run command `set_region_max_cost` (`max_cost_usd`: dollars, or `null` to remove the cap),
+  sister of `set_region_max_iter`: the change is kept by the run (`region_max_cost_overrides` on a
+  run read, kept across a reopen) and beats the pipeline's `max_cost_usd`, a `$variable`
+  included. Refused with a 400, nothing recorded, on a collection, an unknown region or a value
+  at or below 0. Extensions see it as the Run Operation `set_region_max_cost`, granted like
+  `set_region_max_iter`; the Pipeline Manager's guide documents both.
+- `pdo run region <run> <region> --max-cost <usd|none>` sets or removes the cost cap from a shell.
+- The "budget reached" reason now names `set_region_max_cost` as the way to raise the cap.
+- The "budget reached" and "exhausted · unrouted" blocks of a loop region stay clickable when an
+  exit edge's condition label sits on them. An edge whose `when` is a bare string shows that
+  string, no longer "0 and 1 and 2 …", and renaming a port no longer rewrites it.
 
 ### Waiting alerts: a notification and a sound when a node starts waiting for you
 

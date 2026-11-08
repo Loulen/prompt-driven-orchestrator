@@ -96,6 +96,29 @@ export function bumpRegion(
   );
 }
 
+/**
+ * Edit a bounded loop region's Plafond de coût in flight
+ * (`set_region_max_cost`): an absolute dollar cap, or `null` to remove it. No
+ * floor: a cap under the spend stops the loop at its next re-entry. On a Run
+ * parked « budget reached » the daemon lifts the park itself and re-checks the
+ * re-entry, so a raised cap starts the next lap.
+ */
+export function setRegionMaxCost(
+  runId: string,
+  regionId: string,
+  maxCostUsd: number | null,
+): Promise<void> {
+  return request<void>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/commands`,
+    {
+      body: { kind: "set_region_max_cost", region_id: regionId, max_cost_usd: maxCostUsd },
+      responseMode: "void",
+      label: "set_region_max_cost",
+    },
+  );
+}
+
 export function retryAll(runId: string): Promise<CreateRunResponse> {
   return request<CreateRunResponse>(
     "POST",

@@ -15,6 +15,7 @@ import { toastRefusal } from "../../shared/authorization/refusal";
 import { formatCostAmount } from "../../run/model/costLabel";
 import { formatCostCap } from "../../run/model/loopCostLabel";
 import { useEditStore } from "../store/editStore";
+import { useRaiseCap } from "../store/useRaiseCap";
 import type { EditorPipelineDef } from "../model/pipeline";
 import { regionLapText } from "./loopRegionDerivation";
 
@@ -32,9 +33,15 @@ export function BudgetReachedBanner({
   onShowRegion?: () => void;
 }) {
   const setSelection = useEditStore((s) => s.setSelection);
+  const raiseCap = useRaiseCap();
   const endRefused = useWhyNotOnRun(run.run_id)("end_region");
   const select = () => {
     setSelection({ kind: "region", id: null, regionId });
+    onShowRegion?.();
+  };
+  // « Edit for this run » on the region's `max_cost_usd`, focused.
+  const raise = () => {
+    raiseCap(run.run_id, regionId, run);
     onShowRegion?.();
   };
   const cost = run.loop_costs?.[regionId];
@@ -51,7 +58,7 @@ export function BudgetReachedBanner({
         text={`Loop ${regionId}`}
         actions={
           <>
-            <Button size="sm" tone="ghost" data-testid="run-budget-raise-cap" onClick={select}>
+            <Button size="sm" tone="ghost" data-testid="run-budget-raise-cap" onClick={raise}>
               raise cap
             </Button>
             <Button

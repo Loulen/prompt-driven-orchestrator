@@ -160,8 +160,56 @@ describe("CORE-217 — a loop region's inspector takes the pane", () => {
 
     fireEvent.click(document.querySelector<HTMLElement>('[data-testid="loop-region-raise-cap"]')!);
 
-    expect(useEditStore.getState().selection).toEqual(REGION);
+    // CORE-218: on the cap, focused, with the Run's tab edited for itself.
+    expect(useEditStore.getState().selection).toEqual({ ...REGION, focusField: "max_cost_usd" });
+    expect(useEditStore.getState().openTabs[0].runEditing).toBe(true);
     expect(nodeEl("ship")).not.toHaveClass("selected");
     expect(onCloseInfo).toHaveBeenCalled();
+  });
+
+  it("CORE-218: an open « Edit for this run » follows a cap lowered outside it (the CLI)", () => {
+    useEditStore.setState({
+      openTabs: [
+        {
+          id: "__run__r1",
+          scope: "run",
+          pipeline: {
+            ...structuredClone(PIPELINE),
+            loops: [{ id: "review_loop", kind: "bounded", members: ["writer", "reviewer"], max_iter: 3, max_cost_usd: 5 }],
+          } as EditorPipelineDef,
+          prompts: {},
+          diagnostics: [],
+          dirty: false,
+          externalDirty: false,
+          runId: "r1",
+        },
+      ],
+      activeTabId: "__run__r1",
+    });
+    const run = (overrides: Record<string, number | null>) =>
+      ({
+        run_id: "r1",
+        pipeline_name: "p1",
+        status: "running",
+        nodes: {},
+        edges: [],
+        node_defs: [],
+        loop_states: {},
+        foreach_states: {},
+        collection_states: {},
+        switch_states: {},
+        sandbox: "off",
+        sessions_spawned: 0,
+        region_max_cost_overrides: overrides,
+      }) as unknown as RunState;
+    const { rerender } = render(<EditCanvas libraryEntries={[]} onLibraryDelete={() => {}} runState={run({ review_loop: 8 })} />);
+    act(() => useEditStore.getState().startRunEditing("__run__r1", run({ review_loop: 8 })));
+    expect(useEditStore.getState().openTabs[0].pipeline.loops?.[0].max_cost_usd).toBe(8);
+
+    rerender(<EditCanvas libraryEntries={[]} onLibraryDelete={() => {}} runState={run({ review_loop: 4 })} />);
+
+    expect(useEditStore.getState().openTabs[0].pipeline.loops?.[0].max_cost_usd).toBe(4);
+    expect(useEditStore.getState().openTabs[0].dirty).toBe(false);
+    expect(document.querySelector('[data-testid="loop-region-cost"]')?.textContent).toContain("$4");
   });
 });

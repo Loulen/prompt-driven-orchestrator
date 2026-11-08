@@ -148,7 +148,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   // #315 / ADR-0085: an archived Run, or a Run followed in « pilotage », is
   // read-only: selection and inspection stay, every mutation is off (drag,
   // connect, add-node/add-note, the context menu's edit actions).
-  const { readOnly, runEdit, finishConfirm } = useRunEditing(tab, activeRunState);
+  const { readOnly, runEdit, finishConfirm, editingRun } = useRunEditing(tab, activeRunState);
   const {
     reviewHref,
     reviewPending,
@@ -178,9 +178,9 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   const cards = useMemo(
     () =>
       pipeline
-        ? deriveEditNodes(pipeline, activeRunState, agentProfileIds, agentProfiles).map(withPlay).map(withChildren)
+        ? deriveEditNodes(pipeline, activeRunState, agentProfileIds, agentProfiles, editingRun).map(withPlay).map(withChildren)
         : [],
-    [pipeline, activeRunState, agentProfileIds, agentProfiles, withPlay, withChildren],
+    [pipeline, activeRunState, agentProfileIds, agentProfiles, editingRun, withPlay, withChildren],
   );
   const { shown, cards: compactCards, placed, shift } = useCanvasCompaction(tab, pipeline, cards, activeRunState == null, shiftRef);
   const derivedNodes = useMemo(() => {
@@ -192,13 +192,13 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     // region nodes are prepended, pinned to a low zIndex behind the member
     // cards, and given `pointer-events: none` so edges crossing the box stay
     // clickable (#167).
-    const regionNodes: Node[] = buildLoopRegionNodes(shown, activeRunState, compactCards);
+    const regionNodes: Node[] = buildLoopRegionNodes(shown, activeRunState, compactCards, editingRun);
     // Inert canvas notes (#307 / ADR-0018) render as draggable/selectable cards
     // with no handle. They carry no run status, so they're derived from the
     // pipeline alone (independent of run state).
     const noteNodes: Node[] = buildNoteNodes(shown);
     return [...regionNodes, ...placed, ...noteNodes];
-  }, [shown, compactCards, placed, activeRunState]);
+  }, [shown, compactCards, placed, activeRunState, editingRun]);
   const derivedEdges = useMemo(
     () => (shown ? deriveEditEdges(shown) : []),
     [shown],

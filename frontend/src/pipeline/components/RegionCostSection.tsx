@@ -5,6 +5,7 @@
  * cost source may let the loop overshoot its cap.
  */
 import { useState } from "react";
+import type React from "react";
 import { Info, TriangleAlert, X } from "lucide-react";
 import { Field, IconButton, Section, TextInput } from "../../shared/ui/kit";
 import type { LoopCost } from "../../shared/generated/LoopCost";
@@ -65,13 +66,24 @@ export function CostCapField({
   region,
   variables,
   onChange,
+  inputRef,
+  resolved = null,
 }: {
   region: LoopRegion;
   /** The pipeline's declared variables, for a `$var`. */
   variables: readonly string[];
   onChange: (value: number | string | null) => void;
+  /** The input, for `raise cap` to focus it. */
+  inputRef?: React.Ref<HTMLInputElement>;
+  /**
+   * On a Run, the amount a `$var` cap resolves to: the field shows it (`5`,
+   * not `$budget`), while the YAML keeps the expression until it is retyped.
+   */
+  resolved?: number | null;
 }) {
-  const stored = region.max_cost_usd == null ? "" : String(region.max_cost_usd);
+  const declared = region.max_cost_usd == null ? "" : String(region.max_cost_usd);
+  const showsResolved = resolved != null && declared.startsWith("$");
+  const stored = showsResolved ? String(resolved) : declared;
   // What the author is typing, while it differs from the pipeline: kept while
   // it is refused, dropped on blur once valid so an undo shows through.
   const [draft, setDraft] = useState<string | null>(null);
@@ -84,10 +96,12 @@ export function CostCapField({
           $
         </span>
         <TextInput
+          ref={inputRef}
           mono
           value={text}
           placeholder="no cap"
           data-testid="region-max-cost"
+          title={showsResolved ? `${declared} = ${resolved}` : undefined}
           onChange={(e) => {
             const next = e.target.value;
             setDraft(next);
@@ -129,11 +143,29 @@ export function CapOvershootNote({ members }: { members: string[] }) {
 }
 
 /** A grey informative line under a section (a collection, a followed Run). */
-export function RegionInfoNote({ text, testid }: { text: string; testid: string }) {
+export function RegionInfoNote({ text, testid }: { text: React.ReactNode; testid: string }) {
   return (
     <div className="ei-note ei-note--info" data-testid={testid}>
       <Info size={12} strokeWidth={1.5} aria-hidden />
       <span>{text}</span>
+    </div>
+  );
+}
+
+/** An amber line: a cap typed under the spend, or a Run waiting « budget reached ». */
+export function RegionAwaitNote({
+  icon: Icon = TriangleAlert,
+  children,
+  testid,
+}: {
+  icon?: typeof TriangleAlert;
+  children: React.ReactNode;
+  testid: string;
+}) {
+  return (
+    <div className="ei-note ei-note--await" data-testid={testid}>
+      <Icon size={12} strokeWidth={1.5} aria-hidden />
+      <span>{children}</span>
     </div>
   );
 }

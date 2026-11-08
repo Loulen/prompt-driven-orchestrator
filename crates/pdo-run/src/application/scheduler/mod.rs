@@ -12,7 +12,9 @@ pub mod node_completion;
 pub mod stall;
 
 /// The scheduler's **cost input** (ADR draft plafond-de-cout-de-boucle). When
-/// the pipeline caps at least one bounded region (`max_cost_usd`), fold the
+/// the pipeline caps at least one bounded region (`max_cost_usd`, or a live
+/// `set_region_max_cost` override, which caps a region whose YAML declares
+/// none), fold the
 /// **Coût de boucle** of each region from the same attributed breakdown as the
 /// Run total (ADR-0058) onto a copy of the Run state, so the pure scheduler
 /// reads it at re-entry. Never persisted (ADR-0022/0029); a pipeline with no
@@ -23,10 +25,10 @@ pub async fn with_loop_costs_for_caps<'a>(
     events: &[crate::domain::event::Event],
     pipeline: &pdo_pipeline::domain::pipeline::PipelineDef,
 ) -> std::borrow::Cow<'a, crate::domain::state::RunState> {
-    let capped = pipeline.loops.iter().any(|region| {
-        region.kind == pdo_pipeline::domain::pipeline::LoopKind::Bounded
-            && region.max_cost_usd.is_some()
-    });
+    let capped = pipeline
+        .loops
+        .iter()
+        .any(|region| crate::domain::scheduler::region_has_cost_cap(run_state, region));
     if !capped {
         return std::borrow::Cow::Borrowed(run_state);
     }

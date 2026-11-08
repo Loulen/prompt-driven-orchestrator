@@ -229,6 +229,14 @@ describe("requalifyWhen", () => {
   });
 });
 
+describe("a `when` that is not the grammar's map", () => {
+  it("passes through a port change as written, never walked key by key", () => {
+    const when = "iter >= max" as unknown as Record<string, unknown>;
+    expect(requalifyWhen(when, ["a"], ["b"])).toBe("iter >= max");
+    expect(renameWhenPorts(when, ["a"], new Map([["a", "b"]]))).toBe("iter >= max");
+  });
+});
+
 describe("renameWhenPorts", () => {
   it("follows a renamed output rather than letting the clause jump elsewhere", () => {
     expect(

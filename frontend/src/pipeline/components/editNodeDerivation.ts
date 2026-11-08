@@ -52,6 +52,8 @@ export function deriveEditNodes(
   runState: RunState | null | undefined,
   agentProfileIds: ReadonlySet<string> = new Set(),
   agentProfiles: readonly AgentProfile[] = [],
+  /** The Run is edited for itself: a loop badge's cap reads the tab, edits included. */
+  editingRun = false,
 ): Node[] {
   // A single-member loop region renders as a compact badge on the member's card
   // instead of a box (ADR-0011 / #148, #151; the LoopRegion type's "compact
@@ -61,7 +63,7 @@ export function deriveEditNodes(
   // mirroring the box header — so a one-member loop is never invisible (it draws
   // no box). Keyed by member id; the kind drives the glyph and the title.
   const loopBadgeByMember = new Map<string, LoopBadge>();
-  for (const region of deriveLoopRegions(pipeline, runState)) {
+  for (const region of deriveLoopRegions(pipeline, runState, undefined, editingRun)) {
     if (region.badgeMemberId == null) continue;
     const symbol = region.kind === "collection" ? "⇉" : "↻";
     const costText = regionCostText(region);

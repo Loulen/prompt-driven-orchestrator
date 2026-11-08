@@ -1,6 +1,7 @@
 // The canvas side of a pipeline's bounded loop regions (ADR-0011 / #148): the
 // layout and label of each region, and the xyflow nodes that draw it.
 import type { Node } from "@xyflow/react";
+import { EDGE_LABELS_ABOVE_NODES } from "./editEdgeDerivation";
 import type { LoopRegion } from "../../shared/generated/LoopRegion";
 import type { RunState } from "../../shared/generated/RunState";
 import type { EditorPipelineDef } from "../model/pipeline";
@@ -80,6 +81,8 @@ export function deriveLoopRegions(
   pipeline: EditorPipelineDef,
   runState: RunState | null | undefined,
   cards?: Readonly<Record<string, Box>>,
+  /** The Run is edited for itself: its caps read the tab, edits included. */
+  editingRun = false,
 ): LoopRegionLayout[] {
   const regions = pipeline.loops ?? [];
   const byId = new Map(pipeline.nodes.map((n) => [n.id, n]));
@@ -107,7 +110,7 @@ export function deriveLoopRegions(
     // `max/max` while it runs, and so does a region that left by its exit. Only
     // the daemon's `region_exhausted` park on THIS region marks it; a historical
     // run without `awaiting_region_id` falls back to the counter.
-    const money = deriveRegionCost(region, pipeline, runState, currentIter);
+    const money = deriveRegionCost(region, pipeline, runState, currentIter, editingRun);
     const exhausted =
       !isCollection &&
       live &&
@@ -191,6 +194,14 @@ export function deriveLoopRegions(
 const REGION_CHROME_Z = 1001;
 
 /**
+ * A region whose chrome asks for a click (« budget reached │ raise cap │ end
+ * region », « exhausted · unrouted » and its route button) also clears the
+ * labels of edges drawn above the cards: an exit edge leaves the region right
+ * where that block sits, and its condition pill would take the buttons' clicks.
+ */
+const REGION_ACTION_CHROME_Z = EDGE_LABELS_ABOVE_NODES + 1;
+
+/**
  * Builds the decorative xyflow `loopRegion` nodes that back each box-form
  * bounded region (ADR-0011 / #148). TWO nodes per `>= 2`-member region; single-
  * member regions render as a badge on the member card (no box) and produce
@@ -223,11 +234,13 @@ export function buildLoopRegionNodes(
   pipeline: EditorPipelineDef,
   runState: RunState | null | undefined,
   cards?: Readonly<Record<string, Box>>,
+  editingRun = false,
 ): Node[] {
-  return deriveLoopRegions(pipeline, runState, cards)
+  return deriveLoopRegions(pipeline, runState, cards, editingRun)
     .filter((r) => r.box != null)
     .flatMap((r) => {
       const position = { x: r.box!.x, y: r.box!.y };
+      const chromeZ = r.budgetReached || r.exhausted ? REGION_ACTION_CHROME_Z : REGION_CHROME_Z;
       const data = {
         regionId: r.id,
         kind: r.kind,
@@ -240,6 +253,14 @@ export function buildLoopRegionNodes(
         // The live run id (or null in a template view) so an exhausted-unrouted
         // region can offer "route from manager" (ADR-0011 / #152).
         runId: runState?.run_id ?? null,
+        // `raise cap` starts « Edit for this run » from the caps the Run applies.
+        capSource: runState
+          ? {
+              region_max_cost_overrides: runState.region_max_cost_overrides,
+              loop_costs: runState.loop_costs,
+              variables: runState.variables,
+            }
+          : null,
         width: r.box!.width,
         height: r.box!.height,
       };
@@ -263,8 +284,8 @@ export function buildLoopRegionNodes(
           ...inert,
           id: `region-chrome-${r.id}`,
           data: { ...data, layer: "chrome" as const },
-          zIndex: REGION_CHROME_Z,
-          style: { zIndex: REGION_CHROME_Z, pointerEvents: "none" },
+          zIndex: chromeZ,
+          style: { zIndex: chromeZ, pointerEvents: "none" },
         },
       ];
     });

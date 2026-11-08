@@ -346,7 +346,13 @@ describe("LoopRegionNode corner — Coût de boucle and Plafond de coût", () =>
     fireEvent.click(screen.getByTestId("loop-region-end"));
     expect(mockEndRegion).toHaveBeenCalledWith("run-1", "review_loop");
     fireEvent.click(screen.getByTestId("loop-region-raise-cap"));
-    expect(useEditStore.getState().selection).toEqual({ kind: "region", id: null, regionId: "review_loop" });
+    // `raise cap` opens the inspector on the cap, focused once editable.
+    expect(useEditStore.getState().selection).toEqual({
+      kind: "region",
+      id: null,
+      regionId: "review_loop",
+      focusField: "max_cost_usd",
+    });
 
     rerender(
       <Wrapper>
@@ -354,5 +360,43 @@ describe("LoopRegionNode corner — Coût de boucle and Plafond de coût", () =>
       </Wrapper>,
     );
     expect(screen.getByTestId("loop-region")).toHaveAttribute("data-budget");
+  });
+
+  it("raise cap opens the Run's tab with a `$var` cap kept, and what it resolves to taken from the Run", () => {
+    useEditStore.setState({
+      openTabs: [
+        {
+          id: "__run__run-1",
+          scope: "run",
+          pipeline: {
+            name: "p",
+            variables: { budget: { type: "float", default: 2 } },
+            nodes: [makeNode("impl"), makeNode("rev")],
+            edges: [],
+            loops: [{ id: "review_loop", kind: "bounded", members: ["impl", "rev"], max_iter: 5, max_cost_usd: "$budget" }],
+          } as EditorPipelineDef,
+          prompts: {},
+          diagnostics: [],
+          dirty: false,
+          externalDirty: false,
+          runId: "run-1",
+        },
+      ],
+      activeTabId: "__run__run-1",
+      selection: { kind: "none", id: null },
+    });
+    render(
+      <Wrapper>
+        <LoopRegionNode
+          {...props({ budgetReached: true, runId: "run-1", capSource: { variables: { budget: 5 } } })}
+        />
+      </Wrapper>,
+    );
+    fireEvent.click(screen.getByTestId("loop-region-raise-cap"));
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.runEditing).toBe(true);
+    expect(tab.pipeline.loops?.[0].max_cost_usd).toBe("$budget");
+    expect(tab.runCostCaps).toEqual({ review_loop: { usd: 5, yaml: "$budget" } });
+    expect(tab.dirty).toBe(false);
   });
 });

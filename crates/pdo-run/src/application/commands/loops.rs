@@ -188,49 +188,131 @@ pub(super) async fn set_region_max_iter(
     region_id: String,
     max_iter: i64,
 ) -> Response {
-    let (_, run_state) = match load_projected(&state, &run_id).await {
+    let payload = serde_json::json!({
+        "command": "set_region_max_iter",
+        "region_id": region_id,
+        "max_iter": max_iter,
+    });
+    let response = Box::pin(set_region_cap(
+        &state,
+        &run_id,
+        &region_id,
+        payload,
+        CapKind::Laps,
+    ))
+    .await;
+    if response.status().is_success() {
+        info!("set_region_max_iter: region {region_id} -> {max_iter} in run {run_id}");
+    }
+    response
+}
+
+/// Edit a bounded region's Plafond de coût in flight (ADR draft
+/// plafond-de-cout-de-boucle). Same shape as `set_region_max_iter`, and a
+/// `collection` is refused too, since it is never capped: raising the cap of a
+/// Run parked « budget reached » starts the next lap now, and a cap still under
+/// the spend re-parks it truthfully.
+pub(super) async fn set_region_max_cost(
+    state: Arc<Runs>,
+    run_id: String,
+    region_id: String,
+    max_cost_usd: Option<f64>,
+) -> Response {
+    let payload = serde_json::json!({
+        "command": "set_region_max_cost",
+        "region_id": region_id,
+        "max_cost_usd": max_cost_usd,
+    });
+    let response = Box::pin(set_region_cap(
+        &state,
+        &run_id,
+        &region_id,
+        payload,
+        CapKind::Cost,
+    ))
+    .await;
+    if response.status().is_success() {
+        match max_cost_usd {
+            Some(usd) => info!("set_region_max_cost: region {region_id} -> ${usd} in run {run_id}"),
+            None => info!("set_region_max_cost: region {region_id} uncapped in run {run_id}"),
+        }
+    }
+    response
+}
+
+/// Which cap a region command sets.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CapKind {
+    /// `set_region_max_iter`.
+    Laps,
+    /// `set_region_max_cost`: a `collection` is never capped, so refused.
+    Cost,
+}
+
+/// The shared tail of the two cap commands, boxed by both: its future is
+/// large, and `dispatch` reserves room for every arm's future on the stack.
+/// Validate the region against the Run's pipeline SNAPSHOT (an unknown
+/// region, or a `collection` for a cost cap, answers 400 and leaves no trace),
+/// append the `CommandIssued`, lift a parked Run so the new cap re-drives the
+/// region now, then re-evaluate. An interactive `AwaitingUser` is left alone.
+async fn set_region_cap(
+    state: &Arc<Runs>,
+    run_id: &str,
+    region_id: &str,
+    payload: serde_json::Value,
+    cap: CapKind,
+) -> Response {
+    let kind = match cap {
+        CapKind::Laps => "set_region_max_iter",
+        CapKind::Cost => "set_region_max_cost",
+    };
+    let (_, run_state) = match load_projected(state, run_id).await {
         Ok(v) => v,
         Err(resp) => return *resp,
     };
-    let repo_root = effective_repo_root(&state, &run_state);
-    let pipeline_path = resolve_run_pipeline_path(&repo_root, &run_id, &run_state.pipeline_name);
+    let repo_root = effective_repo_root(state, &run_state);
+    let pipeline_path = resolve_run_pipeline_path(&repo_root, run_id, &run_state.pipeline_name);
     if let Some(pipeline) = std::fs::read_to_string(&pipeline_path)
         .ok()
         .and_then(|yaml| pipeline::parse_pipeline(&yaml).ok())
         .map(|p| p.pipeline)
     {
-        if !pipeline.loops.iter().any(|r| r.id == region_id) {
+        let refusal = match pipeline.loops.iter().find(|r| r.id == region_id) {
+            None => Some(format!("region '{region_id}' not found in pipeline")),
+            Some(region)
+                if cap == CapKind::Cost
+                    && region.kind != pdo_pipeline::domain::pipeline::LoopKind::Bounded =>
+            {
+                Some(format!(
+                    "region '{region_id}' is a collection: cost caps apply to bounded loops only"
+                ))
+            }
+            Some(_) => None,
+        };
+        if let Some(error) = refusal {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": format!("region '{region_id}' not found in pipeline")
-                })),
+                Json(serde_json::json!({ "error": error })),
             )
                 .into_response();
         }
     } else {
-        warn!("set_region_max_iter: pipeline snapshot unreadable for run {run_id}; skipping region validation");
+        warn!("{kind}: pipeline snapshot unreadable for run {run_id}; skipping region validation");
     }
 
     let cmd_event = event::Event {
         id: None,
-        run_id: run_id.clone(),
+        run_id: run_id.to_string(),
         ts: pdo_kernel::clock::now_iso(),
         kind: event::EventKind::CommandIssued,
         node_id: None,
         iter: None,
-        payload: Some(serde_json::json!({
-            "command": "set_region_max_iter",
-            "region_id": region_id,
-            "max_iter": max_iter,
-        })),
+        payload: Some(payload),
     };
-    if let Err(e) = append_event(&state, &cmd_event).await {
+    if let Err(e) = append_event(state, &cmd_event).await {
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
     }
 
-    // Lift a parked run so the raised cap re-drives the region now. An
-    // interactive `AwaitingUser` is left alone.
     let needs_reopen = matches!(
         run_state.status,
         state::RunStatus::Halted | state::RunStatus::Failed
@@ -239,19 +321,18 @@ pub(super) async fn set_region_max_iter(
     if needs_reopen {
         let resume_event = event::Event {
             id: None,
-            run_id: run_id.clone(),
+            run_id: run_id.to_string(),
             ts: pdo_kernel::clock::now_iso(),
             kind: event::EventKind::CommandIssued,
             node_id: None,
             iter: None,
             payload: Some(serde_json::json!({ "command": "resume_run" })),
         };
-        if let Err(e) = append_event(&state, &resume_event).await {
-            error!("failed to append resume_run after set_region_max_iter: {e}");
+        if let Err(e) = append_event(state, &resume_event).await {
+            error!("failed to append resume_run after {kind}: {e}");
         }
     }
 
-    let summary = re_evaluate_after_command(&state, &run_id).await;
-    info!("set_region_max_iter: region {region_id} -> {max_iter} in run {run_id}");
+    let summary = re_evaluate_after_command(state, run_id).await;
     (StatusCode::OK, Json(summary.into_response_body())).into_response()
 }

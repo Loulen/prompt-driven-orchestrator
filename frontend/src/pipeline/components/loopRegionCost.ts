@@ -4,6 +4,7 @@
 import type { LoopRegion } from "../../shared/generated/LoopRegion";
 import type { RunState } from "../../shared/generated/RunState";
 import type { EditorPipelineDef } from "../model/pipeline";
+import { resolveCapVariable } from "../model/runCostCaps";
 import {
   costNearCap,
   formatCostCap,
@@ -26,28 +27,30 @@ export interface RegionCost {
 
 /**
  * The effective cost cap of a region, in dollars, as far as the client can
- * tell: the daemon's resolved `cap_usd` on a Run, else the YAML literal, else
- * the `$var`'s value — the one the Run was launched with, then the declared
- * default. `null` = uncapped, and always for a collection.
+ * tell: on a followed Run, its live `set_region_max_cost` override (`null`
+ * there: removed), then the daemon's resolved `cap_usd`; else the YAML
+ * literal, else the `$var`'s value — the one the Run was launched with, then
+ * the declared default. `editing`: the Run is edited for itself, so its tab
+ * (which started from the overrides) is what the cap reads, edits included.
+ * `null` = uncapped, and always for a collection.
  */
 export function regionCapUsd(
   region: LoopRegion,
   pipeline: Pick<EditorPipelineDef, "variables">,
   runState: RunState | null | undefined,
+  editing = false,
 ): number | null {
   if (region.kind !== "bounded") return null;
-  const served = runState?.loop_costs?.[region.id]?.cap_usd;
-  if (served != null) return served;
+  if (!editing) {
+    const overrides = runState?.region_max_cost_overrides;
+    if (overrides && region.id in overrides) return overrides[region.id] ?? null;
+    const served = runState?.loop_costs?.[region.id]?.cap_usd;
+    if (served != null) return served;
+  }
   const cap = region.max_cost_usd;
   if (cap == null || cap === "") return null;
-  const name = typeof cap === "string" && cap.startsWith("$") ? cap.slice(1) : null;
-  const raw =
-    name == null
-      ? cap
-      : runState?.variables?.[name] !== undefined
-        ? runState.variables[name]
-        : pipeline.variables?.[name]?.default;
-  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+  if (typeof cap === "string" && cap.startsWith("$")) return resolveCapVariable(cap.slice(1), pipeline, runState);
+  const n = typeof cap === "number" ? cap : typeof cap === "string" ? Number(cap) : NaN;
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
@@ -81,6 +84,7 @@ export function deriveRegionCost(
   pipeline: EditorPipelineDef,
   runState: RunState | null | undefined,
   currentIter: number,
+  editing = false,
 ): RegionCost {
   const collection = region.kind === "collection";
   const loopCost = runState != null ? runState.loop_costs?.[region.id] : undefined;
@@ -88,7 +92,7 @@ export function deriveRegionCost(
   const memberName = (id: string) =>
     byId.get(id)?.name ?? runState?.node_defs?.find((d) => d.id === id)?.name ?? id;
   const cost = loopCost ? loopCostLabel(loopCost, loopCostWindow(collection, currentIter), memberName) : null;
-  const capUsd = regionCapUsd(region, pipeline, runState);
+  const capUsd = regionCapUsd(region, pipeline, runState, editing);
   const capRaw = region.max_cost_usd;
   const cap = collection
     ? null

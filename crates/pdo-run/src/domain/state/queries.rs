@@ -47,6 +47,7 @@ impl RunState {
             collection_states: HashMap::new(),
             switch_states: HashMap::new(),
             region_max_iter_overrides: HashMap::new(),
+            region_max_cost_overrides: HashMap::new(),
             forced_routes: HashMap::new(),
             target_repo: None,
             target_repos: Vec::new(),

@@ -95,6 +95,31 @@ pub(super) fn apply_command_event(state: &mut RunState, event: &Event) {
                 }
             }
         }
+        // `set_region_max_cost` edits a bounded region's cost cap in flight
+        // (ADR draft plafond-de-cout-de-boucle). Absolute and last-write-wins
+        // like `set_region_max_iter`, but with NO floor (a cap under the spend
+        // is legal: the loop stops at the next re-entry) and `null` meaning
+        // « remove the cap ». A non-positive or non-numeric value is ignored
+        // (the handler refuses it before appending).
+        if cmd == Some("set_region_max_cost") {
+            if let Some(region_id) = payload.get("region_id").and_then(|v| v.as_str()) {
+                match payload.get("max_cost_usd") {
+                    Some(serde_json::Value::Null) => {
+                        state
+                            .region_max_cost_overrides
+                            .insert(region_id.to_string(), None);
+                    }
+                    Some(v) => {
+                        if let Some(usd) = v.as_f64().filter(|u| u.is_finite() && *u > 0.0) {
+                            state
+                                .region_max_cost_overrides
+                                .insert(region_id.to_string(), Some(usd));
+                        }
+                    }
+                    None => {}
+                }
+            }
+        }
         // #600 / ADR-0011: `force_route` records an explicit exit from a node or a
         // region to a target, short-circuiting the source's `when:` edges. Folded
         // per source (last-write-wins) so the effect is deterministic on every

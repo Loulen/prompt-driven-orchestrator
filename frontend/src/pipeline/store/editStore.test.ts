@@ -6,6 +6,9 @@ import { generatedRegionId } from "../../lib/loopRegions";
 import { pipelinesEquivalent } from "../../hooks/useLibraryPipelines";
 import { ApiError } from "../../shared/http/client";
 import { fetchRunPipeline, overwriteDefaultPipelineFromRun, saveRunPipeline } from "../../run/api/runPipeline";
+import { setRegionMaxCost } from "../../run/api/commands";
+import { fetchRun } from "../../run/api/runs";
+import type { RunState } from "../../shared/generated/RunState";
 import { savePipeline, fetchPipeline, fetchPipelines, deletePipeline, renamePipeline } from "../api/pipelines";
 import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import type { EditorNodeDef, EditorPipelineDef } from "../model/pipeline";
@@ -59,6 +62,15 @@ vi.mock("../../run/api/runPipeline", async (importOriginal) => ({
 vi.mock("../api/pipelines", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   ...(await import("../../settings/api/settings")),
+}));
+// CORE-218: a cost cap saved for a run goes through `set_region_max_cost`.
+vi.mock("../../run/api/commands", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  setRegionMaxCost: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock("../../run/api/runs", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  fetchRun: vi.fn().mockResolvedValue({ run_id: "r1" }),
 }));
 vi.mock("../api/libraryPipelines", async (importOriginal) => ({
   ...(await importOriginal<object>()),
@@ -2734,5 +2746,267 @@ describe("closing a tab hands the front to another with its own selection", () =
     useEditStore.getState().setActiveTab("A");
     useEditStore.getState().setActiveTab("C");
     expect(useEditStore.getState().selection.kind).toBe("none");
+  });
+});
+
+describe("CORE-218: the cost cap of a loop, edited for this run", () => {
+  const tabId = "__run__r1";
+  const capped = (max_cost_usd: number | string | null): EditorPipelineDef => ({
+    ...makePipeline([makeNode({ id: "impl" }), makeNode({ id: "rev" })]),
+    loops: [{ id: "review_loop", kind: "bounded" as const, members: ["impl", "rev"], max_iter: 5, max_cost_usd }],
+  });
+  function seedRunTab(pipeline = capped(5)) {
+    useEditStore.setState({
+      openTabs: [
+        {
+          id: tabId,
+          scope: "run",
+          pipeline,
+          prompts: {},
+          diagnostics: [],
+          dirty: false,
+          externalDirty: false,
+          runId: "r1",
+        },
+      ],
+      activeTabId: tabId,
+      selection: { kind: "none", id: null },
+      lastSavedAt: {},
+      history: {},
+    });
+  }
+  const tab = () => useEditStore.getState().openTabs.find((t) => t.id === tabId)!;
+  const snapshot = (max_cost_usd: number | null) =>
+    ({ scope: "run", pipeline: capped(max_cost_usd), prompts: {}, diagnostics: [] }) as unknown as Awaited<
+      ReturnType<typeof fetchRunPipeline>
+    >;
+  const run = (overrides?: Record<string, number | null>, extra: Partial<RunState> = {}) =>
+    ({ run_id: "r1", region_max_cost_overrides: overrides, ...extra }) as unknown as RunState;
+
+  beforeEach(() => {
+    vi.mocked(setRegionMaxCost).mockClear();
+    vi.mocked(fetchRun).mockClear();
+    vi.mocked(fetchRunPipeline).mockClear();
+  });
+
+  it("« Edit for this run » starts from the caps the Run applies, without a change to save", () => {
+    seedRunTab();
+    useEditStore.getState().startRunEditing(tabId, run({ review_loop: 4 }));
+    expect(tab().runEditing).toBe(true);
+    expect(tab().pipeline.loops?.[0].max_cost_usd).toBe(4);
+    expect(tab().dirty).toBe(false);
+    // Already editing: a second start never overwrites what was typed.
+    useEditStore.getState().updateRegion("review_loop", { max_cost_usd: 9 });
+    useEditStore.getState().startRunEditing(tabId, run({ review_loop: 4 }));
+    expect(tab().pipeline.loops?.[0].max_cost_usd).toBe(9);
+  });
+
+  it("Save issues set_region_max_cost for a cap it changed, which resumes the Run", async () => {
+    seedRunTab();
+    useEditStore.getState().startRunEditing(tabId);
+    useEditStore.getState().updateRegion("review_loop", { max_cost_usd: 8 });
+    vi.mocked(fetchRunPipeline).mockResolvedValueOnce(snapshot(5));
+    vi.mocked(fetchRun).mockResolvedValueOnce(run());
+
+    await useEditStore.getState().save(tabId);
+
+    expect(mockSaveRunPipeline).toHaveBeenCalledWith("r1", expect.stringContaining("max_cost_usd: 8"), {});
+    expect(setRegionMaxCost).toHaveBeenCalledWith("r1", "review_loop", 8);
+    expect(vi.mocked(setRegionMaxCost).mock.invocationCallOrder[0]).toBeGreaterThan(
+      mockSaveRunPipeline.mock.invocationCallOrder.at(-1)!,
+    );
+    expect(tab().dirty).toBe(false);
+    expect(tab().saveError).toBeUndefined();
+  });
+
+  it("✕ removes the cap with null", async () => {
+    seedRunTab();
+    useEditStore.getState().startRunEditing(tabId);
+    useEditStore.getState().updateRegion("review_loop", { max_cost_usd: null });
+    vi.mocked(fetchRunPipeline).mockResolvedValueOnce(snapshot(5));
+    vi.mocked(fetchRun).mockResolvedValueOnce(run());
+
+    await useEditStore.getState().save(tabId);
+
+    expect(setRegionMaxCost).toHaveBeenCalledWith("r1", "review_loop", null);
+  });
+
+  it("compares with the Run's override, not the YAML: an untouched cap issues nothing", async () => {
+    seedRunTab();
+    useEditStore.getState().startRunEditing(tabId, run({ review_loop: 4 }));
+    useEditStore.getState().updateNode("impl", { name: "Renamed" });
+    vi.mocked(fetchRunPipeline).mockResolvedValueOnce(snapshot(5));
+    vi.mocked(fetchRun).mockResolvedValueOnce(run({ review_loop: 4 }));
+
+    await useEditStore.getState().save(tabId);
+
+    expect(mockSaveRunPipeline).toHaveBeenCalled();
+    expect(setRegionMaxCost).not.toHaveBeenCalled();
+  });
+
+  it("a cap the Run refuses keeps the save and says so on the tab", async () => {
+    seedRunTab();
+    useEditStore.getState().startRunEditing(tabId);
+    useEditStore.getState().updateRegion("review_loop", { max_cost_usd: 8 });
+    vi.mocked(fetchRunPipeline).mockResolvedValueOnce(snapshot(5));
+    vi.mocked(fetchRun).mockResolvedValueOnce(run());
+    vi.mocked(setRegionMaxCost).mockRejectedValueOnce(new Error("operation refused"));
+
+    await useEditStore.getState().save(tabId);
+
+    expect(tab().dirty).toBe(false);
+    expect(tab().saveError?.message).toBe(
+      "Saved, but the cost cap of 'review_loop' was not applied to the run: operation refused",
+    );
+  });
+
+  it("says so when what the Run applies could not be read: the YAML is saved, no cap command sent", async () => {
+    seedRunTab();
+    useEditStore.getState().startRunEditing(tabId);
+    useEditStore.getState().updateRegion("review_loop", { max_cost_usd: 8 });
+    vi.mocked(fetchRunPipeline).mockResolvedValueOnce(snapshot(5));
+    vi.mocked(fetchRun).mockRejectedValueOnce(new Error("offline"));
+
+    await useEditStore.getState().save(tabId);
+
+    expect(mockSaveRunPipeline).toHaveBeenCalled();
+    expect(setRegionMaxCost).not.toHaveBeenCalled();
+    expect(tab().saveError?.message).toBe(
+      "Saved, but the run's cost caps could not be read, so a changed cap was not applied to it: offline",
+    );
+  });
+
+  it("keeps a `$var` cap's expression in the YAML, and a Save that leaves it issues nothing", async () => {
+    seedRunTab(capped("$budget"));
+    useEditStore.getState().startRunEditing(tabId, run(undefined, { variables: { budget: 5 } }));
+    expect(tab().pipeline.loops?.[0].max_cost_usd).toBe("$budget");
+    expect(tab().runCostCaps).toEqual({ review_loop: { usd: 5, yaml: "$budget" } });
+    expect(tab().dirty).toBe(false);
+    useEditStore.getState().updateNode("impl", { name: "Renamed" });
+    vi.mocked(fetchRunPipeline).mockResolvedValueOnce(
+      ({ scope: "run", pipeline: capped("$budget"), prompts: {}, diagnostics: [] }) as unknown as Awaited<
+        ReturnType<typeof fetchRunPipeline>
+      >,
+    );
+    vi.mocked(fetchRun).mockResolvedValueOnce(run(undefined, { variables: { budget: 5 } }));
+
+    await useEditStore.getState().save(tabId);
+
+    expect(mockSaveRunPipeline).toHaveBeenCalledWith("r1", expect.stringContaining("max_cost_usd: $budget"), {});
+    expect(setRegionMaxCost).not.toHaveBeenCalled();
+  });
+
+  it("a Save while a cap changed outside has not reached the tab yet does not put the old one back", async () => {
+    seedRunTab();
+    useEditStore.getState().startRunEditing(tabId, run({ review_loop: 8 }));
+    useEditStore.getState().updateNode("impl", { name: "Renamed" });
+    vi.mocked(fetchRunPipeline).mockResolvedValueOnce(snapshot(5));
+    vi.mocked(fetchRun).mockResolvedValueOnce(run({ review_loop: 4 }));
+
+    await useEditStore.getState().save(tabId);
+
+    expect(setRegionMaxCost).not.toHaveBeenCalled();
+  });
+
+  it("takes the saved cap as the Run's: a later outside change still reaches the tab", async () => {
+    seedRunTab();
+    useEditStore.getState().startRunEditing(tabId, run({ review_loop: 5 }));
+    useEditStore.getState().updateRegion("review_loop", { max_cost_usd: 8 });
+    vi.mocked(fetchRunPipeline).mockResolvedValueOnce(snapshot(5));
+    vi.mocked(fetchRun).mockResolvedValueOnce(run({ review_loop: 5 }));
+    await useEditStore.getState().save(tabId);
+    expect(setRegionMaxCost).toHaveBeenCalledWith("r1", "review_loop", 8);
+    expect(tab().runCostCaps).toEqual({ review_loop: { usd: 8, yaml: 8 } });
+
+    // The CLI lowers it before the tab saw the 8 arrive.
+    useEditStore.getState().followRunCostCaps(tabId, { review_loop: 4 });
+    expect(tab().pipeline.loops?.[0].max_cost_usd).toBe(4);
+  });
+
+  it("a cap followed while a Save runs stays followed once it ends", async () => {
+    seedRunTab();
+    useEditStore.getState().startRunEditing(tabId, run({ review_loop: 8 }));
+    useEditStore.getState().updateNode("impl", { name: "Renamed" });
+    vi.mocked(fetchRunPipeline).mockResolvedValueOnce(snapshot(5));
+    let answer!: (r: RunState) => void;
+    vi.mocked(fetchRun).mockReturnValueOnce(new Promise<RunState>((resolve) => (answer = resolve)));
+
+    const saving = useEditStore.getState().save(tabId);
+    // The CLI lowers the cap to 4 while the save reads the Run.
+    useEditStore.getState().followRunCostCaps(tabId, { review_loop: 4 });
+    answer(run({ review_loop: 8 }));
+    await saving;
+
+    expect(setRegionMaxCost).not.toHaveBeenCalled();
+    expect(tab().runCostCaps).toEqual({ review_loop: { usd: 4, yaml: 4 } });
+    // Still followed: the next outside change reaches the tab.
+    useEditStore.getState().followRunCostCaps(tabId, { review_loop: 3 });
+    expect(tab().pipeline.loops?.[0].max_cost_usd).toBe(3);
+  });
+
+  it("a refused cap is tried again on the next Save, and follows the Run again once undone", async () => {
+    seedRunTab();
+    useEditStore.getState().startRunEditing(tabId, run({ review_loop: 8 }));
+    useEditStore.getState().updateRegion("review_loop", { max_cost_usd: 12 });
+    vi.mocked(fetchRunPipeline).mockResolvedValueOnce(snapshot(5));
+    vi.mocked(fetchRun).mockResolvedValueOnce(run({ review_loop: 8 }));
+    vi.mocked(setRegionMaxCost).mockRejectedValueOnce(new Error("offline"));
+    await useEditStore.getState().save(tabId);
+    expect(tab().runCostCaps).toEqual({ review_loop: { usd: 8, yaml: 8 } });
+
+    useEditStore.getState().undo();
+    expect(tab().pipeline.loops?.[0].max_cost_usd).toBe(8);
+    useEditStore.getState().followRunCostCaps(tabId, { review_loop: 4 });
+    expect(tab().pipeline.loops?.[0].max_cost_usd).toBe(4);
+  });
+
+  it("follows a cap changed outside the tab while untouched, so a Save does not put the old one back", async () => {
+    seedRunTab();
+    useEditStore.getState().startRunEditing(tabId, run({ review_loop: 8 }));
+    useEditStore.getState().updateNode("impl", { name: "Renamed" });
+    // `pdo run region … --max-cost 4` while the tab is open.
+    useEditStore.getState().followRunCostCaps(tabId, { review_loop: 4 });
+    expect(tab().pipeline.loops?.[0].max_cost_usd).toBe(4);
+    expect(tab().pipeline.nodes[0].name).toBe("Renamed");
+    // An undo does not bring the stale cap back either.
+    useEditStore.getState().undo();
+    expect(tab().pipeline.loops?.[0].max_cost_usd).toBe(4);
+    useEditStore.getState().redo();
+
+    vi.mocked(fetchRunPipeline).mockResolvedValueOnce(snapshot(5));
+    vi.mocked(fetchRun).mockResolvedValueOnce(run({ review_loop: 4 }));
+    await useEditStore.getState().save(tabId);
+
+    expect(setRegionMaxCost).not.toHaveBeenCalled();
+  });
+
+  it("keeps a cap the user typed when the Run's moves meanwhile, and nothing moves for the same overrides", () => {
+    seedRunTab();
+    useEditStore.getState().startRunEditing(tabId, run({ review_loop: 8 }));
+    const before = tab();
+    useEditStore.getState().followRunCostCaps(tabId, { review_loop: 8 });
+    expect(tab()).toBe(before);
+
+    useEditStore.getState().updateRegion("review_loop", { max_cost_usd: 12 });
+    useEditStore.getState().followRunCostCaps(tabId, { review_loop: 4 });
+    expect(tab().pipeline.loops?.[0].max_cost_usd).toBe(12);
+    expect(tab().runCostCaps).toEqual({ review_loop: { usd: 4, yaml: 8 } });
+  });
+
+  it("follows nothing on a tab that is not edited for its run", () => {
+    seedRunTab();
+    useEditStore.getState().followRunCostCaps(tabId, { review_loop: 4 });
+    expect(tab().pipeline.loops?.[0].max_cost_usd).toBe(5);
+  });
+
+  it("reads nothing more for a run tab with no bounded loop", async () => {
+    seedRunTab(makePipeline([makeNode({ id: "worker" })]));
+    useEditStore.getState().startRunEditing(tabId);
+    useEditStore.getState().updateNode("worker", { name: "Renamed" });
+
+    await useEditStore.getState().save(tabId);
+
+    expect(fetchRun).not.toHaveBeenCalled();
+    expect(setRegionMaxCost).not.toHaveBeenCalled();
   });
 });

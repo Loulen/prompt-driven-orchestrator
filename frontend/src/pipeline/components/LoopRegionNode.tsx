@@ -3,6 +3,8 @@ import { Repeat, Split, Wallet } from "lucide-react";
 import { Button } from "../../shared/ui/kit";
 import type { LoopKind } from "../../shared/generated/LoopKind";
 import { useEditStore } from "../store/editStore";
+import { useRaiseCap } from "../store/useRaiseCap";
+import type { RunCapSource } from "../model/runCostCaps";
 import { endRegion } from "../../run/api/commands";
 import { useWhyNotOnRun } from "../../run/store/gestureRightsStore";
 import { toastRefusal } from "../../shared/authorization/refusal";
@@ -50,6 +52,8 @@ export interface LoopRegionNodeData {
    * exhausted-unrouted region targets this run.
    */
   runId: string | null;
+  /** What the Run says about its caps: `raise cap` starts editing from them. */
+  capSource?: RunCapSource | null;
   width: number;
   height: number;
   /**
@@ -82,6 +86,7 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
 
   const openInspector = () =>
     setSelection({ kind: "region", id: null, regionId: data.regionId });
+  const raiseCap = useRaiseCap();
 
   // The grouping layer: a tinted area, nothing interactive. Sits behind the
   // member cards and lets every click through (#167).
@@ -149,10 +154,15 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
           budget reached
           {data.runId != null && (
             <>
-              {/* Raising the cap is an edit of the Run's bounds: it starts in
-                  the region inspector. Like the corner, the click reaches the
-                  canvas's node click, where Pipeline info gives way. */}
-              <Button size="sm" data-testid="loop-region-raise-cap" onClick={openInspector}>
+              {/* Raising the cap is an edit of the Run's bounds: « Edit for
+                  this run », the region inspector on `max_cost_usd`. Like the
+                  corner, the click reaches the canvas's node click, where
+                  Pipeline info gives way. */}
+              <Button
+                size="sm"
+                data-testid="loop-region-raise-cap"
+                onClick={() => raiseCap(data.runId as string, data.regionId, data.capSource)}
+              >
                 raise cap
               </Button>
               <Button

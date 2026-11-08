@@ -22,6 +22,12 @@ pub struct RunCommandRequest {
     /// the region now allows, not a delta like `additional_iter`.
     #[serde(default)]
     pub(super) max_iter: Option<i64>,
+    /// The **absolute** cost cap of a `set_region_max_cost`, in dollars. Outer
+    /// `None` = the field is absent (refused); `Some(Null)` = remove the cap.
+    /// Kept as a raw JSON value so a non-numeric cap answers a 400 in our
+    /// words, not axum's 422.
+    #[serde(default, deserialize_with = "super::parse_cost_cap::present_value")]
+    pub(super) max_cost_usd: Option<serde_json::Value>,
     /// The **source** of a `force_route`: a node id OR a region id whose `when:`
     /// edges are short-circuited. Separate from `node_id`/`region_id` so it can name
     /// either kind without overloading their meaning.
@@ -50,7 +56,7 @@ pub struct RunCommandRequest {
 ///
 /// One variant per accepted `kind`, except `bump_region`/`end_region`, which share
 /// [`RunCommand::Region`] because they share their whole I/O tail.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(super) enum RunCommand {
     MarkNodeDone {
         node_id: String,
@@ -78,6 +84,13 @@ pub(super) enum RunCommand {
     SetRegionMaxIter {
         region_id: String,
         max_iter: i64,
+    },
+    /// Edit a bounded region's **Plafond de coût** in flight, absolute, in
+    /// dollars; `None` removes the cap. No floor: a cap under the spend stops
+    /// the loop at its next re-entry, the lap in progress always finishes.
+    SetRegionMaxCost {
+        region_id: String,
+        max_cost_usd: Option<f64>,
     },
     /// An explicit exit from a node or region to a target, short-circuiting the
     /// source's `when:` edges — the lever for a run wedged `unrouted`. `target` may
@@ -208,6 +221,7 @@ impl RunCommand {
                 ..
             } => "end_region",
             RunCommand::SetRegionMaxIter { .. } => "set_region_max_iter",
+            RunCommand::SetRegionMaxCost { .. } => "set_region_max_cost",
             RunCommand::ForceRoute { .. } => "force_route",
             RunCommand::SkipNode { .. } => "skip_node",
             RunCommand::PauseRun => "pause_run",
@@ -304,6 +318,11 @@ pub(super) fn parse_run_command(req: RunCommandRequest) -> Result<RunCommand, Co
                 max_iter,
             })
         }
+        "set_region_max_cost" => Ok(RunCommand::SetRegionMaxCost {
+            // `region_id` first, then the cap.
+            region_id: required(req.region_id, "region_id", "set_region_max_cost")?,
+            max_cost_usd: super::parse_cost_cap::cost_cap(req.max_cost_usd)?,
+        }),
         "force_route" => {
             // `from` (a node OR region id) before `target`: `{"kind":"force_route"}`
             // alone must complain about the source, not the destination.

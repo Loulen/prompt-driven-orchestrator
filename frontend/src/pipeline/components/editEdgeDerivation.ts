@@ -25,7 +25,11 @@ const OP_SYMBOLS: Record<string, string> = {
  * `not_in` show a bracketed list. The shape mirrors the mechanical predicate
  * grammar exactly — no LLM-eval, no free expression (ADR-0011).
  */
-export function formatWhenPill(when: Record<string, unknown>): string {
+export function formatWhenPill(when: unknown): string {
+  // Not the grammar's map (a bare string, a list): shown as written, never
+  // walked key by key — a string would read « 0 and 1 and 2 … ».
+  if (typeof when === "string") return when;
+  if (when == null || typeof when !== "object" || Array.isArray(when)) return JSON.stringify(when);
   const parts: string[] = [];
   for (const [field, predicate] of Object.entries(when)) {
     if (predicate == null || typeof predicate !== "object") {
@@ -161,7 +165,10 @@ export function resolveSourceSide(edge: EditorPipelineDef["edges"][number]): Por
 /** The condition pill's text: `else`, the formatted `when`, or none. */
 function conditionLabel(e: EditorPipelineDef["edges"][number]): string | undefined {
   if (e.else === true) return "else";
-  if (e.when != null && Object.keys(e.when).length > 0) return formatWhenPill(e.when as Record<string, unknown>);
+  // Typed as the grammar's map, but the YAML may hold anything (a bare string).
+  const when: unknown = e.when;
+  if (typeof when === "string") return when.trim() === "" ? undefined : when;
+  if (when != null && typeof when === "object" && Object.keys(when).length > 0) return formatWhenPill(when);
   return undefined;
 }
 

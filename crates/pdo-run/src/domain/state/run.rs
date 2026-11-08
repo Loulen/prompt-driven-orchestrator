@@ -117,6 +117,17 @@ pub struct RunState {
     /// byte-identically), which is every historical run.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub region_max_iter_overrides: HashMap<String, i64>,
+    /// Live **Plafond de coût** overrides folded from `set_region_max_cost`
+    /// commands (ADR draft plafond-de-cout-de-boucle), keyed by region id.
+    /// Absolute, last-write-wins, read by the scheduler at re-entry in place of
+    /// the region's declared `max_cost_usd`, for a literal and a `$var` cap
+    /// alike. `Some(usd)` = the cap in dollars (no floor: under the spend
+    /// already is legal, the loop stops at its next re-entry); `None` = the cap
+    /// was **removed**, the region is uncapped even if its YAML declares one.
+    /// Folded from the append-only log, so it survives a reopen re-projection;
+    /// empty (and absent on the wire) for every Run that never set one.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub region_max_cost_overrides: HashMap<String, Option<f64>>,
     /// Forced routes folded from `force_route` commands (ADR-0011 / #600), keyed by
     /// **source** — a node id OR a region id — mapping to the target node id. The
     /// scheduler spawns the target (or completes, if it is `End`) when the source

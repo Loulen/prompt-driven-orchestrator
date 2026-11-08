@@ -14,6 +14,7 @@ import type { NoteDef } from "../../shared/generated/NoteDef";
 import type { EditorNodeDef, EditorPipelineDef, PipelineScope } from "../model/pipeline";
 import type { SaveResult } from "../api/pipelines";
 import type { SaveAs } from "../api/versions";
+import type { CostCapOverrides, RunCapSource, RunCostCapBaseline } from "../model/runCostCaps";
 
 
 // `"run"` is not a canvas element: it means the right pane shows the Run-info /
@@ -39,6 +40,11 @@ export interface Selection {
    * inspector and `updateRegion` use. Undefined for other selections.
    */
   regionId?: string;
+  /**
+   * A region inspector field to focus once it is editable: `raise cap` opens
+   * the inspector on `max_cost_usd`, in « Edit for this run ».
+   */
+  focusField?: "max_cost_usd";
   /**
    * The selected canvas note's `id` when `kind === "note"` (#307). Notes carry
    * a stable `id`, so the id is the selection key the note inspector and
@@ -118,6 +124,12 @@ export interface OpenPipeline {
    * always editable.
    */
   runEditing?: boolean;
+  /**
+   * What the tab took from its Run for each loop's Plafond de coût (« Edit
+   * for this run », every outside change it followed, every Save): what tells
+   * an untouched cap, which follows the Run, from one the user changed.
+   */
+  runCostCaps?: RunCostCapBaseline;
   saveError?: SaveErrorData;
   /** ADR-0088: the shared draft a pipeline tab edits. */
   draft?: DraftTabState;
@@ -334,8 +346,17 @@ export interface EditState {
    * version is created.
    */
   restoreVersion: (pipelineId: string, number: number) => Promise<void>;
-  /** ADR-0085: « Edit for this run », a run tab unlocked for hot editing. */
-  startRunEditing: (id: string) => void;
+  /**
+   * ADR-0085: « Edit for this run », a run tab unlocked for hot editing. The
+   * Run's live overrides are folded into its loops, so the inspector starts
+   * from the caps the Run applies.
+   */
+  startRunEditing: (id: string, run?: RunCapSource | null) => void;
+  /**
+   * A run tab being edited follows a cap changed outside it (`overrides`: the
+   * Run's live ones). A cap the user already changed keeps their draft.
+   */
+  followRunCostCaps: (id: string, overrides: CostCapOverrides | null | undefined) => void;
   /**
    * ADR-0085: « Finish editing », back to « pilotage ». Unsaved edits are
    * discarded (the caller confirmed): the tab re-reads the Run's snapshot.

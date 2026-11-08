@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { buildNoteNodes, deriveEditNodes, markerReached, statusForNode } from "./editNodeDerivation";
 import { buildLoopRegionNodes, deriveLoopRegions } from "./loopRegionDerivation";
-import { deriveEditEdges, formatWhenPill } from "./editEdgeDerivation";
+import { deriveEditEdges, EDGE_LABELS_ABOVE_NODES, formatWhenPill } from "./editEdgeDerivation";
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
 import type { NodeType } from "../../shared/generated/NodeType";
 import type { PortSide } from "../../shared/generated/PortSide";
@@ -312,6 +312,11 @@ describe("formatWhenPill — condition pill text (ADR-0011)", () => {
     );
   });
 
+  it("shows a `when` that is not the grammar's map as written, never key by key", () => {
+    expect(formatWhenPill("iter >= max")).toBe("iter >= max");
+    expect(formatWhenPill(["a", "b"])).toBe('["a","b"]');
+  });
+
   it("joins multiple predicates with 'and'", () => {
     expect(
       formatWhenPill({ verdict: { eq: "PASS" }, score: { gte: 8 } }),
@@ -377,6 +382,12 @@ describe("deriveEditEdges — condition pills always visible at midpoint (issue 
     expect(guarded.data?.label).toBe("severity = high");
     expect(guarded.data?.isConditional).toBe(true);
     expect(guarded.data?.isElse).toBe(false);
+  });
+
+  it("labels an edge whose `when` is a bare string with that string", () => {
+    const p = condPipeline();
+    (p.edges[0] as { when: unknown }).when = "iter >= max";
+    expect(deriveEditEdges(p)[0].data?.label).toBe("iter >= max");
   });
 
   it("labels an else edge with 'else'", () => {
@@ -752,6 +763,24 @@ describe("buildLoopRegionNodes — box behind, chrome above (#167 / #455)", () =
       const chrome = layer(buildLoopRegionNodes(regionPipeline(), null), "chrome");
       expect(chrome.zIndex).toBeGreaterThan(1000);
       expect((chrome.style as { zIndex?: number }).zIndex).toBeGreaterThan(1000);
+    });
+
+    it("clears the condition pills of edges above the cards while its block asks for a click", () => {
+      // An exit edge leaves the region where « budget reached │ raise cap │ end
+      // region » sits: its pill (EDGE_LABELS_ABOVE_NODES) took the buttons' clicks.
+      const run = makeRunState({ impl: "completed", rev: "completed" });
+      run.nodes.impl.iter = 2;
+      run.nodes.rev.iter = 2;
+      const chromeZ = () => layer(buildLoopRegionNodes(regionPipeline(), run), "chrome").zIndex!;
+      expect(chromeZ()).toBe(1001);
+      run.status = "awaiting_user";
+      run.awaiting_region_id = "review_loop";
+      for (const code of ["region_budget_exhausted", "region_exhausted"]) {
+        run.awaiting_reason_code = code;
+        const chrome = layer(buildLoopRegionNodes(regionPipeline(), run), "chrome");
+        expect(chrome.zIndex).toBeGreaterThan(EDGE_LABELS_ABOVE_NODES);
+        expect((chrome.style as { zIndex?: number }).zIndex).toBe(chrome.zIndex);
+      }
     });
 
     it("still lets clicks through everywhere except its own chips", () => {

@@ -35,7 +35,7 @@ export function deriveEdgeTrigger(
   const whenClause = runEdge?.when_clause ?? edge.when ?? null;
   const lastValue =
     whenClause && typeof whenClause === "object"
-      ? formatWhenPill(whenClause as Record<string, unknown>)
+      ? formatWhenPill(whenClause)
       : edge.else
         ? "else"
         : null;

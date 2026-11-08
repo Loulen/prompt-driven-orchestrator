@@ -1829,6 +1829,8 @@ mod tests {
         for cmd in [
             "bump_region",
             "end_region",
+            "set_region_max_iter",
+            "set_region_max_cost",
             "extend_cycle",
             "resume_run",
             "kill_node",
@@ -1937,15 +1939,15 @@ mod tests {
         let preamble =
             build_manager_preamble("run-1", "http://localhost:5172", RunNameHint::UserProvided);
         let section = preamble
-            .split("### 9. cleanup_run")
+            .split("### 10. cleanup_run")
             .nth(1)
             .expect("preamble should contain the cleanup_run section")
-            .split("### 10.")
+            .split("### 11.")
             .next()
-            .expect("cleanup_run section should be delimited by section 10");
+            .expect("cleanup_run section should be delimited by section 11");
         assert!(
-            preamble.contains("### 10. rename_run"),
-            "renumbering drifted: section 10 should be rename_run"
+            preamble.contains("### 11. rename_run"),
+            "renumbering drifted: section 11 should be rename_run"
         );
         assert!(
             section.contains("Never call `cleanup_run` on your own initiative"),

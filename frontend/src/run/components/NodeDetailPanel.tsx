@@ -85,15 +85,13 @@ export default function NodeDetailPanel({
   // `io`, `transcript`, `orchestration`, or the key of a `node/detail` tab of an
   // extension.
   const [detailTab, setDetailTab] = useState<string>(initialDetailTab);
-  // The children are read for ANY node (ADR-0064: the tab follows the real
-  // children, not the toggle), whether or not the tab is open — the tab-header
-  // pastilles count from the same read.
+  // Read for ANY node (ADR-0064: the tab follows the real children), open tab
+  // or not: the tab-header pastilles count from the same read.
   const childrenData = useRunChildren(runId, true);
   const nodeChildren = childrenOfNode(childrenData, runId, node.node_id);
   const childCounts = countChildren(nodeChildren);
-  // The tab shows on a first child or on the toggle, which announces a parent
-  // node (empty state from the start). A child appearing mid-session adds the
-  // tab quietly: the open tab stays the open one.
+  // The tab shows on a first child, quietly (the open tab stays open), or on
+  // the toggle, which announces a parent node (empty state from the start).
   const showOrchestration = isOrchestratorNode || nodeChildren.length > 0;
   const failedChild = nodeChildren.find((child) => child.status === "failed") ?? null;
   // #749: what the Review shortcut opens, if anything.

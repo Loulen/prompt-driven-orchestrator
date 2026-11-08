@@ -5,6 +5,7 @@ import { endRegion } from "../../run/api/commands";
 import { useEditStore } from "../store/editStore";
 import { BudgetReachedBanner } from "./BudgetReachedBanner";
 import { budgetReachedRegion } from "./loopRegionCost";
+import type { EditorPipelineDef } from "../model/pipeline";
 
 vi.mock("../../run/api/commands", () => ({
   endRegion: vi.fn().mockResolvedValue(undefined),
@@ -21,10 +22,9 @@ function parkedRun(over: Partial<RunState> = {}): RunState {
     input: null,
     started_at: null,
     completed_at: null,
-    nodes: {},
-    loop_states: {
-      "review-loop": { loop_node_id: "review-loop", current_iter: 4, max_iter: 5, break_received: false, done: false },
-    },
+    // The daemon stamps every member with the region's lap; a region has no `loop_states` entry.
+    nodes: { implement: { iter: 4 }, review: { iter: 3 } },
+    loop_states: {},
     foreach_states: {},
     collection_states: {},
     switch_states: {},
@@ -38,6 +38,15 @@ function parkedRun(over: Partial<RunState> = {}): RunState {
     ...over,
   } as unknown as RunState;
 }
+
+const PIPELINE = {
+  name: "p",
+  version: null,
+  variables: {},
+  nodes: [],
+  edges: [],
+  loops: [{ id: "review-loop", kind: "bounded", members: ["implement", "review"], max_iter: 5 }],
+} as unknown as EditorPipelineDef;
 
 describe("BudgetReachedBanner", () => {
   beforeEach(() => {
@@ -53,20 +62,36 @@ describe("BudgetReachedBanner", () => {
   });
 
   it("explains the stop: the loop, what it spent of its cap, after which lap", () => {
-    render(<BudgetReachedBanner run={parkedRun()} regionId="review-loop" />);
+    render(<BudgetReachedBanner run={parkedRun()} regionId="review-loop" pipeline={PIPELINE} />);
     expect(screen.getByText("Budget reached · awaiting you")).toBeInTheDocument();
     expect(screen.getByTestId("run-budget-reason")).toHaveTextContent(
       "Loop review-loop reached its cost cap: ~$5.12 spent of $5 after lap 4/5. Its exit was not followed. Raise the cap and resume, or end the region.",
     );
   });
 
-  it("selects the region from its name and from raise cap, and ends it from end region", () => {
-    render(<BudgetReachedBanner run={parkedRun()} regionId="review-loop" />);
+  it("leaves the lap out when the Run's pipeline is not at hand", () => {
+    render(<BudgetReachedBanner run={parkedRun()} regionId="review-loop" pipeline={null} />);
+    expect(screen.getByTestId("run-budget-reason")).toHaveTextContent(
+      "Loop review-loop reached its cost cap: ~$5.12 spent of $5. Its exit was not followed.",
+    );
+  });
+
+  it("selects the region from its name and from raise cap, giving the panel way to its inspector", () => {
+    const onShowRegion = vi.fn();
+    render(
+      <BudgetReachedBanner run={parkedRun()} regionId="review-loop" pipeline={PIPELINE} onShowRegion={onShowRegion} />,
+    );
     fireEvent.click(screen.getByTestId("run-budget-region"));
     expect(useEditStore.getState().selection).toEqual({ kind: "region", id: null, regionId: "review-loop" });
+    expect(onShowRegion).toHaveBeenCalledTimes(1);
     useEditStore.setState({ selection: { kind: "none", id: null } });
     fireEvent.click(screen.getByTestId("run-budget-raise-cap"));
     expect(useEditStore.getState().selection).toEqual({ kind: "region", id: null, regionId: "review-loop" });
+    expect(onShowRegion).toHaveBeenCalledTimes(2);
+  });
+
+  it("ends the region from end region", () => {
+    render(<BudgetReachedBanner run={parkedRun()} regionId="review-loop" pipeline={PIPELINE} />);
     fireEvent.click(screen.getByTestId("run-budget-end-region"));
     expect(endRegion).toHaveBeenCalledWith("run-1", "review-loop");
   });

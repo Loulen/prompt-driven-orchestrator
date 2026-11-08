@@ -30,8 +30,12 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   and the next one does not start: the run waits "budget reached" (code `region_budget_exhausted`,
   the region in `awaiting_region_id`), never failed, and the loop's exhaustion exit is not
   followed. `max_iter` wins when both bounds fall on the same lap. The region turns amber with a
-  wallet, "raise cap" and "end region"; Run info explains the stop. A member running on a harness
-  with no cost source is flagged in the inspector ("Cap may be overshot").
+  wallet and a "budget reached" block under its cards, with "raise cap" and "end region". Run info
+  explains the stop (spend, cap, lap); the region it names, and its "raise cap", open the region
+  inspector in place of the panel. A member running on a harness with no cost source is flagged in
+  the inspector ("Cap may be overshot").
+- An open live run is read again every 30 s, so its node costs and loop costs climb while an agent
+  works, not only when a node starts or ends.
 - The region inspector shows a "Loop cost" section on a run: the spend against the cap, its share,
   and each member's cost.
 - "exhausted · unrouted" no longer shows during a loop's last lap nor after it left by its exit:

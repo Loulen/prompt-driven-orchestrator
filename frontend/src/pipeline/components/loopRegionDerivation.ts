@@ -46,11 +46,28 @@ const CARD_H = 66;
 // members for the counter in the box's top-right corner.
 const REGION_PAD = 20;
 const REGION_PAD_TOP = 26;
+// A parked region's block (`budget reached`, `exhausted · unrouted`: 20 px,
+// 4 px off the bottom, canvas.css `.cv-region__block`) gets a band of its own
+// under the cards, so it never covers one.
+const REGION_BLOCK_BAND = 28;
 
 function regionMaxIterText(maxIter: LoopRegion["max_iter"]): string {
   if (maxIter == null) return "∞";
   // A `$var` reference (string) is shown verbatim; a number is shown as-is.
   return String(maxIter);
+}
+
+/**
+ * A region's lap on a Run: the max `iter` across its members (the daemon
+ * stamps every member with the region's lap), `0` before any ran.
+ */
+export function regionCurrentIter(region: Pick<LoopRegion, "members">, runState: RunState): number {
+  return region.members.reduce((max, id) => Math.max(max, runState.nodes[id]?.iter ?? 0), 0);
+}
+
+/** A bounded region's lap over its bound, `4/5`, as its corner reads it on a Run. */
+export function regionLapText(region: Pick<LoopRegion, "members" | "max_iter">, runState: RunState): string {
+  return `${regionCurrentIter(region, runState)}/${regionMaxIterText(region.max_iter)}`;
 }
 
 /**
@@ -80,12 +97,7 @@ export function deriveLoopRegions(
     const maxText = regionMaxIterText(region.max_iter);
     // Region-wide current iter: the daemon stamps each member node with the
     // region's iteration, so the live lap is the max iter across members.
-    const currentIter = live
-      ? members.reduce(
-          (max, n) => Math.max(max, runState?.nodes[n.id]?.iter ?? 0),
-          0,
-        )
-      : 0;
+    const currentIter = runState ? regionCurrentIter(region, runState) : 0;
     const maxNum =
       typeof region.max_iter === "number" ? region.max_iter : null;
     // A collection region (#151) never "exhausts" — the lap count is the
@@ -162,7 +174,8 @@ export function deriveLoopRegions(
         x: minX - REGION_PAD,
         y: minY - REGION_PAD_TOP,
         width: maxX - minX + REGION_PAD * 2,
-        height: maxY - minY + REGION_PAD_TOP + REGION_PAD,
+        height:
+          maxY - minY + REGION_PAD_TOP + REGION_PAD + (exhausted || money.budgetReached ? REGION_BLOCK_BAND : 0),
       },
     });
   }

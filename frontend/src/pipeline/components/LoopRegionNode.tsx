@@ -150,15 +150,9 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
           {data.runId != null && (
             <>
               {/* Raising the cap is an edit of the Run's bounds: it starts in
-                  the region inspector. */}
-              <Button
-                size="sm"
-                data-testid="loop-region-raise-cap"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  openInspector();
-                }}
-              >
+                  the region inspector. Like the corner, the click reaches the
+                  canvas's node click, where Pipeline info gives way. */}
+              <Button size="sm" data-testid="loop-region-raise-cap" onClick={openInspector}>
                 raise cap
               </Button>
               <Button

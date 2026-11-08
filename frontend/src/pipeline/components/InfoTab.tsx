@@ -220,6 +220,7 @@ export function InfoTab({
   pipelineName,
   pipelineId,
   onOpenDiff,
+  onClose,
 }: {
   run: RunState | null;
   pipeline: EditorPipelineDef | null;
@@ -230,6 +231,8 @@ export function InfoTab({
   hasAssistant?: boolean;
   /** #748: the Changes stat is the link to what it counts — the Diff tab. */
   onOpenDiff: () => void;
+  /** Close the panel: a link toward the canvas (the « budget reached » region) hands it the pane. */
+  onClose?: () => void;
 }) {
   const pipelines = useEditStore((s) => s.pipelines);
   // ADR-0088: a version shown in its own tab is read only, like a Run.
@@ -292,7 +295,7 @@ export function InfoTab({
         </div>
       )}
       {run && budgetRegion != null ? (
-        <BudgetReachedBanner run={run} regionId={budgetRegion} />
+        <BudgetReachedBanner run={run} regionId={budgetRegion} pipeline={pipeline} onShowRegion={onClose} />
       ) : run?.awaiting_reason && (
         <div data-testid="run-awaiting-reason">
           {/* #588: only an incident carries a machine slug; a declared wait is

@@ -2,7 +2,9 @@
  * Why a Run waits « budget reached » (ADR draft plafond-de-cout-de-boucle): a
  * bounded loop reached its Plafond de coût at a re-entry, so its next lap did
  * not start and its exit was not followed. Names the loop (a link that
- * selects it), what it spent against its cap, and the two ways on.
+ * selects it), what it spent against its cap after which lap, and the two
+ * ways on. Selecting the region hands the pane to its inspector
+ * (`onShowRegion`: the Run panel gives way).
  */
 import { Wallet } from "lucide-react";
 import { Banner, Button } from "../../shared/ui/kit";
@@ -13,13 +15,31 @@ import { toastRefusal } from "../../shared/authorization/refusal";
 import { formatCostAmount } from "../../run/model/costLabel";
 import { formatCostCap } from "../../run/model/loopCostLabel";
 import { useEditStore } from "../store/editStore";
+import type { EditorPipelineDef } from "../model/pipeline";
+import { regionLapText } from "./loopRegionDerivation";
 
-export function BudgetReachedBanner({ run, regionId }: { run: RunState; regionId: string }) {
+export function BudgetReachedBanner({
+  run,
+  regionId,
+  pipeline,
+  onShowRegion,
+}: {
+  run: RunState;
+  regionId: string;
+  /** The Run's pipeline: where the region's members and bound are read for its lap. */
+  pipeline: EditorPipelineDef | null;
+  /** The region was selected: the panel showing this banner gives way to its inspector. */
+  onShowRegion?: () => void;
+}) {
   const setSelection = useEditStore((s) => s.setSelection);
   const endRefused = useWhyNotOnRun(run.run_id)("end_region");
-  const select = () => setSelection({ kind: "region", id: null, regionId });
+  const select = () => {
+    setSelection({ kind: "region", id: null, regionId });
+    onShowRegion?.();
+  };
   const cost = run.loop_costs?.[regionId];
-  const lap = run.loop_states?.[regionId];
+  const region = pipeline?.loops?.find((r) => r.id === regionId);
+  const lap = region ? regionLapText(region, run) : null;
   const spent = cost ? formatCostAmount(cost.usd, cost.partial, cost.estimated) : null;
   const cap = cost?.cap_usd != null ? formatCostCap(cost.cap_usd) : null;
   return (
@@ -57,7 +77,7 @@ export function BudgetReachedBanner({ run, regionId }: { run: RunState; regionId
             : <strong>{spent}</strong> spent of <strong>{cap}</strong>
           </>
         ) : null}
-        {lap ? ` after lap ${lap.current_iter}/${lap.max_iter}` : ""}. Its exit was not followed. Raise the cap and
+        {lap ? ` after lap ${lap}` : ""}. Its exit was not followed. Raise the cap and
         resume, or end the region.
       </p>
     </div>

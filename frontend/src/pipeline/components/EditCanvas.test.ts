@@ -630,6 +630,23 @@ describe("deriveLoopRegions — bounded region rendering (ADR-0011 / #148)", () 
     expect(r.cap?.text).toBe("$5");
   });
 
+  it("makes room under the cards for the block of a parked region, so it never covers a card", () => {
+    // The cards end at y = 200 + 66; the block (20 px high, 4 px off the box's
+    // bottom) gets a 28 px band under the bottom pad.
+    const cardsBottom = 266;
+    const bottom = (r: ReturnType<typeof deriveLoopRegions>[number]) => r.box!.y + r.box!.height;
+    const run = makeRunState({ impl: "completed", rev: "completed" });
+    run.nodes.impl.iter = 2;
+    run.nodes.rev.iter = 2;
+    expect(bottom(deriveLoopRegions(regionPipeline(3), run)[0]) - cardsBottom).toBe(20);
+    run.status = "awaiting_user";
+    run.awaiting_reason_code = "region_budget_exhausted";
+    run.awaiting_region_id = "review_loop";
+    expect(bottom(deriveLoopRegions(regionPipeline(3), run)[0]) - cardsBottom).toBe(20 + 28);
+    run.awaiting_reason_code = "region_exhausted";
+    expect(bottom(deriveLoopRegions(regionPipeline(3), run)[0]) - cardsBottom).toBe(20 + 28);
+  });
+
   it("renders a single-member region as a badge, not a box", () => {
     const p = regionPipeline(3);
     p.loops = [{ id: "solo", kind: "bounded", members: ["impl"], max_iter: 3 }];

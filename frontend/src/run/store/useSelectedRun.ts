@@ -1,10 +1,15 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { RunState } from "../../shared/generated/RunState";
 import { fetchRun } from "../api/runs";
+import { isLiveRun } from "../model/runStatus";
+import { SAFETY_NET_MS } from "./useLiveRefresh";
 
 /**
  * The Run the user has selected, fetched on selection and refetched on
- * demand. A late answer for a Run the user has since left is dropped.
+ * demand (its events). A late answer for a Run the user has since left is
+ * dropped. A live Run is also read again on the safety net: its costs (a
+ * node's, a loop's against its cap, CORE-217) climb while an agent works,
+ * and no event says so.
  */
 export function useSelectedRun() {
   const [run, setRun] = useState<RunState | null>(null);
@@ -36,6 +41,13 @@ export function useSelectedRun() {
     },
     [],
   );
+
+  const liveId = run && isLiveRun(run.status) ? run.run_id : null;
+  useEffect(() => {
+    if (!liveId) return;
+    const net = setInterval(() => void refresh(), SAFETY_NET_MS);
+    return () => clearInterval(net);
+  }, [liveId, refresh]);
 
   return { run, select, refresh };
 }

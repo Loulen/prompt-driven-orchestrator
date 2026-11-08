@@ -7,6 +7,7 @@ import { useHarnessCatalog } from "../../harness/store/useHarnessCatalog";
 import { useEditStore } from "../store/editStore";
 import { FormRow } from "./InspectorPrimitives";
 import { deriveRegionCost } from "./loopRegionCost";
+import { regionCurrentIter } from "./loopRegionDerivation";
 import { CapOvershootNote, CostCapField, LoopCostSection, RegionInfoNote } from "./RegionCostSection";
 import "./inspect.css";
 
@@ -59,9 +60,7 @@ export default function RegionInspector({
   const isVarRef = typeof region.max_iter === "string";
 
   const onRun = runState != null;
-  const currentIter = onRun
-    ? region.members.reduce((max, id) => Math.max(max, runState.nodes[id]?.iter ?? 0), 0)
-    : 0;
+  const currentIter = onRun ? regionCurrentIter(region, runState) : 0;
   const loopCost = runState?.loop_costs?.[region.id];
   const money = deriveRegionCost(region, tab.pipeline, runState, currentIter);
   const capUsd = money.cap?.usd ?? null;

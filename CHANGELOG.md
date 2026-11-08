@@ -51,6 +51,22 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   by depth) for a Run that has descendants, and each entry of `GET /runs/{id}/children` its own.
   For extensions, `RunCost` gains `tree` (`RunTreeCost`: total, parent, children, descendants,
   by depth), read by `Host::run_cost`.
+### Stats › Cost: roll up child runs under their root's pipeline
+
+- The Cost band has a new "roll up child runs" chip, after a divider, off each time Stats opens;
+  its (i) says the rule. Ticked, every child run counts under the pipeline, the project and the
+  period of its root run: a pipeline's cost then includes everything it orchestrated, and a child
+  pipeline keeps only the runs nobody orchestrated. A child started after the period comes in
+  with its root, and "completed runs only" judges the root. The cohort line turns amber and says
+  the totals per pipeline and project differ from the default view.
+- A root pipeline that orchestrated child runs shows "⑂ N" in the ranking. Opened, it splits into
+  "Parent run" (this run's own nodes) and "Child runs" (N runs · K levels), which unfold in place
+  by depth, then child pipeline, then nodes; each level also opens in the breadcrumb.
+- "By model" does not take the setting: the chip and its divider leave the band, and come back as
+  they were on "By pipeline" and "By project".
+- `GET /stats/cost` takes `roll_up_children=true`; each root pipeline row then carries an additive
+  `roll_up` (`parent`, `children`, `levels`, `depths` with their pipelines). Without the parameter
+  the response is unchanged.
 ### Any node that creates a child run waits for it
 
 - A node that creates a child run (`pdo run create`) waits for it, with or without the

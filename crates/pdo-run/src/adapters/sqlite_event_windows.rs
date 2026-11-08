@@ -177,6 +177,28 @@ async fn latest_run_start(
         .filter(|payload| !payload.is_null()))
 }
 
+async fn child_run_starts(db: &sqlx::SqlitePool) -> Result<Vec<RunStart>> {
+    let rows = sqlx::query_as::<_, (String, String, Option<String>)>(
+        "SELECT e.run_id, e.ts, e.payload FROM events e \
+         WHERE e.kind = 'run_started' \
+           AND json_extract(e.payload, '$.parent_run_id') IS NOT NULL \
+           AND EXISTS (SELECT 1 FROM events p WHERE p.kind = 'run_started' \
+                       AND p.run_id = json_extract(e.payload, '$.parent_run_id')) \
+         ORDER BY e.ts, e.id",
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(run_id, ts, payload)| RunStart {
+            run_id,
+            ts,
+            bucket: None,
+            payload: payload_of(payload.as_deref()),
+        })
+        .collect())
+}
+
 impl EventWindows for SqliteEventStore {
     fn count_by_period<'a>(
         &'a self,
@@ -217,6 +239,10 @@ impl EventWindows for SqliteEventStore {
         unknown: &'a str,
     ) -> BoxFuture<'a, Result<Option<serde_json::Value>>> {
         Box::pin(latest_run_start(self.pool(), pipeline, unknown))
+    }
+
+    fn child_run_starts(&self) -> BoxFuture<'_, Result<Vec<RunStart>>> {
+        Box::pin(child_run_starts(self.pool()))
     }
 }
 
@@ -411,6 +437,54 @@ mod tests {
             store.latest_run_start("nope", "(unknown)").await.unwrap(),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn the_child_runs_are_the_runs_whose_parent_the_log_still_holds() {
+        let store = seeded().await;
+        let child =
+            |parent: &str| serde_json::json!({ "pipeline_name": "Kid", "parent_run_id": parent });
+        // Out of every window: a child is reached whatever its own start.
+        insert(
+            &store,
+            "c1",
+            "2026-08-01T09:00:00Z",
+            "run_started",
+            None,
+            child("r1"),
+        )
+        .await;
+        insert(
+            &store,
+            "c2",
+            "2026-07-15T09:30:00Z",
+            "run_started",
+            None,
+            child("c1"),
+        )
+        .await;
+        // Its parent was forgotten: no `run_started` left, it is a root again.
+        insert(
+            &store,
+            "orphan",
+            "2026-07-15T09:40:00Z",
+            "run_started",
+            None,
+            child("gone"),
+        )
+        .await;
+
+        let children = store.child_run_starts().await.unwrap();
+        assert_eq!(
+            children
+                .iter()
+                .map(|s| s.run_id.as_str())
+                .collect::<Vec<_>>(),
+            ["c2", "c1"]
+        );
+        assert_eq!(children[1].payload["parent_run_id"], "r1");
+        assert_eq!(children[1].ts, "2026-08-01T09:00:00Z");
+        assert_eq!(children[1].bucket, None);
     }
 
     #[tokio::test]

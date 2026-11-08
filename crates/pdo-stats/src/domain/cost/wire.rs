@@ -4,7 +4,11 @@ use std::collections::BTreeMap;
 
 use super::metric::CostAggregateAcc;
 use super::pairs::{cost_then_id, wire_pairs, CostEntityAcc, ModelAcc};
-use super::{StatsCostEntity, StatsCostPeriod, StatsEffortCostEntity, StatsModelCostEntity};
+use super::roll_up::wire_roll_up;
+use super::{
+    StatsCostEntity, StatsCostPeriod, StatsEffortCostEntity, StatsModelCostEntity,
+    StatsProjectCostEntity,
+};
 use crate::domain::absorption::effort_key;
 use crate::domain::absorption::resolver::AbsorptionResolver;
 use crate::domain::provenance::provenance;
@@ -58,6 +62,7 @@ pub fn wire_by_model(
                                 &effort_key(effort.as_deref()),
                                 &effort_acc.tallies,
                             ),
+                            roll_up: None,
                         },
                         provenance: effort.as_ref().map(|_| {
                             provenance(effort_acc.effort_observed, effort_acc.effort_requested)
@@ -86,6 +91,7 @@ pub fn wire_by_model(
                     by_period: wire_periods(acc.periods),
                     nodes: Vec::new(),
                     models: Vec::new(),
+                    roll_up: None,
                 },
                 provenance: provenance(acc.model_observed, acc.model_requested),
                 efforts,
@@ -149,11 +155,59 @@ pub fn wire_cost_entity(
         runs: None,
         last_run: None,
         absorbed: Vec::new(),
+        roll_up: None,
     }
 }
 
+/// Wire a level of Pipeline rows, ranked by cost then id.
+pub fn wire_cost_pipelines(
+    pipelines: BTreeMap<String, CostEntityAcc>,
+    resolver: &AbsorptionResolver,
+) -> Vec<StatsCostEntity> {
+    let mut rows: Vec<StatsCostEntity> = pipelines
+        .into_iter()
+        .map(|(id, pipeline)| wire_cost_pipeline(id, pipeline, resolver))
+        .collect();
+    rows.sort_by(|a, b| cost_then_id(a.aggregate.usd, &a.id, b.aggregate.usd, &b.id));
+    rows
+}
+
+/// Wire the Project rows, each with its Pipeline rows, ranked by cost then id.
+pub fn wire_cost_projects(
+    projects: BTreeMap<String, CostProjectAcc>,
+    resolver: &AbsorptionResolver,
+) -> Vec<StatsProjectCostEntity> {
+    let mut rows: Vec<StatsProjectCostEntity> = projects
+        .into_iter()
+        .map(|(id, project)| StatsProjectCostEntity {
+            entity: StatsCostEntity {
+                id,
+                name: project.name,
+                aggregate: project.aggregate.wire(),
+                by_period: wire_periods(project.periods),
+                nodes: Vec::new(),
+                models: Vec::new(),
+                runs: None,
+                last_run: None,
+                absorbed: Vec::new(),
+                roll_up: None,
+            },
+            pipelines: wire_cost_pipelines(project.pipelines, resolver),
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        cost_then_id(
+            a.entity.aggregate.usd,
+            &a.entity.id,
+            b.entity.aggregate.usd,
+            &b.entity.id,
+        )
+    });
+    rows
+}
+
 /// A Pipeline row: the entity, plus what its Runs and its absorbed members say
-/// — and the same for each of its Node rows (#892).
+/// — and the same for each of its Node rows (#892), and its roll-up.
 pub fn wire_cost_pipeline(
     id: String,
     mut entity: CostEntityAcc,
@@ -162,6 +216,10 @@ pub fn wire_cost_pipeline(
     let runs = entity.tallies.runs();
     let last_run = entity.tallies.last_run();
     let absorbed = resolver.absorbed(&id, &entity.tallies);
+    let roll_up = entity
+        .roll_up
+        .take()
+        .and_then(|roll_up| wire_roll_up(&id, *roll_up, resolver));
     let mut nodes: Vec<StatsCostEntity> = std::mem::take(&mut entity.nodes)
         .into_iter()
         .map(|(node_id, node)| wire_cost_node(&id, node_id, node, resolver))
@@ -172,6 +230,7 @@ pub fn wire_cost_pipeline(
     wired.runs = Some(runs);
     wired.last_run = last_run;
     wired.absorbed = absorbed;
+    wired.roll_up = roll_up.map(Box::new);
     wired
 }
 

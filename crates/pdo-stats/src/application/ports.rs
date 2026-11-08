@@ -54,6 +54,10 @@ pub trait RunEvents: Send + Sync {
     ) -> BoxFuture<'a, anyhow::Result<Option<serde_json::Value>>>;
     /// Every event of one Run, in append order.
     fn events<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, anyhow::Result<Vec<Event>>>;
+    /// The child Runs of the whole log — a `run_started` whose parent the log
+    /// still holds — whatever their own start: what « Roll up child runs »
+    /// walks from each root (ADR draft-cout-de-l-arbre).
+    fn child_run_starts(&self) -> BoxFuture<'_, anyhow::Result<Vec<RunStart>>>;
 }
 
 /// The Triggers' fires, as the trigger context holds them.

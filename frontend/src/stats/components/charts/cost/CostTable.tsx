@@ -7,7 +7,7 @@ import { sortRows, useTableSort } from "../common/tableSort";
 import { Tooltip } from "../../../../shared/ui/tooltip";
 import type { MasterSelection } from "../../../store/absorptionSelection";
 import { coupleRows } from "../../../model/statsAbsorption";
-import { pairMetric } from "../../../model/cost";
+import { pairMetric, rowMetric } from "../../../model/cost";
 import { NOT_SET_COPY } from "../../../model/provenance";
 import { ProvenanceName } from "../common/Provenance";
 import { TableCombinedIcon } from "../common/TableCombinedIcon";
@@ -17,6 +17,8 @@ import {
   type CoupleSelection,
 } from "../common/tableSelection";
 import { CostCell } from "./CostCells";
+import { CostTreeRows, TreeToggle } from "./CostTreeRows";
+import { treeKey, type CostTree } from "./costTree";
 
 export function CostTable({
   rows,
@@ -27,6 +29,7 @@ export function CostTable({
   expandablePairs = false,
   selection,
   coupleSelection,
+  tree,
 }: {
   rows: StatsCostEntity[];
   harnesses: string[];
@@ -43,9 +46,21 @@ export function CostTable({
   /** Node rows gain a chevron unfolding their model × effort pairs (ADR-0065).
    *  Off on the model axis, where the model × effort path is already the drill. */
   expandablePairs?: boolean;
+  /** Rows that unfold their levels in place (« Roll up child runs »). Their
+   *  order is the drill's own — Parent run, then Child runs — until a header
+   *  sorts them. */
+  tree?: CostTree;
 }) {
   // Sorted by cost at first (`overlays.statsBreakdown`); a header sorts by its column.
-  const [sort, onSort] = useTableSort({ key: "total", dir: "desc" });
+  const [sort, onSort] = useTableSort({ key: tree ? "" : "total", dir: "desc" });
+  const [treeOpen, setTreeOpen] = useState<Set<string>>(() => new Set(tree?.expanded));
+  const toggleTree = (key: string) =>
+    setTreeOpen((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   const sorted = sortRows(rows, sort, (row, key) =>
     key === "name"
       ? row.name
@@ -98,6 +113,8 @@ export function CostTable({
           <tbody>
             {sorted.map((row) => {
               const pairs = expandablePairs ? (row.models ?? []) : [];
+              const kids = tree?.children(row, tree.base) ?? [];
+              const treeKeyOf = treeKey(tree?.base ?? [], row);
               const pick = tableSelection(selection, row, order);
               const couples = coupleLine(
                 coupleSelection?.(row),
@@ -114,6 +131,13 @@ export function CostTable({
                     <td>
                       <span className="sx-name">
                         {pick.control}
+                        {kids.length > 0 ? (
+                          <TreeToggle
+                            name={row.name}
+                            open={treeOpen.has(treeKeyOf)}
+                            onToggle={() => toggleTree(treeKeyOf)}
+                          />
+                        ) : null}
                         {pairs.length > 0 ? (
                           <button
                             type="button"
@@ -163,19 +187,7 @@ export function CostTable({
                       <CostCell
                         bar={<InBar value={row.usd} max={max} top={row.id === topId} />}
                         unit={unit}
-                        metric={{
-                          harness: "total",
-                          usd: row.usd,
-                          estimated: row.estimated,
-                          partial: row.partial,
-                          executions: row.executions,
-                          readable: row.readable,
-                          unknown: row.unknown,
-                          average_usd: row.average_usd,
-                          median_usd: row.median_usd,
-                          unpriced_models: row.unpriced_models,
-                          missing_reasons: row.missing_reasons,
-                        }}
+                        metric={rowMetric(row)}
                       />
                     </td>
                     {harnesses.map((harness) => (
@@ -189,6 +201,17 @@ export function CostTable({
                       </td>
                     ))}
                   </tr>
+                  {tree && kids.length > 0 && treeOpen.has(treeKeyOf) ? (
+                    <CostTreeRows
+                      rows={kids}
+                      ancestors={[...tree.base, row]}
+                      tree={tree}
+                      expanded={treeOpen}
+                      onToggle={toggleTree}
+                      harnesses={harnesses}
+                      unit={unit}
+                    />
+                  ) : null}
                   {expanded.has(row.id)
                     ? pairs.map((pair, index) => {
                         const couple = couples.rows[index];

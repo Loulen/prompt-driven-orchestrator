@@ -9,8 +9,10 @@ use pdo_workspace::domain::project::Project;
 
 use super::metric::CostAggregateAcc;
 use super::pairs::{CostEntityAcc, ModelAcc};
-use super::wire::{wire_by_model, wire_cost_pipeline, wire_periods, CostProjectAcc};
-use super::{ResolvedPriceRow, StatsCost, StatsCostEntity, StatsProjectCostEntity};
+use super::wire::{
+    wire_by_model, wire_cost_pipelines, wire_cost_projects, wire_periods, CostProjectAcc,
+};
+use super::{ResolvedPriceRow, StatsCost};
 use crate::domain::absorption::effort_key;
 use crate::domain::absorption::identity::{NodeIdentity, RunIdentity};
 use crate::domain::absorption::resolver::AbsorptionResolver;
@@ -77,6 +79,46 @@ pub fn cost_project_root(payload: &serde_json::Value, daemon_root: &Path) -> Pat
         .unwrap_or_else(|| daemon_root.to_path_buf())
 }
 
+/// A Pipeline's headline is its Nodes' work (ADR-0029 as amended by #742):
+/// the Infrastructure bucket — the run's own manager and merge-resolver
+/// sessions, plus attributable leftover transcripts — and the Unassigned
+/// orphans stay visible as Node rows below the headline, but they are
+/// orchestration overhead, not pipeline work. The instance totals keep every
+/// contribution (ADR-0058: a run's total is the sum of what it actually spent).
+pub fn node_work(contributions: &[CostContribution]) -> Vec<CostContribution> {
+    contributions
+        .iter()
+        .filter(|c| c.scope == CostScope::Node)
+        .cloned()
+        .collect()
+}
+
+/// The row a contribution lands on under its Pipeline row. #892: a Node
+/// absorbed under this Pipeline row counts under its absorbent Node, in every
+/// tree the Node shows in.
+pub fn contribution_node_identity(
+    identity: &RunIdentity,
+    contribution: &CostContribution,
+) -> NodeIdentity {
+    let pipeline_key = &identity.pipeline_key;
+    match contribution.scope {
+        CostScope::Node => identity.node(contribution.node_id.as_deref().unwrap_or("(unknown)")),
+        CostScope::Infrastructure => NodeIdentity {
+            key: format!("{pipeline_key}:infrastructure"),
+            raw_key: String::new(),
+            name: "Infrastructure".to_string(),
+            own_name: true,
+        },
+        CostScope::Unassigned => NodeIdentity {
+            key: format!("{pipeline_key}:unassigned"),
+            raw_key: String::new(),
+            name: "Unassigned".to_string(),
+            own_name: true,
+        },
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct CostRunRow {
     pub run_id: String,
     pub started_at: String,
@@ -85,6 +127,75 @@ pub struct CostRunRow {
     pub project_id: String,
     pub project_name: String,
     pub contributions: Vec<CostContribution>,
+}
+
+/// Count one Run's headline `work` into a row and its period bar.
+pub fn add_work(acc: &mut CostEntityAcc, bucket: &str, work: &[CostContribution]) {
+    acc.aggregate.add_run(work);
+    acc.periods
+        .entry(bucket.to_string())
+        .or_default()
+        .add_run(work);
+}
+
+/// Count `run`'s contributions into the Node rows of `pipeline`, with each
+/// Node leaf's model × effort pairs (ADR-0065, #906). A Node's figures are its
+/// own executions, whatever row its Pipeline is filed under.
+pub fn add_node_rows(pipeline: &mut CostEntityAcc, run: &CostRunRow, bucket: &str) {
+    for contribution in &run.contributions {
+        let node_identity = contribution_node_identity(&run.identity, contribution);
+        let is_node = contribution.scope == CostScope::Node;
+        let node = pipeline.nodes.entry(node_identity.key.clone()).or_default();
+        node_identity.adopt_name(&mut node.name);
+        if is_node {
+            node.tallies
+                .record_run_as(&node_identity.raw_key, &run.run_id, &run.started_at);
+        }
+        node.aggregate.add_contribution(contribution);
+        node.periods
+            .entry(bucket.to_string())
+            .or_default()
+            .add_contribution(contribution);
+        for slice in &contribution.model_slices {
+            let couple = run.identity.couple(
+                is_node.then_some(node_identity.raw_key.as_str()),
+                &slice.model,
+                slice.effort.as_deref(),
+            );
+            let pair = node
+                .pairs
+                .entry((couple.model.clone(), couple.effort.clone()))
+                .or_default();
+            pair.add_slice(&contribution.harness, slice);
+            pair.record(&couple, &run.run_id, &run.started_at);
+        }
+    }
+}
+
+/// Count `run` into a Pipeline row: its tally, its headline (`work`), its
+/// period bars and its Node rows.
+pub fn add_pipeline_run(
+    pipeline: &mut CostEntityAcc,
+    run: &CostRunRow,
+    bucket: &str,
+    work: &[CostContribution],
+) {
+    run.identity.adopt_name(&mut pipeline.name);
+    pipeline
+        .tallies
+        .record_run(&run.identity, &run.run_id, &run.started_at);
+    add_work(pipeline, bucket, work);
+    add_node_rows(pipeline, run, bucket);
+}
+
+/// Count one Run's headline `work` into a Project row and its period bar.
+pub fn add_work_to_project(project: &mut CostProjectAcc, bucket: &str, work: &[CostContribution]) {
+    project.aggregate.add_run(work);
+    project
+        .periods
+        .entry(bucket.to_string())
+        .or_default()
+        .add_run(work);
 }
 
 pub fn fold_harness_cost(
@@ -106,77 +217,31 @@ pub fn fold_harness_cost(
             .or_default()
             .add_run(&run.contributions);
 
-        // A pipeline's headline is its nodes' work (ADR-0029 as amended by
-        // #742): the Infrastructure bucket — the run's own manager and
-        // merge-resolver sessions, plus attributable leftover transcripts —
-        // and the Unassigned orphans stay visible as node rows below the
-        // headline, but they are orchestration overhead, not pipeline work.
-        // The instance totals above keep every contribution (ADR-0058: a
-        // run's total is the sum of what it actually spent).
-        let node_contributions: Vec<CostContribution> = run
-            .contributions
-            .iter()
-            .filter(|c| c.scope == CostScope::Node)
-            .cloned()
-            .collect();
+        let node_contributions = node_work(&run.contributions);
 
         let identity = &run.identity;
         let pipeline_key = &identity.pipeline_key;
-        let pipeline = pipelines.entry(pipeline_key.clone()).or_default();
-        identity.adopt_name(&mut pipeline.name);
-        pipeline
-            .tallies
-            .record_run(identity, &run.run_id, &run.started_at);
-        pipeline.aggregate.add_run(&node_contributions);
-        pipeline
-            .periods
-            .entry(run.bucket.clone())
-            .or_default()
-            .add_run(&node_contributions);
-
+        add_pipeline_run(
+            pipelines.entry(pipeline_key.clone()).or_default(),
+            run,
+            &run.bucket,
+            &node_contributions,
+        );
         let project = projects.entry(run.project_id.clone()).or_default();
         project.name = run.project_name.clone();
-        project.aggregate.add_run(&node_contributions);
-        project
-            .periods
-            .entry(run.bucket.clone())
-            .or_default()
-            .add_run(&node_contributions);
-        let project_pipeline = project.pipelines.entry(pipeline_key.clone()).or_default();
-        identity.adopt_name(&mut project_pipeline.name);
-        project_pipeline
-            .tallies
-            .record_run(identity, &run.run_id, &run.started_at);
-        project_pipeline.aggregate.add_run(&node_contributions);
-        project_pipeline
-            .periods
-            .entry(run.bucket.clone())
-            .or_default()
-            .add_run(&node_contributions);
+        add_work_to_project(project, &run.bucket, &node_contributions);
+        add_pipeline_run(
+            project.pipelines.entry(pipeline_key.clone()).or_default(),
+            run,
+            &run.bucket,
+            &node_contributions,
+        );
 
         for contribution in &run.contributions {
             if contribution.executions > 0 {
                 active_harnesses.insert(contribution.harness.clone());
             }
-            // #892: a Node absorbed under this Pipeline row counts under its
-            // absorbent Node, in every tree the Node shows in.
-            let node_identity = match contribution.scope {
-                CostScope::Node => {
-                    identity.node(contribution.node_id.as_deref().unwrap_or("(unknown)"))
-                }
-                CostScope::Infrastructure => NodeIdentity {
-                    key: format!("{pipeline_key}:infrastructure"),
-                    raw_key: String::new(),
-                    name: "Infrastructure".to_string(),
-                    own_name: true,
-                },
-                CostScope::Unassigned => NodeIdentity {
-                    key: format!("{pipeline_key}:unassigned"),
-                    raw_key: String::new(),
-                    name: "Unassigned".to_string(),
-                    own_name: true,
-                },
-            };
+            let node_identity = contribution_node_identity(identity, contribution);
             let id = node_identity.key.clone();
             let is_node = contribution.scope == CostScope::Node;
             let tally = |node: &mut CostEntityAcc| {
@@ -189,44 +254,11 @@ pub fn fold_harness_cost(
                     );
                 }
             };
-            let node = pipeline.nodes.entry(id.clone()).or_default();
-            tally(node);
-            node.aggregate.add_contribution(contribution);
-            node.periods
-                .entry(run.bucket.clone())
-                .or_default()
-                .add_contribution(contribution);
-
-            let project_node = project_pipeline.nodes.entry(id.clone()).or_default();
-            tally(project_node);
-            project_node.aggregate.add_contribution(contribution);
-            project_node
-                .periods
-                .entry(run.bucket.clone())
-                .or_default()
-                .add_contribution(contribution);
-
-            // ADR-0065: the Node leaf's model × effort pairs, plus the whole
-            // « By model » tree — one pass over the same slices, the same node
-            // identity as the axes above. Slices land in every level of both
-            // hierarchies so headline, cards and period bars all re-scope.
+            // ADR-0065: the whole « By model » tree, from the same slices and
+            // the same node identity as the Node rows above (whose model ×
+            // effort pairs `add_pipeline_run` counted). Slices land in every
+            // level so headline, cards and period bars all re-scope.
             for slice in &contribution.model_slices {
-                // #906: the Node's couple goes through the global absorptions
-                // (effort on the raw model, then model), then the couple
-                // absorptions of its raw Node — the « By model » axis below
-                // stops before that last step.
-                let couple = identity.couple(
-                    is_node.then_some(node_identity.raw_key.as_str()),
-                    &slice.model,
-                    slice.effort.as_deref(),
-                );
-                let pair_key = (couple.model.clone(), couple.effort.clone());
-                for pairs in [&mut node.pairs, &mut project_node.pairs] {
-                    let pair = pairs.entry(pair_key.clone()).or_default();
-                    pair.add_slice(&contribution.harness, slice);
-                    pair.record(&couple, &run.run_id, &run.started_at);
-                }
-
                 // #892: an absorbed model id counts under its absorbent on
                 // this axis only; its efforts meet the absorbent's by effort.
                 let model = models_axis.entry(identity.model(&slice.model)).or_default();
@@ -311,67 +343,12 @@ pub fn fold_harness_cost(
         }
     }
 
-    let mut by_pipeline: Vec<_> = pipelines
-        .into_iter()
-        .map(|(id, pipeline)| wire_cost_pipeline(id, pipeline, resolver))
-        .collect();
-    by_pipeline.sort_by(|a, b| {
-        b.aggregate
-            .usd
-            .unwrap_or(-1.0)
-            .partial_cmp(&a.aggregate.usd.unwrap_or(-1.0))
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.id.cmp(&b.id))
-    });
-
-    let mut by_project: Vec<_> = projects
-        .into_iter()
-        .map(|(id, project)| {
-            let mut pipelines: Vec<_> = project
-                .pipelines
-                .into_iter()
-                .map(|(id, pipeline)| wire_cost_pipeline(id, pipeline, resolver))
-                .collect();
-            pipelines.sort_by(|a, b| {
-                b.aggregate
-                    .usd
-                    .unwrap_or(-1.0)
-                    .partial_cmp(&a.aggregate.usd.unwrap_or(-1.0))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| a.id.cmp(&b.id))
-            });
-            StatsProjectCostEntity {
-                entity: StatsCostEntity {
-                    id,
-                    name: project.name,
-                    aggregate: project.aggregate.wire(),
-                    by_period: wire_periods(project.periods),
-                    nodes: Vec::new(),
-                    models: Vec::new(),
-                    runs: None,
-                    last_run: None,
-                    absorbed: Vec::new(),
-                },
-                pipelines,
-            }
-        })
-        .collect();
-    by_project.sort_by(|a, b| {
-        b.entity
-            .aggregate
-            .usd
-            .unwrap_or(-1.0)
-            .partial_cmp(&a.entity.aggregate.usd.unwrap_or(-1.0))
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.entity.id.cmp(&b.entity.id))
-    });
-
     StatsCost {
         harnesses: active_harnesses.into_iter().collect(),
         total: total.wire(),
         by_period: wire_periods(periods),
-        by_pipeline,
-        by_project,
+        by_pipeline: wire_cost_pipelines(pipelines, resolver),
+        by_project: wire_cost_projects(projects, resolver),
         by_model: wire_by_model(models_axis, resolver),
         resolved,
     }

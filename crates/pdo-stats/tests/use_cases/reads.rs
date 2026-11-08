@@ -117,6 +117,64 @@ async fn the_cost_folds_every_run_of_the_cohort_with_the_price_table() {
     );
 }
 
+fn child_start(run_id: &str, pipeline: &str, parent: &str, ts: &str) -> RunStart {
+    RunStart {
+        run_id: run_id.into(),
+        ts: ts.into(),
+        bucket: None,
+        payload: serde_json::json!({
+            "pipeline_id": pipeline, "pipeline_name": pipeline, "parent_run_id": parent,
+        }),
+    }
+}
+
+#[tokio::test]
+async fn the_rolled_up_cost_recomposes_the_cohort_by_root() {
+    let mut build = Build::default();
+    // The window's cohort: a root, a child of it started in the window, and a
+    // lone Run nobody orchestrated.
+    build.events.run_starts = vec![
+        run_start("root", "orchestrate"),
+        RunStart {
+            bucket: Some("2026-07-16".into()),
+            ..child_start("child", "implement", "root", "2026-07-16T09:00:00Z")
+        },
+        run_start("lone", "implement"),
+    ];
+    // The log's child links: the grandchild started long after the window.
+    build.events.child_run_starts = vec![
+        child_start("child", "implement", "root", "2026-07-16T09:00:00Z"),
+        child_start("grand", "review", "child", "2026-09-01T09:00:00Z"),
+    ];
+    let world = build.world();
+    let read_cost = world.stats.read_cost();
+
+    let plain = read_cost.execute(&read("day")).await.unwrap();
+    let rows: Vec<(&str, Option<u64>)> = plain
+        .by_pipeline
+        .iter()
+        .map(|r| (r.id.as_str(), r.runs))
+        .collect();
+    assert_eq!(rows, [("implement", Some(2)), ("orchestrate", Some(1))]);
+    assert!(plain.by_pipeline.iter().all(|r| r.roll_up.is_none()));
+
+    let rolled = read_cost.execute_rolled_up(&read("day")).await.unwrap();
+    let rows: Vec<(&str, Option<u64>)> = rolled
+        .by_pipeline
+        .iter()
+        .map(|r| (r.id.as_str(), r.runs))
+        .collect();
+    // `implement` keeps only the lone Run; the child left with its tree.
+    assert_eq!(rows, [("implement", Some(1)), ("orchestrate", Some(1))]);
+    let roll_up = rolled.by_pipeline[1].roll_up.as_ref().unwrap();
+    assert_eq!(roll_up.children.runs, Some(2));
+    assert_eq!(roll_up.levels, 2);
+    assert_eq!(roll_up.depths[1].pipelines[0].id, "review");
+    // The whole tree lands in its root's period.
+    let buckets: Vec<&str> = rolled.by_period.iter().map(|p| p.bucket.as_str()).collect();
+    assert_eq!(buckets, ["2026-07-15"]);
+}
+
 fn performance_read(refresh: bool) -> PerformanceRead {
     PerformanceRead {
         from: "2026-07-15T00:00:00Z".into(),

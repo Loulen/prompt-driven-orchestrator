@@ -14,8 +14,11 @@ import { periodDays, presetPeriod, PRESETS, type Preset } from "../model/period"
 import type { StatsTab } from "./StatsCharts";
 import { PricingDetailsContent } from "./PricingDetails";
 import {
+  DEFAULT_COST_VIEW,
   DEFAULT_PERFORMANCE_BAND,
+  rollsUp,
   TAB_COHORT_DEFAULTS,
+  type CostView,
   type PerformanceBand,
 } from "../model/statsFilters";
 import { useRefusal } from "../../shared/authorization/useRefusals";
@@ -94,6 +97,7 @@ function StatsSurface({
   const [performanceCompletedOnly, setPerformanceCompletedOnly] =
     useState<boolean>(TAB_COHORT_DEFAULTS.performance);
   const [band, setBand] = useState<PerformanceBand>(DEFAULT_PERFORMANCE_BAND);
+  const [costView, setCostView] = useState<CostView>(DEFAULT_COST_VIEW);
   const [pricingOpen, setPricingOpen] = useState(
     initialPricingOpen && initialTab === "cost",
   );
@@ -156,6 +160,7 @@ function StatsSurface({
     },
     absorptionsVersion,
     uncombined,
+    rollsUp(costView),
   );
 
   const refreshing =
@@ -379,6 +384,8 @@ function StatsSurface({
           onUncombinedChange={setUncombined}
           // Kept while on, so the reading can always be turned back off.
           showUncombined={hasAbsorptions || uncombined}
+          costView={costView}
+          onCostViewChange={setCostView}
         />
       </Suspense>
       )}

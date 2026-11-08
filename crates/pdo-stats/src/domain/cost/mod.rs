@@ -8,6 +8,7 @@
 pub mod fold;
 pub mod metric;
 pub mod pairs;
+pub mod roll_up;
 pub mod wire;
 
 use serde::Serialize;
@@ -120,6 +121,42 @@ pub struct StatsCostEntity {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[ts(optional = nullable)]
     pub absorbed: Vec<AbsorbedMember>,
+    /// « Roll up child runs » (ADR draft-cout-de-l-arbre §2): on a root
+    /// Pipeline row whose root runs orchestrated child runs, the split
+    /// « Parent run » / « Child runs » › Depth k › child Pipeline › Node.
+    /// Omitted everywhere else — and always when the roll-up is off, so that
+    /// response stays the one it was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub roll_up: Option<Box<StatsCostRollUp>>,
+}
+
+/// The roll-up of a root Pipeline row. Every figure follows the rule of a
+/// Pipeline headline (its Nodes' work); Infrastructure and Unassigned stay
+/// visible as Node rows under each Pipeline.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
+pub struct StatsCostRollUp {
+    /// The root runs' own work — the Coût du Run parent; its `nodes` are the
+    /// root Pipeline's Nodes, Infrastructure and Unassigned.
+    pub parent: StatsCostEntity,
+    /// Every descendant summed; `runs` = how many child runs, every depth.
+    pub children: StatsCostEntity,
+    /// How many depth levels the trees reach.
+    pub levels: u32,
+    /// The descendants per depth, shallowest first.
+    pub depths: Vec<StatsCostDepth>,
+}
+
+/// One depth level of a roll-up (1 = direct children): its total, then its
+/// child Pipelines with their Nodes.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
+pub struct StatsCostDepth {
+    #[serde(flatten)]
+    pub entity: StatsCostEntity,
+    pub depth: u32,
+    pub pipelines: Vec<StatsCostEntity>,
 }
 
 /// One model × effort pair of a Node leaf (ADR-0065): the same aggregate shape

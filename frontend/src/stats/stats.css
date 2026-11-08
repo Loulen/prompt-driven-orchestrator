@@ -981,3 +981,45 @@ button.sx-crumb:hover {
 .sx-bulkpos--up {
   bottom: calc(var(--g-6) + 44px);
 }
+
+/* « Roll up child runs »: the (i) beside its chip, the « ⑂ N » of a root
+   Pipeline, the tags of the Parent run / Child runs / Depth rows, and the rows
+   that unfold in place, one indent per level. */
+.sx-info {
+  display: inline-flex;
+  color: var(--text-3);
+  cursor: help;
+}
+.sx-info:hover,
+.sx-info:focus-visible {
+  color: var(--text-2);
+}
+.sx-fork {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  color: var(--text-3);
+  font-family: var(--font-code);
+  font-size: var(--fs-2xs);
+}
+.sx-tag {
+  flex: none;
+  margin-left: var(--g-3);
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.sx-table .sx-open:has(.sx-tag) {
+  display: inline-flex;
+  align-items: baseline;
+}
+.sx-table--cost tbody tr.sx-tree td:first-child {
+  padding-left: calc(var(--g-4) + var(--sx-level, 1) * 16px);
+}
+.sx-chev-gap {
+  width: 16px;
+  flex: none;
+}

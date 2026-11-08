@@ -38,7 +38,9 @@ export function fetchStatsOverview(
 /**
  * Estimated cost over `[from, to)`, folded by period/pipeline/project (#377,
  * ADR-0022/0029). Heavy (memoized per-run cost fanned over the window) — fetch
- * lazily, only when the cost tab is shown.
+ * lazily, only when the cost tab is shown. `rollUp` — « Roll up child runs »:
+ * the cohort becomes the root runs of the period, each child run filed under
+ * its root's Pipeline and Project; omitted when off.
  */
 export function fetchStatsCost(
   from: string,
@@ -46,6 +48,7 @@ export function fetchStatsCost(
   bucket: string,
   completedOnly = false,
   uncombined = false,
+  rollUp = false,
 ): Promise<StatsCost> {
   return request<StatsCost>("GET", "/stats/cost", {
     query: {
@@ -54,6 +57,7 @@ export function fetchStatsCost(
       bucket,
       ...(completedOnly ? { completed_only: true } : {}),
       ...(uncombined ? { uncombined: true } : {}),
+      ...(rollUp ? { roll_up_children: true } : {}),
     },
   });
 }

@@ -1,5 +1,6 @@
-import { Check, Combine, X } from "lucide-react";
+import { Check, Combine, GitFork, Info, X } from "lucide-react";
 import { IconButton } from "../../../../shared/ui/kit";
+import { Tooltip } from "../../../../shared/ui/tooltip";
 
 // --- The filter bar (#819) -----------------------------------------------------
 
@@ -92,6 +93,53 @@ export function UncombinedChip({
   );
 }
 
+/** What « roll up child runs » does, said in words. */
+export const ROLL_UP_COPY =
+  "Child runs count under the pipeline, the project and the period of their root run. A pipeline's cost then includes everything it orchestrated, and a child pipeline keeps only the runs nobody orchestrated. Resets each time Stats opens.";
+
+/** « Roll up child runs »: file every child run's cost under its root's
+ *  Pipeline and Project. Same anatomy as the other chips; off at each open
+ *  (« Réglages de Stats éphémères »); By pipeline and By project only. The (i)
+ *  beside it says the rule. */
+export function RollUpChip({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <>
+      <button
+        type="button"
+        role="checkbox"
+        aria-checked={checked}
+        data-testid="stats-roll-up-children"
+        onClick={() => onChange(!checked)}
+        className="sx-toggle"
+      >
+        {checked ? (
+          <Check size={11} strokeWidth={2} aria-hidden="true" />
+        ) : (
+          <GitFork size={11} strokeWidth={1.5} aria-hidden="true" />
+        )}
+        roll up child runs
+      </button>
+      <Tooltip content={ROLL_UP_COPY} side="bottom">
+        <span
+          role="img"
+          tabIndex={0}
+          aria-label={ROLL_UP_COPY}
+          data-testid="stats-roll-up-info"
+          className="sx-info"
+        >
+          <Info size={12} strokeWidth={1.5} />
+        </span>
+      </Tooltip>
+    </>
+  );
+}
+
 /** A thin divider between two groups of the bar, so « which Runs » and « which
  *  duration » never read as one control. */
 export function BandDivider() {
@@ -107,6 +155,7 @@ export function CohortOnlyBand({
   completedOnly,
   onCompletedOnlyChange,
   uncombined,
+  rollUp,
   crumbs,
   children,
 }: {
@@ -115,6 +164,9 @@ export function CohortOnlyBand({
   onCompletedOnlyChange: (value: boolean) => void;
   /** The « Uncombined » chip, on the tabs that show Pipelines (not Overview). */
   uncombined?: { checked: boolean; onChange: (value: boolean) => void };
+  /** « Roll up child runs », after a divider: Cost, By pipeline and By
+   *  project only — absent, not greyed, on « By model ». */
+  rollUp?: { checked: boolean; onChange: (value: boolean) => void };
   crumbs?: React.ReactNode;
   /** The tab's own controls (Cost's grouping), before the cohort. */
   children?: React.ReactNode;
@@ -128,6 +180,12 @@ export function CohortOnlyBand({
           checked={uncombined.checked}
           onChange={uncombined.onChange}
         />
+      )}
+      {rollUp && (
+        <>
+          <BandDivider />
+          <RollUpChip checked={rollUp.checked} onChange={rollUp.onChange} />
+        </>
       )}
     </StatsFilterBand>
   );

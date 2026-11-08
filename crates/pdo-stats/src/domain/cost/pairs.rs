@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use pdo_run::domain::run_cost::ModelEffortSlice;
 
 use super::metric::{CostAggregateAcc, CostMetricAcc, HarnessMetricAcc};
+use super::roll_up::RollUpAcc;
 use super::StatsModelEffortPair;
 use crate::domain::absorption::couple_key;
 use crate::domain::absorption::identity::CoupleIdentity;
@@ -25,6 +26,8 @@ pub struct CostEntityAcc {
     /// Which raw keys' Runs landed here: Pipeline keys on a Pipeline acc
     /// (#890), Node ids on a Node acc (#892).
     pub tallies: PipelineTallies,
+    /// « Roll up child runs »: filled on a root Pipeline row only.
+    pub roll_up: Option<Box<RollUpAcc>>,
 }
 
 /// One model × effort bucket, accumulated over the executions that landed in

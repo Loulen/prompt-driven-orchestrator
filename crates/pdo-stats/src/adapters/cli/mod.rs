@@ -82,8 +82,8 @@ pub enum StatsAction {
 #[derive(Args, Debug, Clone)]
 pub struct Filters {
     /// The period, as the surface's presets: the last 7, 30 or 90 days
-    /// (today included), or all time.
-    #[arg(long, value_enum, default_value_t = Preset::Days7)]
+    /// (today included), or all time. 30 days by default, as Stats opens.
+    #[arg(long, value_enum, default_value_t = Preset::Days30)]
     pub period: Preset,
     /// A window of your own instead (`YYYY-MM-DD` or RFC 3339), `--to`
     /// excluded; with `--bucket`.
@@ -308,6 +308,19 @@ mod tests {
     fn a_row_is_a_key_and_a_name_the_key_by_default() {
         assert_eq!(named("ship"), ("ship".into(), "ship".into()));
         assert_eq!(named("ship=Ship it"), ("ship".into(), "Ship it".into()));
+    }
+
+    /// The CLI reads the period the surface opens on (CORE-231): Stats opens
+    /// on 30 days, so `pdo stats` without `--period` shows the same figures.
+    #[test]
+    fn the_default_period_is_the_one_stats_opens_on() {
+        #[derive(clap::Parser)]
+        struct Cli {
+            #[command(flatten)]
+            filters: Filters,
+        }
+        let cli = <Cli as clap::Parser>::parse_from(["pdo"]);
+        assert_eq!(cli.filters.period, Preset::Days30);
     }
 
     #[test]

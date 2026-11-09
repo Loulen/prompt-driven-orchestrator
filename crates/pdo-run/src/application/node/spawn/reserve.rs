@@ -303,6 +303,10 @@ pub(super) async fn reserve(
                 // conflict is the run's own history rewritten by this node. `null`
                 // for a node with no sub-worktree, which never merges back.
                 "base_sha": spawn_base_sha,
+                // CORE-231: a non-isolated node's delivery `before`; `null` if isolated.
+                "run_head_sha": (!has_sub_worktree)
+                    .then(|| pdo_workspace::adapters::git::revisions::rev_parse(working_dir, "HEAD"))
+                    .flatten(),
             })),
         };
         freeze_extension_env(&mut node_started, extension);

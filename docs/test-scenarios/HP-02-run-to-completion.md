@@ -1,6 +1,6 @@
 ---
 id: HP-02
-covers: [run, start-node, tmux-session, dataflow, conditional-routing, loop-region, collection, convergence, artifact, run-stats, sandbox, staging-profile, staging-floor, sandbox-prep, harness, harness-pin, harness-capability, harness-turn-end, harness-reported-cost, harness-resume-by-identity]
+covers: [run, run-pause, review, review-comment, pipeline-manager, start-node, tmux-session, dataflow, conditional-routing, loop-region, collection, convergence, artifact, run-stats, sandbox, staging-profile, staging-floor, sandbox-prep, harness, harness-pin, harness-capability, harness-turn-end, harness-reported-cost, harness-resume-by-identity]
 ---
 
 # HP-02 — Launch a run to completion
@@ -32,10 +32,19 @@ Features validated while crossing the run screens (grafted from retired per-issu
   an ordinary **agent**: it starts only once every lap is done, receives the laps' outputs grouped in
   one input, and finds each lap's code already merged back on the Run branch (ADR-0082). The editor
   toolbar offers no Merge button.
+- **Pause / Resume** (recette CORE-229): a Run paused from its row of the Runs list launches
+  nothing new, but a node already working **finishes** during the pause and reads completed; Resume
+  starts the next node. A completion lost to a pause (the node « session died » after Resume, its
+  work to redo) is the regression this guards.
 - **Artifact rendering**: an output artifact opens in the markdown modal; a ` ```mermaid ` block
   renders as inline SVG and invalid mermaid degrades gracefully to raw source (#240 / ADR-0013).
-- **Run stats**: the Info panel shows a Stats block — Duration (ticking live), Node sessions started
-  (manager excluded), Lines changed / LOC — and an **estimated cost** (labelled "est.", #100 / #272).
+- **Run stats**: the Info panel shows a Stats block — Duration (ticking live), Lines changed / LOC —
+  and an **estimated cost** (labelled "est.", #100 / #272). Node sessions started (manager excluded)
+  is hidden by default: Settings › Appearance › Run info tab shows it.
+- **Diff review loop** (ADR-0067, grafted from the acceptance tour of the Review and observation domain): the
+  Run's Diff tab opens the Review page; an inline comment sent to the Pipeline Manager gets its reply
+  in the thread without a reload, and resolving folds the thread. It is the one journey where a real
+  agent answers through the Review surface — see the journey's §17.
 - **Runs / Triggers grouped by repo** when ≥ 2 distinct repos are present; flat otherwise (#258).
 - **Daemon version** displayed live in the footer (#139).
 - **Sandbox, as an A/B pair** (PRD #403, ADR-0030, ADR-0031): the same one-node pipeline is launched
@@ -79,12 +88,14 @@ Features validated while crossing the run screens (grafted from retired per-issu
    wrapping without horizontal scroll) and the deterministic prompt preamble (`## Inputs` / `## Outputs`).
 5. Data routes downstream: conditional edges fire to all matching targets, the loop region iterates and
    exits on PASS, a collection region fans out in parallel and converges on a downstream **agent** (no Merge
-   node exists: the convergence is the agent's incoming edges).
+   node exists: the convergence is the agent's incoming edges). While a node works, press **Pause**
+   on the Run's row of the Runs list → the row reads **Paused** and offers **Resume**; let the node
+   finish → it reads **completed** and no new node starts; press **Resume** → the next node starts.
 6. The Run reaches **Completed** (the happy ending): nodes read completed, the End inspector shows the
    `result` port **received**.
 7. Open an output artifact → the **markdown modal** renders it (including a mermaid diagram as SVG).
-8. Open the Run **Info panel** → the **Stats** block shows Duration, Node sessions started, Lines
-   changed / LOC, and an **estimated cost** ("Est. cost", labelled as an estimate — "—" when uncomputable).
+8. Open the Run **Info panel** → the **Stats** block shows Duration, Lines changed / LOC, and an
+   **estimated cost** ("Est. cost", labelled as an estimate — "—" when uncomputable).
 9. Find the run in the **Runs list** (grouped by repo when ≥ 2 repos exist).
 10. **Sandboxed twin.** Seed (or reuse) a **one-node pipeline** whose node asks for a single line of
     output and then completes. Open **New Run** on it → the sandbox field sits on **Default**,
@@ -137,6 +148,13 @@ Features validated while crossing the run screens (grafted from retired per-issu
     is gone by then, reaped on the terminal transition; that is the one-live-iteration invariant, not a
     defect. The identity that conversation ran under is the one PDO would resume by (see the probes
     below).
+17. **Review the first Run.** Back on the Run of steps 1-9, open its **Diff** tab: the file list and
+    its `+`/`−` counts match what the Run changed. Its **Review page** button (top right) opens the
+    Review page on the fork → worktree (or tip) pair. Hover a changed line, click its **+**, write a
+    one-line remark, save it as a draft, then **Send all to manager**. Within a minute the manager's
+    reply appears **in the thread, without a reload**, and the comment reads as answered. **Resolve**
+    it: the thread folds and keeps its line number. Last, open one output card of the Run and
+    download it (the arrow): the file is the artifact the markdown modal showed in step 7.
 
 ## Checks
 
@@ -145,11 +163,17 @@ Features validated while crossing the run screens (grafted from retired per-issu
 - Start/End nodes render; the running node shows live, wrapping terminal output (no horizontal scrollbar).
 - Routing matches the pipeline shape (multi-match fan-out, loop `↻ X/Y` header iterating, collection
   `⇉ N items` badge, convergence on the downstream agent — rendered as an agent, not a Merge).
+- Paused, the Run launches nothing; the node that was working completes during the pause (never
+  « session died » after Resume) and Resume starts its successor.
 - The Run settles to **Completed**; the End `result` port shows **received**.
 - The artifact modal shows the content; a valid mermaid block is an SVG, an invalid one falls back to
   `<pre><code>` (never a blank pane, never a thrown error).
 - Stats: Duration ticks on a live run, freezes on a terminal one; an **estimated cost** ("Est. cost",
   framed as an estimate) is shown, "—" when uncomputable.
+- Review (step 17): the Diff tab's counts equal the Review page header's; the manager's reply lands in
+  the thread live; a resolved thread folds and keeps its `:<line>`. A comment left « Awaiting manager
+  reply » with no manager session alive is the finding CORE-239 describes (the manager's first start on
+  a repo `claude` never trusted exits on its trust dialog): blocking until it is fixed.
 
 #### Sandbox A/B (steps 10-13)
 

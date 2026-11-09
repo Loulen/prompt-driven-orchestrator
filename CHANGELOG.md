@@ -4,7 +4,8 @@ One entry per version, newest first: what changes on screen, the new seams for e
 breaking changes, each marked **Breaking**. The binary embeds this file: "What's new" shows its
 latest entries. The full history lives in the git log and in the
 [GitHub Releases](https://github.com/Loulen/prompt-driven-orchestrator/releases), generated from
-the commits.
+the commits. The history of PDO 1.x, up to 1.132.0, is archived in
+[docs/CHANGELOG-v1.md](docs/CHANGELOG-v1.md).
 
 Work not released yet sits under `## Unreleased`, the first entry; "What's new" does not show it.
 `make release-bump` turns it into the version's entry when a story merges into `main`.
@@ -42,6 +43,75 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   command does.
 - `pdo settings agent-profile delete --help` says what the daemon does: it deletes a profile even
   while something names it, and each of those falls back to the next tier.
+### Upgrading from 1.x
+
+This is the first 2.x release published in this repository: it replaces PDO 1.x in place.
+
+- Your data is kept. 2.x reads the `~/.pdo` folder of 1.x as it is: pipelines, Runs, Projects,
+  settings and the database open without a migration step.
+- The service is kept. The same unit starts the daemon at boot, now on the 2.x binary.
+- To upgrade, run `brew upgrade pdo` (or `brew update && brew upgrade Loulen/tap/pdo`), or re-run
+  the install script of the latest release. The Update button of a 1.x install does the same.
+- Going back to 1.x afterwards is not guaranteed: 2.x adds tables and columns 1.x does not know.
+- From this version on, PDO is licensed under the Apache License 2.0, with a `NOTICE` file. Versions
+  up to 1.132.0 stay under the MIT License; their changelog is in `docs/CHANGELOG-v1.md`.
+
+### Updates come from the public repository
+
+- Settings › Version & update checks the latest release of `Loulen/prompt-driven-orchestrator`,
+  and the tooltip of "GitHub Releases" next to the check date shows the address it asked. The
+  Homebrew command is `brew update && brew upgrade Loulen/tap/pdo` (the `pdo` formula, no longer
+  `pdo-v2`), and the script command re-runs that repository's installer.
+
+### Review and observation: fixes from the vanilla acceptance tour
+
+- Review: a node that runs in the Run's worktree (not isolated) and commits its own work now has a
+  before → after pair that holds those commits. Before, its delivery started where the node stopped,
+  so the pair read "No changes". `NodeStarted` of such a node carries `run_head_sha`, the Run
+  worktree's HEAD when it started; a node started before this version keeps the old pair.
+- Stats › Cost and Run info: a Run that started no Pipeline Manager and no merge resolver no longer
+  counts an "Infrastructure" execution of unknown cost. Before, every Run read "without computable
+  cost", the Cost headline median stayed "—", and a script-only Run counted a `claude` execution.
+- `pdo stats` reads 30 days when `--period` is not given, the period Stats opens on (it read 7).
+- `pdo review diff --from/--to` with a revision git does not know answers `unknown ref: <ref>` and
+  lists the Run ref spellings, instead of "run branch not found"; `--help` lists them too.
+- `pdo complete` refused for a frontmatter mismatch says the agent has one retry left (it said the
+  retry was spent). A Run parked by a node's `pdo fail` names the node ("node make failed (awaiting
+  your confirmation)") instead of saying "agent pdo fail", which read wrong for a script node.
+- Stats › Performance: the wait coverage reads "1 execution of 4" and capitalises its second
+  sentence.
+### The interface takes the Marque of its binary: PDO, or Acogni Driver
+
+- The vanilla binary now calls itself **PDO** everywhere it names the product: the browser tab
+  (title and favicon, written into the page by the daemon so no other name flashes on load), the
+  mark at the left of the top bar, the welcome modal ("Welcome to PDO", the PDO lockup), the tours,
+  the import of a pipeline ("PDO pipeline"), the notifications, and Settings › Version & update,
+  whose Installed row reads `PDO 2.76.0` after the mark. A distribution that declares Acogni
+  Driver shows "Acogni Driver" and its logo instead, and `Acogni Driver 1.4.0 (core PDO 2.76.0)`.
+- New PDO logo: three steps of a Run (done, running in ruby, to come) joined by two edges. Acogni
+  Driver's mark is the A of Acogni, its hollow in ruby. Both keep their ruby under the Classic
+  Theme, in dark and light.
+- The gear of Acogni is the Settings icon now, in the top bar and in the Settings header; it no
+  longer stands for the product, so the top bar never shows two gears. It signs "by Acogni" under
+  the PDO lockup of the welcome modal and after the title of Settings › Version & update.
+- The Acogni wordmark of the Acogni Driver lockup is no longer clipped under its "g".
+- New seam for distributions: `Config::with_brand(pdo::Brand::AcogniDriver)`, next to
+  `with_release_channel`; without it a binary is PDO. Neither an environment variable, a setting
+  nor an extension changes it. The daemon serves the logos of its Marque under `/shared/brand/`
+  (`mark.svg`, `lockup.svg`, `favicon.svg`) for the pages an extension serves outside the
+  interface; `/shared/favicon.svg` now answers the Marque's favicon.
+### Runs: a pause keeps the work in flight, a reopen relaunches stopped nodes
+
+- A node that finishes while its Run is paused now completes. Before, its completion was refused
+  ("resume the run first"): a `script` node, which completes once as its bash exits, lost its work,
+  and after Resume it read "session died" and had to run again. What the finished node would launch
+  still waits for Resume.
+- Reopening a Run (the Play button, `pdo run reopen`) runs again the nodes that were stopped, as it
+  already did for interrupted ones. A cancelled Run (`pdo run cancel`) used to park "run_stalled …
+  blocked behind" its stopped nodes as soon as it was reopened. A stopped lap of a collection
+  fan-out stays stopped, with the laps already done, until its node is retried.
+- A `script` lap of a collection fan-out gets its item in `$PDO_ITEM` and the number of laps in
+  `$PDO_ITEM_TOTAL`, as an agent lap reads them in its preamble.
 
 ## 2.75.0
 
@@ -109,6 +179,7 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   waiting on its child runs.
 - `GET /runs` gives each child Run its `root_run_id`, the Run at the top of its chain of parents.
 - While an alert switch is on, a hidden tab of the interface reopens its event stream after a drop (a daemon restart,
+- While an alert switch is on, a hidden interface tab reopens its event stream after a drop (a daemon restart,
   a network change) instead of waiting to be shown; `openProbedSocket` takes a `whileHidden` option.
 ### Tree cost: what an orchestration really cost
 

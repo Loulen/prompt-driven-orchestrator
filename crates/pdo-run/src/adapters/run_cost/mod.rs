@@ -1411,6 +1411,87 @@ mod tests {
         assert!((cost.by_harness[0].usd - 1.0).abs() < 1e-9);
     }
 
+    /// CORE-231: the Pipeline Manager is on demand. A Run that never started one
+    /// (nor a merge resolver) has no Infrastructure execution: it must not count
+    /// an unreadable one, which made every Run read "without computable cost".
+    #[test]
+    fn a_run_without_manager_or_resolver_has_no_infrastructure_execution() {
+        let home = tempfile::tempdir().unwrap();
+        let claude = home.path().join(".claude").join("projects");
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
+        let repo = tempfile::tempdir().unwrap();
+        let events = vec![Event {
+            id: None,
+            run_id: "no-infra".into(),
+            ts: pdo_kernel::clock::now_iso(),
+            kind: EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "harness": "claude" })),
+        }];
+
+        let breakdown = compute_run_cost_breakdown(
+            &events,
+            &claude,
+            &stores,
+            repo.path(),
+            "no-infra",
+            &builtin(),
+        );
+
+        assert!(
+            breakdown
+                .contributions
+                .iter()
+                .all(|c| c.scope != CostScope::Infrastructure),
+            "{:?}",
+            breakdown.contributions
+        );
+    }
+
+    /// A Run whose manager predates `ManagerStarted` (it started with every Run)
+    /// still files its leftover transcript under Infrastructure, as one execution.
+    #[test]
+    fn a_legacy_manager_transcript_is_still_one_infrastructure_execution() {
+        let home = tempfile::tempdir().unwrap();
+        let claude = home.path().join(".claude").join("projects");
+        let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(home.path());
+        let repo = tempfile::tempdir().unwrap();
+        let run_id = "legacy-manager";
+        let worktree = repo.path().join(".pdo/runs").join(run_id).join("worktree");
+        let project = claude.join(cc_project_dirname(&worktree));
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("manager.jsonl"),
+            format!(
+                "{}\n",
+                assistant("manager", "req-manager", "claude-opus-4-8", 400_000, 0)
+            ),
+        )
+        .unwrap();
+        let events = vec![Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: pdo_kernel::clock::now_iso(),
+            kind: EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "harness": "claude" })),
+        }];
+
+        let breakdown =
+            compute_run_cost_breakdown(&events, &claude, &stores, repo.path(), run_id, &builtin());
+
+        let infra = breakdown
+            .contributions
+            .iter()
+            .find(|c| c.scope == CostScope::Infrastructure)
+            .expect("the leftover transcript is infrastructure");
+        assert_eq!(infra.executions, 1);
+        assert_eq!(infra.readable_executions, 1);
+        assert!(infra.usd.is_some());
+    }
+
     #[test]
     fn claude_cost_outside_node_sessions_is_infrastructure() {
         let home = tempfile::tempdir().unwrap();
@@ -1438,6 +1519,15 @@ mod tests {
                 node_id: None,
                 iter: None,
                 payload: Some(serde_json::json!({ "harness": "claude" })),
+            },
+            Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: pdo_kernel::clock::now_iso(),
+                kind: EventKind::ManagerStarted,
+                node_id: None,
+                iter: None,
+                payload: None,
             },
             Event {
                 id: None,
@@ -1578,6 +1668,7 @@ mod tests {
         };
         let events = vec![
             event(EventKind::RunStarted),
+            event(EventKind::ManagerStarted),
             event(EventKind::MergeResolverStarted),
         ];
 

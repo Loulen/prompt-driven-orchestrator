@@ -95,6 +95,18 @@ async fn stats_absorption_folds_pipelines_in_every_tab_and_undoes_cleanly() {
             }),
         )
         .await;
+        // Each Run starts its Pipeline Manager: its Infrastructure execution
+        // (CORE-231: a Run that starts none has no Infrastructure row).
+        insert_event(
+            &state.db,
+            run,
+            &format!("{day}T09:00:30Z"),
+            "manager_started",
+            None,
+            None,
+            serde_json::json!({}),
+        )
+        .await;
         insert_event(
             &state.db,
             run,

@@ -953,6 +953,43 @@ async fn restart_node_happy_path_emits_command_issued_and_restarts() {
     assert_eq!(started[0].iter, Some(1));
 }
 
+/// CORE-231: a non-isolated node's `NodeStarted` records where the Run's
+/// worktree stood (`run_head_sha`): its delivery's `before`, so the commits
+/// the node makes itself stay inside its Review pair.
+#[tokio::test]
+async fn a_non_isolated_spawn_records_the_run_worktree_head() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    write_test_pipeline(dir, "head-pipe");
+    init_test_repo(dir);
+    let state = test_state_with_dir(dir).await;
+    let run_id = "head-run";
+    seed_run_for_node_control(&state, run_id, "head-pipe").await;
+    let wt_dir = worktree_dir_for_run(dir, run_id);
+    create_worktree(dir, &wt_dir, &format!("pdo/run-{run_id}"), "HEAD").unwrap();
+    let head = pdo_workspace::adapters::git::revisions::rev_parse(&wt_dir, "HEAD").unwrap();
+
+    let (status, _, body) = command_triplet(
+        &state,
+        run_id,
+        r#"{"kind":"restart_node","node_id":"worker","iter":1}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "got {body}");
+
+    let events = load_events(&state.db, run_id).await.unwrap();
+    let started = events
+        .iter()
+        .rfind(|e| e.kind == event_log::EventKind::NodeStarted)
+        .expect("the restart spawned");
+    let payload = started.payload.as_ref().unwrap();
+    assert_eq!(payload["run_head_sha"], head.as_str(), "{payload}");
+    assert!(
+        payload["base_sha"].is_null(),
+        "no sub-worktree, no cut: {payload}"
+    );
+}
+
 #[tokio::test]
 async fn restart_node_on_an_isolated_node_reuses_its_sub_worktree() {
     // #489, the class that mattered. `write_test_pipeline`'s `worker` is

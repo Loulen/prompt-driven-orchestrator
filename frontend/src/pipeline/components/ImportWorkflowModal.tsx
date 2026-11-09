@@ -8,6 +8,7 @@ import { importPipelineDocument } from "../api/document";
 import { importWorkflow } from "../api/library";
 import { announceSkillsChanged } from "../../skill/store/useSkillBank";
 import { useEditStore } from "../store/editStore";
+import { brandName } from "../../shared/ui/brand/brand";
 
 export default function ImportWorkflowModal({
   onClose,
@@ -101,7 +102,7 @@ export default function ImportWorkflowModal({
         <div className="mb-1 font-medium text-text">Import a pipeline</div>
         <div className="mb-3 grid grid-cols-2 rounded border border-line-strong bg-surface-2 p-0.5">
           {([
-            ["pdo", "Acogni Driver pipeline"],
+            ["pdo", `${brandName()} pipeline`],
             ["claude", "Claude Code workflow"],
           ] as const).map(([value, label]) => (
             <button
@@ -184,7 +185,7 @@ export default function ImportWorkflowModal({
 
         {mismatch && (
           <div className="mb-3 rounded border border-st-await/40 bg-st-await/10 px-2 py-1.5 text-text-2">
-            This content looks like a {mode === "pdo" ? "Claude Code workflow" : "Acogni Driver pipeline"}.
+            This content looks like a {mode === "pdo" ? "Claude Code workflow" : `${brandName()} pipeline`}.
             <button
               className="ml-1 text-primary hover:underline"
               onClick={() => setMode(mode === "pdo" ? "claude" : "pdo")}

@@ -16,11 +16,11 @@ pub const VANILLA_CHANNEL_NAME: &str = "PDO";
 /// The version of the core this binary is built on.
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Where the vanilla binary looks for releases: nowhere. `Loulen/PDO-v2` is
-/// private and publishes tags, not GitHub releases, so any endpoint would
-/// answer 404 or, worse, the v1 line. An operator can still point the check at
-/// a source with `PDO_UPDATE_SOURCE_URL`.
-pub const VANILLA_SOURCE_URL: Option<&str> = None;
+/// Where the vanilla binary looks for releases: the latest release of the
+/// public repository, `Loulen/prompt-driven-orchestrator`. An operator can
+/// still point the check elsewhere with `PDO_UPDATE_SOURCE_URL`.
+pub const VANILLA_SOURCE_URL: Option<&str> =
+    Some("https://api.github.com/repos/Loulen/prompt-driven-orchestrator/releases/latest");
 
 /// How an Update replaces the binary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,17 +102,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn vanilla_is_the_core_with_no_source_and_the_detected_method() {
+    fn vanilla_is_the_core_checking_the_public_repository_with_the_detected_method() {
         let v = UpdateChannel::vanilla();
         assert_eq!(v.name, "PDO");
         assert_eq!(v.installed_version, env!("CARGO_PKG_VERSION"));
-        assert_eq!(v.source_url, None);
+        assert_eq!(
+            v.source_url.as_deref(),
+            Some("https://api.github.com/repos/Loulen/prompt-driven-orchestrator/releases/latest")
+        );
         let (method, command) = v.upgrader(|| InstallMethod::Homebrew);
         assert_eq!(method, InstallMethod::Homebrew);
         assert_eq!(
             command.as_deref(),
-            Some("brew update && brew upgrade Loulen/pdo-v2/pdo-v2")
+            Some("brew update && brew upgrade Loulen/tap/pdo")
         );
+        let (method, command) = v.upgrader(|| InstallMethod::Script);
+        assert_eq!(method, InstallMethod::Script);
+        assert!(command.unwrap().contains(
+            "https://github.com/Loulen/prompt-driven-orchestrator/releases/latest/download/pdo-daemon-installer.sh"
+        ));
     }
 
     #[test]

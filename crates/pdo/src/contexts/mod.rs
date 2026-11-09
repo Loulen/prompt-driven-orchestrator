@@ -56,6 +56,8 @@ pub struct ContextResources {
     pub update_source_url: Option<String>,
     /// The distribution's release channel; `None` → the vanilla one.
     pub release_channel: Option<UpdateChannel>,
+    /// The Marque the SPA is served under.
+    pub brand: crate::Brand,
     pub update_executor_override: Option<String>,
     pub install_method_override: Option<InstallMethod>,
     pub supervision_override: Option<Supervision>,
@@ -179,7 +181,7 @@ pub(crate) fn wire_over(
     // prefix are free (the proxy key is a prefix), and a static segment beside a
     // `{param}` in the same subtree is fine — axum 0.8 prefers the static one.
     let router = Router::new()
-        .fallback(static_handler)
+        .fallback(static_handler(r.brand))
         .merge(pdo_workspace::adapters::http::router::<ProjectTiers>(
             workspace,
         ))
@@ -289,6 +291,7 @@ pub(crate) mod testing {
                 home_root: None,
                 update_source_url: None,
                 release_channel: None,
+                brand: crate::Brand::default(),
                 update_executor_override: None,
                 install_method_override: None,
                 supervision_override: None,

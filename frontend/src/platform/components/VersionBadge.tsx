@@ -10,7 +10,7 @@ import { newerAvailable } from "../model/updateStatus";
  * claims "up to date".
  *
  * `label` replaces the bare `v<version>`: a distribution (#24) reads as
- * `acme-pdo 0.3.0 (core 2.0.0)`.
+ * `acme-pdo 0.3.0 (core PDO 2.0.0)`.
  */
 export default function VersionBadge({
   version,

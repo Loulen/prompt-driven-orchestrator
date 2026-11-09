@@ -55,7 +55,10 @@ describe("Settings › Version & update — a distribution's release channel (#2
     fetchUpdateStatusMock.mockResolvedValue(distribution());
     renderSection();
     const installed = await screen.findByTestId("setting-version-installed");
-    expect(installed).toHaveTextContent("acme-pdo 0.3.0 (core 2.0.0)");
+    expect(installed).toHaveTextContent("acme-pdo 0.3.0(core PDO 2.0.0)");
+    // A third party's channel: no mark of the Marque next to its name.
+    expect(installed.querySelector('[data-testid="brand-mark"]')).toBeNull();
+    expect(screen.getByTestId("setting-version-installed-product")).toHaveTextContent(/^acme-pdo 0\.3\.0$/);
     expect(screen.getByTestId("setting-version-install-method")).toHaveTextContent(
       "Declared by the distribution",
     );
@@ -65,14 +68,33 @@ describe("Settings › Version & update — a distribution's release channel (#2
     expect(screen.getByTestId("setting-version-update-button")).not.toBeDisabled();
   });
 
-  it("the vanilla binary keeps its bare version", async () => {
+  it("the vanilla binary names the Marque, its mark and its version, no core (CORE-225)", async () => {
     fetchUpdateStatusMock.mockResolvedValue(
       distribution({ channel_name: "PDO", installed_version: "2.0.0", core_version: "2.0.0" }),
     );
     renderSection();
     const installed = await screen.findByTestId("setting-version-installed");
-    expect(installed).toHaveTextContent("v2.0.0");
+    expect(installed).toHaveTextContent("PDO 2.0.0");
     expect(installed).not.toHaveTextContent("core");
+    expect(installed.querySelector('[data-testid="brand-mark"][aria-hidden="true"]')).toHaveAttribute("data-brand", "pdo");
+  });
+
+  it("is signed « by Acogni » after its title, whatever the Marque (CORE-225)", async () => {
+    document.documentElement.dataset.brand = "acogni-driver";
+    try {
+      fetchUpdateStatusMock.mockResolvedValue(
+        distribution({ channel_name: "Acogni Driver", installed_version: "1.4.0", core_version: "2.76.0" }),
+      );
+      renderSection();
+      const installed = await screen.findByTestId("setting-version-installed");
+      expect(installed).toHaveTextContent("Acogni Driver 1.4.0(core PDO 2.76.0)");
+      expect(installed.querySelector('[data-testid="brand-mark"]')).toHaveAttribute("data-brand", "acogni-driver");
+      const signature = screen.getByTestId("by-acogni");
+      expect(signature).toHaveTextContent("by Acogni");
+      expect(signature).toHaveClass("set-sec__by");
+    } finally {
+      delete document.documentElement.dataset.brand;
+    }
   });
 
   it("no upgrade command: no Update, no Copy, and the daemon's reason", async () => {

@@ -1,12 +1,17 @@
 /**
  * The app icons with one ruby part, after the product marks of the brand: an
  * ink line icon whose accent stroke takes `--primary`. Stats, the latest bar;
- * Review, the two arrows between the commits;
- * Settings, the mark's triangle in the gear. Same props as a `lucide-react`
- * icon, so they fit any `icon={...}` slot.
+ * Review, the two arrows between the commits; Settings, the gear of Acogni.
+ * Same props as a `lucide-react` icon, so they fit any `icon={...}` slot.
  */
 import * as React from "react";
 import type { LucideIcon, LucideProps } from "lucide-react";
+import { AcogniGear } from "./AcogniMark";
+
+/** An icon of the brand, typed as the icon slots expect. */
+function lucideSlot(icon: React.ForwardRefExoticComponent<LucideProps & React.RefAttributes<SVGSVGElement>>): LucideIcon {
+  return icon as unknown as LucideIcon;
+}
 
 function accentIcon(name: string, line: React.ReactNode, accent: React.ReactNode): LucideIcon {
   const Icon = React.forwardRef<SVGSVGElement, LucideProps>(
@@ -46,12 +51,6 @@ export const StatsIcon = accentIcon(
   <path d="M18 17V9" />,
 );
 
-export const SettingsIcon = accentIcon(
-  "SettingsIcon",
-  <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" />,
-  <path d="M12 9.5 14.6 14H9.4Z" />,
-);
-
 export const ReviewIcon = accentIcon(
   "ReviewIcon",
   <>
@@ -63,3 +62,9 @@ export const ReviewIcon = accentIcon(
     <path d="M11 18H8a2 2 0 0 1-2-2V9" />
   </>,
 );
+
+/**
+ * Settings: the gear of Acogni itself (CORE-225), its triangle in the ruby; no
+ * longer a gear drawn after it, so the top bar never shows two gears.
+ */
+export const SettingsIcon = lucideSlot(AcogniGear);

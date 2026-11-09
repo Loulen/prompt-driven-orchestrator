@@ -57,7 +57,8 @@ sibling edge matched. There is no LLM router: an LLM never decides which node ru
 Drag an edge back from `reviewer` to `implementer`, set `verdict = fail`, and PDO turns the cycle
 into a named, **bounded loop** (`↻ 1/8` on the canvas) with a `max_iter`, so a cycle can never run
 forever. A **collection loop** fans a node out over a list field of its input, with laps running in
-parallel.
+parallel. Each lap gets its own item: an agent reads it in its preamble, a `script` in `$PDO_ITEM`
+(and the number of laps in `$PDO_ITEM_TOTAL`).
 
 Each loop shows what it spent since it was entered, after its counter (`↻ 3/5 · ~$1.20`), with each
 member's share in the tooltip. A bounded loop also takes a cost cap, `max_cost_usd` (a dollar amount
@@ -127,8 +128,8 @@ Decisions: [ADR-0010](adr/0010-port-output-as-directory.md),
 
 ## Diff review
 
-The run's **Diff** tab shows everything the run changed since it forked. **Expand and comment**
-opens the review page: a diff between any two refs of the run (fork point, run tip, each node's
+The run's **Diff** tab shows everything the run changed since it forked. Its **Review page** button
+(the arrow icon at the top right) opens the review page: a diff between any two refs of the run (fork point, run tip, each node's
 before/after, the live working tree), side by side, with inline comments on any line. Tick
 **Viewed** on a file (or press `v`) to fold it once read: the mark stays in your browser, for that
 pair of refs.
@@ -167,11 +168,11 @@ Decisions: [ADR-0012](adr/0012-triggers-and-trust-earned-autonomy.md),
 
 ## Run stats by model
 
-The **Stats** page aggregates your own runs over a period: Overview (runs, errors, sessions), fires
-per pipeline, Sessions, **Cost** and **Performance**. Cost breaks down by harness, by node, and **by
+The **Stats** page aggregates your own runs over a period (30 days when it opens): **Runs** (runs,
+failures, failure rate), **Sessions**, **Triggers** (fires per pipeline), **Cost** and **Performance**. Cost breaks down by harness, by node, and **by
 model then effort**, with the model the execution actually ran on, read from the harness's own
-transcript. Performance shows duration, failure rate and steering messages per node or per model as
-box plots. Every summary is a median, never a mean.
+transcript. Performance shows peak context, duration (total, active or waiting on you) and steering
+messages per node or per model as box plots. Every summary is a median, never a mean.
 
 Cost is an estimate read from local transcripts: derived for `claude` (tokens × a price table fed
 from models.dev, overridable by hand), reported for harnesses that count it themselves. A harness

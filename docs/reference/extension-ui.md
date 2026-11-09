@@ -1131,6 +1131,24 @@ its interface follows a switch at once. One that needs to know the mode (a libra
 `light` or `dark`) reads `data-mode`. Before 0.20 `data-theme` carried the mode (`dark`, `light`):
 it now carries the Theme, without an alias.
 
+### The Marque's logos
+
+The binary declares its **Marque** (PDO, or Acogni Driver for the enterprise distribution) at
+compile time. The interface reads it; a page served outside the interface (a sign-in page, a
+mounted page) takes the logos from the binary rather than embedding its own copy:
+
+| Address | What it is |
+| --- | --- |
+| `/shared/brand/mark.svg` | The mark, square. Ink in `currentColor`, accent in `var(--primary)` (ruby when absent) |
+| `/shared/brand/lockup.svg` | The mark with the name: PDO's mark and « PDO » in `--font-code`; Acogni Driver's wordmark, rule and tag |
+| `/shared/brand/favicon.svg` | The mark in fixed colours that follow `prefers-color-scheme`, for `<link rel="icon">` and `<img>`; `/shared/favicon.svg` answers the same |
+
+`mark.svg` and `lockup.svg` take the colour of the page once inlined (fetch the file, insert its
+text): through an `<img>` an SVG reads neither `currentColor` nor the tokens. Put them in an
+element with the class `acogni-brand` to keep their accent ruby under the Classic Theme too, as the
+interface does. `document.documentElement.dataset.brand` is not set on such a page; the interface's
+own carries `pdo` or `acogni-driver`.
+
 The interface is drawn at the **UI scale** (Settings › Interface, 100, 110 or 120 %, 120 by
 default), a CSS `zoom` on its root. A length in pixels needs nothing. A position computed from
 the screen (`getBoundingClientRect`, `clientX`, `innerWidth`) is divided by the zoom before it is

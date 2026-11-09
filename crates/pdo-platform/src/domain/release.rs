@@ -174,13 +174,14 @@ mod tests {
         assert_eq!(source_label("not a url"), "not a url");
     }
 
-    const GITHUB_LATEST: &str = "https://api.github.com/repos/Loulen/PDO-v2/releases/latest";
+    const GITHUB_LATEST: &str =
+        "https://api.github.com/repos/Loulen/prompt-driven-orchestrator/releases/latest";
 
     #[test]
     fn releases_list_url_drops_latest() {
         assert_eq!(
             releases_list_url(GITHUB_LATEST),
-            "https://api.github.com/repos/Loulen/PDO-v2/releases"
+            "https://api.github.com/repos/Loulen/prompt-driven-orchestrator/releases"
         );
         assert_eq!(
             releases_list_url("http://127.0.0.1:1/releases/latest/"),

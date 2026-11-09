@@ -115,6 +115,9 @@ export default defineConfig({
       // the environment (armed by default). Disarm it: the suite must never depend
       // on models.dev being reachable, and CI must never egress for a UI test.
       PDO_PRICE_SYNC: "off",
+      // Same for the boot version check: the vanilla channel asks the public
+      // repository's releases, and this daemon shares the real home's cache.
+      PDO_UPDATE_CHECK: "off",
       PDO_TMUX_CMD_OVERRIDE:
         'case "$PDO_NODE_ID" in ' +
         "scroller) " +

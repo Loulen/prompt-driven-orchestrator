@@ -2044,7 +2044,12 @@ describe("StatsCharts — duration mode (#819)", () => {
     // why every other row reads Active = Total and Waiting = 0.
     expect(screen.getByTestId("stats-wait-coverage")).toHaveAttribute(
       "aria-label",
-      expect.stringContaining("1 executions of 4 declared at least one wait"),
+      expect.stringContaining("1 execution of 4 declared at least one wait"),
+    );
+    // A sentence after a full stop starts with a capital, and ends with one.
+    expect(screen.getByTestId("stats-wait-coverage")).toHaveAttribute(
+      "aria-label",
+      expect.stringMatching(/Waiting = 0\. A declared wait is .*released yet\.$/),
     );
     await user.click(mode("Waiting"));
     expect(screen.getByTestId("stats-wait-coverage")).toBeInTheDocument();

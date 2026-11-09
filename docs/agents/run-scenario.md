@@ -94,13 +94,16 @@ The point of this layer is that the UI alone doesn't tell the full story — ver
 - **tmux sessions**: `tmux -L pdo-<port> capture-pane -p -t pdo-<run_id>-<node_id>-iter-<n>`. The session-name
   pattern is fixed; confirm it shows the expected program (e.g. `claude` running, not a bare shell
   that exited). A first `claude` launch in a fresh worktree lands on the "Quick safety check" trust
-  dialog — confirm it with `tmux -L pdo-<port> send-keys -t <session> Enter`. `copilot`'s equivalent is **not** a
+  dialog, its cursor on « No, exit »: pick « Yes, I trust this folder » with
+  `tmux -L pdo-<port> send-keys -t <session> Down`, then `… send-keys -t <session> Enter` (a bare
+  Enter exits `claude`, and the node turns « session died »). `copilot`'s equivalent is **not** a
   step to drive: approve the target repository's root once, outside the journey, and it cascades to
   every node sub-worktree (`docs/reference/harnesses.md` § Prerequisites). A `copilot` pane parked on it means the
   prerequisite was never met.
 - **Filesystem** (read with `cat` / Read):
-  - Pipelines: `.pdo/pipelines/<name>.yaml` of the target repo, or the demo library
-    `/tmp/pdo-demo-<port>/home/.pdo/pipelines/`, with the sidecar `<name>.prompts/<node>.md`
+  - Pipelines: the daemon's library, never the target repo's `.pdo/pipelines/` (it is not read):
+    seed one with `pdo pipeline create <name>` then `pdo pipeline save <id> <file> --prompt <node>=<file>`,
+    or author it in the UI
   - Run artifacts: `.pdo/runs/<run_id>/worktree/.pdo/artifacts/...`
 - **Daemon state**: `curl http://127.0.0.1:<port>/runs/<run_id>` for the projected run state (incl.
   `sessions_spawned`, `started_at`/`completed_at`, `loc`), and `/runs/<run_id>/events` for the full

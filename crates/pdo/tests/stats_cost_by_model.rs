@@ -582,7 +582,8 @@ async fn by_model_ventilates_observed_models_requested_fallback_and_node_pairs()
     // The pipeline axes stay untouched in shape: the totals still sum both runs.
     let total = &cost["total"];
     assert_eq!(total["usd"], 8.0);
-    // Two honest gaps: run B's unreadable node, and the infrastructure slice
-    // neither run can attribute (each node's transcript owns its lines).
-    assert_eq!(total["unknown"], 2);
+    // One honest gap: run B's unreadable node. Neither run started a manager
+    // or a resolver, so neither has an Infrastructure slice to leave unknown
+    // (CORE-231).
+    assert_eq!(total["unknown"], 1);
 }

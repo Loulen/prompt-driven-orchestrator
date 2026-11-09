@@ -48,9 +48,25 @@ pub(super) fn apply_command_event(state: &mut RunState, event: &Event) {
             // would not stick. The satisfied `Completed` nodes are untouched, so
             // the scheduler never re-spawns them (anti-#221). The event log keeps
             // every `NodeInterrupted` — this only rewinds the *projection*.
-            state
+            //
+            // A `Stopped` node goes the same way: it is not done, and the
+            // reopen runs « the rest » again. Kept, it would re-park the Run
+            // `run_stalled` behind it at once — the end a cancelled Run (whose
+            // cancel stops every live node) met on every reopen. Except a
+            // member of a collection fan-out: dropping it would drop its
+            // completed laps with it, and the region (whose state survives)
+            // would never start the stopped ones again. It stays stopped, for
+            // a Retry of the node.
+            let collection_members: std::collections::HashSet<String> = state
                 .nodes
-                .retain(|_, n| n.status != NodeStatus::Interrupted);
+                .keys()
+                .filter(|id| state.collection_states.values().any(|cs| cs.governs(id)))
+                .cloned()
+                .collect();
+            state.nodes.retain(|id, n| {
+                n.status != NodeStatus::Interrupted
+                    && (n.status != NodeStatus::Stopped || collection_members.contains(id))
+            });
         }
         // #199: `end_region` CLOSES the region — the projection
         // marks its loop state done so the scheduler's region

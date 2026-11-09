@@ -95,9 +95,10 @@ pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
         )
         .into_iter()
         .map(|r| InputResolution {
-            // ADR-0086: an upstream that has produced nothing in this Run (a node
-            // launched ahead of it) gives no path — never one nothing wrote.
-            paths: if !r.from_start && ctx.absent_sources.contains(&r.source_node) {
+            // ADR-0086 / ADR-0082: an upstream that has produced nothing in this
+            // Run (a node launched ahead of it, a branch not taken) gives no path
+            // — never one nothing wrote.
+            paths: if !r.from_start && ctx.absent_sources.contains_key(&r.source_node) {
                 Vec::new()
             } else {
                 r.paths

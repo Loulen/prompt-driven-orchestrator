@@ -429,6 +429,9 @@ mod skill_seed;
 #[path = "sandbox_tracer.rs"]
 mod sandbox_tracer;
 
+#[path = "pruned_routing.rs"]
+mod pruned_routing;
+
 #[path = "script_node.rs"]
 mod script_node;
 

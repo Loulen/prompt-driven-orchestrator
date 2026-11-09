@@ -9,8 +9,10 @@ use pdo_harness::agent_choice::ResolvedCombo;
 use pdo_kernel::event_bus::EventBus;
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation};
+use pdo_pipeline::domain::pipeline::parse_pipeline;
 use pdo_run::application::ports::*;
-use pdo_run::domain::event::{Event, EventKind};
+use pdo_run::domain::event::{edge_info_from_pipeline, node_def_from_pipeline, Event, EventKind};
+use pdo_run::domain::projection::project;
 use pdo_run::domain::run_summary::{summarize, RunSummary};
 use pdo_run::domain::state::{CostStat, RunState};
 use pdo_run::{Runs, RunsOptions, RunsPorts};
@@ -912,4 +914,60 @@ pub async fn seed_run_of(w: &World, run_id: &str, yaml: &str) {
     seed_relay(w, run_id).await;
     let run_dir = w.repo.path().join(".pdo").join("runs").join(run_id);
     std::fs::write(run_dir.join("pipeline.yaml"), yaml).unwrap();
+}
+
+/// A started Run of `yaml`, its `RunStarted` carrying the frozen graph the
+/// way the create path writes it.
+pub async fn seed_frozen(w: &World, run_id: &str, yaml: &str) {
+    let repo = w.repo.path();
+    let run_dir = repo.join(".pdo").join("runs").join(run_id);
+    std::fs::create_dir_all(run_dir.join("worktree").join(".pdo").join("artifacts")).unwrap();
+    std::fs::write(run_dir.join("pipeline.yaml"), yaml).unwrap();
+    let prompts = run_dir.join("pipeline.prompts");
+    std::fs::create_dir_all(&prompts).unwrap();
+    let pipeline = parse_pipeline(yaml).unwrap().pipeline;
+    for node in &pipeline.nodes {
+        std::fs::write(prompts.join(format!("{}.md", node.id)), "Do it.\n").unwrap();
+    }
+    let node_defs: Vec<_> = pipeline.nodes.iter().map(node_def_from_pipeline).collect();
+    let edges: Vec<_> = pipeline.edges.iter().map(edge_info_from_pipeline).collect();
+    let mut started = event(run_id, EventKind::RunStarted, None);
+    started.payload = Some(serde_json::json!({
+        "pipeline_name": pipeline.name,
+        "input": "go",
+        "target_repo": repo.to_string_lossy(),
+        "node_defs": node_defs,
+        "edges": edges,
+    }));
+    if pipeline.wait_for_started_nodes {
+        started.payload.as_mut().unwrap()["wait_for_started_nodes"] = serde_json::json!(true);
+    }
+    w.runs.append_event().execute(&started).await.unwrap();
+}
+
+pub fn state(w: &World, run_id: &str) -> RunState {
+    let events: Vec<_> = w
+        .store
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|e| e.run_id == run_id)
+        .cloned()
+        .collect();
+    project(&events).unwrap()
+}
+
+/// The worktree of `run_id`.
+pub fn worktree(w: &World, run_id: &str) -> std::path::PathBuf {
+    w.repo
+        .path()
+        .join(".pdo/runs")
+        .join(run_id)
+        .join("worktree")
+}
+
+/// Let the detached completion tails run to the end.
+pub async fn settle() {
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 }

@@ -39,7 +39,28 @@ pub(super) fn node_completed(state: &mut RunState, event: &Event) {
         // greyed with its reason); a graceful `skip_node` skips a node that
         // DID start and reach a decision (→ stays `Completed`, and the run,
         // not the node, carries the "nothing to do" signal).
+        // A skip of an iteration already settled is a duplicate — two sweeps
+        // that pruned the same node from one snapshot, both appended: the
+        // transition guard no-ops it, unless both appends raced its check. It
+        // must not turn a pruned node `Completed`.
+        if is_skip
+            && state.nodes.get(node_id).is_some_and(|n| {
+                n.iter == event.iter.unwrap_or(n.iter) && n.status.is_settled_complete()
+            })
+        {
+            return;
+        }
         let never_started_skip = is_skip && !state.nodes.contains_key(node_id);
+        // A never-started node the reachability sweep settled is **pruned**:
+        // dead for routing (ADR-0082). The operator's skip of a never-started
+        // node (`skip_node`) is not: it settles the node as if it had run.
+        let pruned = never_started_skip
+            && event
+                .payload
+                .as_ref()
+                .and_then(|p| p.get("source"))
+                .and_then(|v| v.as_str())
+                == Some(AUTO_SKIP_UNREACHABLE_SOURCE);
         let done_status = if never_started_skip {
             NodeStatus::Skipped
         } else {
@@ -73,6 +94,7 @@ pub(super) fn node_completed(state: &mut RunState, event: &Event) {
                     completed_at: Some(event.ts.clone()),
                     failure_reason: None,
                     skip_reason: skip_reason.clone(),
+                    pruned,
                     iterations: vec![IterationInfo {
                         iter,
                         status: done_status.clone(),

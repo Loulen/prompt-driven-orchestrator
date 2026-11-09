@@ -66,7 +66,11 @@ pub(super) async fn extend_cycle(
             .into_response();
     }
 
-    if run_state.status == state::RunStatus::Halted || run_state.status == state::RunStatus::Failed
+    // A Run its routing parked re-opens too: the extension may route it on,
+    // and a parked Run never ends by itself.
+    if run_state.status == state::RunStatus::Halted
+        || run_state.status == state::RunStatus::Failed
+        || run_state.is_parked_by_routing()
     {
         let resume_event = event::Event {
             id: None,

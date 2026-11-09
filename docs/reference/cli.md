@@ -79,7 +79,7 @@ Run `pdo service install` to start PDO at boot and keep it running after logout.
 | `pdo run archive <run-id> [--json]` | Archive a Run and its finished child Runs (the Runs list's Cleanup): their worktrees go, their history stays. Refused while a child Run is live. |
 | `pdo run forget <run-id> [--json]` | Forget an archived Run. |
 | `pdo run rename <run-id> <name> [--json]` | Rename a Run; an empty name clears it. |
-| `pdo run repos <run-id> [--add <repo>]… [--read-only] [--remove <repo>]… [--json]` | Add or remove secondary repositories of a running Run, `--read-only` applying to every `--add`; `--remove` names a repository by its path or its alias. Paths are made absolute like `pdo project`'s. |
+| `pdo run repos <run-id> [--add <repo>]… [--read-only] [--remove <repo>]… [--json]` | Add or remove secondary repositories of a running Run, `--read-only` applying to every `--add`; `--remove` names a secondary by its alias, else by its path (from the working directory); one the Run does not have is refused, exit 4, with the Run's secondaries, and nothing changes. Paths are made absolute like `pdo project`'s. |
 | `pdo run inject <run-id> <path> --content <text>\|--file <path> [--json]` | Write an artifact into the Run's blackboard, a path under its artifacts. |
 | `pdo run force-route <run-id> --from <node-or-region> --to <node> [--json]` | Leave a node or a loop region through `--to`, past its conditions (`--to end` completes the Run). |
 | `pdo run region <run-id> <region-id> --end\|--bump <n>\|--max <n>\|--max-cost <usd\|none> [--json]` | End a loop region, run it `n` more laps, set its lap cap, or set its cost cap in dollars (`none` removes it; under the spend, the loop stops at its next re-entry). |

@@ -11,6 +11,7 @@ import PooledInputRow from "./PooledInputRow";
 import { useHarnessCatalog } from "../../harness/store/useHarnessCatalog";
 import { useAgentProfiles } from "../../settings/store/useAgentProfiles";
 import { useInheritedFloor } from "../../settings/store/useInheritedFloor";
+import { foldNodeIntoHarnesses } from "../../harness/model/nodeHarness";
 import { useSkillBank } from "../../skill/store/useSkillBank";
 import { useSkillTiers } from "../../skill/store/useSkillTiers";
 import type { InheritedTier } from "../../skill/model/skillSelection";
@@ -110,7 +111,12 @@ export default function NodeInspector({
   // each installed/not). Called before the early return so the hook order is stable.
   const harnessCatalog = useHarnessCatalog();
   const { profiles: agentProfiles } = useAgentProfiles();
-  const inheritedAgent = useInheritedFloor(agentProfiles);
+  // A node with no choice still runs on its own legacy entries (a pin, or the
+  // `harnesses` entry of the floor's harness): « Inherit » says so.
+  const nodeHarnessEntries = node
+    ? { pin_harness: node.pin_harness, harnesses: foldNodeIntoHarnesses(node) }
+    : undefined;
+  const inheritedAgent = useInheritedFloor(agentProfiles, nodeHarnessEntries);
   // #669/ADR-0062: the bank (names, folders) and the coarser tiers this node
   // inherits — the instance selection, the Projet owning the Run's repo when one
   // is known (run canvas), and the Run's frozen list. Called before the early

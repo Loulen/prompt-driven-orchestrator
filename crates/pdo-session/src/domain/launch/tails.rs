@@ -155,13 +155,26 @@ pub(super) fn forced_ccr_env() -> Vec<(String, String)> {
 /// refusal's slug off `pdo complete`'s output (still echoed to the pane) and
 /// leaves a held node alone. Any OTHER `3` keeps failing: the script cannot take
 /// another turn (output refusals fail-fast to `4` for a script anyway).
+///
+/// **The fail reason is the refusal's cause only**: the headline of `pdo
+/// complete`'s output past its « — », cut before « The node is still running »,
+/// then its cause lines (`Reason:`, the listed outputs or violations, a
+/// `Detail:` the headline does not already say). The rest is addressed to an
+/// agent (« still your turn », « Do NOT run `pdo fail` ») and would contradict
+/// the Failed banner that shows the reason. The whole output stays in the pane.
 pub fn build_script_tail(prompt_path: &Path, timeout_secs: u64) -> String {
     let body = sh_single_quote(&prompt_path.to_string_lossy());
     format!(
         "timeout {timeout_secs}s bash {body} ; ec=$? ; \
          if [ $ec -eq 0 ]; then co=$(pdo complete 2>&1) ; cc=$? ; printf '%s\\n' \"$co\" ; \
          case \"$cc:$co\" in 0:*|4:*|3:*children_pending*) ;; \
-         *) pdo fail --reason \"pdo complete refused with exit $cc after script success: $co\" ;; esac ; \
+         *) why=$(printf '%s\\n' \"$co\" | {{ IFS= read -r first ; first=${{first#* — }} ; \
+         first=${{first%%. The node is still running*}} ; printf '%s' \"${{first%.}}\" ; \
+         while IFS= read -r l ; do case \"$l\" in \
+         'Reason: '*|'Missing declared outputs:'*|'Frontmatter violations:'*|'  - '*) printf '. %s' \"${{l%.}}\" ;; \
+         'Detail: '*) case \"$first\" in *\"${{l#Detail: }}\"*) ;; *) printf '. %s' \"${{l%.}}\" ;; esac ;; \
+         esac ; done ; }}) ; \
+         pdo fail --reason \"pdo complete refused with exit $cc after script success: $why\" ;; esac ; \
          elif [ $ec -eq 124 ]; then pdo fail --reason \"script timed out after {timeout_secs}s\" ; \
          else pdo fail --reason \"script exited $ec\" ; fi"
     )

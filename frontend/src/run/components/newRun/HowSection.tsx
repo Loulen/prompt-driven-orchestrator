@@ -1,5 +1,5 @@
 import AgentControl from "../../../settings/components/AgentControl";
-import { inheritedFloor } from "../../../settings/model/agentProfiles";
+import { inheritedFloor, instanceFloor } from "../../../settings/model/agentProfiles";
 import HarnessSelect from "../../../harness/components/HarnessSelect";
 import SkillSelector from "../../../skill/components/SkillSelector";
 import FormRow from "../../../shared/ui/FormRow";
@@ -50,7 +50,7 @@ export default function HowSection({ form, onManageStagingProfiles }: { form: Ne
           onChange={setAgentChoice}
           profiles={agentProfiles}
           catalog={harnessCatalog}
-          inherited={inheritedFloor(agentProfiles, settings?.default_harness?.effective, settings?.agent_choice)}
+          inherited={inheritedFloor(agentProfiles, instanceFloor(settings))}
           label={mode === "trigger" ? "Agent — Trigger" : "Agent — New Run"}
           showLabel={false}
           testId="run-agent-control"

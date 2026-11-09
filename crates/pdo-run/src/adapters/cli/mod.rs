@@ -19,6 +19,7 @@ mod run_list;
 mod run_pipeline_cli;
 mod run_read;
 mod run_render;
+mod run_repos;
 mod run_status;
 mod upload;
 mod wait;

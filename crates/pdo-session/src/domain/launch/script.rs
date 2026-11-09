@@ -1134,8 +1134,67 @@ mod tests {
             "pdo complete REFUSED — secondary_repo_dirtied: revert the read-only secondary",
         );
         assert!(fails.contains("secondary_repo_dirtied"), "{fails:?}");
-        let fails = run_script_tail_with_fake_pdo(1, "failed to reach daemon");
+        let fails = run_script_tail_with_fake_pdo(
+            1,
+            "pdo complete FAILED to get a verdict — failed to reach daemon",
+        );
         assert!(fails.contains("exit 1"), "{fails:?}");
+        assert!(fails.contains("failed to reach daemon"), "{fails:?}");
+    }
+
+    /// The reason of a failed script node is read in a red « Failed » banner:
+    /// it carries the refusal's cause, never the turn-taking instructions
+    /// `pdo complete` prints for an agent (« still your turn », « Do NOT run
+    /// `pdo fail` »), which contradict the node's status. The fake prints the
+    /// CLI's real wording (`complete_refusal_text`, recoverable arm).
+    #[test]
+    fn script_tail_fail_reason_carries_the_cause_not_the_agent_instructions() {
+        let fails = run_script_tail_with_fake_pdo(
+            3,
+            "pdo complete REFUSED — secondary_repo_dirtied: read-only secondary 'sec2' has \
+             tracked changes. The node is still running; it is still your turn.\n\
+             Fix what is listed above, then run `pdo complete` again.\n\
+             Do NOT run `pdo fail`.",
+        );
+        assert!(
+            fails.contains(
+                "pdo complete refused with exit 3 after script success: \
+                 secondary_repo_dirtied: read-only secondary 'sec2' has tracked changes"
+            ),
+            "{fails:?}"
+        );
+        for agent_words in [
+            "still your turn",
+            "still running",
+            "Do NOT",
+            "Fix what",
+            "Detail:",
+        ] {
+            assert!(!fails.contains(agent_words), "{agent_words:?} in {fails:?}");
+        }
+    }
+
+    /// A refusal whose headline is generic keeps the cause the CLI prints
+    /// under it (`Reason:`, a `Detail:` the headline does not already say).
+    #[test]
+    fn script_tail_fail_reason_keeps_the_cause_lines_under_the_headline() {
+        let fails = run_script_tail_with_fake_pdo(
+            3,
+            "pdo complete REFUSED — PDO could not deliver your work onto the run's branch — it \
+             is still on disk, untouched. The node is still running; it is still your turn.\n\
+             Reason: index.lock exists\n\
+             Detail: git commit failed\n\
+             Fix what is listed above, then run `pdo complete` again.\n\
+             Do NOT run `pdo fail`.",
+        );
+        assert!(
+            fails.contains(
+                "after script success: PDO could not deliver your work onto the run's branch — \
+                 it is still on disk, untouched. Reason: index.lock exists. Detail: git commit failed"
+            ),
+            "{fails:?}"
+        );
+        assert!(!fails.contains("Do NOT"), "{fails:?}");
     }
 
     /// The full arm matrix of the tail, so a future edit cannot quietly drop one.
@@ -1150,7 +1209,14 @@ mod tests {
             // `children_pending` 3 (held by its child runs, ADR-0064) → do
             // nothing. Anything else → signal the failure ourselves.
             "case \"$cc:$co\" in 0:*|4:*|3:*children_pending*) ;;",
-            "*) pdo fail --reason \"pdo complete refused with exit $cc after script success: $co\" ;; esac",
+            // … with the refusal's cause alone, not the agent's instructions.
+            "*) why=$(printf '%s\\n' \"$co\" | { IFS= read -r first ; first=${first#* — } ; \
+             first=${first%%. The node is still running*} ; printf '%s' \"${first%.}\" ; \
+             while IFS= read -r l ; do case \"$l\" in \
+             'Reason: '*|'Missing declared outputs:'*|'Frontmatter violations:'*|'  - '*) printf '. %s' \"${l%.}\" ;; \
+             'Detail: '*) case \"$first\" in *\"${l#Detail: }\"*) ;; *) printf '. %s' \"${l%.}\" ;; esac ;; \
+             esac ; done ; }) ; \
+             pdo fail --reason \"pdo complete refused with exit $cc after script success: $why\" ;; esac",
             // ec = 124 → the `timeout` verdict
             "elif [ $ec -eq 124 ]; then pdo fail --reason \"script timed out after 60s\"",
             // any other ec → the author's own failure

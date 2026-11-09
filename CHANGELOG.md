@@ -30,7 +30,9 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   started yet".
 - Every "Inherit" picker (New Run, node inspector, Project, Settings › Agents) shows what it
   would really inherit: the instance's choice, else its default harness, else the Default profile
-  as you edited it, instead of always "claude · — · —".
+  as you edited it, instead of always "claude · — · —". In the node inspector, a node's own
+  legacy entries count: a `harnesses: { claude: … }` entry or a `pin_harness` names the model and
+  effort the node runs.
 - A pending tool call of an iteration that ended reads "no result" in the Transcript tab instead
   of "running" forever.
 - Settings › Diagnostics and the model pickers follow a harness probed again by a later read (a
@@ -47,9 +49,12 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - A node that changed a tracked file of a read-only secondary repository is told it is still its
   turn (`pdo complete` exits 3, `recoverable: true`): it reverts and completes again. It used to
   read "already ruled" (exit 4) while nothing was recorded, and a `script` node ended "session
-  died"; a `script` node now fails with the refusal in its reason.
+  died"; a `script` node now fails with the refusal's cause in its reason, without the
+  instructions `pdo complete` prints for an agent ("still your turn", "Do NOT run `pdo fail`").
 - `pdo run repos --remove <path>` removes the secondary repository it names; `PATCH /runs/<run>/repos`
-  takes a repository's path in `remove` as well as its alias.
+  takes a repository's path in `remove` as well as its alias. `--remove <alias>` works from any
+  directory, and a repository the Run does not have is refused (exit 4) with the Run's secondaries,
+  instead of "repositories updated".
 - `make demo-daemon … BIND=0.0.0.0` lets a sandboxed Run's containers reach the demo daemon; the docs
   of `pdo daemon --bind` and of the sandbox say a loopback daemon leaves a sandboxed node unable to
   call `pdo complete`.

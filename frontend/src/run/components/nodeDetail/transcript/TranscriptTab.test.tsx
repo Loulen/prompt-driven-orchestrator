@@ -285,6 +285,24 @@ describe("TranscriptTab", () => {
     expect(screen.getByTestId("transcript-tool-detail").textContent).not.toContain("Input");
   });
 
+  it("says a call an ended iteration never answered has no result, without a spinner", async () => {
+    // The session was reaped mid-call (the agent ran `pdo complete` inside it):
+    // the call stays pending in the transcript, but nothing is running any more.
+    fetchPage.mockResolvedValue(PAGE);
+    renderTab(false);
+    const row = await screen.findByTestId("transcript-tool");
+    expect(row.textContent).toContain("no result");
+    expect(row.textContent).not.toContain("running");
+    expect(row.querySelector(".d-spin")).toBeNull();
+  });
+
+  it("shows a call of a live iteration as running", async () => {
+    fetchPage.mockResolvedValue(PAGE);
+    renderTab(true);
+    const row = await screen.findByTestId("transcript-tool");
+    expect(row.textContent).toContain("running");
+  });
+
   it("says a harness without a reader is unavailable", async () => {
     fetchPage.mockResolvedValue({ ...PAGE, available: false, harness: "opencode", entries: [], total: 0 });
     renderTab();

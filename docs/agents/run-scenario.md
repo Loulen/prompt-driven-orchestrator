@@ -25,6 +25,7 @@ to be running.
 ```bash
 make demo-daemon PORT=6491             # this branch's `pdo daemon`
 make demo-daemon PORT=6491 TEST_EXT=1  # the demo daemon of the test extension instead
+make demo-daemon PORT=6491 BIND=0.0.0.0 # a journey with a sandboxed Run
 ```
 
 Pick a free port between 6400 and 6999 (another agent may be testing at the same time); the
@@ -38,7 +39,9 @@ user's ports (5172, 5272, 6160, 6172…) and the caller's own daemon are refused
 - builds its environment from yours, minus every `PDO_*` (a node's `PDO_PORT`, `PDO_TOKEN`,
   `PDO_NODE_ID`: the demo daemon is never in nested mode), `TMUX` and `TMUX_PANE`; it sets `PDO_PORT`,
   `PDO_BIND=127.0.0.1`, `PDO_UPDATE_CHECK=off`, `PDO_PRICE_SYNC=off`, and keeps `RUSTUP_HOME`,
-  `CARGO_HOME` and `COREPACK_HOME` on the real toolchains;
+  `CARGO_HOME` and `COREPACK_HOME` on the real toolchains. A sandboxed Run's nodes call the daemon
+  from their container through the host gateway, which a loopback daemon does not answer (their
+  `pdo complete` fails): `BIND=0.0.0.0` makes it listen on every interface for the journey;
 - **copies** the harnesses' auth files (`~/.claude/.credentials.json` and the account block of
   `~/.claude.json`, `~/.pi/agent/auth.json`, `~/.local/share/opencode/auth.json`) into the demo
   `HOME`; your own config folders are never linked nor written;

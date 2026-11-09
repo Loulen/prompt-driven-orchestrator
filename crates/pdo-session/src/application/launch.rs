@@ -45,7 +45,8 @@ pub fn spawn(
     // #433 / ADR-0043: when turn-end auto-completion is enabled, drop a settings
     // file beside the prompt and reference it via `claude --settings`, so a `Stop`
     // hook runs `pdo complete --auto` at every turn end. Same lifecycle as the
-    // prompt (gitignored under `.pdo/`, resolves identically host and container).
+    // prompt (under `.pdo/prompts`, which the delivery never commits; resolves
+    // identically host and container).
     // Callers pass `false` for `script`/manager sessions; the tail
     // selector in `build_tmux_script` is the belt-and-suspenders guard.
     //

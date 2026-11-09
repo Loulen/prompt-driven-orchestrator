@@ -1,3 +1,4 @@
+import type { AgentCombination } from "../../../settings/model/settings";
 import type { NodeState } from "../../../shared/generated/NodeState";
 import type { SkillRef } from "../../../shared/generated/SkillRef";
 import type { AgentProfile } from "../../../shared/generated/AgentProfile";
@@ -24,6 +25,7 @@ export default function AgentSection({
   handleField,
   harnessCatalog,
   agentProfiles,
+  inheritedAgent,
   skillBank,
   inheritedSkillTiers,
   resolvedHarness,
@@ -37,6 +39,8 @@ export default function AgentSection({
   handleField: (field: keyof EditorNodeDef, value: unknown) => void;
   harnessCatalog: HarnessCatalog;
   agentProfiles: AgentProfile[];
+  /** What « Inherit » falls to: the instance's choice, then the Default profile. */
+  inheritedAgent?: AgentCombination;
   skillBank: Parameters<typeof SkillSelector>[0]["bank"];
   inheritedSkillTiers: InheritedTier[];
   resolvedHarness: string;
@@ -54,7 +58,7 @@ export default function AgentSection({
           onChange={(agentChoice) => handleField("agent_choice", agentChoice)}
           profiles={agentProfiles}
           catalog={harnessCatalog}
-          inherited={{ harness: "claude", model: null, effort: null }}
+          inherited={inheritedAgent ?? { harness: "claude", model: null, effort: null }}
           readOnly={readOnly}
           testId="node-agent-control"
         />

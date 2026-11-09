@@ -779,6 +779,52 @@ async fn create_run_with_unknown_field_multipart_is_400() {
     assert_no_run_and_no_worktree(&state).await;
 }
 
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn create_run_whose_first_target_repo_is_not_the_primary_is_400_naming_both() {
+    // `target_repos[0]` is the primary: a list of secondaries alone, beside a
+    // `target_repo`, used to drop its first entry without a word (the Run went
+    // on with one secondary fewer). Refused before any effect.
+    let _home = FakeHome::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    write_test_pipeline(tmp.path(), "some-pipe");
+    init_test_repo(tmp.path());
+    init_test_repo(other.path());
+    let repo = tmp.path().to_string_lossy().into_owned();
+    let secondary = other.path().to_string_lossy().into_owned();
+    let state = test_state_with_dir(tmp.path()).await;
+
+    let app = build_router(state.clone());
+    let body = format!(
+        r#"{{"pipeline":"some-pipe","input":"x","target_repo":"{repo}","target_repos":[{{"repo":"{secondary}"}}]}}"#
+    );
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/runs")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let error = json["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("target_repos[0]") && error.contains(&repo) && error.contains(&secondary),
+        "the error must say [0] is the primary and name both repositories; got: {error}"
+    );
+    assert_no_run_and_no_worktree(&state).await;
+}
+
 #[test]
 fn create_run_known_fields_cover_the_struct() {
     // Guards the allow-list against drift: a payload carrying EXACTLY the

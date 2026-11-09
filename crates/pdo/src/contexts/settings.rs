@@ -40,7 +40,12 @@ pub(super) fn settings(
     let profiles = Arc::new(SqliteProfiles::new(r.db.clone()));
     let harnesses = Arc::new(HarnessCatalogue {
         home: home.clone(),
-        reader: installed_catalogue_reader(),
+        reader: installed_catalogue_reader().with_reprobe_notice({
+            // A read that found another version probed again: every open page
+            // reads the new catalogue, as after « Refresh models ».
+            let events = BusCatalogueEvents(r.bus_tx.clone());
+            move |harness| events.catalogue_refreshed(harness)
+        }),
     });
     let sandbox = SandboxSection::new(
         profiles.clone(),

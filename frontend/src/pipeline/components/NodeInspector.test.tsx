@@ -1223,3 +1223,27 @@ describe("NodeInspector — toggle skills (#588 / ADR-0069)", () => {
     expect((node().skills ?? []).map((s) => s.id)).toEqual(["pdo-interactive"]);
   });
 });
+
+// CORE-230 FP F1: a node with no choice and a legacy `harnesses.claude` entry
+// runs that entry's model and effort at the Default floor (the daemon's
+// `agent_choice::resolve`); « Inherit » must name them, not the profile's.
+describe("NodeInspector — Inherit names what the node runs (CORE-230)", () => {
+  it("reads the node's own entry for the floor's harness over the Default profile", async () => {
+    const { fetchAgentProfiles } = await import("../../settings/api/agentProfiles");
+    vi.mocked(fetchAgentProfiles).mockResolvedValue({
+      profiles: [{ id: "default", name: "Default", harness: "claude", model: "sonnet", effort: "high", created_at: "", updated_at: "" }],
+    } as never);
+    seedNode({ harnesses: { claude: { model: "haiku", effort: "low" } }, model: "haiku", effort: "low" });
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    await waitFor(() =>
+      expect(screen.getByTestId("node-agent-control-resolved")).toHaveTextContent("claude · haiku · low"),
+    );
+
+    // A node without its own entry inherits the Default profile whole.
+    act(() => seedNode({}));
+    await waitFor(() =>
+      expect(screen.getByTestId("node-agent-control-resolved")).toHaveTextContent("claude · sonnet · high"),
+    );
+    vi.mocked(fetchAgentProfiles).mockResolvedValue({ profiles: [] });
+  });
+});

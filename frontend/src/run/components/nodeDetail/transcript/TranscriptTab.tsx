@@ -259,6 +259,7 @@ function TranscriptList({
                   outputBytes={entry.output_bytes}
                   diff={entry.diff}
                   focusNonce={focus?.index === entry.index ? focus.nonce : undefined}
+                  live={live}
                 />
               ),
             )}

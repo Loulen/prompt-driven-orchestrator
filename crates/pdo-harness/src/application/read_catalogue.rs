@@ -27,7 +27,14 @@ pub struct CatalogueReader {
     ttl: Box<dyn Fn() -> Duration + Send + Sync>,
     /// Held across a probe: two probes of the catalogues never run at once.
     cache: tokio::sync::Mutex<HashMap<String, Entry>>,
+    /// Told when a read probes a harness again because its binary answers
+    /// another version than the one cached (one that failed to answer at boot
+    /// included): the open pages read the new catalogue.
+    reprobe_notice: Option<ReprobeNotice>,
 }
+
+/// Who hears a harness probed again by a read.
+type ReprobeNotice = Box<dyn Fn(&str) + Send + Sync>;
 
 impl CatalogueReader {
     pub fn new(
@@ -38,7 +45,14 @@ impl CatalogueReader {
             probe,
             ttl: Box::new(ttl),
             cache: tokio::sync::Mutex::new(HashMap::new()),
+            reprobe_notice: None,
         }
+    }
+
+    /// The same reader, telling `notice` the harness a read probed again.
+    pub fn with_reprobe_notice(mut self, notice: impl Fn(&str) + Send + Sync + 'static) -> Self {
+        self.reprobe_notice = Some(Box::new(notice));
+        self
     }
 
     /// Whether `binary` resolves on the harness probe `PATH`.
@@ -71,13 +85,22 @@ impl CatalogueReader {
         }
 
         let version = self.version(binary).await;
-        if let Some(entry) = guard.get_mut(harness) {
-            if entry.cached.version == version {
+        let reprobe = match guard.get_mut(harness) {
+            Some(entry) if entry.cached.version == version => {
                 entry.checked = Instant::now();
                 return entry.cached.clone();
             }
+            Some(_) => true,
+            None => false,
+        };
+        let cached = self.probe_into(&mut guard, harness, binary, version).await;
+        drop(guard);
+        if reprobe {
+            if let Some(notice) = &self.reprobe_notice {
+                notice(harness);
+            }
         }
-        self.probe_into(&mut guard, harness, binary, version).await
+        cached
     }
 
     /// Re-probe `harness`'s catalogue now, whatever its version and its window
@@ -224,6 +247,24 @@ pub(crate) mod tests {
         reader.read("claude", "claude").await;
         reader.read("claude", "claude").await;
         assert_eq!(fake.runs().len(), 2, "the second read ran nothing");
+    }
+
+    #[tokio::test]
+    async fn a_read_that_finds_a_new_version_says_so_and_a_first_read_does_not() {
+        // A boot probe that failed (a slow `--version`) leaves no version; the next
+        // read past the window finds one and probes again: the open pages, which
+        // still show « probe failed », must hear of it.
+        let fake = binaries();
+        let heard = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let notes = heard.clone();
+        let reader = CatalogueReader::new(fake.clone(), || Duration::ZERO)
+            .with_reprobe_notice(move |harness| notes.lock().unwrap().push(harness.to_string()));
+        reader.read("claude", "claude").await;
+        reader.read("claude", "claude").await;
+        assert!(heard.lock().unwrap().is_empty(), "nothing changed yet");
+        fake.set_version("claude", "2.2.0");
+        reader.read("claude", "claude").await;
+        assert_eq!(*heard.lock().unwrap(), vec!["claude".to_string()]);
     }
 
     #[tokio::test]

@@ -12,7 +12,7 @@ use pdo_workspace::adapters::git::repository::validate_source_branch;
 use tracing::warn;
 
 use super::naming::validate_run_input;
-use super::repos::{required_target_repo, resolve_secondary_pins};
+use super::repos::{canonical_or_self, required_target_repo, resolve_secondary_pins};
 use super::request::CreateRunRequest;
 use crate::application::paths::{effective_repo_root, resolve_pipeline_path};
 use crate::domain::state::{RepoPin, RunState};
@@ -71,6 +71,7 @@ pub(super) fn resolve(
         .or_else(|| parent.map(|p| effective_repo_root(state, p).to_string_lossy().into_owned()));
     let run_repo_root =
         required_target_repo(effective_target_repo.as_deref()).map_err(bad_request)?;
+    primary_first(&run_repo_root, req).map_err(bad_request)?;
 
     // The primary's base branch is the scalar `source_branch` when present, else
     // `target_repos[0].base_branch`: row 0 of the multi-repo modal carries the
@@ -106,6 +107,32 @@ pub(super) fn resolve(
         source_ref,
         secondary_pins,
     })
+}
+
+/// `target_repos[0]` is the primary: beside a `target_repo`, it must name the
+/// same repository. A list of secondaries alone would lose its first entry
+/// without a word, the Run going on with one secondary fewer.
+fn primary_first(run_repo_root: &std::path::Path, req: &CreateRunRequest) -> Result<(), String> {
+    let Some(first) = req.target_repos.first() else {
+        return Ok(());
+    };
+    let first_repo = first.repo.trim();
+    let Some(target_repo) = req.target_repo.as_deref().map(str::trim) else {
+        return Ok(());
+    };
+    // Verbatim first (a URL the create clones), then as the same folder.
+    if first_repo.is_empty()
+        || target_repo.is_empty()
+        || first_repo == target_repo
+        || canonical_or_self(std::path::Path::new(first_repo)) == canonical_or_self(run_repo_root)
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "target_repos[0] is the primary repository: it must be target_repo ({}), got {first_repo}. \
+         List the primary first, then the secondaries",
+        run_repo_root.display()
+    ))
 }
 
 /// The pipeline a new Run runs, read from the instance registry.

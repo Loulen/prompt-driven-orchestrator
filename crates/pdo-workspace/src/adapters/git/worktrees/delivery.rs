@@ -61,8 +61,12 @@ pub fn stage_and_commit(
     }
 
     // Paths PDO itself put in the worktree, never the node's deliverable: the
-    // artifact store first (#796), then whatever provisioning materialized.
-    let mut excluded: Vec<Vec<u8>> = vec![RUN_ARTIFACTS_RELATIVE.as_bytes().to_vec()];
+    // artifact store first (#796), the sessions' prompts and hooks, then
+    // whatever provisioning materialized.
+    let mut excluded: Vec<Vec<u8>> = vec![
+        RUN_ARTIFACTS_RELATIVE.as_bytes().to_vec(),
+        SESSION_PROMPTS_RELATIVE.as_bytes().to_vec(),
+    ];
     excluded.extend(crate::adapters::git::manifest::materialized_paths(
         worktree_dir,
     )?);

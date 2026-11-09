@@ -254,3 +254,70 @@ async fn an_unknown_node_exits_4_and_leaves_a_finished_run_untouched() {
     assert!(run["nodes"].get("ghost").is_none(), "{run}");
     assert_eq!(events(&daemon).await, before, "nothing was written");
 }
+
+/// `pdo run repos --remove` names a secondary by its alias or its path, from
+/// any working directory; one the Run does not have is refused, exit 4, with
+/// the Run's secondaries, and nothing changes (it used to answer
+/// « repositories updated », exit 0, and keep the list as it was).
+#[tokio::test]
+async fn run_repos_removes_by_alias_or_path_and_refuses_an_unknown_one() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = flow::create_run(&daemon, "solo").await;
+    wait_node_status(&daemon, &run_id, "worker", "running").await;
+    let secondaries = tempfile::tempdir().unwrap();
+    let (lib, doc) = (
+        secondaries.path().join("lib"),
+        secondaries.path().join("doc"),
+    );
+    flow::git_init(&lib).unwrap();
+    flow::git_init(&doc).unwrap();
+    let (lib, doc) = (lib.to_str().unwrap(), doc.to_str().unwrap());
+
+    let added = pdo(
+        &daemon,
+        &["run", "repos", &run_id, "--add", lib, "--add", doc],
+    )
+    .await;
+    assert_eq!(added.ok(), format!("{run_id} repositories updated\n"));
+    let aliases = |run: &serde_json::Value| -> Vec<String> {
+        // A Run with no secondary leaves `target_repos` out.
+        run["target_repos"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|pin| pin["alias"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let run = daemon.get_json(&format!("/runs/{run_id}")).await;
+    assert_eq!(aliases(&run), ["lib", "doc"], "{run}");
+
+    for unknown in ["/nowhere/nope", "nope"] {
+        let refused = pdo(&daemon, &["run", "repos", &run_id, "--remove", unknown]).await;
+        assert_eq!(
+            refused.code,
+            Some(4),
+            "{}{}",
+            refused.stdout,
+            refused.stderr
+        );
+        assert!(
+            refused.stderr.contains(&format!(
+                "{unknown} is not a secondary repository of run {run_id}"
+            )) && refused.stderr.contains(&format!("lib ({lib})"))
+                && refused.stderr.contains(&format!("doc ({doc})")),
+            "{}",
+            refused.stderr
+        );
+    }
+    let run = daemon.get_json(&format!("/runs/{run_id}")).await;
+    assert_eq!(aliases(&run), ["lib", "doc"], "nothing changed: {run}");
+
+    // By alias, from a working directory that has no `lib` in it.
+    let removed = pdo(&daemon, &["run", "repos", &run_id, "--remove", "lib"]).await;
+    assert_eq!(removed.ok(), format!("{run_id} repositories updated\n"));
+    // By path.
+    let removed = pdo(&daemon, &["run", "repos", &run_id, "--remove", doc]).await;
+    assert_eq!(removed.ok(), format!("{run_id} repositories updated\n"));
+    let run = daemon.get_json(&format!("/runs/{run_id}")).await;
+    assert!(aliases(&run).is_empty(), "{run}");
+}

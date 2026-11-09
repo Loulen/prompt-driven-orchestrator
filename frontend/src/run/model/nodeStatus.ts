@@ -98,7 +98,7 @@ export function nodeSessionEnded(status: NodeStatus, isArchived?: boolean): bool
 export function terminalPlaceholder(node: NodeState): string {
   switch (node.status) {
     case "pending":
-      return "en attente d’activation";
+      return "Not started yet";
     case "waiting":
       // Admission-throttled: ready, but the session cap is reached.
       return "Waiting for a free session slot";

@@ -34,7 +34,7 @@ export function stageHarnessCredentials({ hostHome, demoHome }) {
  * since the last build is not tested on a stale binary (false: build only if
  * the binary is missing). Resolves to `{ url, pdo, pid, paths, env }`.
  */
-export async function startDemo({ port, testExt = false, extra = {}, build = true, repoRoot, tmpRoot = "/tmp", env = process.env, log = console.log }) {
+export async function startDemo({ port, testExt = false, extra = {}, bind, build = true, repoRoot, tmpRoot = "/tmp", env = process.env, log = console.log }) {
   const paths = demoPaths(port, tmpRoot);
   const running = readPid(paths.pidfile);
   if (running && isAlive(running)) {
@@ -57,7 +57,7 @@ export async function startDemo({ port, testExt = false, extra = {}, build = tru
   const staged = stageHarnessCredentials({ hostHome: env.HOME, demoHome: paths.home });
   fs.writeFileSync(path.join(paths.root, STAGED_LIST), staged.map((file) => `${file}\n`).join(""));
 
-  const daemonEnv = demoEnv({ env, paths, port, extra: { ...extra, ...own } });
+  const daemonEnv = demoEnv({ env, paths, port, bind, extra: { ...extra, ...own } });
   const logFile = fs.openSync(paths.log, "a");
   const child = spawn(command, args, { cwd: paths.cwd, env: daemonEnv, detached: true, stdio: ["ignore", logFile, logFile] });
   fs.closeSync(logFile);

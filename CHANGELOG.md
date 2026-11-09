@@ -16,6 +16,48 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 
 ## Unreleased
 
+### Sandbox, harnesses, worktrees, multi-repo and live sessions: fixes from the vanilla acceptance tour
+
+- A declared wait is lifted by a person's answer only. What the browser's terminal answers by itself
+  when the agent queries it (its colours, its version) no longer counts as typed text, so a bare
+  Enter no longer lifts the wait, and a node's log no longer gains a `node_typed` nobody typed.
+  Attaching to an iteration that already ended records no `node_taken_over`.
+- A node waiting for its user (`pdo wait-user`, an unreleased completion) whose session dies turns
+  `Interrupted` with "session died", as a running one does, instead of waiting forever.
+- Leaving a finished node for the node of the same id in another Run opens its live terminal,
+  instead of keeping it folded and marked "ended".
+- The terminal of a node not started yet, and the Run pane before any node is live, say "Not
+  started yet".
+- Every "Inherit" picker (New Run, node inspector, Project, Settings › Agents) shows what it
+  would really inherit: the instance's choice, else its default harness, else the Default profile
+  as you edited it, instead of always "claude · — · —". In the node inspector, a node's own
+  legacy entries count: a `harnesses: { claude: … }` entry or a `pin_harness` names the model and
+  effort the node runs.
+- A pending tool call of an iteration that ended reads "no result" in the Transcript tab instead
+  of "running" forever.
+- Settings › Diagnostics and the model pickers follow a harness probed again by a later read (a
+  `copilot` whose `--version` was too slow at boot no longer reads "probe failed" until a reload).
+- A node with `harnesses: { claude: { model: … } }` and no pin runs on that model again on the
+  Default profile's harness, as it did before agent profiles; the profile fills what the entry
+  leaves out.
+- The delivery commit of a node no longer carries `.pdo/prompts/` (the prompt and the turn-end hook
+  PDO writes beside the session) into the Run branch of a repository whose `.gitignore` does not
+  cover `.pdo/`.
+- `POST /runs` refuses a `target_repos` whose first entry is not the `target_repo` (400 naming both):
+  the list is the primary first, then the secondaries; its first secondary used to be dropped
+  without a word. `pdo run create --target-repos` says so in its help.
+- A node that changed a tracked file of a read-only secondary repository is told it is still its
+  turn (`pdo complete` exits 3, `recoverable: true`): it reverts and completes again. It used to
+  read "already ruled" (exit 4) while nothing was recorded, and a `script` node ended "session
+  died"; a `script` node now fails with the refusal's cause in its reason, without the
+  instructions `pdo complete` prints for an agent ("still your turn", "Do NOT run `pdo fail`").
+- `pdo run repos --remove <path>` removes the secondary repository it names; `PATCH /runs/<run>/repos`
+  takes a repository's path in `remove` as well as its alias. `--remove <alias>` works from any
+  directory, and a repository the Run does not have is refused (exit 4) with the Run's secondaries,
+  instead of "repositories updated".
+- `make demo-daemon … BIND=0.0.0.0` lets a sandboxed Run's containers reach the demo daemon; the docs
+  of `pdo daemon --bind` and of the sandbox say a loopback daemon leaves a sandboxed node unable to
+  call `pdo complete`.
 ### Routing: a branch not taken stays dead downstream
 
 - A run whose only path to End goes through a branch that was not taken stays "awaiting you"

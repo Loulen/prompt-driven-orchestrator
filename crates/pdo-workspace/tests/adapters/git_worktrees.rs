@@ -775,6 +775,41 @@ fn stage_and_commit_keeps_the_run_artifacts_out_of_the_branch() {
     );
 }
 
+/// The prompt and the turn-end hook PDO writes beside a session
+/// (`.pdo/prompts/<node>-iter-<n>.md`, `….settings.json`) are PDO's, not the
+/// node's deliverable: a target repo whose `.gitignore` does not cover `.pdo/`
+/// used to get them committed into every Run branch.
+#[test]
+fn stage_and_commit_keeps_the_session_prompts_out_of_the_branch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    init_test_repo(repo);
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .unwrap()
+    };
+    let prompts = repo.join(".pdo/prompts");
+    std::fs::create_dir_all(&prompts).unwrap();
+    std::fs::write(prompts.join("worker-iter-1.md"), "# PDO Runtime Preamble\n").unwrap();
+    std::fs::write(prompts.join("worker-iter-1.settings.json"), "{}\n").unwrap();
+    std::fs::write(repo.join("hello.txt"), "hello from PDO\n").unwrap();
+
+    stage_and_commit(repo, "worker", 1, &CommitIdentity::default())
+        .unwrap()
+        .unwrap();
+
+    let files =
+        String::from_utf8_lossy(&git(&["show", "--name-status", "--format="]).stdout).to_string();
+    assert!(files.contains("A\thello.txt"), "{files}");
+    assert!(
+        !files.contains(".pdo/prompts"),
+        "the session's prompts stay out: {files}"
+    );
+}
+
 /// #796: only artifacts are exempt from the completion commit — nothing else
 /// under `.pdo/` (a versioned pipeline edited by the node) is.
 #[test]

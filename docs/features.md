@@ -77,6 +77,11 @@ node whose every branch died is skipped; if that makes `End` unreachable, the ru
 (« unrouted ») instead of stalling. There is no dedicated Merge node: the converging node carries its
 own prompt, so it can do real synthesis work.
 
+A node skipped because its branch was not taken fires nothing: what it fed does not receive it (its
+preamble says « not taken », a `script` gets an empty `PDO_INPUT_<PORT>`), and an `End` reachable only
+through it stays unreached, so the run waits « unrouted » for you to force a route. A node you skip
+yourself (`pdo node skip`, with or without `--output`) feeds what comes after it as if it had run.
+
 A skipped node keeps a ▶: it runs the branch as if it had been taken (a Retry: next iteration, the
 skipped nodes downstream evaluated again, a finished run re-opened).
 
@@ -137,7 +142,11 @@ pair of refs.
 **Send to manager** hands your comments to the run's manager agent in one message. It answers each
 one with `pdo review reply`, the answer lands in the thread in real time, and the manager can route
 the fix back into the pipeline (restart a node, inject an artifact). By default you resolve a
-comment; the agent only proposes the resolution.
+comment; the agent only proposes the resolution. A manager the send starts reads your comments in its
+launch prompt. If its agent first asks whether to trust the folder, the thread says the comments
+are held and how to go on (answer it in the run's Manager tab); if the manager exits before
+answering, the thread says so and **Send again** hands the unanswered comments to a new manager,
+as written.
 
 Each comment, reply, resolution and reopening keeps who made it: with an extension that names
 people, the thread shows their names, and an extension can complete what you type in the comment

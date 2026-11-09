@@ -55,6 +55,7 @@ const KINDS: &[EventKind] = &[
     EventKind::ReviewCommentReplied,
     EventKind::ReviewCommentResolved,
     EventKind::ReviewCommentReopened,
+    EventKind::ReviewCommentDelivery,
     EventKind::CommandIssued,
     EventKind::SandboxPrepStarted,
     EventKind::SandboxPrepReady,

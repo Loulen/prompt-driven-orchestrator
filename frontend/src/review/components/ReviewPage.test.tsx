@@ -28,6 +28,7 @@ vi.mock("../../run/api/artifacts", () => ({
 vi.mock("../api/comments", () => ({
   fetchReviewComments: vi.fn(),
   sendReviewComments: vi.fn(),
+  resendReviewComments: vi.fn(),
   resolveReviewComment: vi.fn(),
   reopenReviewComment: vi.fn(),
 }));
@@ -109,7 +110,7 @@ vi.mock("../../shared/authorization/api", async (orig) => ({
 import { askAuthorization, type OperationQuestion } from "../../shared/authorization/api";
 import { fetchRun } from "../../run/api/runs";
 import { fetchRunFileAtRef, fetchRunRefs } from "../../run/api/artifacts";
-import { fetchReviewComments, sendReviewComments, resolveReviewComment, reopenReviewComment } from "../api/comments";
+import { fetchReviewComments, sendReviewComments, resendReviewComments, resolveReviewComment, reopenReviewComment } from "../api/comments";
 import { fetchRunStructuredDiff } from "../api/diff";
 
 const mockedRun = vi.mocked(fetchRun);
@@ -118,6 +119,7 @@ const mockedRefs = vi.mocked(fetchRunRefs);
 const mockedDiff = vi.mocked(fetchRunStructuredDiff);
 const mockedFile = vi.mocked(fetchRunFileAtRef);
 const mockedSend = vi.mocked(sendReviewComments);
+const mockedResend = vi.mocked(resendReviewComments);
 const mockedResolve = vi.mocked(resolveReviewComment);
 const mockedReopen = vi.mocked(reopenReviewComment);
 const mockedAsk = vi.mocked(askAuthorization);
@@ -770,6 +772,51 @@ describe("ReviewPage — review comments (#750)", () => {
     fireEvent.click(within(screen.getAllByTestId("review-file")[0]).getByTestId("mock-add-new-2"));
     await waitFor(() => expect(screen.getByTestId("review-toast")).toHaveTextContent("already has a sent comment"));
     expect(screen.queryByTestId("review-comment-editor")).toBeNull();
+  });
+
+  // CORE-239: never « Awaiting manager reply » for ever.
+  it("says a held comment waits on the manager's trust prompt, and how to unblock it", async () => {
+    const held = sentComment({
+      id: "rc-001",
+      line: 2,
+      delivery: { state: "blocked", reason: "The manager's agent asks whether to trust this folder.", at: "2026-09-09T00:31:00Z" },
+    });
+    mockedRun.mockResolvedValue(makeRun({ has_manager: true, review_comments: [held] }));
+    render(<ReviewPage runId={RUN_ID} />);
+    const card = await screen.findByTestId("review-comment");
+    const notice = within(card).getByTestId("review-comment-delivery");
+    expect(notice).toHaveAttribute("data-kind", "blocked");
+    expect(notice).toHaveTextContent("asks whether to trust this folder");
+    expect(within(notice).getByTestId("review-comment-open-run")).toHaveAttribute("href", `/#/runs/${RUN_ID}`);
+    expect(within(notice).queryByTestId("review-comment-resend")).toBeNull();
+    expect(within(card).getByTestId("review-comment-status")).toHaveAttribute("data-kind", "blocked");
+    expect(card).not.toHaveTextContent("Awaiting manager reply");
+  });
+
+  it("says the manager exited before answering, and Send again hands every unanswered comment over as written", async () => {
+    const lost = [
+      sentComment({ id: "rc-001", line: 2, delivery: { state: "exited", at: "2026-09-09T00:31:00Z" } }),
+      sentComment({ id: "rc-002", side: "old", line: 2 }),
+      sentComment({ id: "rc-003", path: "web/adr/0068.md", line: 2, replies: [{ author: "manager", text: "done", at: "2026-09-09T00:32:00Z" }] }),
+    ];
+    // No manager runs: rc-002 too was left unanswered (a daemon restart no longer follows it).
+    mockedRun.mockResolvedValue(makeRun({ has_manager: false, review_comments: lost }));
+    render(<ReviewPage runId={RUN_ID} />);
+    await waitFor(() => expect(screen.getAllByTestId("review-comment-delivery")).toHaveLength(2));
+    const first = screen.getAllByTestId("review-comment").find((c) => c.dataset.commentId === "rc-001")!;
+    expect(within(first).getByTestId("review-comment-delivery-reason")).toHaveTextContent("The manager exited before answering.");
+    const answered = screen.getAllByTestId("review-comment").find((c) => c.dataset.commentId === "rc-003")!;
+    expect(within(answered).queryByTestId("review-comment-delivery")).toBeNull();
+
+    mockedResend.mockResolvedValue({ resent: ["rc-001", "rc-002"], manager_started: true });
+    mockedRun.mockResolvedValue(
+      makeRun({ has_manager: true, review_comments: lost.map((c) => ({ ...c, delivery: undefined })) }),
+    );
+    fireEvent.click(within(first).getByTestId("review-comment-resend"));
+    await waitFor(() => expect(mockedResend).toHaveBeenCalledWith(RUN_ID, ["rc-001", "rc-002"]));
+    await waitFor(() => expect(screen.queryByTestId("review-comment-delivery")).toBeNull());
+    expect(screen.getByTestId("review-toast")).toHaveTextContent("2 comments sent again — manager started");
+    expect(first).toHaveTextContent("Awaiting manager reply");
   });
 
   it("keeps the drafts when the send fails and says so", async () => {

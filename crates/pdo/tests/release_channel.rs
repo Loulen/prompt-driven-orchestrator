@@ -187,7 +187,8 @@ async fn a_distribution_compares_its_own_version_and_updates_with_its_own_comman
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let log = std::fs::read_to_string(&log_path).unwrap_or_default();
-        if log.contains("cmd=acme-upgrade") {
+        // The executor writes one line at a time: read on once both are in.
+        if log.contains("cmd=acme-upgrade") && log.contains("method=") {
             assert!(log.contains("method=declared"), "{log}");
             break;
         }

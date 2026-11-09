@@ -23,7 +23,6 @@ use crate::application::events::load_events;
 use crate::application::node::spawn::{spawn_node, SpawnContext, SpawnDeps};
 use crate::application::paths::effective_repo_root;
 use crate::application::paths::resolve_run_pipeline_path;
-use crate::application::scheduler::frontmatter::resolve_completed_frontmatter;
 use crate::application::scheduler::frontmatter::resolve_run_variables;
 use crate::application::scheduler::interpreter::{self as scheduler_interpreter, SpawnDedup};
 use crate::domain::scheduler;
@@ -34,6 +33,7 @@ use pdo_workspace::adapters::git::worktrees::worktree_dir_for_run;
 
 pub use super::children_binding::*;
 pub use super::completion_head::*;
+use super::prune::sweep_auto_skips;
 
 /// Advance one Run by a single tick: spawn whatever the scheduler says is ready
 /// (plus any pending loop-iteration seeds), or — when there is nothing left to
@@ -128,125 +128,6 @@ pub async fn advance_run(state: &Runs, run_id: &str) {
     );
 }
 
-/// Auto-skip every node that has become **structurally unreachable** — its
-/// producing branch was not taken, so nothing will ever spawn it (ADR-0011).
-/// Each skipped node is marked satisfied with an *empty output* so a downstream
-/// resolver finds a concrete artifact rather than a missing file.
-///
-/// Must iterate: skipping one node can render a downstream either/or dead in
-/// turn. The pass count is capped at the node count so a pathological graph
-/// cannot spin.
-pub(super) async fn sweep_auto_skips(state: &Runs, run_id: &str) {
-    let mut passes = 0usize;
-    loop {
-        let events = match load_events(state, run_id).await {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-        let Some(run_state) = projection::project(&events) else {
-            return;
-        };
-        if run_state.status != state::RunStatus::Running
-            && run_state.status != state::RunStatus::AwaitingUser
-        {
-            return;
-        }
-
-        let repo_root = effective_repo_root(state, &run_state);
-        let pipeline_path = resolve_run_pipeline_path(&repo_root, run_id, &run_state.pipeline_name);
-        let Ok(yaml) = std::fs::read_to_string(&pipeline_path) else {
-            return;
-        };
-        let Ok(parse_result) = pipeline::parse_pipeline(&yaml) else {
-            return;
-        };
-        let pipeline = parse_result.pipeline;
-
-        // Bound: at most one skip per node over the whole sweep.
-        if passes > pipeline.nodes.len() {
-            return;
-        }
-        passes += 1;
-
-        let resolved_vars = resolve_run_variables(&pipeline, &events);
-        let worktree_dir = worktree_dir_for_run(&repo_root, run_id);
-        let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
-        let frontmatter_by_node =
-            resolve_completed_frontmatter(&pipeline, &run_state, &artifacts_dir);
-
-        let skips = scheduler::unreachable_nodes(
-            &pipeline,
-            &run_state,
-            &frontmatter_by_node,
-            &resolved_vars,
-        );
-        if skips.is_empty() {
-            return;
-        }
-
-        let skipped_ids = append_auto_skips(state, run_id, &pipeline, &artifacts_dir, &skips).await;
-
-        if skipped_ids.is_empty() {
-            return;
-        }
-        // `fire_edges` re-projects internally, so the next pass sees the updated
-        // state and can skip a newly-dead node.
-        for node_id in &skipped_ids {
-            fire_edges(state, run_id, node_id).await;
-        }
-    }
-}
-
-/// Skip each of `skips` — `(node_id, reason)` as [`scheduler::unreachable_nodes`]
-/// returns them — with an empty output, so a downstream resolver finds a
-/// concrete artifact rather than a missing file. Returns the nodes skipped.
-/// Fires no edge: that is the caller's business.
-pub(crate) async fn append_auto_skips(
-    state: &Runs,
-    run_id: &str,
-    pipeline: &pipeline::PipelineDef,
-    artifacts_dir: &std::path::Path,
-    skips: &[(String, String)],
-) -> Vec<String> {
-    let no_overrides = std::collections::HashMap::new();
-    let mut skipped_ids = Vec::new();
-    for (node_id, reason) in skips {
-        // A structurally-unreachable node never started, so it skips at iter 1.
-        let iter = 1;
-        if let Err(e) = crate::application::node::primitives::write_skip_outputs(
-            pipeline,
-            node_id,
-            iter,
-            &no_overrides,
-            artifacts_dir,
-        ) {
-            error!("auto-skip: failed to write outputs for {node_id} in {run_id}: {e}");
-            continue;
-        }
-        let event = event::Event {
-            id: None,
-            run_id: run_id.to_string(),
-            ts: pdo_kernel::clock::now_iso(),
-            kind: event::EventKind::NodeCompleted,
-            node_id: Some(node_id.clone()),
-            iter: Some(iter),
-            payload: Some(serde_json::json!({
-                "source": "auto_skip_unreachable",
-                "skipped": true,
-                "reason": reason,
-            })),
-        };
-        match append_event(state, &event).await {
-            Ok(()) => {
-                info!("auto-skip: node {node_id} in run {run_id} unreachable — {reason}");
-                skipped_ids.push(node_id.clone());
-            }
-            Err(e) => error!("auto-skip: failed to append skip for {node_id}: {e}"),
-        }
-    }
-    skipped_ids
-}
-
 /// Spawn each node in `ready_set` through [`spawn_node`].
 ///
 /// Don't re-sort or de-duplicate `ready_set`: under the session cap its order
@@ -296,8 +177,12 @@ pub fn should_complete_run(
     expected_node_ids: &[String],
     complete_when_awaiting_user: bool,
 ) -> bool {
+    // A Run its routing parked is awaiting its user too, but no branch reaches
+    // `End`: it never completes from here.
     let status_permits = run_state.status == state::RunStatus::Running
-        || (complete_when_awaiting_user && run_state.status == state::RunStatus::AwaitingUser);
+        || (complete_when_awaiting_user
+            && run_state.status == state::RunStatus::AwaitingUser
+            && !run_state.is_parked_by_routing());
     // Don't drop this in favour of node statuses: node status reflects the LATEST
     // event, so a collection member whose lap 1 finished while laps 2..N run can
     // transiently project Completed. The barrier is the only truthful signal.
@@ -545,6 +430,7 @@ mod tests {
             completed_at: Some("t1".into()),
             failure_reason: None,
             skip_reason: None,
+            pruned: false,
             iterations: Vec::new(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
@@ -569,6 +455,7 @@ mod tests {
             completed_at: None,
             failure_reason: None,
             skip_reason: None,
+            pruned: false,
             iterations: Vec::new(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
@@ -691,6 +578,21 @@ mod tests {
     }
 
     #[test]
+    fn a_run_its_routing_parked_never_completes_even_when_the_flag_is_set() {
+        for code in [
+            "unrouted",
+            "region_exhausted",
+            "region_ended_unrouted",
+            "region_budget_exhausted",
+        ] {
+            let mut s = state_with(RunStatus::AwaitingUser, &[("a", completed_node("a"))]);
+            s.awaiting_reason_code = Some(code.into());
+            let expected = vec!["a".to_string()];
+            assert!(!should_complete_run(&s, &expected, true), "{code}");
+        }
+    }
+
+    #[test]
     fn undone_collection_region_blocks_completion() {
         // A collection member can transiently project Completed mid-fan-out;
         // only the barrier unblocks run completion.
@@ -741,6 +643,7 @@ mod tests {
             completed_at: completed_at.clone(),
             failure_reason: None,
             skip_reason: None,
+            pruned: false,
             iterations: vec![IterationInfo {
                 iter,
                 status,

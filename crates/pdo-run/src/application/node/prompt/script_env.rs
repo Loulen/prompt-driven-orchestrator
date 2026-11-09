@@ -80,6 +80,11 @@ pub fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)> {
             .map(|p| p.to_string_lossy())
             .collect::<Vec<_>>()
             .join("\n");
+        // An input with nothing to read (a branch not taken, an upstream that
+        // has produced nothing yet) never blanks a same-named input that has.
+        if value.is_empty() && env.iter().any(|(k, _)| *k == key) {
+            continue;
+        }
         env.push((key, value));
     }
 

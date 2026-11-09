@@ -44,6 +44,7 @@ pub(super) fn apply_switch_event(state: &mut RunState, event: &Event) {
                     completed_at: Some(event.ts.clone()),
                     failure_reason: None,
                     skip_reason: None,
+                    pruned: false,
                     iterations: Vec::new(),
                     frontmatter_retries: 0,
                     frontmatter_violations: Vec::new(),

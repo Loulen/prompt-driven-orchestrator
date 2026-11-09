@@ -113,7 +113,7 @@ fn budget_exhausted(
         ""
     };
     Some(SchedulerAction::Interrupt {
-        reason_code: "region_budget_exhausted".to_string(),
+        reason_code: crate::domain::state::PARK_REGION_BUDGET_EXHAUSTED.to_string(),
         message: format!(
             "budget reached: bounded region '{id}' reached its cost cap: \
              {approx}{spent} spent of {cap} after lap {current_iter}/{max_iter}{partial}. \
@@ -257,7 +257,7 @@ pub(super) fn handle_region_reentry(
                     );
                     let (reason_code, head) = if ended {
                         (
-                            "region_ended_unrouted",
+                            crate::domain::state::PARK_REGION_ENDED_UNROUTED,
                             format!(
                                 "ended — unrouted: bounded region '{}' was closed by end_region \
                                  at iter {current_iter} but no exit edge matched",
@@ -266,7 +266,7 @@ pub(super) fn handle_region_reentry(
                         )
                     } else {
                         (
-                            "region_exhausted",
+                            crate::domain::state::PARK_REGION_EXHAUSTED,
                             format!(
                                 "exhausted — unrouted: bounded region '{}' reached max_iter \
                                  {max_iter} with the continuation condition still true and no \

@@ -11,8 +11,8 @@ use pdo_kernel::Actor;
 
 use super::answer;
 use super::dto::{
-    ListReviewCommentsQuery, ReplyReviewCommentRequest, ReviewDecisionRequest,
-    SendReviewCommentsRequest,
+    ListReviewCommentsQuery, ReplyReviewCommentRequest, ResendReviewCommentsRequest,
+    ReviewDecisionRequest, SendReviewCommentsRequest,
 };
 use crate::application::list_comments::ListComments;
 use crate::application::reply::ReplyCommand;
@@ -138,4 +138,14 @@ pub(super) async fn send(
         Ok(body) => (StatusCode::OK, Json(body)).into_response(),
         Err(failure) => failure.into_response(),
     }
+}
+
+/// `POST /runs/{run_id}/review/comments/resend` (CORE-239).
+pub(super) async fn resend(
+    State(review): State<Arc<Review>>,
+    Extension(actor): Extension<Actor>,
+    Path(run_id): Path<String>,
+    Json(req): Json<ResendReviewCommentsRequest>,
+) -> Response {
+    answer(review.resend_comments(&actor, &run_id, req.ids).await)
 }

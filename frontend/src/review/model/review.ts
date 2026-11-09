@@ -30,3 +30,9 @@ export interface SendReviewCommentsResponse {
   /** True when this send started the manager on demand. */
   manager_started: boolean;
 }
+
+/** CORE-239: « Send again » — the ids handed to the manager once more. */
+export interface ResendReviewCommentsResponse {
+  resent: string[];
+  manager_started: boolean;
+}

@@ -87,6 +87,18 @@ pub fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<String> 
             })
             .collect();
 
+        // ADR-0082: a node is ready once at least one of its edges fired. A
+        // pruned producer fires nothing, so a node whose every unconditional
+        // feeder is pruned is not ready by readiness: a live conditional edge
+        // into it spawns it, or it dies and is pruned in turn.
+        if !unconditional_in.is_empty()
+            && unconditional_in
+                .iter()
+                .all(|e| run_state.is_pruned(&e.source.node))
+        {
+            continue;
+        }
+
         let all_completed = upstream.iter().all(|src| {
             // A collection-region member upstream is a BARRIER input (#269):
             // it counts as completed only once the whole region is done, never
@@ -474,6 +486,7 @@ mod tests {
             completed_at: Some("t1".into()),
             failure_reason: None,
             skip_reason: None,
+            pruned: false,
             iterations: Vec::new(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
@@ -498,6 +511,7 @@ mod tests {
             completed_at: None,
             failure_reason: None,
             skip_reason: None,
+            pruned: false,
             iterations: Vec::new(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),

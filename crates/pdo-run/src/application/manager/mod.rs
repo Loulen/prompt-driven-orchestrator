@@ -67,7 +67,7 @@ impl Runs {
             Ok(t) => t,
             Err(resp) => return *resp,
         };
-        match ensure_run_manager(state, run_id, &run_state, actor).await {
+        match ensure_run_manager(state, run_id, &run_state, actor, None).await {
             Ok(created) => (
                 StatusCode::OK,
                 Json(ManagerStartResponse {
@@ -121,7 +121,9 @@ impl Runs {
 
 /// Make sure the Run's Pipeline Manager session is up, spawning it on demand
 /// (manager on demand; #750 reuses it for "send to manager"), started by
-/// `actor`, whose gesture asks for it (CORE-61). `Ok(true)` when
+/// `actor`, whose gesture asks for it (CORE-61). A manager this call spawns
+/// gets `first_message` at the end of its launch prompt (CORE-239); one already
+/// running does not, its caller hands the message over. `Ok(true)` when
 /// THIS call spawned it, `Ok(false)` when it already existed; `Err` carries the
 /// status + JSON body the HTTP surfaces answer with (`409` no worktree, `500`
 /// the session did not come up).
@@ -137,6 +139,7 @@ pub async fn ensure_run_manager(
     run_id: &str,
     run_state: &RunState,
     actor: &Actor,
+    first_message: Option<&str>,
 ) -> Result<bool, (StatusCode, serde_json::Value)> {
     let session_name = pdo_session::domain::names::manager_session_name(run_id);
     let tmux = state.tmux();
@@ -178,6 +181,7 @@ pub async fn ensure_run_manager(
         name_hint,
         !run_state.sandbox.is_off(),
         Some(actor.clone()),
+        first_message,
     )
     .await;
 

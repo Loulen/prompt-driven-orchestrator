@@ -1,7 +1,109 @@
-//! The prose an `unrouted` interruption carries: which edges were candidates and
-//! why none fired.
+//! The `unrouted` interruption (ADR-0011, « jamais de stall silencieux ») and
+//! the prose it carries: which edges were candidates and why none fired.
 
 use super::*;
+use crate::domain::state::PARK_UNROUTED;
+
+/// Explicit park on an unrouted convergence (ADR-0011). A convergence whose
+/// branches are ALL dead is never spawned and becomes dead itself; the cascade
+/// can render `End` unreachable, and the run would sit `Running` forever. Park
+/// instead, so the state is diagnosable.
+///
+/// Only when this completion produced no forward progress (`actions` holds no
+/// spawn and no end): if `End` is still reachable through a live path, a
+/// convergence waiting on a running sibling is normal, not a stall.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn unrouted_interrupt(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    completed_node_id: &str,
+    actions: &[SchedulerAction],
+    fired_indices: &HashSet<usize>,
+    frontmatter_fields: &HashMap<String, serde_yaml::Value>,
+    frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
+    resolved_vars: &HashMap<String, serde_yaml::Value>,
+) -> Option<SchedulerAction> {
+    if actions.iter().any(|a| {
+        matches!(
+            a,
+            SchedulerAction::Spawn { .. }
+                | SchedulerAction::Complete
+                | SchedulerAction::Halt { .. }
+        )
+    }) || !end_is_dead(pipeline, run_state, frontmatter_by_node, resolved_vars)
+    {
+        return None;
+    }
+    let source_iter = run_state
+        .nodes
+        .get(completed_node_id)
+        .map(|n| n.iter)
+        .unwrap_or(1);
+    // Don't just say "unrouted": the operator needs each guard, whether it
+    // fired, and the value actually read, to know where to `force_route`.
+    let candidates = describe_candidate_edges(
+        pipeline,
+        completed_node_id,
+        source_iter,
+        fired_indices,
+        frontmatter_fields,
+    );
+    Some(SchedulerAction::Interrupt {
+        reason_code: PARK_UNROUTED.to_string(),
+        region_id: None,
+        message: format!(
+            "unrouted: node '{completed_node_id}' (iter {source_iter}) completed \
+             but conditional routing suppressed every path to End (no live branch \
+             reaches End). Candidate edges:\n{candidates}\n\
+             Route it explicitly with force_route (source '{completed_node_id}' \
+             -> a target), or adjust the verdict the edges read."
+        ),
+    })
+}
+
+/// The `unrouted` park when pruning the branches not taken leaves `End` with no
+/// live branch: a required input of a node died while its other inputs fired,
+/// and that node was the way to `End` (ADR-0011, ADR-0082).
+pub(super) fn unrouted_by_pruning(pruned: &[String]) -> SchedulerAction {
+    SchedulerAction::Interrupt {
+        reason_code: PARK_UNROUTED.to_string(),
+        region_id: None,
+        message: format!(
+            "unrouted: {} skipped because its branch was not taken, and no live branch \
+             reaches End any more. Route the Run explicitly with force_route (a completed \
+             node -> a target).",
+            pruned
+                .iter()
+                .map(|id| format!("'{id}'"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+/// Is `End` dead for this Run — every branch into it died (ADR-0082)? `false`
+/// for a pipeline without `End`.
+pub(super) fn end_is_dead(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
+    vars: &HashMap<String, serde_yaml::Value>,
+) -> bool {
+    pipeline
+        .nodes
+        .iter()
+        .find(|n| n.node_type == NodeType::End)
+        .is_some_and(|end| {
+            is_node_dead(
+                pipeline,
+                run_state,
+                &end.id,
+                frontmatter_by_node,
+                vars,
+                &mut HashSet::new(),
+            )
+        })
+}
 
 /// Renders a `serde_yaml` scalar as a short token for the `unrouted` diagnostic:
 /// a compact YAML flow for a mapping/sequence, so multi-line YAML never lands in a

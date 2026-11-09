@@ -5,6 +5,7 @@ import { anchorLabel } from "../model/drafts";
 import { Badge, Refusable, Spinner } from "./commentBits";
 import ReviewMarkdown from "./ReviewMarkdown";
 import SentCard from "./SentCard";
+import type { SentDelivery } from "../model/commentsApi";
 
 /**
  * One review comment rendered under its diff line (#750): a **draft** card
@@ -68,6 +69,8 @@ interface Props {
   outdated?: { writtenOn: string };
   /** #752 — sent cards only: the written line, when the reported number differs. */
   movedFrom?: number;
+  /** CORE-239 — sent cards only: held on its way to the manager, and « Send again ». */
+  delivery?: SentDelivery;
 }
 
 export default function CommentCard({
@@ -90,6 +93,7 @@ export default function CommentCard({
   onSeen,
   outdated,
   movedFrom,
+  delivery,
 }: Props) {
   const label = anchorLabel(entry.anchor);
   const body = (text: string) => (
@@ -118,6 +122,7 @@ export default function CommentCard({
         onSeen={onSeen}
         outdated={outdated}
         movedFrom={movedFrom}
+        delivery={delivery}
       />
     );
   }

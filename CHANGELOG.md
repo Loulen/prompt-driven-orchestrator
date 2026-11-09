@@ -29,6 +29,23 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   after it, as if it had run. The ▶ of a skipped node is unchanged.
 - The run state marks a node skipped because its branch was not taken with `pruned: true`.
 
+### Review: comments never lost on their way to the manager
+
+- "Send to manager" no longer loses comments on a repository the manager's agent never trusted.
+  A manager the send starts reads the comments at the end of its launch prompt, instead of having
+  them typed into its folder-trust prompt (where the Enter chose "No, exit"). Into a manager
+  already running, the comments are typed only once its screen can take them.
+- While the manager's agent asks whether to trust the folder, the comment's thread says the
+  comments are held and how to go on: answer the prompt in the run's Manager tab. They go out once
+  it is answered. PDO never answers it for you nor writes the trust into your home.
+- A manager that exits before answering is said on the thread ("The manager exited before
+  answering", "Manager exited" in the footer) instead of "Awaiting manager reply" for ever, and
+  **Send again** hands every unanswered comment to a new manager, as written. The same holds when
+  no manager runs any more after a daemon restart.
+- New seams: `POST /runs/<id>/review/comments/resend` (`{"ids": [...]}`, the send's right) and
+  `pdo review resend <id>...`; the Run event `review_comment_delivery` (`ids`, `state`: `awaiting`,
+  `blocked` or `exited`, `reason`), folded onto each comment's `delivery`.
+
 ### Authoring: fixes from the vanilla acceptance tour
 
 - Importing a Claude Code workflow lists what it could not map in English, in the import modal and

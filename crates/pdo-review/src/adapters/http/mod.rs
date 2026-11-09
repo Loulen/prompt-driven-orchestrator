@@ -1,5 +1,5 @@
 //! The review's routes: a Run's raw and structured diff, its review comments,
-//! and the gestures on them (send, reply, resolve, reopen). Each translates
+//! and the gestures on them (send, send again, reply, resolve, reopen). Each translates
 //! the request and hands it to its use case; a gesture's use case receives
 //! the Actor `identify` set. The composition root merges [`router`] behind
 //! the `identify` middleware.
@@ -37,6 +37,10 @@ pub fn router(review: Arc<Review>) -> Router {
             post(comments::reopen),
         )
         .route("/runs/{run_id}/review/comments/send", post(comments::send))
+        .route(
+            "/runs/{run_id}/review/comments/resend",
+            post(comments::resend),
+        )
         .with_state(review)
 }
 

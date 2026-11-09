@@ -125,7 +125,8 @@ pub fn project(events: &[Event]) -> Option<RunState> {
             EventKind::ReviewCommentSent
             | EventKind::ReviewCommentReplied
             | EventKind::ReviewCommentResolved
-            | EventKind::ReviewCommentReopened => {
+            | EventKind::ReviewCommentReopened
+            | EventKind::ReviewCommentDelivery => {
                 crate::domain::review_comment::fold(&mut state.review_comments, event)
             }
 

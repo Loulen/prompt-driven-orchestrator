@@ -378,6 +378,9 @@ mod review_comments;
 #[path = "review_comment_actor.rs"]
 mod review_comment_actor;
 
+#[path = "review_delivery.rs"]
+mod review_delivery;
+
 #[path = "run_pause_reopen.rs"]
 mod run_pause_reopen;
 

@@ -1981,6 +1981,20 @@ mod tests {
     }
 
     #[test]
+    fn a_manager_started_for_a_message_reads_it_after_its_instructions() {
+        let prompt = with_first_message(
+            "# Pipeline Manager Runtime Preamble\nYou are the Pipeline Manager.",
+            "Review comments — 1 new on Run run-1.\n[rc-001] lib.rs:R4\n",
+        );
+        let role = prompt.find("You are the Pipeline Manager.").unwrap();
+        let message = prompt
+            .find("[pdo-runtime] Review comments — 1 new on Run run-1.")
+            .expect("the message carries the runtime prefix");
+        assert!(role < message, "instructions first, then the message");
+        assert!(prompt.contains("[rc-001] lib.rs:R4"));
+    }
+
+    #[test]
     fn manager_preamble_derive_from_input_keeps_existing_instruction() {
         let preamble = build_manager_preamble(
             "run-1",

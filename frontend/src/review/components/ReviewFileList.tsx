@@ -213,8 +213,7 @@ function CommentRow({ entry, pair, onClick }: { entry: ReviewEntry; pair?: strin
   const state = entry.kind === "sent" ? commentState(entry.comment) : null;
   const status = entry.kind === "sent" ? footerStatus(entry.comment) : null;
   // The last actor on the thread: who replied / proposed / resolved / reopened.
-  const lastActor =
-    status && status.kind !== "awaiting" ? ("author" in status ? status.author : status.by) : null;
+  const lastActor = !status ? null : "author" in status ? status.author : "by" in status ? status.by : null;
   const stateTitle =
     state === "proposed"
       ? `resolution proposed${lastActor ? ` by ${authorLabel(lastActor)}` : ""}`
@@ -222,7 +221,11 @@ function CommentRow({ entry, pair, onClick }: { entry: ReviewEntry; pair?: strin
         ? `resolved by ${authorLabel(entry.kind === "sent" ? (entry.comment.resolved_by ?? "user") : "user")}`
         : lastActor
           ? `replied by ${authorLabel(lastActor)}`
-          : "awaiting reply";
+          : status?.kind === "exited"
+            ? "the manager exited before answering"
+            : status?.kind === "blocked"
+              ? "held: the manager's agent waits for you"
+              : "awaiting reply";
   const at = anchorLabel(entry.anchor);
   const [atFile, atLine] = anchorParts(entry.anchor);
   return (

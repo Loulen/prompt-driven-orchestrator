@@ -1,10 +1,10 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { MutableRefObject } from "react";
 import type { ReviewComment } from "../../shared/generated/ReviewComment";
 import type { RunState } from "../../shared/generated/RunState";
 import type { RefPair } from "../../run/model/runRefs";
-import { reopenReviewComment, resolveReviewComment, sendReviewComments } from "../api/comments";
-import { authorLabel, plural } from "../model/commentStatus";
+import { reopenReviewComment, resendReviewComments, resolveReviewComment, sendReviewComments } from "../api/comments";
+import { authorLabel, lostCommentIds, plural } from "../model/commentStatus";
 import { addDraft, removeDrafts, toSendInputs, updateDraft } from "../model/drafts";
 import type { Anchor, ReviewDraft } from "../model/drafts";
 import { markSeen as markSeenIn, readSeen, unreadReplies, writeSeen } from "../model/seen";
@@ -25,6 +25,9 @@ interface Args {
   /** CORE-205: the gestures the caller may not make, and why. */
   refusals?: ReviewRefusals;
   jumpTo: (anchor: Anchor) => void;
+  /** CORE-239: the Run's sent comments and its `has_manager` (undefined until known). */
+  reviewComments?: ReviewComment[];
+  managerRunning?: boolean;
 }
 
 /**
@@ -46,6 +49,8 @@ export function useReviewGestures({
   sendDisabledReason,
   refusals,
   jumpTo,
+  reviewComments,
+  managerRunning,
 }: Args) {
   const sendRefused = refusals?.send;
   const resolveOf = refusals?.resolveOf;
@@ -148,6 +153,41 @@ export function useReviewGestures({
     [drafts, runId, runRef, sendDisabledReason, sendRefused, showToast, persistDrafts, refreshRun, setEditingKey, setSendingKeys, setStartingManager],
   );
 
+  // CORE-239: « Send again » hands every comment the manager left unanswered to a new one.
+  const lostIds = useMemo(() => lostCommentIds(reviewComments, managerRunning), [reviewComments, managerRunning]);
+  const [resending, setResending] = useState(false);
+  const resend = useCallback(async () => {
+    const why = sendDisabledReason ?? sendRefused;
+    if (why) {
+      showToast(why, true);
+      return;
+    }
+    if (lostIds.length === 0 || resending) return;
+    setResending(true);
+    try {
+      const res = await resendReviewComments(runId, lostIds);
+      await refreshRun();
+      showToast(
+        `${plural(res.resent.length, "comment")} sent again${res.manager_started ? " — manager started" : ""}. Replies show up inline.`,
+      );
+    } catch (e: unknown) {
+      showToast(`Send again failed — ${e instanceof Error ? e.message : String(e)}`, true);
+    } finally {
+      setResending(false);
+    }
+  }, [lostIds, resending, runId, sendDisabledReason, sendRefused, showToast, refreshRun]);
+  const delivery = useMemo(
+    () => ({
+      managerRunning,
+      runHref: `/#/runs/${encodeURIComponent(runId)}`,
+      onResend: () => void resend(),
+      resending,
+      resendCount: lostIds.length,
+      resendRefused: sendDisabledReason ?? sendRefused ?? undefined,
+    }),
+    [managerRunning, runId, resend, resending, lostIds.length, sendDisabledReason, sendRefused],
+  );
+
   const { editingKey, sendingKeys, startingManager, showResolved, showOutdated } = state;
   const commentsApi = useMemo<ReviewCommentsApi>(
     () => ({
@@ -192,6 +232,7 @@ export function useReviewGestures({
       showResolved,
       showOutdated,
       writtenOnLabel,
+      delivery,
     }),
     [
       editingKey,
@@ -216,6 +257,7 @@ export function useReviewGestures({
       showOutdated,
       writtenOnLabel,
       setEditingKey,
+      delivery,
     ],
   );
 

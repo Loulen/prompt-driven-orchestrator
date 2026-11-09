@@ -1,6 +1,11 @@
 import type { SendReviewCommentInput } from "../../shared/generated/SendReviewCommentInput";
 import { request } from "../../shared/http/client";
-import type { ReviewCommentsListResponse, ReviewDecisionResponse, SendReviewCommentsResponse } from "../model/review";
+import type {
+  ResendReviewCommentsResponse,
+  ReviewCommentsListResponse,
+  ReviewDecisionResponse,
+  SendReviewCommentsResponse,
+} from "../model/review";
 
 /**
  * #750: the Run's sent review comments, on their own endpoint. With a `pair`
@@ -28,6 +33,17 @@ export function sendReviewComments(
   return request<SendReviewCommentsResponse>("POST", `/runs/${encodeURIComponent(runId)}/review/comments/send`, {
     body: { comments },
     label: "Send review comments",
+  });
+}
+
+/**
+ * CORE-239: « Send again » — hand comments the manager left unanswered (it
+ * exited) to it once more, as written; the manager is started on demand.
+ */
+export function resendReviewComments(runId: string, ids: string[]): Promise<ResendReviewCommentsResponse> {
+  return request<ResendReviewCommentsResponse>("POST", `/runs/${encodeURIComponent(runId)}/review/comments/resend`, {
+    body: { ids },
+    label: "Send review comments again",
   });
 }
 

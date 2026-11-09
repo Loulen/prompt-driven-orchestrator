@@ -111,6 +111,23 @@ afterEach(() => {
 });
 
 describe("a Run's Info tab, with an Apparence", () => {
+  it("names the Trigger that fired the Run, its id in the tooltip (CORE-232)", async () => {
+    appearance({});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url) === "/triggers/nightly"
+          ? new Response(JSON.stringify({ id: "nightly", name: "Nightly audit" }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            })
+          : new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } }),
+      ),
+    );
+    draw();
+    await waitFor(() => expect(screen.getByTestId("run-trigger")).toHaveTextContent("Nightly audit"));
+  });
+
   it("shows the defaults: no read-only note, no Status row, no Node sessions, no Graph rows", async () => {
     appearance({});
     draw();

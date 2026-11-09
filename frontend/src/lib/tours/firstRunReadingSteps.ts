@@ -155,7 +155,9 @@ export const READING_STEPS: TourStep[] = [
     note: (o) =>
       endedBadly(followedNode(o.app))
         ? "The node ended without completing. Its terminal above says why; the tour goes on to the output, which may be missing."
-        : "If the agent asks you something in the terminal above, answer it — the step waits for as long as it takes.",
+        : // The release tells the agent nothing (CORE-232): one refused before it
+          // waits to hear it may finish.
+          "If the agent says it is waiting for you, tell it in the terminal above that it can finish now. The step waits for as long as it takes.",
     // The whole inspector, as a zone rather than a target: during a wait of
     // unknown length the reader must keep the terminal — read it, scroll it,
     // answer a late question. The rest of the app stays blocked.

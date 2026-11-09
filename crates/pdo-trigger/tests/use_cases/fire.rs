@@ -52,6 +52,32 @@ async fn run_now_starts_the_run_records_it_and_leaves_the_schedule_alone() {
 }
 
 #[tokio::test]
+async fn run_now_on_a_dormant_trigger_whose_references_came_back_resumes_its_schedule() {
+    let w = world();
+    let id = w.create_standard().await;
+    // A dangling reference put it to sleep: no next fire (CORE-232).
+    w.store
+        .triggers
+        .lock()
+        .unwrap()
+        .iter_mut()
+        .for_each(|t| t.next_fire_at = None);
+
+    let record = w
+        .triggers
+        .run_now(&Actor::LocalOperator, &id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(record.outcome, "fired");
+    assert!(
+        w.store.one(&id).unwrap().next_fire_at.is_some(),
+        "the schedule resumes"
+    );
+}
+
+#[tokio::test]
 async fn a_disabled_or_dangling_trigger_is_a_409_with_no_record() {
     let w = world();
     let id = w.create_standard().await;
@@ -66,7 +92,7 @@ async fn a_disabled_or_dangling_trigger_is_a_409_with_no_record() {
             .run_now(&Actor::LocalOperator, &id)
             .await
             .unwrap_err(),
-        TriggerError::Conflict(format!("trigger '{id}' is disabled — enable it first"))
+        TriggerError::Conflict("trigger 'T' is disabled — enable it first".to_string())
     );
 
     let legacy = w.create_standard().await;

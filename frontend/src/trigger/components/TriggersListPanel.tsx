@@ -12,6 +12,8 @@ import { projectsEntryOf, type ProjectsEntry } from "../../workspace/model/proje
 import GroupHeader from "../../shared/ui/leftList/GroupHeader";
 import ListEmpty from "../../shared/ui/leftList/ListEmpty";
 import TriggerRow from "./triggersList/TriggerRow";
+import ConfirmDeleteModal from "../../shared/ui/ConfirmDeleteModal";
+import { toast } from "../../shared/ui/toast";
 import TriggersBulk, { type TriggerBulkKind } from "./triggersList/TriggersBulk";
 import TriggersListHeader from "./triggersList/TriggersListHeader";
 import { useTriggerListRefusals } from "../store/useTriggerRefusals";
@@ -103,12 +105,17 @@ export default function TriggersListPanel({
   const bulkDeleteRefused =
     selectedTriggers.length > 0 && selectedTriggers.every((t) => refusals.of(t.id).delete !== undefined);
 
-  async function handleDelete(triggerId: string) {
+  // A deletion loses the schedule and the fire history: confirmed first, as the
+  // bulk delete is (CORE-232).
+  const [deleting, setDeleting] = useState<Trigger | null>(null);
+
+  async function handleDelete(t: Trigger) {
+    setDeleting(null);
     try {
-      await deleteTrigger(triggerId);
+      await deleteTrigger(t.id);
       onTriggersChanged();
-    } catch {
-      // WS push / refresh will reconcile.
+    } catch (e) {
+      toast(`Delete ${t.name}: ${e instanceof Error ? e.message : String(e)}`, "error");
     }
   }
 
@@ -116,8 +123,8 @@ export default function TriggersListPanel({
     try {
       await updateTrigger(t.id, { enabled: !t.enabled });
       onTriggersChanged();
-    } catch {
-      // WS push / refresh will reconcile.
+    } catch (e) {
+      toast(`${t.enabled ? "Disable" : "Enable"} ${t.name}: ${e instanceof Error ? e.message : String(e)}`, "error");
     }
   }
 
@@ -151,7 +158,7 @@ export default function TriggersListPanel({
       }}
       onRunNow={onRunNow && (() => onRunNow(t))}
       onEdit={onEditTrigger && (() => onEditTrigger(t))}
-      onDelete={() => void handleDelete(t.id)}
+      onDelete={() => setDeleting(t)}
       onToggle={() => void handleToggle(t)}
       refused={refusals.of(t.id)}
     />
@@ -267,6 +274,15 @@ export default function TriggersListPanel({
         refusalsOf={refusals.of}
       />
 
+      <ConfirmDeleteModal
+        key={deleting?.id ?? ""}
+        open={deleting !== null}
+        kind="trigger"
+        name={deleting?.name ?? ""}
+        detail="Its schedule and fire history go"
+        onClose={() => setDeleting(null)}
+        onConfirm={() => deleting && void handleDelete(deleting)}
+      />
     </div>
   );
 }

@@ -251,7 +251,11 @@
       color: var(--text);
     }
   }
-  .set-sec__body[data-filtered="true"] > :not(.set-row),
+  /* A search keeps the matching rows. A filtered Appearance block renders its
+     switches bare, each in its pointing wrapper (`ElementSwitch`): the wrapper
+     stays while its row matches (rows filter themselves), CORE-232. */
+  .set-sec__body[data-filtered="true"] > :not(.set-row, .set-ablock__point),
+  .set-sec__body[data-filtered="true"] > .set-ablock__point:not(:has(.set-row)),
   .set-extra[hidden] {
     display: none;
   }

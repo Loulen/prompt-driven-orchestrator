@@ -3,7 +3,7 @@
 
 use super::attempt::{channel_apply_gate, UpdateAttempt};
 use super::install::{InstallMethod, Supervision};
-use super::release::{is_newer, source_label};
+use super::release::{is_newer, source_label, source_page};
 use super::update_check::UpdateCache;
 
 /// Why there is no latest version when the release channel declares no source.
@@ -26,6 +26,9 @@ pub struct UpdateStatus {
     /// Human label of the source; `None` without a source.
     pub source: Option<String>,
     pub source_url: Option<String>,
+    /// The page a human opens for the source (a GitHub API source: its
+    /// repository's releases page); `None` without a source.
+    pub source_page_url: Option<String>,
     pub check_enabled: bool,
     pub install_method: InstallMethod,
     /// What an Update runs; `None` when the channel declares no command.
@@ -124,6 +127,7 @@ pub fn update_status(inputs: StatusInputs<'_>) -> UpdateStatus {
         checked_at,
         source: source_url.map(source_label),
         source_url: source_url.map(str::to_string),
+        source_page_url: source_url.map(source_page),
         check_enabled: enabled,
         install_method: method,
         manual_command: manual_command.map(str::to_string),

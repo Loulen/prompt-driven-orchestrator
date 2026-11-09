@@ -292,7 +292,9 @@ export default function ProjectEditModal({
               showLabel={false}
               testId="project-agent-control"
             />
-            <div className="d-sr" aria-hidden>
+            {/* Hidden and out of the tab order: the Agent control above is the
+                surface (CORE-232: an invisible tab stop). */}
+            <div className="d-sr" aria-hidden inert data-testid="project-harness-hidden">
               <HarnessSelect
                 value={harness}
                 onChange={setHarness}
@@ -319,7 +321,8 @@ export default function ProjectEditModal({
             <PersistedProvisioningEditor
               scope="project"
               projectId={initialProject.id}
-              initialRepository={initialProject.members[0] ?? ""}
+              // Previewed against the Project's default primary, as a launch would (CORE-232).
+              initialRepository={effectivePrimary ?? initialProject.members[0] ?? ""}
               home={home}
             />
           )}

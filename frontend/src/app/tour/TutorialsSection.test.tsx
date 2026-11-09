@@ -60,6 +60,19 @@ describe("the Tutorials section", () => {
     expect(screen.getByTestId("tutorials-start-overview")).toHaveTextContent("Replay");
   });
 
+  it("ticks the full tour once each of its tours is done, not before (CORE-232)", () => {
+    markTourDone("overview");
+    markTourDone("first-run");
+    const { unmount } = render(
+      <TutorialsSection section={SECTION} onStartTour={vi.fn()} onStartFullTour={vi.fn()} />,
+    );
+    expect(screen.queryByTestId("tutorials-done-full")).not.toBeInTheDocument();
+    unmount();
+    markTourDone("first-pipeline");
+    setup();
+    expect(screen.getByTestId("tutorials-done-full")).toBeInTheDocument();
+  });
+
   it("shows no tick on a tour that was only started (story 5)", () => {
     setup();
     expect(screen.queryByTestId("tutorials-done-first-pipeline")).not.toBeInTheDocument();

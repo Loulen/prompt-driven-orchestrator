@@ -263,7 +263,7 @@ test.describe("Settings › Notifications", () => {
     await openNotificationsSettings(page);
     const status = page.getByTestId("setting-browser-notification-status");
     await expect(notificationSwitch(page)).toHaveAttribute("aria-checked", "false");
-    await expect(status).toHaveText("Turning it on asks your browser for permission.");
+    await expect(status).toHaveText("Asks your browser's permission");
     await expect(page.getByTestId("setting-browser-notification-test")).toHaveAttribute("aria-disabled", "true");
     await expect(page.getByTestId("setting-row-alert-scope").getByRole("radio", { name: "Runs I launched" })).toHaveAttribute(
       "aria-checked",

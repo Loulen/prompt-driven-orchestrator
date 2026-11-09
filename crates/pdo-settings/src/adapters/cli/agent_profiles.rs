@@ -50,7 +50,7 @@ pub enum AgentProfileAction {
         #[arg(long)]
         json: bool,
     },
-    /// Who names the profile: the instance, Projets, Triggers, pipeline nodes.
+    /// Who names the profile: the instance, Projects, Triggers, pipeline nodes.
     Referents {
         id: String,
         #[arg(long)]

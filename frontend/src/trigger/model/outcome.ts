@@ -41,10 +41,30 @@ export function outcomeDot(outcome: string | null | undefined): string {
   }
 }
 
-export function lastOutcomeTooltip(t: Trigger): string {
-  if (!t.last_outcome) return "never fired";
-  const when = t.last_fired_at ?? "—";
-  return `last run: ${when}, result: ${t.last_outcome}`;
+/** Why Run now is greyed on a disabled Trigger, which the daemon would refuse. */
+export const DISABLED_FIRE_REFUSAL = "Disabled: enable it first";
+
+/**
+ * Why Run now is refused on `t`, if it is: the caller's rights first, then a disabled
+ * Trigger, which the daemon refuses with a 409 (CORE-232) — said before the click.
+ */
+export function fireRefusalOf(t: Pick<Trigger, "enabled">, rightsRefusal: string | undefined): string | undefined {
+  return rightsRefusal ?? (t.enabled ? undefined : DISABLED_FIRE_REFUSAL);
+}
+
+/** What wakes a Trigger with no next fire: a missing pipeline or repository put it to sleep. */
+export const NOT_SCHEDULED_HINT = "Run now or disable and enable it to resume";
+
+/**
+ * The status icon's tooltip: the last tick's result in words, then the last fire.
+ * `last_fired_at` is the last *fire*, not the last tick: a later skip keeps it, so
+ * the two are said apart, never as « result X at T ».
+ */
+export function lastOutcomeTooltip(t: Pick<Trigger, "last_outcome" | "last_fired_at">): string {
+  const fired = formatFireTs(t.last_fired_at);
+  const lastFire = fired ? `Last fired ${fired}` : "Never fired";
+  if (!t.last_outcome) return lastFire;
+  return `Last tick: ${outcomeWord(t.last_outcome)}\n${lastFire}`;
 }
 
 /**

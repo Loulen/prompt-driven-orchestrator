@@ -2538,6 +2538,7 @@ dependencies = [
  "clap",
  "futures-util",
  "ignore",
+ "libc",
  "pdo-extension-api",
  "pdo-kernel",
  "pdo-platform",

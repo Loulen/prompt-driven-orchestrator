@@ -36,7 +36,8 @@ user's ports (5172, 5272, 6160, 6172…) and the caller's own daemon are refused
   and runs the daemon from `~/.pdo/app` there, so its event log, pipelines, profiles and skill bank
   start empty;
 - builds its environment from yours, minus every `PDO_*` (a node's `PDO_PORT`, `PDO_TOKEN`,
-  `PDO_NODE_ID`: the demo daemon is never in nested mode), `TMUX` and `TMUX_PANE`; it sets `PDO_PORT`,
+  `PDO_NODE_ID`: the demo daemon is never in nested mode), `TMUX` and `TMUX_PANE`, and the service
+  manager's `INVOCATION_ID`, `JOURNAL_STREAM`, `NOTIFY_SOCKET` (it is not a supervised service); it sets `PDO_PORT`,
   `PDO_BIND=127.0.0.1`, `PDO_UPDATE_CHECK=off`, `PDO_PRICE_SYNC=off`, and keeps `RUSTUP_HOME`,
   `CARGO_HOME` and `COREPACK_HOME` on the real toolchains;
 - **copies** the harnesses' auth files (`~/.claude/.credentials.json` and the account block of

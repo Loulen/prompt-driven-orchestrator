@@ -16,6 +16,7 @@ function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
     checked_at: null,
     source: "GitHub Releases",
     source_url: "",
+    source_page_url: null,
     check_enabled: true,
     install_method: "homebrew",
     manual_command: "brew update && brew upgrade Loulen/tap/pdo",

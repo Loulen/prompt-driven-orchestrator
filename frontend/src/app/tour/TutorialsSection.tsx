@@ -32,7 +32,14 @@ function shortDate(iso: string): string {
 export default function TutorialsSection({ section, onStartTour, onStartFullTour }: Props) {
   const [done, setDone] = useState(loadToursDone);
   const full = fullTourMinutes();
-  const hasStartableTour = fullTourSequence().length > 0;
+  const sequence = fullTourSequence();
+  const hasStartableTour = sequence.length > 0;
+  // The full tour is done once each of its tours is (CORE-232): its mark carries the
+  // date the last of them was finished.
+  const fullFinishedAt =
+    hasStartableTour && sequence.every((tour) => done[tour.id])
+      ? sequence.map((tour) => done[tour.id]).sort().at(-1)
+      : undefined;
 
   return (
     <Section
@@ -55,12 +62,18 @@ export default function TutorialsSection({ section, onStartTour, onStartFullTour
       <SectionExtra>
         <table className="set-table" data-testid="settings-tutorials">
           <tbody>
-            <tr className="set-tour--full">
+            <tr className="set-tour--full" data-testid="tutorials-full" data-done={fullFinishedAt ? "true" : "false"}>
               <td>
                 <b>Full tour</b>
               </td>
               <td className="set-faint set-mono">~{full} min</td>
-              <td />
+              <td>
+                {fullFinishedAt && (
+                  <span className="set-ok" title={`Completed ${shortDate(fullFinishedAt)}`}>
+                    <Check size={13} strokeWidth={1.5} aria-label="Full tour completed" data-testid="tutorials-done-full" />
+                  </span>
+                )}
+              </td>
               <td className="set-table__act">
                 <Button
                   size="sm"

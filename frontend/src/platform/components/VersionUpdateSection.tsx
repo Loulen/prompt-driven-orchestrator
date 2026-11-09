@@ -215,6 +215,17 @@ export default function VersionUpdateSection({
   const core = coreLabel(status);
   // The mark is the Marque's: next to its own name, never next to a third party's channel.
   const ownMark = channelLabel(status) === brandName();
+  const whatsNew = onOpenChangelog && (
+    <button
+      type="button"
+      onClick={onOpenChangelog}
+      className="set-link"
+      data-testid="setting-version-whats-new"
+      title={newer ? "What changed since your version" : "The changelog of this build"}
+    >
+      What's new
+    </button>
+  );
 
   return (
     <Section section={section} tools={tools} badge={signature}>
@@ -246,17 +257,7 @@ export default function VersionUpdateSection({
           {status.latest_version ? (
             <>
               <span className={`set-mono ${newer ? "text-st-await" : ""}`}>v{status.latest_version}</span>
-              {onOpenChangelog && (
-                <button
-                  type="button"
-                  onClick={onOpenChangelog}
-                  className="set-link"
-                  data-testid="setting-version-whats-new"
-                  title={newer ? "What changed since your version" : "The changelog of this build"}
-                >
-                  What's new
-                </button>
-              )}
+              {whatsNew}
             </>
           ) : (
             <>
@@ -266,6 +267,8 @@ export default function VersionUpdateSection({
                   {status.reason}
                 </span>
               )}
+              {/* The embedded changelog is always there, check or not (CORE-232). */}
+              {whatsNew}
             </>
           )}
         </KeyValueRow>
@@ -274,14 +277,23 @@ export default function VersionUpdateSection({
             <span className="set-ellipsis" title={absoluteTime(status.checked_at)}>
               {relativeTime(status.checked_at)}
               {status.source && (
-                <span className="set-faint" title={status.source_url ?? undefined}>
+                <span className="set-faint" title={status.source_page_url ?? status.source_url ?? undefined}>
                   {" "}
                   · {status.source}
                 </span>
               )}
             </span>
           ) : (
-            <span className="set-mono">—</span>
+            <span className="set-ellipsis">
+              <span className="set-mono">—</span>
+              {/* Where a check would ask, before the first one (CORE-232). */}
+              {status.source && (
+                <span className="set-faint" title={status.source_page_url ?? status.source_url ?? undefined}>
+                  {" "}
+                  · {status.source}
+                </span>
+              )}
+            </span>
           )}
         </KeyValueRow>
         <KeyValueRow label="Method" testId="setting-version-install-method">

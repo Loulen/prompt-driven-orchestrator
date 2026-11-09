@@ -36,6 +36,9 @@ test("rail, sections, search, discard, then a save that holds after a reload", a
   await expect(page.getByTestId("settings-search-count")).toHaveText("1");
   await expect(page.getByTestId("setting-reaper-ttl")).toBeVisible();
   await expect(page.getByTestId("setting-session-cap")).toHaveCount(0);
+  // A switch of Settings › Appearance is found too, not only its section's title (CORE-232).
+  await page.getByTestId("settings-search").fill("Cost");
+  await expect(page.getByTestId("setting-row-runs.list.cost")).toBeVisible();
   await page.getByTestId("settings-search").fill("");
 
   // A change shows the Save bar; Discard puts the value back.

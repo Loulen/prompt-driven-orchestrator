@@ -51,7 +51,7 @@ export default function WhatSection({ form }: { form: NewRunForm }) {
         htmlFor="new-run-input"
         title={
           trigger
-            ? "The Run's input at each fire; {{guard.stdout}} is the guard's output"
+            ? "The Run's input when there is no guard, or when the guard prints nothing"
             : promptOptional
               ? "Optional for this pipeline"
               : "Free text, an issue link, or both; / completes a skill"
@@ -62,7 +62,7 @@ export default function WhatSection({ form }: { form: NewRunForm }) {
             id="new-run-input"
             className="d-input d-area ln-area"
             rows={4}
-            placeholder={trigger ? "{{guard.stdout}}" : "Free-text prompt or issue URL"}
+            placeholder={trigger ? "Free-text input" : "Free-text prompt or issue URL"}
             {...fieldProps}
             data-testid="input-textarea"
           />

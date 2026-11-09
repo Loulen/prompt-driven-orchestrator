@@ -26,7 +26,8 @@ async fn the_dry_run_runs_the_guard_in_the_repo_with_the_fire_timeout_and_nothin
     assert_eq!(
         result,
         GuardResult::Pass {
-            stdout: "from the guard".into()
+            stdout: "from the guard".into(),
+            stderr: String::new(),
         }
     );
     assert_eq!(

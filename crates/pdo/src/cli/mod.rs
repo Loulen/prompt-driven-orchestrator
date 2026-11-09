@@ -37,7 +37,7 @@ const DEFAULT_PORT: u16 = pdo_platform::domain::service_unit::DEFAULT_PORT;
 #[derive(Parser, Debug)]
 #[command(
     name = "pdo",
-    about = "PDO — deterministic Claude Code pipeline orchestrator",
+    about = "PDO — a local daemon that runs and supervises agentic coding pipelines",
     version
 )]
 pub struct Cli {
@@ -68,7 +68,7 @@ pub enum Commands {
         #[arg(long)]
         reason: String,
     },
-    /// Declare that you are waiting on the user (#588, ADR-0069): the node and
+    /// Declare that you are waiting on the user: the node and
     /// its run turn `awaiting_user`, the message is shown on the run's banner.
     /// Accepted on any node with a live session; refused (exit 3) on a `script`
     /// node or without a live session; a repeat is a no-op. The wait lifts when
@@ -86,8 +86,8 @@ pub enum Commands {
         #[arg(long)]
         reason: String,
     },
-    /// Migrate legacy pipeline YAMLs and node-library entries on disk
-    /// (ADR-0011): dissolve `type: for-each` (and other retired control nodes)
+    /// Migrate legacy pipeline YAMLs and node-library entries on disk:
+    /// dissolve `type: for-each` (and other retired control nodes)
     /// into `loops:` regions, rewiring edges; move a port's `side` onto its edges
     /// and drop its `repeated`. Never auto-run at load — a migration is always a
     /// deliberate act. Reports what changed in each file. A real run writes a
@@ -102,11 +102,11 @@ pub enum Commands {
         dry_run: bool,
     },
     /// Reclaim disk from old terminal Runs surfaced by `GET /runs/reapable`.
-    /// Applies a graded-TTL policy ([`reap_policy`]) and archives each match via
+    /// Applies a graded-TTL policy and archives each match via
     /// the existing `cleanup_run` command.
     ///
-    /// Driven from a pipeline `script` node, never by the runtime itself
-    /// (ADR-0012a: the runtime never triggers a durable action on its own).
+    /// Driven from a pipeline `script` node, never by the runtime itself (the
+    /// runtime never triggers a durable action on its own).
     Reap {
         /// Print only the number of Runs the policy would reclaim, then exit 0.
         /// A Trigger guard can gate on it: `[ "$(pdo reap --count)" -gt 0 ]`.
@@ -129,7 +129,7 @@ pub enum Commands {
         #[arg(long, default_value_t = 40)]
         budget_secs: u64,
     },
-    /// Manage the persistent OS service unit for the daemon (ADR-0019).
+    /// Manage the persistent OS service unit for the daemon.
     ///
     /// Installs the daemon as a `systemd --user` unit (Linux) or a launchd
     /// LaunchAgent (macOS, best-effort) so it starts at boot and survives logout.
@@ -167,7 +167,7 @@ pub enum Commands {
         args: Vec<String>,
     },
     /// A Run's Review: read and answer the review comments a human left on its
-    /// diff (#751, ADR-0067 §4), read the diff, write and send a comment,
+    /// diff, read the diff, write and send a comment,
     /// resolve or reopen one. The Run id comes from `PDO_RUN_ID` (`--run`
     /// overrides it) and the author from the session (`manager`, or the node
     /// id). `diff`, `comment`, `resolve` and `reopen` exit 4 when the daemon
@@ -176,9 +176,9 @@ pub enum Commands {
         #[command(subcommand)]
         action: ReviewAction,
     },
-    /// The Projets: list, show, create, update, their member repositories,
+    /// The Projects: list, show, create, update, their member repositories,
     /// their skills, their provisioning rules, delete. Exits 4 when the daemon
-    /// knows no such Projet.
+    /// knows no such Project.
     Project {
         #[command(subcommand)]
         action: ProjectAction,
@@ -190,8 +190,8 @@ pub enum Commands {
         #[command(subcommand)]
         action: Box<TriggerAction>,
     },
-    /// The sessions: the status bar's gauges, and the gestures of a Session
-    /// hébergée (show, events, terminate, relaunch, configure). Exits 4 when
+    /// The sessions: the status bar's gauges, and the gestures of a hosted
+    /// session (show, events, terminate, relaunch, configure). Exits 4 when
     /// the daemon knows no such session.
     Session {
         #[command(subcommand)]
@@ -212,7 +212,7 @@ pub enum Commands {
         action: PipelineAction,
     },
     /// The instance settings, as Settings shows them: get and set them, the
-    /// agentic and staging profiles, the provisioning rules, your Apparence,
+    /// agentic and staging profiles, the provisioning rules, your Appearance,
     /// the telemetry export, the price table. Exits 4 when the daemon knows no
     /// such profile.
     Settings {
@@ -225,7 +225,7 @@ pub enum Commands {
         #[command(subcommand)]
         action: Box<StatsAction>,
     },
-    /// The Banque de skills: list, show, add, update, remove, the files and
+    /// The skill bank: list, show, add, update, remove, the files and
     /// folders of the skills, import from a Source, export, upload. Exits 4
     /// when the daemon knows no such skill or folder.
     Skill {
@@ -296,6 +296,71 @@ mod tests {
             }
             _ => panic!("expected Daemon subcommand"),
         }
+    }
+
+    /// Every help text, from `pdo --help` down to each argument.
+    fn help_texts(cmd: &mut clap::Command, path: &str, out: &mut Vec<(String, String)>) {
+        out.push((path.to_string(), cmd.render_long_help().to_string()));
+        for sub in cmd.get_subcommands_mut() {
+            let path = format!("{path} {}", sub.get_name());
+            help_texts(sub, &path, out);
+        }
+    }
+
+    /// The CLI speaks the interface's English (CORE-232): the glossary's
+    /// French terms (`CONTEXT.md`) stay out of `--help`.
+    #[test]
+    fn the_help_names_the_domain_in_english() {
+        use clap::CommandFactory;
+        let mut texts = Vec::new();
+        help_texts(&mut Cli::command(), "pdo", &mut texts);
+        assert!(texts.len() > 100, "the whole tree is walked");
+        let french = [
+            "Projet",
+            "hébergée",
+            "Banque de",
+            "Apparence",
+            "Mode sombre",
+            "daltonienne",
+            "Nodes compactes",
+            "masquables",
+        ];
+        let leaks: Vec<String> = texts
+            .iter()
+            .flat_map(|(path, text)| {
+                french
+                    .iter()
+                    .filter(|word| text.contains(*word))
+                    .map(move |word| format!("{path}: {word}"))
+            })
+            .collect();
+        assert!(leaks.is_empty(), "French in the CLI help: {leaks:#?}");
+    }
+
+    /// The help reads for a user of the published binary (CORE-232): no ADR,
+    /// issue or ticket number of the core's own bookkeeping.
+    #[test]
+    fn the_help_cites_no_internal_reference() {
+        use clap::CommandFactory;
+        let mut texts = Vec::new();
+        help_texts(&mut Cli::command(), "pdo", &mut texts);
+        let internal = |text: &str| {
+            text.contains("ADR-")
+                || text.contains("CORE-")
+                || text.contains("[`")
+                || text
+                    .match_indices('#')
+                    .any(|(i, _)| text[i + 1..].starts_with(|c: char| c.is_ascii_digit()))
+        };
+        let leaks: Vec<&str> = texts
+            .iter()
+            .filter(|(_, text)| internal(text))
+            .map(|(path, _)| path.as_str())
+            .collect();
+        assert!(
+            leaks.is_empty(),
+            "internal references in the CLI help: {leaks:#?}"
+        );
     }
 
     #[test]

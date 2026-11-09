@@ -9,6 +9,7 @@ import type { TourObservation, TourStep } from "../tourDef";
 import {
   ADD_MENU_NODE,
   DELETE_CONFIRM,
+  SAVE_DIALOG,
   NAME_INPUT,
   OUT_PORT,
   PROMPT_INPUT,
@@ -211,7 +212,7 @@ export const TESTER_STEPS: TourStep[] = [
     title: "Connect tester to End",
     to: endNode,
     body: "Press on the border of the tester's card again and drag onto the End marker. End is where a Run stops, and it needs a route in.",
-    // Same two outputs, same consequence: the `verdict eq pass` of the next
+    // Same two outputs, same consequence: the `verdict = pass` of the next
     // step can only be written on an edge that carries the verdict (#825).
     note: "Again the edge carries out, the first output: the condition below it reads the verdict in out's frontmatter.",
     waitingFor: "the tester card and the End marker",
@@ -242,9 +243,11 @@ export const TESTER_STEPS: TourStep[] = [
     // rather than asking for a click that is already made.
     body: (o) =>
       saved(o)
-        ? "Saved: the pipeline is in your Library. Until you save, changes live only in this browser tab."
-        : "Click Save. Until you do, all of this lives only in this browser tab.",
-    target: () => ['[data-testid="save-button"]'],
+        ? "Saved: the pipeline is in your Library as a version. Until you save, your changes are a draft."
+        : "Click Save. Until you do, all of this is a draft: Save makes it a version in your Library.",
+    // Re-aims onto the dialog Save opens, as « keep-or-delete » does onto its
+    // confirmation: left outside the hole, it was drawn under the dimming (CORE-232).
+    target: (o) => (o.present(SAVE_DIALOG) ? [SAVE_DIALOG] : ['[data-testid="save-button"]']),
     waitingFor: "the Save button",
     // Not skippable: everything after this reads the saved file.
     done: saved,

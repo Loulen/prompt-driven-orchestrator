@@ -3,13 +3,16 @@
 //!
 //! A first-class fire: same guard, same overlap gate, same fire record
 //! (`source = "manual"`), same `triggered_by` provenance — but `next_fire_at` is
-//! left untouched, because the cron heartbeat owns the schedule.
+//! left untouched, because the cron heartbeat owns the schedule. One exception:
+//! a Trigger a dangling reference put to sleep (no next fire) whose references
+//! resolve again resumes its schedule forward from the click.
 
 use pdo_kernel::{Actor, Verb};
 use tracing::error;
 
 use crate::application::{TriggerError, FIRE};
-use crate::domain::schedule::FireSource;
+use crate::domain::cron_schedule::CronSchedule;
+use crate::domain::schedule::{recompute_next_fire, FireSource, Transition};
 use crate::domain::trigger::FireRecord;
 use crate::Triggers;
 
@@ -39,7 +42,8 @@ impl Triggers {
         // no-op stays cron-only.
         if !trigger.enabled {
             return Err(TriggerError::Conflict(format!(
-                "trigger '{id}' is disabled — enable it first"
+                "trigger '{}' is disabled — enable it first",
+                trigger.name
             )));
         }
 
@@ -63,8 +67,19 @@ impl Triggers {
         // Serialize with the cron tick, or a manual fire and a tick race the same
         // overlap window.
         let _tick = self.tick_lock.lock().await;
-        Ok(self
-            .fire_one(&trigger, chrono::Utc::now(), FireSource::Manual)
-            .await)
+        let now = chrono::Utc::now();
+        // A dangling reference put the Trigger to sleep (no next fire); its
+        // references resolve again, so the click that proves it also resumes its
+        // schedule — never a Trigger that reads ON and silently never fires.
+        if trigger.next_fire_at.is_none() {
+            if let Ok(schedule) = CronSchedule::parse(&trigger.cron) {
+                if let Some(next) = recompute_next_fire(now, Transition::Revive(&schedule)) {
+                    if let Err(e) = self.store.set_next_fire(&trigger.id, next.as_deref()).await {
+                        error!("failed to revive trigger {id}: {e}");
+                    }
+                }
+            }
+        }
+        Ok(self.fire_one(&trigger, now, FireSource::Manual).await)
     }
 }

@@ -296,7 +296,7 @@ export default function PipelineSelect({
               <span className="ln-pp__n">{sections.test.length}</span>
             </DropdownMenuItem>
             {showTests &&
-              renderSection("test", "Unvalidated pipelines", shown.test, "No test pipeline")}
+              renderSection("test", "Test pipelines · not validated", shown.test, "No test pipeline")}
           </>
         )}
       </DropdownMenuContent>

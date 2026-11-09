@@ -50,6 +50,8 @@ describe("ProvisioningRulesEditor", () => {
       <Harness />,
     );
 
+    // Paths, not prose: no spell-check (CORE-232).
+    expect(screen.getByLabelText("Copy patterns")).toHaveAttribute("spellcheck", "false");
     await userEvent.type(screen.getByLabelText("Copy patterns"), ".env");
 
     expect(onChange).toHaveBeenCalledWith({

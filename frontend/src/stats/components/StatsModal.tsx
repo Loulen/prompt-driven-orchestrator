@@ -281,7 +281,7 @@ function StatsSurface({
             data-testid="stats-computed-at"
           >
             {computedAt
-              ? `Computed ${computedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+              ? `Computed ${computedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}`
               : tabError
                 ? null
                 : "Computing…"}

@@ -84,8 +84,15 @@ pub async fn run_guard(command: &str, target_repo: &Path, timeout: Duration) -> 
         Ok(Ok(status)) => {
             let stdout = collect_stream(stdout_task).await;
             if status.success() {
-                // The input path: stdout is the Run input — keep it uncapped.
-                GuardResult::Pass { stdout }
+                // The input path: stdout is the Run input — keep it uncapped;
+                // stderr is diagnostics, tail-capped like a skip's. Bounded: a
+                // background process the guard left behind may hold stderr open,
+                // and a passing guard must never hang the fire for its warnings.
+                let stderr = collect_within(stderr_task, PASS_STDERR_GRACE).await;
+                GuardResult::Pass {
+                    stdout,
+                    stderr: cap_tail(&stderr, GUARD_CAPTURE_LIMIT_BYTES),
+                }
             } else {
                 // The skip path: capture both streams + the exit code as
                 // diagnostics, tail-capped so a chatty guard can't bloat the DB.
@@ -108,6 +115,26 @@ pub async fn run_guard(command: &str, target_repo: &Path, timeout: Duration) -> 
             GuardResult::Error {
                 detail: format!("guard timed out after {}ms", timeout.as_millis()),
             }
+        }
+    }
+}
+
+/// How long a passing guard's stderr is waited for once the guard exited.
+const PASS_STDERR_GRACE: Duration = Duration::from_millis(500);
+
+/// [`collect_stream`] within `grace`; past it, the reader is aborted and what
+/// was not read is dropped (an empty string).
+async fn collect_within(task: Option<tokio::task::JoinHandle<Vec<u8>>>, grace: Duration) -> String {
+    let Some(handle) = task else {
+        return String::new();
+    };
+    let abort = handle.abort_handle();
+    match tokio::time::timeout(grace, handle).await {
+        Ok(Ok(buf)) => String::from_utf8_lossy(&buf).to_string(),
+        Ok(Err(_)) => String::new(),
+        Err(_) => {
+            abort.abort();
+            String::new()
         }
     }
 }
@@ -136,8 +163,48 @@ mod tests {
         assert_eq!(
             result,
             GuardResult::Pass {
-                stdout: "hello\n".to_string()
+                stdout: "hello\n".to_string(),
+                stderr: String::new(),
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_passing_guard_keeps_its_stderr_for_the_dry_run() {
+        let dir = std::env::temp_dir();
+        let result = run_guard(
+            "echo work; echo 'rate limit near' >&2",
+            &dir,
+            Duration::from_secs(5),
+        )
+        .await;
+        assert_eq!(
+            result,
+            GuardResult::Pass {
+                stdout: "work\n".to_string(),
+                stderr: "rate limit near\n".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_passing_guard_whose_child_holds_stderr_open_does_not_hang_the_fire() {
+        let dir = std::env::temp_dir();
+        let started = std::time::Instant::now();
+        let result = run_guard(
+            "echo work; (sleep 30 >/dev/null &)",
+            &dir,
+            Duration::from_secs(10),
+        )
+        .await;
+        assert!(
+            matches!(&result, GuardResult::Pass { stdout, .. } if stdout == "work\n"),
+            "{result:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
         );
     }
 
@@ -231,7 +298,8 @@ mod tests {
         assert_eq!(
             result,
             GuardResult::Pass {
-                stdout: "i am here".to_string()
+                stdout: "i am here".to_string(),
+                stderr: String::new(),
             }
         );
     }
@@ -248,7 +316,8 @@ mod tests {
         assert_eq!(
             result,
             GuardResult::Pass {
-                stdout: repo.path().to_string_lossy().to_string()
+                stdout: repo.path().to_string_lossy().to_string(),
+                stderr: String::new(),
             }
         );
     }

@@ -169,6 +169,7 @@ import { useWiringStore } from "../../stores/wiringStore";
 import { resetCompactNodes } from "../../hooks/useCompactNodes";
 import type { InstanceSettings } from "../model/settings";
 import type { SandboxProfile } from "../../sandbox/model/sandbox";
+import { SETTINGS_WRITTEN } from "../store/useSettings";
 
 function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
   return {
@@ -544,6 +545,22 @@ describe("SettingsSurface", () => {
     ).toBe("50");
   });
 
+  it("follows a write made elsewhere on the fields it is not editing; an edit in progress stays (CORE-232)", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsSurface open onClose={() => {}} />);
+    const cap = (await screen.findByTestId("setting-session-cap")) as HTMLInputElement;
+    fireEvent.change(cap, { target: { value: "5" } });
+    // `pdo settings set reaper_ttl_secs=1800`, relayed by the daemon.
+    fetchSettingsMock.mockResolvedValue(
+      sample({ reaper_ttl_secs: { effective: 1800, source: "stored", stored: 1800, env: null, default: 3600 } }),
+    );
+    act(() => {
+      window.dispatchEvent(new Event(SETTINGS_WRITTEN));
+    });
+    await waitFor(() => expect((screen.getByTestId("setting-reaper-ttl") as HTMLInputElement).value).toBe("1800"));
+    expect((screen.getByTestId("setting-session-cap") as HTMLInputElement).value).toBe("5");
+  });
+
   it("saves the attachment budget and refuses one outside 1–4096 MB (#779)", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     updateSettingsMock.mockResolvedValue(
@@ -848,6 +865,8 @@ describe("SettingsSurface", () => {
     const onClose = vi.fn();
     render(<SettingsSurface open onClose={onClose} />);
 
+    // Its models are claude's: the row says so (CORE-232).
+    expect(await screen.findByTestId("setting-row-default-model")).toHaveTextContent("Default model · claude");
     await user.click(await screen.findByTestId("default-model-trigger"));
     await user.click(await screen.findByTestId("default-model-option-opus"));
     fireEvent.click(screen.getByTestId("settings-save"));

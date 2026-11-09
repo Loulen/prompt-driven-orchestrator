@@ -19,11 +19,13 @@ export function newerAvailable(s: UpdateStatus | null | undefined): boolean {
   return !!s && s.check_enabled && s.latest_version != null && s.newer_available;
 }
 
-/** The daemon runs the latest published version. Never claimed when unverified. */
+/**
+ * Nothing newer than the installed version is published — the latest itself, or a build
+ * ahead of it (CORE-232: a 2.x build checked against releases topped at 1.x). As the CLI
+ * and What's new say it. Never claimed when unverified.
+ */
 export function upToDate(s: UpdateStatus | null | undefined): boolean {
-  return (
-    !!s && s.check_enabled && s.latest_version != null && s.latest_version === s.installed_version
-  );
+  return !!s && s.check_enabled && s.latest_version != null && !s.newer_available;
 }
 
 /** The name of the vanilla binary's release channel: the core's. */

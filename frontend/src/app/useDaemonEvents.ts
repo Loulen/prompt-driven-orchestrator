@@ -4,6 +4,7 @@ import { useEditStore } from "../pipeline/store/editStore";
 import { trailingWindow } from "../shared/lib/trailingWindow";
 import { refreshGestureRights } from "../run/store/gestureRightsStore";
 import { announceHarnessCatalogueChanged } from "../harness/store/useHarnessCatalog";
+import { announceSettingsWritten } from "../settings/store/useSettings";
 import { announceLaunchOfferChanged } from "../run/store/useLaunchTargets";
 import { syncAppearance } from "../hooks/useAppearance";
 
@@ -129,6 +130,12 @@ export function useDaemonEvents({
       // model picker of the tab reads it anew.
       if (msg.type === "harness_catalogue_changed") {
         announceHarnessCatalogueChanged();
+        return;
+      }
+      // The instance settings written elsewhere (CORE-232): an open Settings page
+      // shows the new values of the fields it is not editing, New Run its offers.
+      if (msg.type === "instance_settings_changed") {
+        announceSettingsWritten();
         return;
       }
       // #552: a Projet mutation (name/harness/members) — refresh the Projet list

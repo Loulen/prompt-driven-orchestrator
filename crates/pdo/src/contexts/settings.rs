@@ -89,4 +89,10 @@ impl CatalogueEvents for BusCatalogueEvents {
             "harness": harness,
         }));
     }
+
+    fn settings_changed(&self) {
+        let _ = self
+            .0
+            .send(serde_json::json!({ "type": "instance_settings_changed" }));
+    }
 }

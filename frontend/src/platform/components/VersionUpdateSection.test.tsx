@@ -26,6 +26,7 @@ function distribution(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
     checked_at: "2026-09-05T08:00:00Z",
     source: "GitHub Releases",
     source_url: "https://api.github.com/repos/acme/acme-pdo/releases/latest",
+    source_page_url: "https://github.com/acme/acme-pdo/releases",
     check_enabled: true,
     install_method: "declared",
     manual_command: "brew update && brew upgrade acme/tap/acme-pdo",
@@ -97,6 +98,14 @@ describe("Settings › Version & update — a distribution's release channel (#2
     }
   });
 
+  it("the source's tooltip is the releases page a human reads, not the API URL (CORE-232)", async () => {
+    fetchUpdateStatusMock.mockResolvedValue(distribution());
+    renderSection();
+    const checked = await screen.findByTestId("setting-version-checked-at");
+    const source = within(checked).getByText(/GitHub Releases/);
+    expect(source).toHaveAttribute("title", "https://github.com/acme/acme-pdo/releases");
+  });
+
   it("no upgrade command: no Update, no Copy, and the daemon's reason", async () => {
     fetchUpdateStatusMock.mockResolvedValue(
       distribution({
@@ -144,5 +153,43 @@ describe("Settings › Version & update — a distribution's release channel (#2
     const check = screen.getByTestId("setting-version-check-now");
     expect(check).toBeDisabled();
     expect(screen.getByTestId("setting-version-update-button")).toBeDisabled();
+  });
+
+  it("check off: What's new still opens this build's changelog, and the source is named (CORE-232)", async () => {
+    fetchUpdateStatusMock.mockResolvedValue(
+      distribution({
+        latest_version: null,
+        newer_available: false,
+        checked_at: null,
+        check_enabled: false,
+        reason: "Update check is off.",
+      }),
+    );
+    const onOpenChangelog = vi.fn();
+    render(
+      <VersionUpdateSection
+        section={SECTION}
+        active
+        onToggleCheck={async () => {}}
+        onRequestUpdate={() => {}}
+        onOpenChangelog={onOpenChangelog}
+      />,
+    );
+    const latest = await screen.findByTestId("setting-version-latest");
+    const whatsNew = within(latest).getByTestId("setting-version-whats-new");
+    expect(whatsNew).toHaveAttribute("title", "The changelog of this build");
+    whatsNew.click();
+    expect(onOpenChangelog).toHaveBeenCalled();
+    const checked = screen.getByTestId("setting-version-checked-at");
+    expect(checked).toHaveTextContent("— · GitHub Releases");
+    expect(within(checked).getByText(/GitHub Releases/)).toHaveAttribute("title", "https://github.com/acme/acme-pdo/releases");
+  });
+
+  it("a build ahead of the latest release reads « up to date » (CORE-232)", async () => {
+    fetchUpdateStatusMock.mockResolvedValue(
+      distribution({ installed_version: "0.5.0", latest_version: "0.4.0", newer_available: false }),
+    );
+    renderSection();
+    expect(await screen.findByTestId("setting-version-uptodate")).toHaveTextContent("up to date");
   });
 });

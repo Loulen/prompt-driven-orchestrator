@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import AgentControl from "./AgentControl";
@@ -114,6 +114,13 @@ describe("AgentControl", () => {
       fireEvent.click(screen.getByText("Custom…"));
       return { onChange };
     }
+
+    it("the effort radios carry their own names, not « Effort » twice (CORE-232)", async () => {
+      renderCustom({ mode: "custom", harness: "union", model: "GPT5.4", effort: "low" });
+      const group = await screen.findByRole("radiogroup", { name: "Effort" });
+      expect(within(group).getByRole("radio", { name: "Default" })).toBeInTheDocument();
+      expect(group.closest("label")).toBeNull();
+    });
 
     it("a supported (model, effort) pair shows no warning", async () => {
       renderCustom({ mode: "custom", harness: "union", model: "GPT5.4", effort: "low" });

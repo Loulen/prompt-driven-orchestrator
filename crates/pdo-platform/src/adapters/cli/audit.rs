@@ -57,7 +57,29 @@ fn query(args: &AuditArgs) -> String {
     pairs.join("&")
 }
 
-/// One tab-separated line per entry: `ts  action  target_kind  target_id  actor`.
+/// The longest `after` a line spells out; a longer one (a whole Trigger) is
+/// for `--json`.
+const SHORT_CHANGE: usize = 60;
+
+/// What the entry changed to, when it says it in a few characters: the
+/// direction of `triggers.pause_changed` (`{"paused":true}`), never a whole
+/// document.
+fn short_after(entry: &Value) -> String {
+    match &entry["after"] {
+        Value::Null => String::new(),
+        after => {
+            let compact = after.to_string();
+            if compact.chars().count() <= SHORT_CHANGE {
+                compact
+            } else {
+                String::new()
+            }
+        }
+    }
+}
+
+/// One tab-separated line per entry: `ts  action  target_kind  target_id  actor
+/// after`, `after` only when short.
 fn lines(entries: &Value) -> String {
     let field = |entry: &Value, key: &str| entry[key].as_str().unwrap_or("").to_string();
     entries
@@ -67,12 +89,13 @@ fn lines(entries: &Value) -> String {
         .iter()
         .map(|entry| {
             format!(
-                "{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{}\t{}\n",
                 field(entry, "ts"),
                 field(entry, "action"),
                 field(entry, "target_kind"),
                 field(entry, "target_id"),
                 field(entry, "actor_hint"),
+                short_after(entry),
             )
         })
         .collect()
@@ -101,6 +124,28 @@ mod tests {
             "ts": "t", "action": "trigger.deleted", "target_kind": "trigger",
             "target_id": "tr-1", "actor_hint": "cli"
         }]);
-        assert_eq!(lines(&entries), "t\ttrigger.deleted\ttrigger\ttr-1\tcli\n");
+        assert_eq!(
+            lines(&entries),
+            "t\ttrigger.deleted\ttrigger\ttr-1\tcli\t\n"
+        );
+    }
+
+    #[test]
+    fn a_short_change_says_its_direction_a_document_stays_for_json() {
+        let entries = serde_json::json!([
+            {
+                "ts": "t", "action": "triggers.pause_changed", "target_kind": "instance",
+                "actor_hint": "ui", "before": { "paused": false }, "after": { "paused": true }
+            },
+            {
+                "ts": "t", "action": "trigger.created", "target_kind": "trigger", "target_id": "tr-1",
+                "actor_hint": "cli", "after": { "name": "nightly", "cron": "0 3 * * *", "input_template": "a long enough template" }
+            }
+        ]);
+        assert_eq!(
+            lines(&entries),
+            "t\ttriggers.pause_changed\tinstance\t\tui\t{\"paused\":true}\n\
+             t\ttrigger.created\ttrigger\ttr-1\tcli\t\n"
+        );
     }
 }

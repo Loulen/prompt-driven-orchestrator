@@ -127,6 +127,29 @@ pub fn source_label(url: &str) -> String {
     }
 }
 
+/// The page a human reads for a source URL: a GitHub API source
+/// (`api.github.com/repos/<owner>/<repo>/releases…`) is its repository's
+/// releases page; any other source is its own page.
+pub fn source_page(url: &str) -> String {
+    let github_repo = url
+        .split_once("://")
+        .and_then(|(_, rest)| rest.strip_prefix(GITHUB_API_HOST))
+        .and_then(|path| path.strip_prefix("/repos/"))
+        .and_then(|path| {
+            let mut parts = path.split('/');
+            match (parts.next(), parts.next()) {
+                (Some(owner), Some(repo)) if !owner.is_empty() && !repo.is_empty() => {
+                    Some(format!("{owner}/{repo}"))
+                }
+                _ => None,
+            }
+        });
+    match github_repo {
+        Some(repo) => format!("https://github.com/{repo}/releases"),
+        None => url.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,6 +195,22 @@ mod tests {
             "127.0.0.1:4321"
         );
         assert_eq!(source_label("not a url"), "not a url");
+    }
+
+    #[test]
+    fn a_github_api_source_reads_as_its_releases_page() {
+        assert_eq!(
+            source_page(GITHUB_LATEST),
+            "https://github.com/Loulen/prompt-driven-orchestrator/releases"
+        );
+        assert_eq!(
+            source_page("http://127.0.0.1:4321/latest"),
+            "http://127.0.0.1:4321/latest"
+        );
+        assert_eq!(
+            source_page("https://api.github.com/rate_limit"),
+            "https://api.github.com/rate_limit"
+        );
     }
 
     const GITHUB_LATEST: &str =

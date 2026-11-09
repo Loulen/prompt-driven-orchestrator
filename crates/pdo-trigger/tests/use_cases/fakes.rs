@@ -235,6 +235,7 @@ impl Default for ScriptedGuard {
         Self {
             answer: Mutex::new(GuardResult::Pass {
                 stdout: "from the guard".into(),
+                stderr: String::new(),
             }),
             ran: Mutex::new(Vec::new()),
         }

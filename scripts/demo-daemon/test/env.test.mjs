@@ -21,6 +21,9 @@ const caller = {
   TMUX: "/tmp/tmux-1000/pdo-5272,1,0",
   TMUX_PANE: "%140",
   TMUX_TMPDIR: "/run/user/1000",
+  INVOCATION_ID: "0123456789abcdef",
+  JOURNAL_STREAM: "8:12345",
+  NOTIFY_SOCKET: "/run/systemd/notify",
   CLAUDE_CONFIG_DIR: "/home/me/.claude",
   XDG_CONFIG_HOME: "/home/me/.config",
   XDG_DATA_HOME: "/home/me/.local/share",
@@ -61,6 +64,12 @@ describe("demo daemon environment", () => {
     assert.equal(env.TMUX_PANE, undefined);
     // Where the sockets live stays the caller's: `tmux -L pdo-<port>` finds the demo's.
     assert.equal(env.TMUX_TMPDIR, caller.TMUX_TMPDIR);
+  });
+
+  test("no mark of the caller's service manager: the demo daemon is not a supervised service", () => {
+    assert.equal(env.INVOCATION_ID, undefined);
+    assert.equal(env.JOURNAL_STREAM, undefined);
+    assert.equal(env.NOTIFY_SOCKET, undefined);
   });
 
   test("a fresh HOME, and no variable pointing a harness at the real config", () => {

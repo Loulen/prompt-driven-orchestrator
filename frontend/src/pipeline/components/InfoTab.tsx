@@ -27,6 +27,7 @@ import { useAppearancePreview, useElementMarks, type ElementMarks } from "../../
 import { useSourceDrift } from "../../run/store/useSourceDrift";
 import type { SourceDrift } from "../../shared/generated/SourceDrift";
 import { RUN_INFO } from "../model/runInfoElements";
+import { useTriggerName } from "../../trigger/store/useTriggerName";
 import { BudgetReachedBanner } from "./BudgetReachedBanner";
 import { budgetReachedRegion } from "./loopRegionCost";
 import "./inspect.css";
@@ -170,6 +171,8 @@ function RunSection({ run, marks }: { run: RunState; marks: Marks }) {
   const sample = useAppearancePreview()?.sample === true;
   const read = useSourceDrift(sample ? null : run);
   const source = sample ? { ...read, drift: SAMPLE_DRIFT } : read;
+  // The Trigger as the user named it; its id while unread or gone (CORE-232).
+  const triggerName = useTriggerName(sample ? null : run.triggered_by);
   const row = (id: string, show: unknown, value: () => KeyValueRow): KeyValueRow[] => {
     const attrs = show ? marks(id) : null;
     return attrs ? [{ ...value(), attrs }] : [];
@@ -204,7 +207,12 @@ function RunSection({ run, marks }: { run: RunState; marks: Marks }) {
       v: <span data-testid="run-started">{startedAgo(run.started_at!)}</span>,
       tip: Number.isNaN(Date.parse(run.started_at!)) ? run.started_at! : new Date(run.started_at!).toLocaleString(),
     })),
-    ...row(RUN_INFO.trigger, run.triggered_by, () => ({ k: "Trigger", v: run.triggered_by, mono: true })),
+    ...row(RUN_INFO.trigger, run.triggered_by, () => ({
+      k: "Trigger",
+      v: <span data-testid="run-trigger">{triggerName ?? run.triggered_by}</span>,
+      mono: triggerName === null,
+      tip: run.triggered_by ?? undefined,
+    })),
   ];
   const sourceMarks = source.drift ? marks(RUN_INFO.source) : null;
   if (rows.length === 0 && !sourceMarks) return null;

@@ -135,8 +135,10 @@ export default function AgentControl({
                     subject={testId}
                   />
                 </label>
-                <label className="ln-agent__f">
-                  <span className="ln-faint">Effort</span>
+                {/* A div, not a label: the radio group names itself « Effort »; a label
+                    around it named its first radio « Effort Effort » (CORE-232). */}
+                <div className="ln-agent__f">
+                  <span className="ln-faint" aria-hidden>Effort</span>
                   <EffortPicker
                     value={custom.effort ?? null}
                     onChange={(next) => setCustom({ ...custom, effort: next })}
@@ -145,7 +147,7 @@ export default function AgentControl({
                     testid={`${testId}-custom-effort`}
                     disabled={!(harnessOption?.hasEffort ?? true)}
                   />
-                </label>
+                </div>
                 <div className="ln-line ln-line--end">
                   <Button
                     size="sm"

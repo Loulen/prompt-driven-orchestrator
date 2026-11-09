@@ -13,6 +13,22 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+### Authoring: fixes from the vanilla acceptance tour
+
+- Importing a Claude Code workflow lists what it could not map in English, in the import modal and
+  on `pdo pipeline library import`, and the placeholder it writes into a node's prompt is English
+  too ("⟨TODO: prompt built at run time — write this node's role⟩").
+- Deleting an agent profile something still names says "1 reference moves to the next tier", and
+  "2 references move" from two on.
+- The Undo tooltip names a note or a loop added or deleted ("Undo add note", "Undo delete loop"),
+  as it already did for nodes and edges; "edit note" is left for a note whose text changed.
+- `pdo skill export --skill` takes a skill's name as well as its id, as every other `pdo skill`
+  command does.
+- `pdo settings agent-profile delete --help` says what the daemon does: it deletes a profile even
+  while something names it, and each of those falls back to the next tier.
+
 ## 2.75.0
 
 ### Tours: Previous replays the step before, and the arrow keys drive the card
@@ -71,14 +87,14 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   Runs they launched), "Projects" (the Runs launched in the Projects you check) or "All I can see".
   It only narrows what your rights already show.
 - When a node of such a Run starts waiting for you (a question, a completion to approve, a Run
-  paused on an incident) and no PDO tab of the browser is in view, one tab shows a notification
+  paused on an incident) and no tab of the interface is in view, one tab shows a notification
   (the node's name, then "is waiting for you" or "is done, waiting for your go"; "Run paused on an
   incident") and plays a chime of its reason, at most one chime every 10 s. Clicking the
   notification brings the tab back on the Run with the node selected. A wait already there when
   the page loads, or caught up after a reconnection, alerts nothing; neither does a parent node
   waiting on its child runs.
 - `GET /runs` gives each child Run its `root_run_id`, the Run at the top of its chain of parents.
-- While an alert switch is on, a hidden PDO tab reopens its event stream after a drop (a daemon restart,
+- While an alert switch is on, a hidden tab of the interface reopens its event stream after a drop (a daemon restart,
   a network change) instead of waiting to be shown; `openProbedSocket` takes a `whileHidden` option.
 ### Tree cost: what an orchestration really cost
 

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import AgentProfilesPanel from "./AgentProfilesPanel";
-import { createAgentProfile, updateAgentProfile } from "../api/agentProfiles";
+import { createAgentProfile, fetchAgentProfileReferents, updateAgentProfile } from "../api/agentProfiles";
 import type { AgentProfile } from "../../shared/generated/AgentProfile";
 import { SETTINGS_CATEGORIES } from "../model/settingsCategories";
 
@@ -420,6 +420,32 @@ describe("AgentProfilesPanel — the Edit button opens the editor in a modal (#8
       model: null,
       effort: null,
     });
+  });
+
+  it("Delete names who still names the profile, in a sentence that agrees with the count", async () => {
+    const referents = (pipelines: string[]) => ({
+      profile_id: "p1",
+      instance: false,
+      pipelines: pipelines.map((name) => ({ id: name, name, nodes: ["impl"] })),
+      runs: [],
+      projects: [],
+      triggers: [],
+    });
+    vi.mocked(fetchAgentProfileReferents).mockResolvedValueOnce(referents(["flow"]) as never);
+    const user = userEvent.setup();
+    const { unmount } = render(<AgentProfilesPanel section={SECTION} profiles={[DAILY]} onChanged={onChanged} />);
+    await user.click(screen.getByRole("button", { name: "Delete daily driver" }));
+    const one = await screen.findByRole("dialog", { name: "Delete daily driver?" });
+    expect(one).toHaveTextContent("1 reference moves to the next tier");
+    expect(one).toHaveTextContent("pipeline flow");
+    unmount();
+
+    vi.mocked(fetchAgentProfileReferents).mockResolvedValueOnce(referents(["flow", "other"]) as never);
+    render(<AgentProfilesPanel section={SECTION} profiles={[DAILY]} onChanged={onChanged} />);
+    await user.click(screen.getByRole("button", { name: "Delete daily driver" }));
+    expect(await screen.findByRole("dialog", { name: "Delete daily driver?" })).toHaveTextContent(
+      "2 references move to the next tier",
+    );
   });
 
   it("a failed save keeps the modal open and shows the error", async () => {

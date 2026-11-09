@@ -313,6 +313,53 @@ async fn a_file_with_coordinates_opens_and_saves_with_no_change() {
     assert_eq!(again.room.changes(), 0);
 }
 
+/// A drawn edge lands at a sub-pixel offset (`13.270833333333343`), which the
+/// save rounds in the file. The draft the save carries arrives as JSON text:
+/// read back to the very float the replicated document holds, the edge is
+/// still found by its value, takes the file's rounded offset, and nothing is
+/// left to save (the « v2 · draft: 3 changes » of the First pipeline tour).
+#[tokio::test]
+async fn an_edge_at_a_sub_pixel_offset_saves_with_no_change() {
+    let world = world_with_worker();
+    let join = world
+        .pipelines
+        .join_draft(&operator(), "flow")
+        .await
+        .unwrap();
+    let client = Client::of(&join);
+    let update = client.edit(|c| {
+        c.pipeline["edges"][1]["source_anchor"] =
+            json!({"side": "right", "offset": 13.270833333333343_f64});
+    });
+    world
+        .pipelines
+        .edit_draft(&join.room, join.connection, &update)
+        .await
+        .unwrap();
+    let yaml = pipeline_with_worker("flow").replace(
+        "    target: { node: end, port: result }\n",
+        "    target: { node: end, port: result }\n    source_anchor: { side: right, offset: 13 }\n",
+    );
+    // What `PUT /pipelines/{id}` reads of the body the editor sent.
+    let sent: DraftContent =
+        serde_json::from_str(&serde_json::to_string(&client.doc.content()).unwrap()).unwrap();
+    world
+        .pipelines
+        .save_draft(
+            &operator(),
+            "flow",
+            &yaml,
+            &HashMap::new(),
+            &sent,
+            &SaveAs::new_version(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(join.room.changes(), 0);
+    let content = Client::of(&join).doc.content();
+    assert_eq!(content.pipeline["edges"][1]["source_anchor"]["offset"], 13);
+}
+
 #[tokio::test]
 async fn a_change_made_while_saving_is_still_a_change_and_survives_a_restart() {
     let world = world_with_worker();

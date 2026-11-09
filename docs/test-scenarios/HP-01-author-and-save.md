@@ -64,9 +64,11 @@ Features validated while crossing the editing screens:
    whole rim is the drag source) and drag. The preview grows **on the wiring grid**, one orthogonal
    segment per crossed cell, a cursor badge reading `snap ×1` (or `snap ×N · Mpx`); hold **Shift**
    mid-gesture → the badge reads `free` and the trace leaves the grid; release Shift → the grid
-   re-originates on the current point. Drop on another card's **body** → an edge is created, the
-   target's input named after the source, carrying the source's **first declared output**, landing
-   **perpendicular** to the side it was aimed at.
+   re-originates on the current point. Drop on another card's **body** → an edge is created,
+   carrying the source's **first declared output**, landing **perpendicular** to the side it was
+   aimed at. The edge lands on the target's first declared input (a card made with `+` › Node
+   declares `in`, so the edge panel reads `in ← <source>`); only a target that declares no input
+   gets one named after the output the edge carries.
    Then **reshape it**: select the edge, drag a middle segment → it snaps to the grid (Shift frees
    it) and the neighbouring waypoints do not move; drag it until it lines up with a neighbour → the
    waypoint between them is **merged away** on release. **Right-click on a segment handle does

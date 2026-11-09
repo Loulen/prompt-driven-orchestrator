@@ -6,7 +6,7 @@
  * component computes — which is exactly what the browser would lay out.
  */
 import { describe, it, expect, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Projecteur from "./Projecteur";
 import TourPopover, { TourAside } from "./TourPopover";
@@ -289,6 +289,22 @@ describe("the popover", () => {
     expect(writeText).toHaveBeenCalledWith("tutorial-implement-test");
     expect(screen.getByTestId("tour-copy")).toHaveAccessibleName("Copied");
     vi.unstubAllGlobals();
+  });
+
+  /**
+   * FP of CORE-227 (F3-10a): pressing Copy blurred the field the step before had
+   * left open; it folded under the press, the card moved up with it, and the
+   * release missed the button — the old clipboard got pasted. The press leaves
+   * the focus where it is, as the footer's buttons already do.
+   */
+  it("keeps the focus where it is on a press of the copy button", () => {
+    renderPopover(step({ confirm: true, copyBlock: "tutorial-implement-test" }), {
+      awaitingConfirm: true,
+    });
+    // `dispatchEvent` answers false when the default — moving the focus — is prevented.
+    expect(fireEvent.mouseDown(screen.getByTestId("tour-copy"))).toBe(false);
+    // The block itself stays selectable.
+    expect(fireEvent.mouseDown(screen.getByTestId("tour-copy-block"))).toBe(true);
   });
 
   // ---- #825 --------------------------------------------------------------

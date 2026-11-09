@@ -95,7 +95,10 @@ Features validated while crossing the run screens:
 4. Select the running node → the right panel shows a **live terminal** (« attached · live », a real
    `claude` session, wrapping without horizontal scroll) and, in its **I/O** tab, the folded
    « Prompt » section holding the prompt preamble (`## Inputs` / `## Outputs`). Approve ▾ is inert
-   until the node has written its outputs.
+   until the node has written its outputs. The terminal's bar reads **« You pilot »**: the first
+   browser to attach drives the session, and the Run's log keeps that as one `node_taken_over`
+   (`source: pty`) — expected without a keystroke (CONTEXT.md « Prise de main »). Only a
+   `node_typed` with no keystroke is a finding.
 5. Data routes downstream: conditional edges fire to all matching targets, the loop region iterates
    (`i/N` in its corner) and exits on PASS, the collection region fans out in parallel (`⇉ X/N
    items`) and converges on the downstream **agent**.
@@ -147,7 +150,9 @@ Features validated while crossing the run screens:
     source. Finally restore the finished
     node's folded terminal bar (« Show the terminal ») → the inset shows the snapshot PDO froze on
     the way out, labelled `snapshot · session reaped`, with no detach button: **this node's own
-    conversation** — its prompt, its turn, its `❯` prompt back and waiting.
+    conversation** — its prompt and its turn. When the agent ran `pdo complete` itself, the session
+    is reaped at once, so the snapshot may freeze mid-turn (« Working · esc interrupt ») rather than
+    on its `❯` prompt back and waiting: both are the node's own conversation.
 
 ## Checks
 
@@ -287,6 +292,12 @@ Harness four-way choice, read-only probes:
   dialog is `claude`'s, not the product's; `copilot`'s is a prerequisite, set once before the Run.
 - Nothing in the journey names the product or shows its logo: the brand shown in the window is out
   of scope here.
+- **A session that dies within seconds of its start** says so: its « Session died » banner reads
+  « … it ended N s after it started: check that its harness is logged in and knows the node's
+  model ». On `opencode` that is the unmet login precondition, not a product finding.
+- **Seed pipelines in the instance library** (`<demo HOME>/.pdo/pipelines/`). Pipelines belong to
+  the instance, not to a repository: a YAML in the target repo's `.pdo/pipelines/` is not listed
+  (only a legacy registry is merged into the library, once, on the daemon's first start).
 
 ### Sandbox A/B — why it is built this way
 

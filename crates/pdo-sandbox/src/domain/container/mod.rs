@@ -215,13 +215,16 @@ pub fn is_name_conflict_stderr(stderr: &str) -> bool {
 /// One-liner `sh -c` du kill ciblé (marqueur single-quoté). `grep -qazx` : `-z` enregistrements
 /// NUL (`/environ` est NUL-séparé), `-x` match ligne ENTIÈRE (pas de faux positif sur un préfixe
 /// du marqueur d'une session sœur), `-a` force le mode texte. `TERM` puis, après 2 s, `KILL`.
+/// Finit par `true` : le statut de la boucle est celui de son dernier `grep`, un « pas de match »
+/// sur une session déjà partie, et chaque complétion loguait un kill raté. Seul `docker exec`
+/// lui-même peut l'échouer.
 pub fn kill_one_liner(marker: &str) -> String {
     let target = sh_single_quote(&format!("{SESSION_MARKER_ENV}={marker}"));
     format!(
         "t={target}; \
 k() {{ for e in /proc/[0-9]*/environ; do p=${{e%/environ}}; p=${{p#/proc/}}; \
 grep -qazx \"$t\" \"$e\" 2>/dev/null && kill -\"$1\" \"$p\" 2>/dev/null; done; }}; \
-k TERM; sleep 2; k KILL"
+k TERM; sleep 2; k KILL; true"
     )
 }
 

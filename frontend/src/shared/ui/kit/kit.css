@@ -892,7 +892,8 @@
     transition: opacity 0.1s;
   }
   .d-sec:hover .d-sec__aside,
-  .d-sec__aside:focus-within {
+  .d-sec__aside:focus-within,
+  .d-sec__aside:has([data-tour-lit]) {
     opacity: 1;
   }
   .d-sec__body {

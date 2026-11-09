@@ -77,7 +77,7 @@
 .cv-n__flag { display: inline-grid; place-items: center; flex: none; color: var(--text-3); }
 .cv-n__loop {
   flex: none;
-  max-width: 72px;
+  max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

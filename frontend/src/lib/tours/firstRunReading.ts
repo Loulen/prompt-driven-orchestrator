@@ -63,6 +63,8 @@ export const INSPECTOR_RUN = testId("inspector-pane-run");
 export const TERMINAL = testId("tmux-terminal");
 /** The node's terminal lifted over the whole app (#44). */
 export const ENLARGED_TERMINAL = testId("terminal-fullsize");
+/** The enlarged terminal's own « Collapse terminal » button, top right of its bar. */
+export const COLLAPSE_TERMINAL = `${ENLARGED_TERMINAL} ${testId("term-expand")}`;
 /** The banner of a node whose session died (ADR-0049), and its Reopen. */
 export const INTERRUPTED_BANNER = testId("interrupted-banner");
 export const REOPEN_BUTTON = testId("interrupted-reopen-btn");

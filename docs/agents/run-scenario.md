@@ -116,9 +116,14 @@ The point of this layer is that the UI alone doesn't tell the full story — ver
   sub-worktree (`docs/reference/harnesses.md` § Prerequisites). A `copilot` pane parked on it means
   the prerequisite was never met.
 - **Filesystem** (read with `cat` / Read):
-  - Pipelines: `.pdo/pipelines/<name>.yaml` of the target repo, or the demo library
-    `/tmp/pdo-demo-<port>/home/.pdo/pipelines/`, with the sidecar `<name>.prompts/<node>.md`
+  - Pipelines: the instance library `/tmp/pdo-demo-<port>/home/.pdo/pipelines/<name>.yaml`, with
+    the sidecar `<name>.prompts/<node>.md`. Pipelines belong to the instance: a YAML in a target
+    repo's `.pdo/pipelines/` is not listed, so seed them in the library.
   - Run artifacts: `.pdo/runs/<run_id>/worktree/.pdo/artifacts/...`
+- **Library assistant focus**: while a pipeline tab is open the UI sends one
+  `PUT /sessions/libassist/focus` when the edited pipeline changes, then repeats it every 20 s as a
+  heartbeat (ADR-0051: the daemon reaps an idle assistant after 120 s). A steady 20 s rhythm with
+  the same body is expected; several identical PUTs within a second are the finding.
 - **Daemon state**: `curl http://127.0.0.1:<port>/runs/<run_id>` for the projected run state (incl.
   `sessions_spawned`, `started_at`/`completed_at`, `loc`), and `/runs/<run_id>/events` for the full
   event log.

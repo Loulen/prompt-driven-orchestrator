@@ -31,6 +31,10 @@ export default function ExpectedContentField({
   useEffect(() => {
     if (!expanded) return;
     const collapseOnOutsideClick = (event: MouseEvent) => {
+      // A press that keeps the focus where it is — a tour card's buttons
+      // prevent its default — keeps the field open. Folding under it moved the
+      // card up before the release, and the click missed Next (FP of CORE-227).
+      if (event.defaultPrevented) return;
       if (!containerRef.current?.contains(event.target as Node)) {
         setExpanded(false);
       }

@@ -851,6 +851,24 @@ mod tests {
         );
     }
 
+    /// A session already gone — the usual case on a completion, whose reap ran
+    /// first — leaves nothing for the one-liner to signal. Its exit code used to
+    /// be the last `grep`'s (no match → 1), so every sandboxed completion logged
+    /// « targeted kill … failed » (FP of CORE-227). The one-liner ends in success:
+    /// only `docker exec` itself can fail it.
+    #[test]
+    fn the_kill_one_liner_succeeds_when_nothing_matches() {
+        let script = kill_one_liner("pdo-nobody-here-iter-1");
+        let status = std::process::Command::new("sh")
+            .args(["-c", &script])
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "nothing to kill is not a failure: {status}"
+        );
+    }
+
     #[test]
     fn remove_present_ok() {
         let tmp = tempfile::tempdir().unwrap();

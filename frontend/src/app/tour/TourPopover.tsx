@@ -184,6 +184,10 @@ export default function TourPopover({
             label={copied ? "Copied" : "Copy the block"}
             size="sm"
             onClick={copy}
+            // Same as the footer's buttons below: the press leaves the focus in
+            // the field the step before left open, so it does not fold and move
+            // the card from under the release (FP of CORE-227).
+            onMouseDown={(e) => e.preventDefault()}
             data-testid="tour-copy"
           />
         </div>

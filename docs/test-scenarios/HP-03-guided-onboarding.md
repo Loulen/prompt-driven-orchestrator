@@ -129,9 +129,15 @@ Features validated while crossing the tour:
 10. Open the menu of **Approve ▾** and choose **Auto-approve when ready** → the tour advances on the released guard, not on the click.
 11. The **wait** step lights the whole inspector as a soft zone — the terminal stays readable and
    usable — shows a two-item checklist (released / finished) and says it has **no time limit**. It
-   ends by itself when the node's status becomes terminal.
-12. Open the node's **`out`** output → the artifact modal shows the summary the agent wrote, lit as a
-    soft zone with the card beside it. Read it, then `Next`.
+   ends by itself when the node's status becomes terminal. **Enlarge the terminal** while you wait
+   (its expand button): the zone follows the enlarged terminal, with no dashed outline drawn across
+   it.
+12. **Open the output.** With the terminal still enlarged, the card first asks to put it back: it
+    lights the terminal's **Collapse terminal** button (top right of its bar) and says the `out` row
+    is under it. Click it → the card re-aims onto the **`out`** row under Outputs. Click the row →
+    the artifact modal shows the summary the agent wrote, lit as a soft zone with the card beside
+    it. Read it, then `Next`. Every target lit on the way is reachable with the mouse; Skip is never
+    the only way on.
 13. The **intermediate card** says how far along the full tour is, recaps what was actually observed,
     and offers *Finish here* or **Continue** (next: *First pipeline*).
 14. **Continue** → the artifact modal closes and the *First pipeline* tour starts on a clear screen.

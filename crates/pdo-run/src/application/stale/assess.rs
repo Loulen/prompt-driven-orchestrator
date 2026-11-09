@@ -1,7 +1,7 @@
 //! One live node, assessed: what its probes say (session, pane, transcript,
 //! outputs) and which events the sweep records for it.
 
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use super::detector::*;
 use crate::domain::event::{self, EventKind};
@@ -93,6 +93,52 @@ fn episode_has_event(
         .any(|e| &e.kind == kind && e.node_id.as_deref() == Some(node_id) && e.iter == Some(iter))
 }
 
+/// A session that dies this soon after its start never got to work: almost
+/// always the harness refused to start — not logged in, a model it does not
+/// know (FP of CORE-227: an `opencode` with no login exits in four seconds).
+const EARLY_DEATH: Duration = Duration::from_secs(30);
+
+/// How long the session of `node_id` iter `iter` lived, from its
+/// `NodeStarted` in `prior_events` to `now`; `None` without a readable start.
+fn lifetime(
+    prior_events: &[event::Event],
+    node_id: &str,
+    iter: i64,
+    now: SystemTime,
+) -> Option<Duration> {
+    let started = prior_events.iter().rev().find(|e| {
+        e.kind == EventKind::NodeStarted
+            && e.node_id.as_deref() == Some(node_id)
+            && e.iter == Some(iter)
+    })?;
+    let started: SystemTime = chrono::DateTime::parse_from_rfc3339(&started.ts)
+        .ok()?
+        .with_timezone(&chrono::Utc)
+        .into();
+    now.duration_since(started).ok()
+}
+
+/// The reason of a session-death event, told when the session died within
+/// [`EARLY_DEATH`] of its start: the harness never started, and what to check.
+fn tell_early_death(events: &mut [event::Event], lived: Duration) {
+    if lived >= EARLY_DEATH {
+        return;
+    }
+    for event in events.iter_mut() {
+        let Some(obj) = event.payload.as_mut().and_then(|p| p.as_object_mut()) else {
+            continue;
+        };
+        if let Some(reason) = obj.get("reason").and_then(|r| r.as_str()) {
+            let told = format!(
+                "{reason} · it ended {} s after it started: check that its harness is \
+                 logged in and knows the node's model",
+                lived.as_secs()
+            );
+            obj.insert("reason".to_string(), serde_json::Value::String(told));
+        }
+    }
+}
+
 fn informational_event(
     kind: EventKind,
     run_id: &str,
@@ -137,8 +183,9 @@ fn informational_event(
 /// and [`parse_turn_state`] answers [`TurnState::AwaitingAssistant`]. "Blocked"
 /// is never "finished", by construction rather than by a third guard.
 ///
-/// `prior_events` is the run's event-log snapshot, used purely for the
-/// rising-edge de-dup of `NodeBlockedOnLimit` (see [`episode_has_event`]).
+/// `prior_events` is the run's event-log snapshot, used for the rising-edge
+/// de-dup of `NodeBlockedOnLimit` (see [`episode_has_event`]) and, on a dead
+/// session, for how long it lived (see [`EARLY_DEATH`]).
 // The probe set + policy toggles are all distinct facts a sweep tick needs; the
 // same posture as the four session-launch builders (`pdo_session`) that allow this lint.
 #[allow(clippy::too_many_arguments)]
@@ -174,6 +221,9 @@ pub fn assess_node(
                 .and_then(|tail| pdo_harness::probes::hard_error(harness, &tail.text));
         }
         attach_diagnostics(&mut events, &diag);
+        if let Some(lived) = lifetime(prior_events, node_id, iter, now) {
+            tell_early_death(&mut events, lived);
+        }
         return Assessment {
             detection,
             events,

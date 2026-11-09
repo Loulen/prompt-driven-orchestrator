@@ -51,6 +51,7 @@ import {
   type TourRunsInput,
 } from "./tour/tourObservation";
 import { resolvePanels } from "./tour/tourPanels";
+import { clearLit, markLit } from "./tour/tourLitMark";
 import { revealTarget } from "./tour/tourReveal";
 import type { TourAsideView, TourController, TourPrepView, TourRect, TourView } from "./tour/tourView";
 import { useTourTidyUp } from "./tour/useTourTidyUp";
@@ -137,6 +138,7 @@ export function useTour(
 
   /** Clear what the pump drew: the hole, the zone, the lit panels, the bubbles. */
   const clearAim = useCallback(() => {
+    clearLit();
     setHole(null);
     setZone(null);
     setWideZone(false);
@@ -282,6 +284,7 @@ export function useTour(
         dismissOverlaysAside(elements);
       }
 
+      markLit(elements);
       const nextHole = union(elements.map(rectOf), HOLE_PADDING);
       setHole((prev) => (sameRect(prev, nextHole) ? prev : nextHole));
 
@@ -349,6 +352,7 @@ export function useTour(
     window.addEventListener("scroll", onViewportChange, true);
     return () => {
       window.clearInterval(timer);
+      clearLit();
       window.removeEventListener("resize", onViewportChange);
       window.removeEventListener("scroll", onViewportChange, true);
     };

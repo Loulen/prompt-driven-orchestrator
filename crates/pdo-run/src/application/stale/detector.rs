@@ -776,6 +776,62 @@ SwapFree:         204800 kB
         assert!(!a.blocked_on_limit);
     }
 
+    /// FP of CORE-227: an `opencode` that is not logged in exits four seconds
+    /// after its start, and the banner said only « tmux session … no longer
+    /// exists ». A session that dies this soon never got to work: the reason
+    /// says so, and what to check.
+    fn dead_after(started: Duration) -> Assessment {
+        let now = SystemTime::now();
+        let ts = chrono::DateTime::<chrono::Utc>::from(now - started).to_rfc3339();
+        let prior = vec![event::Event {
+            id: None,
+            run_id: "run1".to_string(),
+            ts,
+            kind: EventKind::NodeStarted,
+            node_id: Some("worker".to_string()),
+            iter: Some(1),
+            payload: None,
+        }];
+        let probes = FakeProbes {
+            session_alive: false,
+            ..FakeProbes::alive()
+        };
+        assess_node(
+            &probes,
+            &prior,
+            "run1",
+            "worker",
+            1,
+            now,
+            true,
+            pdo_harness::registry::OPENCODE,
+        )
+    }
+
+    fn reason_of(a: &Assessment) -> String {
+        a.events[0].payload.as_ref().unwrap()["reason"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn a_session_dead_seconds_after_its_start_says_the_harness_never_started() {
+        let reason = reason_of(&dead_after(Duration::from_secs(4)));
+        assert!(
+            reason.starts_with("session_died: tmux session "),
+            "{reason}"
+        );
+        assert!(reason.contains("ended 4 s after it started"), "{reason}");
+        assert!(reason.contains("logged in"), "{reason}");
+    }
+
+    #[test]
+    fn a_session_dead_after_working_a_while_says_nothing_more() {
+        let reason = reason_of(&dead_after(Duration::from_secs(600)));
+        assert!(reason.ends_with("no longer exists"), "{reason}");
+    }
+
     #[test]
     fn assess_dead_session_probes_no_transcript() {
         // Death short-circuits everything: no tail read, no outputs validation,

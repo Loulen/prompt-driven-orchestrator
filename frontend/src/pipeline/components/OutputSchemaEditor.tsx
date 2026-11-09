@@ -8,9 +8,13 @@ type FieldType = (typeof FIELD_TYPES)[number];
 
 interface FieldEntry {
   name: string;
-  type: FieldType;
+  /** One of {@link FIELD_TYPES}, or a type nobody knows as the YAML spells it:
+   *  kept as written, so an edit elsewhere never rewrites it (the lint names it). */
+  type: string;
   allowed?: string[];
 }
+
+const known = (type: string): type is FieldType => (FIELD_TYPES as readonly string[]).includes(type);
 
 function schemaToEntries(
   schema: Record<string, FrontmatterFieldDecl> | null | undefined,
@@ -18,7 +22,7 @@ function schemaToEntries(
   if (!schema) return [];
   return Object.entries(schema).map(([name, decl]) => ({
     name,
-    type: (FIELD_TYPES.includes(decl.type as FieldType) ? decl.type : "string") as FieldType,
+    type: decl.type,
     allowed: decl.allowed ?? undefined,
   }));
 }
@@ -31,7 +35,9 @@ function entriesToSchema(
   for (const e of entries) {
     schema[e.name] = {
       type: e.type,
-      ...(e.type === "enum" && e.allowed ? { allowed: e.allowed } : {}),
+      // An unknown type keeps its list too: a `type: Enum` typo must not lose
+      // its values on an edit elsewhere. Picking a known type drops it (updateField).
+      ...((e.type === "enum" || !known(e.type)) && e.allowed ? { allowed: e.allowed } : {}),
     };
   }
   return schema;
@@ -116,11 +122,12 @@ function SchemaFieldRow({
       />
       <select
         value={entry.type}
-        onChange={(e) => onUpdate({ type: e.target.value as FieldType })}
+        onChange={(e) => onUpdate({ type: e.target.value })}
         className="ei-select ei-select--sm ei-select--mono"
         aria-label="Field type"
         data-testid="schema-field-type"
       >
+        {!known(entry.type) && <option value={entry.type}>{entry.type} (unknown)</option>}
         {FIELD_TYPES.map((t) => (
           <option key={t} value={t}>
             {t}

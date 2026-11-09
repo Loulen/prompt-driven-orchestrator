@@ -56,6 +56,44 @@ describe("OutputSchemaEditor", () => {
     });
   });
 
+  /**
+   * FP of CORE-227 (F1-1): a type nobody knows (`banana`) read as `string` in
+   * the dropdown while the lint banner and the condition picker said `banana`,
+   * and any other edit of the schema rewrote it to `string` without a word. The
+   * dropdown names it, as unknown, and keeps it until the user picks a type.
+   */
+  it("names an unknown type as it is written, and keeps it through other edits", () => {
+    const onChange = vi.fn();
+    const schema = { ripe: { type: "banana" }, title: { type: "string" } };
+    render(<OutputSchemaEditor schema={schema} onChange={onChange} />);
+    const [ripe] = screen.getAllByTestId("schema-field-type") as HTMLSelectElement[];
+    expect(ripe.value).toBe("banana");
+    expect(ripe.selectedOptions[0]).toHaveTextContent("banana (unknown)");
+
+    fireEvent.change(screen.getAllByTestId("schema-field-name")[1], { target: { value: "heading" } });
+    expect(onChange).toHaveBeenLastCalledWith({ ripe: { type: "banana" }, heading: { type: "string" } });
+
+    fireEvent.change(ripe, { target: { value: "bool" } });
+    expect(onChange).toHaveBeenLastCalledWith({ ripe: { type: "bool" }, title: { type: "string" } });
+  });
+
+  it("keeps the allowed values of an unknown type through other edits", () => {
+    const onChange = vi.fn();
+    const schema = { verdict: { type: "Enum", allowed: ["PASS", "FAIL"] }, title: { type: "string" } };
+    render(<OutputSchemaEditor schema={schema} onChange={onChange} />);
+    fireEvent.change(screen.getAllByTestId("schema-field-name")[1], { target: { value: "heading" } });
+    expect(onChange).toHaveBeenLastCalledWith({
+      verdict: { type: "Enum", allowed: ["PASS", "FAIL"] },
+      heading: { type: "string" },
+    });
+  });
+
+  it("offers an unknown type only on the field that has it", () => {
+    render(<OutputSchemaEditor schema={{ title: { type: "string" } }} onChange={vi.fn()} />);
+    const select = screen.getByTestId("schema-field-type") as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(["enum", "int", "string", "bool", "list"]);
+  });
+
   it("shows allowed chip list when type is enum", () => {
     const onChange = vi.fn();
     const schema = {

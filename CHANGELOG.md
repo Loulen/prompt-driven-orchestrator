@@ -43,6 +43,11 @@ Pipeline editor:
 - Box-selecting cards with Shift and drag no longer selects text on the page.
 - Reshaping an edge segment reads "Undo reshape edge", and moving an edge label reads "Undo move
   edge label".
+- An output field of an unknown type shows that type, marked "(unknown)", in the schema editor,
+  and editing another field no longer rewrites it as `string`.
+- A collection or loop badge on a card no longer clips "⇉ 2/2 items".
+- Saving a pipeline whose edges were drawn by hand leaves its draft at zero changes: an edge's
+  sub-pixel anchor offsets are read back exactly, so the saved file and the draft agree.
 
 Runs and nodes:
 
@@ -67,6 +72,9 @@ Runs and nodes:
   saying where the daemon must listen, instead of leaving its node running forever.
 - The copilot and pi catalogues are read even when their CLI takes several seconds to start, and
   the settings page no longer waits for a harness version check.
+- A node whose session dies within 30 seconds of its start says how long it lived and to check
+  that its harness is logged in and knows the node's model.
+- A sandboxed completion no longer logs a failed targeted kill when the session was already gone.
 
 New Run, Settings and the folder explorer:
 
@@ -89,6 +97,13 @@ Tours:
 - With the terminal enlarged, the wait step outlines the enlarged terminal instead of drawing
   across it.
 - During *First run*, Reopen on an interrupted node stays clickable on the steps about that node.
+- *Open the output* on *First run*, with the terminal still enlarged, first lights its Collapse
+  terminal button and says the `out` row is under it, instead of lighting a row nobody can reach.
+- Copy on a tour card keeps the focus in the field the step before left open, and an open
+  Expected content field stays open on a press of the card's buttons: the card no longer moves
+  from under the click.
+- A control that shows only on hover, such as a section's "Add output" `+`, is visible while a
+  tour step lights it.
 - *First pipeline* names the worktree buttons as they read (Shared and Isolated), and wires Start
   to the implementer: without that edge, a Run of the pipeline it builds would never start.
 
@@ -100,6 +115,9 @@ Agentic tests:
 - The Happy Paths and the driving playbook say how to answer claude's trust dialog (its cursor
   starts on "No, exit"), which harness logins a journey needs, that the undo history does not
   survive a reload, and where Pipeline info and the Node sessions stat are.
+- The Happy Paths say that "You pilot" and one `node_taken_over` on the first attach are
+  expected, where to seed pipelines (the instance library, not the target repo), what the library
+  assistant's 20-second focus heartbeat looks like, and which input a new edge lands on.
 
 ## 2.75.0
 

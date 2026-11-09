@@ -14,6 +14,7 @@ import {
 import {
   APPROVE_MENU,
   AUTO_APPROVE_ENTRY,
+  COLLAPSE_TERMINAL,
   ENLARGED_TERMINAL,
   INSPECTOR_RUN,
   INTERRUPTED_BANNER,
@@ -221,15 +222,27 @@ export const READING_STEPS: TourStep[] = [
     id: "open-output",
     title: "Open the output",
     // Two beats, one card: click the row, then read what opened.
-    body: (o) =>
-      o.present(OUT_MODAL)
-        ? "This is what the agent wrote — the summary your prompt asked for, and the only thing the next node would have received. Read it, then press Next."
-        : `Click ${TUTORIAL_OUT_PORT}. It is the file the agent wrote — the summary your prompt asked for — and the only thing the next node would have received.`,
+    body: (o) => {
+      if (o.present(OUT_MODAL))
+        return "This is what the agent wrote — the summary your prompt asked for, and the only thing the next node would have received. Read it, then press Next.";
+      if (o.present(ENLARGED_TERMINAL))
+        return `The terminal is still enlarged over the app, and the ${TUTORIAL_OUT_PORT} row is under it. Click Collapse terminal, at the top right of its bar, to put it back in the inspector.`;
+      return `Click ${TUTORIAL_OUT_PORT}. It is the file the agent wrote — the summary your prompt asked for — and the only thing the next node would have received.`;
+    },
     // Re-aims onto the artifact the click opened, the way `pick-repo` re-aims
     // onto the explorer. Without it the tour ends the instant the file appears,
     // and the recap card lands on top of the summary it just told the reader to
     // open — the one thing this step exists to show them (FP finding, #825).
-    target: (o) => (o.present(OUT_MODAL) ? [OUT_MODAL] : [OUT_ROW]),
+    //
+    // A terminal the reader enlarged at the wait step covers the whole app, the
+    // row included: the hole would light the terminal's screen and its collapse
+    // button would sit under the dim (FP of CORE-227). The step aims at that
+    // button first; once the terminal is back in the inspector, at the row.
+    target: (o) => {
+      if (o.present(OUT_MODAL)) return [OUT_MODAL];
+      if (o.present(ENLARGED_TERMINAL)) return [COLLAPSE_TERMINAL];
+      return [OUT_ROW];
+    },
     // A page to read, not a control to hit: once the artifact is up it is lit as
     // a zone — dashed, lighter dim, scrollable — and the popover moves beside it.
     soft: (o) => o.present(OUT_MODAL),

@@ -94,6 +94,7 @@ const NODE_CARD = `.react-flow__node[data-id="${NODE_ID}"]`;
 const INSPECTOR_RUN = t("inspector-pane-run");
 const TERMINAL = t("tmux-terminal");
 const ENLARGED_TERMINAL = t("terminal-fullsize");
+const COLLAPSE_TERMINAL = `${ENLARGED_TERMINAL} ${t("term-expand")}`;
 const INTERRUPTED_BANNER = t("interrupted-banner");
 const REOPEN = t("interrupted-reopen-btn");
 const RELEASE = t("approve-btn-menu");
@@ -1202,6 +1203,34 @@ describe("opening the output", () => {
     expect(needsConfirm(TOUR, run, fake.obs())).toBe(true);
     expect(canAdvance(TOUR, run, fake.obs())).toBe(true);
     expect(confirmStep(TOUR, run, fake.obs()).phase).toBe("finished");
+  });
+
+  /**
+   * FP of CORE-227 (F3-13): a reader who enlarged the terminal at the wait step
+   * finds the out row buried under it — the hole lit the terminal's screen, and
+   * its collapse button sat under the dim. The step aims at that button first,
+   * and says so; once the terminal is back in the inspector it aims at the row.
+   */
+  it("has the reader collapse an enlarged terminal before pointing at the row", () => {
+    const fake = new FakeApp();
+    const step = stepById("open-output");
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    fake.finishNode("completed");
+    fake.show(ENLARGED_TERMINAL, COLLAPSE_TERMINAL);
+
+    expect(step.target(fake.obs())).toEqual([COLLAPSE_TERMINAL]);
+    expect(stepSoft(step, fake.obs())).toBe(false);
+    expect(stepBody(step, fake.obs())).toContain("Collapse terminal");
+    let run = at(fake, "open-output");
+    for (const clock of [0, 20_000]) run = observeTour(TOUR, run, fake.obs(), clock);
+    expect(run.phase).not.toBe("failed");
+    expect(currentStep(TOUR, run)?.id).toBe("open-output");
+
+    fake.hide(ENLARGED_TERMINAL, COLLAPSE_TERMINAL);
+    expect(step.target(fake.obs())).toEqual([OUT_ROW]);
+    expect(stepBody(step, fake.obs())).not.toContain("Collapse terminal");
   });
 
   /** A node that failed writes nothing: the tour stops on the usual card, with a

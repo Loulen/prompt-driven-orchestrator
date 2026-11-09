@@ -79,55 +79,55 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - Triggers: the Input field of a Trigger no longer suggests a `{{guard.stdout}}` template (the
   guard's output replaces the input, it is never interpolated), and the guard example exits
   non-zero when there is nothing to do (`gh issue list --label ready | grep .`). The guard's
-  tooltip points at Settings › General for its timeout instead of saying « 60 s ».
-- Run now is greyed on a disabled Trigger, row and panel, with « Disabled: enable it first »:
+  tooltip points at Settings › General for its timeout instead of saying "60 s".
+- Run now is greyed on a disabled Trigger, row and panel, with "Disabled: enable it first":
   the daemon refused it with a 409 the toast showed with the raw id.
 - Deleting a Trigger from its row asks first, as the bulk delete does: its schedule and fire
   history go. A refused delete or enable/disable says why in a toast instead of doing nothing.
 - A Trigger a missing pipeline or repository put to sleep resumes its schedule when Run now
-  fires it once they are back; its row and panel say « Not scheduled » and what wakes it.
+  fires it once they are back; its row and panel say "Not scheduled" and what wakes it.
 - The status icon's tooltip names the last tick's result in words and the last fire apart
-  (« Last tick: Skipped, overlap · Last fired Nov 9, 10:25 UTC »), instead of pairing a skip
-  with the time of an older fire. « Next fire in now » reads « Next fire now ».
-- The « Last fired » switch of Settings › Appearance shows the element at every panel width.
+  ("Last tick: Skipped, overlap · Last fired Nov 9, 10:25 UTC"), instead of pairing a skip
+  with the time of an older fire. "Next fire in now" reads "Next fire now".
+- The "Last fired" switch of Settings › Appearance shows the element at every panel width.
 - A raw cron reads in mono in the Trigger panel (`* * * * *`, not `*****`), and Run info names
   the Trigger that fired the Run instead of its id.
 - Test guard shows the stderr of a guard that passes too. A prompt-required pipeline whose
-  guard printed nothing is refused with « the guard printed nothing and there is no input
-  template », not « add a guard ».
-- The pipeline menu of New Run names its hidden section « Test pipelines · not validated », as
+  guard printed nothing is refused with "the guard printed nothing and there is no input
+  template", not "add a guard".
+- The pipeline menu of New Run names its hidden section "Test pipelines · not validated", as
   its toggle says.
-- `pdo trigger list` says `disabled` for a disabled Trigger (« paused » is the global switch,
+- `pdo trigger list` says `disabled` for a disabled Trigger ("paused" is the global switch,
   which standard error now mentions); `pdo trigger disable|enable` are aliases of
   `pause|resume`; `pdo trigger fire` exits 1 on an error outcome. `pdo audit` prints what a
   short change changed to (`{"paused":true}`).
-- Settings: a search finds the switches of Settings › Appearance (« iteration », « cost »…), not
+- Settings: a search finds the switches of Settings › Appearance ("iteration", "cost"…), not
   only their section title. A page left open follows a change made elsewhere (`pdo settings
   set`, another browser, the harness warm-up) on the fields it is not editing.
 - Settings › Notifications drops its sentences of explanation; the rows' tooltips carry them.
-- The default model row reads « Default model · claude »: its models are claude's.
-- The skill bank says « built in » for a seeded skill and counts the tiers that select a skill
+- The default model row reads "Default model · claude": its models are claude's.
+- The skill bank says "built in" for a seeded skill and counts the tiers that select a skill
   (it always said 0). Provisioning patterns are not spell-checked; a Project's provisioning
   preview reads its default primary repository. The Edit project dialog has no invisible tab
-  stop, and its effort radios are not announced « Effort Effort ».
+  stop, and its effort radios are not announced "Effort Effort".
 - `pdo settings appearance` says `default` for a choice left at its default.
-- `pdo update check` no longer says « can update now » on an install that is up to date, and
+- `pdo update check` no longer says "can update now" on an install that is up to date, and
   says why there is no latest version when there is none. `pdo update log <id>` names the attempt
   it has no log for.
-- Settings › Version & update says « up to date » for a build ahead of the latest release, keeps
+- Settings › Version & update says "up to date" for a build ahead of the latest release, keeps
   What's new (the changelog of this build) while the check is off or has not answered, and names
   the source before the first check.
 - Tours: the conditions read `verdict = pass`, as the canvas draws them; *First pipeline* says
-  « Pick Shared, under Worktree » (the button's name) and calls the unsaved work a draft, not
-  something « only in this browser tab »; its Save step lights the Save dialog once it opens.
-  *First run* says « Open the Runs tab, then click New Run » when it lights the tab, « Untick
-  Auto » as the box reads, and tells you to say to an agent waiting for the release that it can
+  "Pick Shared, under Worktree" (the button's name) and calls the unsaved work a draft, not
+  something "only in this browser tab"; its Save step lights the Save dialog once it opens.
+  *First run* says "Open the Runs tab, then click New Run" when it lights the tab, "Untick
+  Auto" as the box reads, and tells you to say to an agent waiting for the release that it can
   finish. Settings › Tutorials ticks the full tour once its three tours are done.
-- An edge into End reads « fired » once its End port fired, instead of « not fired » always.
+- An edge into End reads "fired" once its End port fired, instead of "not fired" always.
 - The training repository of the tours is reused only when it belongs to you: one another user
   left under `/tmp` is refused by name.
-- The node inspector no longer says « NodeRun » in its tooltips.
-- Settings › Telemetry › « Include the Actor » warns about the law where you work, with France as
+- The node inspector no longer says "NodeRun" in its tooltips.
+- Settings › Telemetry › "Include the Actor" warns about the law where you work, with France as
   the example, instead of French law alone.
 - The CLI help speaks English throughout (Project, hosted session, skill bank, Appearance),
   describes PDO for every harness, not Claude Code alone, and cites no ADR or issue number.

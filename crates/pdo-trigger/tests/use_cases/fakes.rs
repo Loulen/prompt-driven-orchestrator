@@ -261,6 +261,8 @@ impl GuardRunner for ScriptedGuard {
 pub struct Settings {
     pub paused: Mutex<bool>,
     pub guard_timeout: Duration,
+    /// How many reads of the pause fail first, as a busy store does.
+    pub busy_reads: Mutex<usize>,
 }
 
 impl Default for Settings {
@@ -268,12 +270,18 @@ impl Default for Settings {
         Self {
             paused: Mutex::new(false),
             guard_timeout: Duration::from_secs(7),
+            busy_reads: Mutex::new(0),
         }
     }
 }
 
 impl TriggerSettings for Settings {
     fn paused(&self) -> BoxFuture<'_, Result<bool, String>> {
+        let mut busy = self.busy_reads.lock().unwrap();
+        if *busy > 0 {
+            *busy -= 1;
+            return ready(Err("database is locked".to_string()));
+        }
         ready(Ok(*self.paused.lock().unwrap()))
     }
 

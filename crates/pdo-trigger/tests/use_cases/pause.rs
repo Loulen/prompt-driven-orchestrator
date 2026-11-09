@@ -36,6 +36,17 @@ async fn the_pause_flips_the_switch_announces_it_and_journals_both_sides() {
 }
 
 #[tokio::test]
+async fn a_busy_store_does_not_make_a_paused_instance_read_as_running() {
+    let w = world();
+    *w.settings.paused.lock().unwrap() = true;
+    *w.settings.busy_reads.lock().unwrap() = 1;
+    assert!(
+        w.triggers.health().await.paused,
+        "asked again, not failed open"
+    );
+}
+
+#[tokio::test]
 async fn a_refused_pause_leaves_the_switch_alone() {
     let w = world();
     w.refuse();

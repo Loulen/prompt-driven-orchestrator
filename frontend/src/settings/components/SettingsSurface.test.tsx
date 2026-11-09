@@ -2389,12 +2389,24 @@ describe("SettingsSurface — search line, Save bar (CORE-117)", () => {
     expect(name("setting-row-runs.list.cost")).toBe("Cost");
   });
 
+  it("does not name a category twice: Appearance › Appearance reads Appearance (CORE-232)", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "cost" } });
+    const head = (await screen.findByTestId("settings-section-body-appearance")).querySelector(".set-sec__head");
+    expect(head?.querySelector(".set-sec__cat")).toBeNull();
+    expect(head?.querySelector(".set-sec__title")).toHaveTextContent("Appearance");
+  });
+
   it("finds a tour by its name and counts the tours it shows (CORE-232)", async () => {
     render(<SettingsSurface open onClose={() => {}} />);
     await screen.findByTestId("setting-session-cap");
     fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "full tour" } });
     expect(await screen.findByTestId("tutorials-full")).toBeVisible();
     expect(screen.queryByTestId("tutorials-row-overview")).not.toBeInTheDocument();
+    // A section not found by its name hides what is not a row; the table of tours,
+    // whose rows the search filters, is marked to stay (the CSS reads the class).
+    expect(screen.getByTestId("settings-tutorials").parentElement).toHaveClass("set-extra--rows");
     await waitFor(() => expect(screen.getByTestId("settings-search-count").textContent).toBe("1"));
     // The section found by its own name: every tour shows, and each counts once.
     fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "tutorials" } });

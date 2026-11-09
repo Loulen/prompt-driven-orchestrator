@@ -184,5 +184,7 @@ function TourTable({ children }: { children: (search: TourSearch) => ReactNode }
     searching: searching(query),
   };
   const any = search.finds(FULL_TOUR_TEXT) || TOUR_CATALOG.some((entry) => search.finds(tourText(entry)));
-  return any ? <div className="set-extra">{children(search)}</div> : null;
+  // `set-extra--rows`: a section not found by its name hides what is not a row, but
+  // the search filters these rows, so the table stays.
+  return any ? <div className="set-extra set-extra--rows">{children(search)}</div> : null;
 }

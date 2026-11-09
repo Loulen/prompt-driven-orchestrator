@@ -105,10 +105,11 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   short change changed to (`{"paused":true}`).
 - Settings: a search finds the switches of Settings › Appearance ("iteration", "cost"…), not
   only their section title, and names their block ("Runs list · Cost", "Run canvas · Cost"). It
-  finds a tour of Settings › Tutorials by its name ("Full tour", "Overview") and counts the tours
-  it shows. A page left open follows a change made elsewhere (`pdo settings set`, another
-  browser, the harness warm-up) on the fields it is not editing, and the status bar's session
-  gauge follows a session cap set from the CLI.
+  finds a tour of Settings › Tutorials by its name ("Full tour", "Overview"), shows its row and
+  counts the tours it shows. A section named like its category (Appearance, Projects) is named
+  once under a search, not "Appearance › Appearance". A page left open follows a change made
+  elsewhere (`pdo settings set`, another browser, the harness warm-up) on the fields it is not
+  editing, and the status bar's session gauge follows a session cap set from the CLI.
 - Settings › Notifications drops its sentences of explanation; the rows' tooltips carry them.
 - The default model row reads "Default model · claude": its models are claude's.
 - The skill bank says "built in" for a seeded skill and counts the tiers that select a skill
@@ -131,7 +132,9 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - An edge into End reads "fired" once its End port fired, instead of "not fired" always.
 - A `script` node keeps its terminal once it ends: its shell exits as soon as `pdo complete` or
   `pdo fail` answers, and the pane was often gone before it was frozen, so the Overview tour's
-  "frozen on the lines the script printed" showed "Session no longer available".
+  "frozen on the lines the script printed" showed "Session no longer available". The frozen
+  pane opens on those lines, at its top: the empty rows under them no longer push them into the
+  scrollback of a folded terminal, which showed black.
 - The training repository of the tours is reused only when it belongs to you: one another user
   left under `/tmp` is refused by name.
 - The node inspector no longer says "NodeRun" in its tooltips.

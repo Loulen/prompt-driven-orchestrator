@@ -46,12 +46,24 @@ export const TERMINAL_TYPOGRAPHY_RESET = {
   fontFeatureSettings: "normal",
 } as const;
 
-// xterm writes raw bytes: a snapshot captured with `tmux capture-pane -pe` is
-// newline-separated, and a bare \n moves down without returning, so every line
-// would start where the previous one ended. Normalise to CRLF without doubling
-// the \r of a line that already carries one.
-export function toTerminalNewlines(content: string): string {
-  return content.replace(/\r?\n/g, "\r\n");
+// A row with nothing to read: blank, or only colour resets. A row painted with a
+// background colour (a TUI's status bar) is not empty, and stays.
+const COLOUR_RESETS = ["\u001b[0m", "\u001b[m", "\u001b[39m", "\u001b[49m"];
+const isEmptyRow = (row: string) =>
+  COLOUR_RESETS.reduce((rest, reset) => rest.replaceAll(reset, ""), row).trim() === "";
+
+// What a frozen pane writes into xterm. xterm writes raw bytes: a snapshot captured
+// with `tmux capture-pane -pe` is newline-separated, and a bare \n moves down without
+// returning, so every line would start where the previous one ended: rows are joined
+// with CRLF. And `capture-pane` returns the whole pane (CORE-232): a script's few
+// lines come followed by the empty rows under them. Written as is, they overflowed a
+// small terminal, and xterm, which keeps its last row in view, showed the empty rows
+// with the lines in its scrollback. The empty rows after the last line go, and so
+// does the final newline, which would scroll one row more.
+export function frozenPaneText(content: string): string {
+  const rows = content.split(/\r?\n/);
+  while (rows.length > 0 && isEmptyRow(rows[rows.length - 1])) rows.pop();
+  return rows.join("\r\n");
 }
 
 // Send a resize message to the daemon, but only if the dimensions are valid.

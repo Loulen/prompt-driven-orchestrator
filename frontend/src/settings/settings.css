@@ -253,8 +253,9 @@
   }
   /* A search keeps the matching rows. A filtered Appearance block renders its
      switches bare, each in its pointing wrapper (`ElementSwitch`): the wrapper
-     stays while its row matches (rows filter themselves), CORE-232. */
-  .set-sec__body[data-filtered="true"] > :not(.set-row, .set-ablock__point),
+     stays while its row matches (rows filter themselves), CORE-232. So does a
+     table whose rows the search filters (`set-extra--rows`, the tours). */
+  .set-sec__body[data-filtered="true"] > :not(.set-row, .set-ablock__point, .set-extra--rows),
   .set-sec__body[data-filtered="true"] > .set-ablock__point:not(:has(.set-row)),
   .set-extra[hidden] {
     display: none;

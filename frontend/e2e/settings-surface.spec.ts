@@ -39,6 +39,9 @@ test("rail, sections, search, discard, then a save that holds after a reload", a
   // A switch of Settings › Appearance is found too, not only its section's title (CORE-232).
   await page.getByTestId("settings-search").fill("Cost");
   await expect(page.getByTestId("setting-row-runs.list.cost")).toBeVisible();
+  // A tour is found by its name, and its row shows, not only the count (CORE-232).
+  await page.getByTestId("settings-search").fill("full tour");
+  await expect(page.getByTestId("tutorials-full")).toBeVisible();
   await page.getByTestId("settings-search").fill("");
 
   // A change shows the Save bar; Discard puts the value back.

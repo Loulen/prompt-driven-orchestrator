@@ -13,6 +13,21 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+### Runs: a pause keeps the work in flight, a reopen relaunches stopped nodes
+
+- A node that finishes while its Run is paused now completes. Before, its completion was refused
+  ("resume the run first"): a `script` node, which completes once as its bash exits, lost its work,
+  and after Resume it read "session died" and had to run again. What the finished node would launch
+  still waits for Resume.
+- Reopening a Run (the Play button, `pdo run reopen`) runs again the nodes that were stopped, as it
+  already did for interrupted ones. A cancelled Run (`pdo run cancel`) used to park "run_stalled …
+  blocked behind" its stopped nodes as soon as it was reopened. A stopped lap of a collection
+  fan-out stays stopped, with the laps already done, until its node is retried.
+- A `script` lap of a collection fan-out gets its item in `$PDO_ITEM` and the number of laps in
+  `$PDO_ITEM_TOTAL`, as an agent lap reads them in its preamble.
+
 ## 2.75.0
 
 ### Tours: Previous replays the step before, and the arrow keys drive the card
@@ -71,14 +86,14 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   Runs they launched), "Projects" (the Runs launched in the Projects you check) or "All I can see".
   It only narrows what your rights already show.
 - When a node of such a Run starts waiting for you (a question, a completion to approve, a Run
-  paused on an incident) and no PDO tab of the browser is in view, one tab shows a notification
+  paused on an incident) and no tab of the app in this browser is in view, one tab shows a notification
   (the node's name, then "is waiting for you" or "is done, waiting for your go"; "Run paused on an
   incident") and plays a chime of its reason, at most one chime every 10 s. Clicking the
   notification brings the tab back on the Run with the node selected. A wait already there when
   the page loads, or caught up after a reconnection, alerts nothing; neither does a parent node
   waiting on its child runs.
 - `GET /runs` gives each child Run its `root_run_id`, the Run at the top of its chain of parents.
-- While an alert switch is on, a hidden PDO tab reopens its event stream after a drop (a daemon restart,
+- While an alert switch is on, a hidden tab of the app reopens its event stream after a drop (a daemon restart,
   a network change) instead of waiting to be shown; `openProbedSocket` takes a `whileHidden` option.
 ### Tree cost: what an orchestration really cost
 

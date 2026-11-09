@@ -418,6 +418,8 @@ describe("Settings › General › Version & update (#697)", () => {
 
     const btn = await screen.findByTestId("setting-version-check-now");
     expect(btn).toHaveAccessibleName("Check now");
+    // Disabled until the status is read: a click before it is lost.
+    await waitFor(() => expect(btn).toBeEnabled());
     fireEvent.click(btn);
     expect(checkForUpdateNowMock).toHaveBeenCalledTimes(1);
     expect(btn).toHaveAccessibleName("Checking…");
@@ -439,7 +441,9 @@ describe("Settings › General › Version & update (#697)", () => {
     checkForUpdateNowMock.mockRejectedValue(new Error("release source unreachable: timed out"));
     renderVersionSection();
 
-    fireEvent.click(await screen.findByTestId("setting-version-check-now"));
+    const checkNow = await screen.findByTestId("setting-version-check-now");
+    await waitFor(() => expect(checkNow).toBeEnabled());
+    fireEvent.click(checkNow);
     const err = await screen.findByTestId("setting-version-check-error");
     expect(err).toHaveTextContent("Check failed");
     expect(err).toHaveTextContent("release source unreachable: timed out");

@@ -1,6 +1,6 @@
 ---
 id: HP-02
-covers: [run, start-node, tmux-session, dataflow, conditional-routing, loop-region, collection, convergence, artifact, run-stats, sandbox, staging-profile, staging-floor, sandbox-prep, harness, harness-pin, harness-capability, harness-turn-end, harness-reported-cost, harness-resume-by-identity]
+covers: [run, run-pause, start-node, tmux-session, dataflow, conditional-routing, loop-region, collection, convergence, artifact, run-stats, sandbox, staging-profile, staging-floor, sandbox-prep, harness, harness-pin, harness-capability, harness-turn-end, harness-reported-cost, harness-resume-by-identity]
 ---
 
 # HP-02 — Launch a run to completion
@@ -32,6 +32,10 @@ Features validated while crossing the run screens (grafted from retired per-issu
   an ordinary **agent**: it starts only once every lap is done, receives the laps' outputs grouped in
   one input, and finds each lap's code already merged back on the Run branch (ADR-0082). The editor
   toolbar offers no Merge button.
+- **Pause / Resume** (recette CORE-229): a Run paused from its row of the Runs list launches
+  nothing new, but a node already working **finishes** during the pause and reads completed; Resume
+  starts the next node. A completion lost to a pause (the node « session died » after Resume, its
+  work to redo) is the regression this guards.
 - **Artifact rendering**: an output artifact opens in the markdown modal; a ` ```mermaid ` block
   renders as inline SVG and invalid mermaid degrades gracefully to raw source (#240 / ADR-0013).
 - **Run stats**: the Info panel shows a Stats block — Duration (ticking live), Node sessions started
@@ -79,7 +83,9 @@ Features validated while crossing the run screens (grafted from retired per-issu
    wrapping without horizontal scroll) and the deterministic prompt preamble (`## Inputs` / `## Outputs`).
 5. Data routes downstream: conditional edges fire to all matching targets, the loop region iterates and
    exits on PASS, a collection region fans out in parallel and converges on a downstream **agent** (no Merge
-   node exists: the convergence is the agent's incoming edges).
+   node exists: the convergence is the agent's incoming edges). While a node works, press **Pause**
+   on the Run's row of the Runs list → the row reads **Paused** and offers **Resume**; let the node
+   finish → it reads **completed** and no new node starts; press **Resume** → the next node starts.
 6. The Run reaches **Completed** (the happy ending): nodes read completed, the End inspector shows the
    `result` port **received**.
 7. Open an output artifact → the **markdown modal** renders it (including a mermaid diagram as SVG).
@@ -145,6 +151,8 @@ Features validated while crossing the run screens (grafted from retired per-issu
 - Start/End nodes render; the running node shows live, wrapping terminal output (no horizontal scrollbar).
 - Routing matches the pipeline shape (multi-match fan-out, loop `↻ X/Y` header iterating, collection
   `⇉ N items` badge, convergence on the downstream agent — rendered as an agent, not a Merge).
+- Paused, the Run launches nothing; the node that was working completes during the pause (never
+  « session died » after Resume) and Resume starts its successor.
 - The Run settles to **Completed**; the End `result` port shows **received**.
 - The artifact modal shows the content; a valid mermaid block is an SVG, an invalid one falls back to
   `<pre><code>` (never a blank pane, never a thrown error).

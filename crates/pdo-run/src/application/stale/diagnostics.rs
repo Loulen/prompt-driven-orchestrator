@@ -99,6 +99,29 @@ pub fn count_correlated_deaths(
         .count()
 }
 
+/// The nodes whose session the sweep probes: each `Running` one, and each
+/// `AwaitingUser` one whose agent waits in its session for its user (a declared
+/// wait, a refused unreleased completion) — `true` for those, probed for the
+/// death of their session only: their turn ended on a question, it never
+/// completes them. A node parked on its children has no session to probe.
+pub fn session_holding_nodes(run_state: &state::RunState) -> Vec<(String, i64, bool)> {
+    run_state
+        .nodes
+        .iter()
+        .filter_map(|(id, ns)| match ns.status {
+            NodeStatus::Running => Some((id.clone(), ns.iter, false)),
+            NodeStatus::AwaitingUser
+                if ns.awaiting.as_ref().is_some_and(|a| {
+                    crate::domain::declared_wait::opens_declared_wait(&a.cause)
+                }) =>
+            {
+                Some((id.clone(), ns.iter, true))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 pub fn running_nodes(run_state: &state::RunState) -> Vec<(String, i64)> {
     run_state
         .nodes

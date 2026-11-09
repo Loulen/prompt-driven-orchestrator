@@ -23,6 +23,7 @@ export default function ToolCallRow({
   outputBytes,
   diff,
   focusNonce,
+  live = true,
 }: {
   runId: string;
   nodeId: string;
@@ -34,6 +35,9 @@ export default function ToolCallRow({
   outputBytes?: number;
   diff?: TranscriptDiffStat;
   focusNonce?: number;
+  /** The iteration still runs: a call without its result is still running.
+   *  Ended, it will never get one (the session was reaped mid-call). */
+  live?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<ToolCallDetail | null>(null);
@@ -112,10 +116,15 @@ export default function ToolCallRow({
             error
           </span>
         )}
-        {status === "pending" && (
+        {status === "pending" && live && (
           <span className="ri-tx__st" data-st="running">
             <LoaderCircle size={11} strokeWidth={1.75} className="d-spin" aria-hidden />
             running
+          </span>
+        )}
+        {status === "pending" && !live && (
+          <span className="ri-tx__st" title="The session ended before this call returned">
+            no result
           </span>
         )}
       </button>
@@ -135,10 +144,14 @@ export default function ToolCallRow({
                   error={detail.is_error}
                   testId="transcript-tool-output"
                 />
-              ) : (
+              ) : live ? (
                 <div className="ri-tx__note" data-testid="transcript-tool-output">
                   <LoaderCircle size={12} strokeWidth={1.5} className="d-spin" aria-hidden />
                   No output yet
+                </div>
+              ) : (
+                <div className="ri-tx__note" data-testid="transcript-tool-output">
+                  No output: the session ended before this call returned
                 </div>
               )}
               {detail.truncated && <div className="ri-tx__note">Output cut · rest in the session file</div>}

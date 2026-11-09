@@ -129,6 +129,9 @@ impl CompletionRefusal {
                 // attend qu'ils se terminent et re-complète. Avec un enfant
                 // `failed`, c'est l'utilisateur qui tranche (exit 4).
                 | Self::ChildrenPending { failed: 0, .. }
+                // Nothing is recorded and the node stays alive: the agent reverts
+                // the tracked change in the read-only secondary and completes again.
+                | Self::SecondaryRepoDirtied { .. }
         )
     }
 

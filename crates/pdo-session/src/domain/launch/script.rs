@@ -1127,6 +1127,13 @@ mod tests {
             fails.contains("pdo complete refused with exit 3 after script success"),
             "{fails:?}"
         );
+        // The failure says why the completion was refused (a dirtied read-only
+        // secondary, here), not only its exit code.
+        let fails = run_script_tail_with_fake_pdo(
+            3,
+            "pdo complete REFUSED — secondary_repo_dirtied: revert the read-only secondary",
+        );
+        assert!(fails.contains("secondary_repo_dirtied"), "{fails:?}");
         let fails = run_script_tail_with_fake_pdo(1, "failed to reach daemon");
         assert!(fails.contains("exit 1"), "{fails:?}");
     }
@@ -1143,7 +1150,7 @@ mod tests {
             // `children_pending` 3 (held by its child runs, ADR-0064) → do
             // nothing. Anything else → signal the failure ourselves.
             "case \"$cc:$co\" in 0:*|4:*|3:*children_pending*) ;;",
-            "*) pdo fail --reason \"pdo complete refused with exit $cc after script success\" ;; esac",
+            "*) pdo fail --reason \"pdo complete refused with exit $cc after script success: $co\" ;; esac",
             // ec = 124 → the `timeout` verdict
             "elif [ $ec -eq 124 ]; then pdo fail --reason \"script timed out after 60s\"",
             // any other ec → the author's own failure

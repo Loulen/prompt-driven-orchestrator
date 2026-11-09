@@ -100,6 +100,11 @@ describe("demo daemon environment", () => {
     assert.equal(extra.PDO_TOKEN, undefined);
   });
 
+  test("a sandboxed journey binds the daemon beyond loopback, so its containers reach it", () => {
+    assert.equal(demoEnv({ env: caller, paths, port: 6391, bind: "0.0.0.0" }).PDO_BIND, "0.0.0.0");
+    assert.throws(() => demoEnv({ env: caller, paths, port: 6391, bind: "everywhere" }), /BIND/);
+  });
+
   test("extra variables may not undo the isolation", () => {
     for (const key of ["HOME", "PDO_PORT", "PDO_NODE_ID", "PDO_DAEMON_NO_CLEANUP", "TMUX"]) {
       assert.throws(() => demoEnv({ env: caller, paths, port: 6391, extra: { [key]: "x" } }), new RegExp(key));

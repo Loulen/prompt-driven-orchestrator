@@ -1,6 +1,6 @@
 ---
 id: HP-02
-covers: [run, run-pause, review, review-comment, pipeline-manager, start-node, tmux-session, dataflow, conditional-routing, loop-region, collection, convergence, artifact, run-stats, sandbox, staging-profile, staging-floor, sandbox-prep, harness, harness-pin, harness-capability, harness-turn-end, harness-reported-cost, harness-resume-by-identity]
+covers: [run, run-pause, review, review-comment, pipeline-manager, start-node, tmux-session, dataflow, conditional-routing, loop-region, collection, convergence, artifact, run-stats, sandbox, staging-profile, staging-floor, sandbox-prep, harness, harness-pin, harness-capability, harness-turn-end, harness-reported-cost, harness-resume-by-identity, shared-terminal, terminal-import, declared-wait]
 ---
 
 # HP-02 — Launch a run to completion
@@ -52,6 +52,12 @@ Features validated while crossing the run screens (grafted from retired per-issu
   business outcome by two visibly different routes. The `off` twin is the **control**: without it, a
   green sandboxed Run proves nothing (a Run that silently fell back to the host path also looks
   green). See the journey's §10-12 and the dedicated checks below.
+- **Live session, two browsers** (acceptance tour of the Sandbox, harness and live sessions domain):
+  while a node waits for its user, a second browser opens its terminal and **watches** (« Watching »,
+  the pilot's screen at a reduced font, its keystrokes refused); **Take control** flips the roles.
+  The pilot drops a file on the terminal: **Import** files it under the Run's `_attachments/`, and
+  **Copy & send to terminal** writes the sentence into the agent's input **without** Enter — the wait
+  stays open until the pilot types and presses Enter; a bare Enter never lifts it. See the journey's §18.
 - **Agentic harness, as a four-way pin** (PRD #549 / #612 / #702, ADR-0045, ADR-0046, ADR-0051,
   ADR-0052, ADR-0063): a **four-node** pipeline runs one node pinned to **`claude`**, one to
   **`opencode`**, one to **`copilot`** and one to **`pi`** in the **same Run**. The set is the
@@ -74,6 +80,10 @@ Features validated while crossing the run screens (grafted from retired per-issu
   Trust cascades to subdirectories, so one approval at the repo root covers every node sub-worktree.
 - A valid pipeline and a target git repo are available. No hard-coded ports/ids in the journey — see
   `docs/agents/run-scenario.md` for how to drive PDO and probe side-effects.
+- The daemon answers **beyond loopback**: the sandboxed twin's node calls it from its container through
+  the host gateway. A demo daemon starts with `make demo-daemon PORT=<p> BIND=0.0.0.0`; on a loopback
+  one the twin's `pdo complete` fails (« failed to reach daemon … host.docker.internal ») and step 11
+  cannot pass — a precondition missing, not a finding of the sandbox.
 
 ## Journey
 
@@ -155,6 +165,16 @@ Features validated while crossing the run screens (grafted from retired per-issu
     reply appears **in the thread, without a reload**, and the comment reads as answered. **Resolve**
     it: the thread folds and keeps its line number. Last, open one output card of the Run and
     download it (the arrow): the file is the artifact the markdown modal showed in step 7.
+
+18. **Two browsers on a waiting node.** Launch a one-node pipeline whose **interactive** node asks a
+    question with `pdo wait-user`. Its terminal shows **You pilot**. Open the same node in a second
+    browser (another profile): it reads **Watching** with **Take control**; its typing does nothing.
+    Press **Take control** there: the first browser turns spectator. Back in the pilot, press a bare
+    **Enter** in the terminal: the question stays on the banner. Click the terminal's import icon,
+    pick a file, **Import**, then **Copy & send to terminal**: the sentence naming
+    `.pdo/artifacts/_attachments/<node>/<file>` sits in the agent's input, not submitted, and the node
+    still waits. Type an answer and press **Enter**: the wait lifts (`node_resumed`), and **Approve ▾ ›
+    Auto-approve when ready** lets the agent complete.
 
 ## Checks
 

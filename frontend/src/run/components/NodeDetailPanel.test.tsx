@@ -339,7 +339,7 @@ describe("NodeDetailPanel", () => {
       expect(screen.queryByTestId("tmux-terminal")).not.toBeInTheDocument();
       const placeholder = screen.getByTestId("pending-placeholder");
       expect(placeholder).toBeInTheDocument();
-      expect(placeholder).toHaveTextContent("en attente");
+      expect(placeholder).toHaveTextContent("Not started yet");
     });
 
     it("passes correct session name with iter", () => {
@@ -1311,6 +1311,21 @@ describe("NodeDetailPanel", () => {
       expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
       expect(screen.getByTestId("details-pane")).toBeInTheDocument();
       expect(screen.queryByTestId("tmux-terminal")).not.toBeInTheDocument();
+    });
+
+    it("opens the terminal of another Run's live node that bears the same id", () => {
+      // Two Runs of one pipeline share their node ids: leaving a finished
+      // node for the live one of the next Run must not keep its folded,
+      // « ended » terminal.
+      const { rerender } = render(
+        <NodeDetailPanel node={makeNode({ node_id: "asker", status: "completed" })} runId="run-1" />,
+      );
+      expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
+      rerender(
+        <NodeDetailPanel node={makeNode({ node_id: "asker", status: "awaiting_user" })} runId="run-2" />,
+      );
+      expect(screen.queryByTestId("terminal-minimized")).not.toBeInTheDocument();
+      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
     });
 
     it("renders terminal for stale node", () => {

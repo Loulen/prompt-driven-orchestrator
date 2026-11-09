@@ -80,18 +80,28 @@ impl Runs {
         let repo_root = effective_repo_root(state, &run_state);
         let primary_canon = canonical_or_self(&repo_root);
 
-        // (4) Removals first, by alias. An absent alias is a silent no-op: the UI removes
-        //     by displayed alias, and a double-click must not 404.
+        // (4) Removals first, by alias or by repository path (`pdo run repos
+        //     --remove <path>`). An absent one is a silent no-op: the UI removes by
+        //     displayed alias, and a double-click must not 404.
         let remove_set: HashSet<&str> = req
             .remove
             .iter()
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .collect();
+        let removed_canon: HashSet<std::path::PathBuf> = remove_set
+            .iter()
+            .filter(|s| std::path::Path::new(s).is_absolute())
+            .map(|s| canonical_or_self(std::path::Path::new(s)))
+            .collect();
         let mut active: Vec<RepoPin> = run_state
             .target_repos
             .iter()
-            .filter(|p| !remove_set.contains(p.alias.as_str()))
+            .filter(|p| {
+                !remove_set.contains(p.alias.as_str())
+                    && !remove_set.contains(p.repo.as_str())
+                    && !removed_canon.contains(&canonical_or_self(std::path::Path::new(&p.repo)))
+            })
             .cloned()
             .collect();
 

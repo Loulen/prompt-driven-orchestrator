@@ -9,7 +9,7 @@ export function RunTabPlaceholder({ nodeId }: { nodeId: string | null }) {
       data-testid="pending-placeholder"
     >
       <EmptyState icon={Hourglass}>
-        <em>en attente d&apos;activation</em>
+        <em>Not started yet</em>
       </EmptyState>
       {nodeId && <div className="d-mono mt-1 text-xs text-text-3">{nodeId}</div>}
     </aside>

@@ -1,8 +1,8 @@
-// `make demo-daemon PORT=<p> [TEST_EXT=1] [DEMO_ENV='K=V …']` and `make
+// `make demo-daemon PORT=<p> [TEST_EXT=1] [DEMO_ENV='K=V …'] [BIND=<ip>]` and `make
 // demo-daemon-stop PORT=<p> [KEEP=1]`: a PDO daemon for an agentic test,
 // sealed off from the user's (lib/daemon.mjs). See docs/agents/run-scenario.md.
 //
-//   node scripts/demo-daemon/demo-daemon.mjs start <port> [--test-ext] [--env 'K=V …']
+//   node scripts/demo-daemon/demo-daemon.mjs start <port> [--test-ext] [--env 'K=V …'] [--bind <ip>]
 //   node scripts/demo-daemon/demo-daemon.mjs stop <port> [--keep]
 
 import path from "node:path";
@@ -29,7 +29,7 @@ async function main(argv) {
   const value = (name) => (rest.includes(name) ? rest[rest.indexOf(name) + 1] : undefined);
   if (verb === "start") {
     const port = parsePort(portText, process.env);
-    const demo = await startDemo({ port, testExt: flag("--test-ext"), extra: parseExtra(value("--env")), repoRoot });
+    const demo = await startDemo({ port, testExt: flag("--test-ext"), extra: parseExtra(value("--env")), bind: value("--bind"), repoRoot });
     const unset = Object.keys(process.env)
       .filter((key) => key.startsWith("PDO_"))
       .map((key) => `-u ${key} `)

@@ -312,7 +312,7 @@ test("pending node: Run tab shows placeholder and resolved inputs", async ({
     timeout: 3_000,
   });
   await expect(page.getByTestId("pending-placeholder")).toContainText(
-    "en attente",
+    "Not started yet",
   );
 
   // Cleanup

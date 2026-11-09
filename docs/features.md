@@ -263,6 +263,8 @@ Decisions: [ADR-0005](adr/0005-inline-xterm-over-os-spawn.md),
 
 Run nodes inside a container profile. PDO stages the harness home (credentials, settings) into the
 sandbox at spawn and harvests transcripts back, so cost and stats still work. The image is yours.
+The nodes call the daemon through the host gateway: keep it listening beyond `127.0.0.1` (its
+default, all interfaces, does).
 
 Decisions: [ADR-0030](adr/0030-sandbox-execution-model.md),
 [ADR-0031](adr/0031-sandbox-staging-profiles.md),

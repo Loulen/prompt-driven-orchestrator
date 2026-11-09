@@ -263,8 +263,12 @@ pub struct InputSignal {
 
 /// Classify one binary frame from the PTY WebSocket. Escape sequences are
 /// skipped whole: `ESC [ … <final 0x40..=0x7e>` (CSI, which covers arrows, mouse
-/// reports and bracketed-paste markers) and `ESC O <byte>` (SS3 keypad), plus a
-/// bare `ESC <byte>`.
+/// reports and bracketed-paste markers), `ESC O <byte>` (SS3 keypad), the
+/// control strings `ESC ] … ` (OSC), `ESC P …` (DCS), `ESC _ …` (APC),
+/// `ESC ^ …` (PM) and `ESC X …` (SOS) up to their `ESC \` or BEL, plus a bare
+/// `ESC <byte>`. The control strings are what the browser's terminal answers by
+/// itself when the program in the pane queries it (its colours, its version):
+/// a person typed none of it.
 pub fn classify_input(bytes: &[u8]) -> InputSignal {
     let mut signal = InputSignal::default();
     let mut i = 0;
@@ -283,6 +287,21 @@ pub fn classify_input(bytes: &[u8]) -> InputSignal {
                     }
                 }
                 Some(b'O') => i += 2,
+                Some(b']' | b'P' | b'_' | b'^' | b'X') => {
+                    i += 1;
+                    while let Some(&c) = bytes.get(i) {
+                        i += 1;
+                        if c == 0x07 {
+                            break;
+                        }
+                        if c == 0x1b {
+                            if bytes.get(i) == Some(&b'\\') {
+                                i += 1;
+                            }
+                            break;
+                        }
+                    }
+                }
                 Some(_) => i += 1,
                 None => {}
             }
@@ -355,6 +374,35 @@ mod tests {
         ] {
             assert_eq!(classify_input(seq), InputSignal::default(), "{seq:?}");
         }
+    }
+
+    #[test]
+    fn the_terminals_own_replies_are_neither() {
+        // What xterm.js answers on its own when the program in the pane queries
+        // it: a background colour (OSC 11, ended by ST or BEL), its version
+        // (XTVERSION, a DCS string), a status report (DECRQSS), a device
+        // attributes report (CSI). None of it was typed by a person.
+        for seq in [
+            &b"\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\"[..],
+            b"\x1b]10;rgb:ffff/ffff/ffff\x07",
+            b"\x1bP>|xterm.js(6.0.0)\x1b\\",
+            b"\x1bP1$r0;1m\x1b\\",
+            b"\x1b_Gi=1;OK\x1b\\",
+            b"\x1b[?1;2c",
+        ] {
+            assert_eq!(classify_input(seq), InputSignal::default(), "{seq:?}");
+        }
+    }
+
+    #[test]
+    fn a_keystroke_after_a_terminal_reply_still_counts() {
+        assert_eq!(
+            classify_input(b"\x1b]11;rgb:0/0/0\x07y\r"),
+            InputSignal {
+                typed: true,
+                enter: true
+            }
+        );
     }
 
     #[test]

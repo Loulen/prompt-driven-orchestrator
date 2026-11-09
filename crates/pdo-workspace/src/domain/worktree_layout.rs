@@ -64,6 +64,10 @@ pub fn delivery_commit_message(node_id: &str, iter: i64) -> String {
 /// the target repo's `.gitignore` says (#796).
 pub const RUN_ARTIFACTS_RELATIVE: &str = ".pdo/artifacts";
 
+/// Where a session's prompt and its turn-end hook are written, relative to the
+/// node's working directory: PDO's, never committed with the node's work.
+pub const SESSION_PROMPTS_RELATIVE: &str = ".pdo/prompts";
+
 #[cfg(test)]
 mod tests {
     use super::*;

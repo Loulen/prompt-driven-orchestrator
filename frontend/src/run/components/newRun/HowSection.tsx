@@ -1,4 +1,5 @@
 import AgentControl from "../../../settings/components/AgentControl";
+import { inheritedFloor } from "../../../settings/model/agentProfiles";
 import HarnessSelect from "../../../harness/components/HarnessSelect";
 import SkillSelector from "../../../skill/components/SkillSelector";
 import FormRow from "../../../shared/ui/FormRow";
@@ -12,7 +13,7 @@ export default function HowSection({ form, onManageStagingProfiles }: { form: Ne
     pipelines, selectedPipelineId, repoValid, mode, harness, setHarness,
     agentChoice, setAgentChoice, skills, setSkills, agentProfiles, skillBank,
     inheritedSkillTiers, handlePipelineChange, harnessCatalog, instanceDefaultHarness,
-    pipelineSections, repoProject, promptAddedSkills, remoteUrl,
+    pipelineSections, repoProject, promptAddedSkills, remoteUrl, settings,
   } = form;
   return (
     <>
@@ -49,7 +50,7 @@ export default function HowSection({ form, onManageStagingProfiles }: { form: Ne
           onChange={setAgentChoice}
           profiles={agentProfiles}
           catalog={harnessCatalog}
-          inherited={{ harness: instanceDefaultHarness || "claude", model: null, effort: null }}
+          inherited={inheritedFloor(agentProfiles, settings?.default_harness?.effective, settings?.agent_choice)}
           label={mode === "trigger" ? "Agent — Trigger" : "Agent — New Run"}
           showLabel={false}
           testId="run-agent-control"

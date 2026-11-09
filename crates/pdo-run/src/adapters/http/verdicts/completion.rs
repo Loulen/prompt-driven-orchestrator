@@ -189,6 +189,9 @@ mod tests {
                     // La liaison forte laisse la main à l'agent tant qu'aucun
                     // enfant n'a échoué (#724).
                     | CompletionRefusal::ChildrenPending { failed: 0, .. }
+                    // A dirtied read-only secondary leaves the node alive and
+                    // nothing recorded: revert, then complete again.
+                    | CompletionRefusal::SecondaryRepoDirtied { .. }
             );
             assert_eq!(r.recoverable(), expected, "{} recoverable()", r.slug());
         }

@@ -10,6 +10,7 @@ import { NodeTypeIcon } from "./NodeTypeIcon";
 import PooledInputRow from "./PooledInputRow";
 import { useHarnessCatalog } from "../../harness/store/useHarnessCatalog";
 import { useAgentProfiles } from "../../settings/store/useAgentProfiles";
+import { useInheritedFloor } from "../../settings/store/useInheritedFloor";
 import { useSkillBank } from "../../skill/store/useSkillBank";
 import { useSkillTiers } from "../../skill/store/useSkillTiers";
 import type { InheritedTier } from "../../skill/model/skillSelection";
@@ -109,6 +110,7 @@ export default function NodeInspector({
   // each installed/not). Called before the early return so the hook order is stable.
   const harnessCatalog = useHarnessCatalog();
   const { profiles: agentProfiles } = useAgentProfiles();
+  const inheritedAgent = useInheritedFloor(agentProfiles);
   // #669/ADR-0062: the bank (names, folders) and the coarser tiers this node
   // inherits — the instance selection, the Projet owning the Run's repo when one
   // is known (run canvas), and the Run's frozen list. Called before the early
@@ -280,6 +282,7 @@ export default function NodeInspector({
             handleField={handleField}
             harnessCatalog={harnessCatalog}
             agentProfiles={agentProfiles}
+            inheritedAgent={inheritedAgent}
             skillBank={skillBank}
             inheritedSkillTiers={inheritedSkillTiers}
             resolvedHarness={resolvedHarness}

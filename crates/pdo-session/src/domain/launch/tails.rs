@@ -161,7 +161,7 @@ pub fn build_script_tail(prompt_path: &Path, timeout_secs: u64) -> String {
         "timeout {timeout_secs}s bash {body} ; ec=$? ; \
          if [ $ec -eq 0 ]; then co=$(pdo complete 2>&1) ; cc=$? ; printf '%s\\n' \"$co\" ; \
          case \"$cc:$co\" in 0:*|4:*|3:*children_pending*) ;; \
-         *) pdo fail --reason \"pdo complete refused with exit $cc after script success\" ;; esac ; \
+         *) pdo fail --reason \"pdo complete refused with exit $cc after script success: $co\" ;; esac ; \
          elif [ $ec -eq 124 ]; then pdo fail --reason \"script timed out after {timeout_secs}s\" ; \
          else pdo fail --reason \"script exited $ec\" ; fi"
     )

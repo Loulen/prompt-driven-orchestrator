@@ -132,7 +132,13 @@ pub async fn deliver_node_run(
     // pipeline branch's actual tip: still equal ⇒ the divergence is the run's own
     // history rewritten by this node, and resolving in its favour drops nothing.
     // No base recorded ⇒ no resolution.
-    let spawn_base = merge_action::spawn_base_sha(events, node_id, iter);
+    // CORE-231: a non-isolated NodeRun has no cut; its delivery starts where the
+    // Run worktree's HEAD stood when it started, so its own commits count.
+    let spawn_base = if isolated {
+        merge_action::spawn_base_sha(events, node_id, iter)
+    } else {
+        merge_action::start_head_sha(events, node_id, iter)
+    };
     // CORE-43: the identity the extensions gave the node signs every commit of
     // its delivery, as it signs the commits the node made itself.
     let identity = merge_action::frozen_git_identity(events, node_id, iter);

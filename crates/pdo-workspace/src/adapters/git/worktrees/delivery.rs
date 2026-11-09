@@ -189,10 +189,14 @@ pub enum DeliveryOutcome {
 /// every non-ignored change then visible — under its own deterministic message.
 /// Isolation, not the runtime, is how an author buys reliable attribution.
 ///
-/// `spawn_base`: the commit an isolated NodeRun's sub-worktree was cut from, per its
-/// `NodeStarted` (`merge_action::spawn_base_sha`). `None` — a pre-#503 Run, or a
-/// spawn that recorded none — forbids the #503 resolution: an unknown base is not a
-/// licence to rewrite a branch. Ignored when the NodeRun is not isolated.
+/// `spawn_base`: the commit the NodeRun's work started from, per its `NodeStarted`.
+/// For an isolated NodeRun, the commit its sub-worktree was cut from
+/// (`merge_action::spawn_base_sha`): `None` — a pre-#503 Run, or a spawn that
+/// recorded none — forbids the #503 resolution, an unknown base is not a licence
+/// to rewrite a branch. For a non-isolated one, the Run worktree's HEAD when it
+/// started (`merge_action::start_head_sha`): it is the delivery's `before`, so the
+/// commits the node made itself stay inside its pair (CORE-231). `None` there
+/// falls back to the HEAD at delivery, which only brackets what was left behind.
 ///
 /// `identity`: the identity frozen on the NodeRun's start (CORE-43). It signs
 /// every commit this delivery writes: the delivery commit, the merge-back and
@@ -212,7 +216,10 @@ pub fn deliver_node_work(
 
     if !isolated {
         // In place: the node worked in the Run's worktree, so its commit IS the
-        // delivery. Nothing to merge, nothing to conflict with.
+        // delivery. Nothing to merge, nothing to conflict with. The pair starts
+        // where the node started, not where it stopped: a node that committed its
+        // own work would otherwise deliver an empty pair.
+        let before = spawn_base.map(str::to_string).unwrap_or(before);
         stage_and_commit(run_worktree_dir, node_id, iter, identity)?;
         let after = rev_parse(run_worktree_dir, "HEAD")?;
         if before == after {

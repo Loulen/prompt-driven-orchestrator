@@ -160,14 +160,6 @@ pub fn compute_run_cost_breakdown(
         .and_then(|value| value.as_str())
         .filter(|value| !value.is_empty())
         .unwrap_or(pdo_harness::registry::CLAUDE);
-    let infrastructure_executions = i64::from(
-        events
-            .iter()
-            .any(|event| event.kind == crate::domain::event::EventKind::RunStarted),
-    ) + events
-        .iter()
-        .filter(|event| event.kind == crate::domain::event::EventKind::MergeResolverStarted)
-        .count() as i64;
     let ambiguous_shared_claude = executions.iter().any(|execution| {
         execution.harness == pdo_harness::registry::CLAUDE
             && execution.session_id.is_none()
@@ -175,6 +167,29 @@ pub fn compute_run_cost_breakdown(
     });
     let leftover = leftover_files
         .then(|| aggregate_by_model(leftover_lines.into_iter(), prices, &mut seen_messages));
+    // The Run's own sessions: each Pipeline Manager it started (on demand) and
+    // each merge resolver. A Run that started none has no Infrastructure
+    // execution (CORE-231): counting one anyway made every Run read "without
+    // computable cost". A leftover transcript without any such event is a
+    // manager that predates `ManagerStarted` (it started with every Run): one.
+    let infrastructure_starts = events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.kind,
+                crate::domain::event::EventKind::ManagerStarted
+                    | crate::domain::event::EventKind::MergeResolverStarted
+            )
+        })
+        .count() as i64;
+    let run_started = events
+        .iter()
+        .any(|event| event.kind == crate::domain::event::EventKind::RunStarted);
+    // A floor, not an addition: a Run of today with a resolver and no manager
+    // also leaves the resolver's transcript over, and must count one. The price
+    // is a legacy Run with a manager AND a resolver counting one, not two.
+    let legacy_manager = run_started && leftover.is_some();
+    let infrastructure_executions = infrastructure_starts.max(i64::from(legacy_manager));
     if infrastructure_executions > 0 {
         let attributable = !ambiguous_shared_claude;
         contributions.push(CostContribution {

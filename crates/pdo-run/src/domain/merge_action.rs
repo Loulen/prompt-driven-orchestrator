@@ -50,6 +50,35 @@ use crate::domain::event::EventKind;
 /// base — means *no adoption*. An unknown base is not a licence to rewrite a
 /// branch.
 pub fn spawn_base_sha(events: &[Event], node_id: &str, iter: i64) -> Option<String> {
+    node_started_sha(events, node_id, iter, "base_sha")
+}
+
+/// The Run worktree's HEAD when a **non-isolated** NodeRun started, recorded on
+/// its last `NodeStarted` (`run_head_sha`). It is the `before` of that NodeRun's
+/// delivery, so the commits the node made itself stay inside its pair (CORE-231).
+/// A restart re-records it: the pair then starts at the restart.
+///
+/// `None` for an isolated NodeRun, for a Run started before it was recorded, and
+/// when **another** delivery moved the Run's branch since: from the start head,
+/// the pair would also hold that sibling's work, which is already its own pair.
+/// The delivery then falls back to the HEAD it finds, as before.
+pub fn start_head_sha(events: &[Event], node_id: &str, iter: i64) -> Option<String> {
+    let started = events.iter().rposition(|e| {
+        e.kind == EventKind::NodeStarted
+            && e.node_id.as_deref() == Some(node_id)
+            && e.iter.unwrap_or(1) == iter
+    })?;
+    let sibling_delivered = events[started + 1..].iter().any(|e| {
+        e.kind == EventKind::NodeDelivered
+            && (e.node_id.as_deref() != Some(node_id) || e.iter.unwrap_or(1) != iter)
+    });
+    if sibling_delivered {
+        return None;
+    }
+    node_started_sha(events, node_id, iter, "run_head_sha")
+}
+
+fn node_started_sha(events: &[Event], node_id: &str, iter: i64, key: &str) -> Option<String> {
     events
         .iter()
         .rev()
@@ -60,7 +89,7 @@ pub fn spawn_base_sha(events: &[Event], node_id: &str, iter: i64) -> Option<Stri
         })?
         .payload
         .as_ref()?
-        .get("base_sha")?
+        .get(key)?
         .as_str()
         .map(str::trim)
         .filter(|sha| !sha.is_empty())
@@ -186,6 +215,57 @@ mod tests {
         assert!(frozen_git_identity(&events, "impl", 1).is_empty());
         assert!(frozen_git_identity(&events, "ship", 1).is_empty());
         assert!(frozen_git_identity(&events, "never", 1).is_empty());
+    }
+
+    #[test]
+    fn the_start_head_comes_off_the_last_node_started() {
+        let started = |iter: i64, head: &str| Event {
+            payload: Some(serde_json::json!({ "base_sha": null, "run_head_sha": head })),
+            ..ev(EventKind::NodeStarted, Some("make"), Some(iter))
+        };
+        let events = vec![
+            ev(EventKind::RunStarted, None, None),
+            started(1, "aaaa1111"),
+            ev(EventKind::NodeInterrupted, Some("make"), Some(1)),
+            started(1, "bbbb2222"),
+            started(2, "cccc3333"),
+            spawn("impl", 1, "dddd4444"),
+        ];
+        assert_eq!(
+            start_head_sha(&events, "make", 1).as_deref(),
+            Some("bbbb2222")
+        );
+        assert_eq!(
+            start_head_sha(&events, "make", 2).as_deref(),
+            Some("cccc3333")
+        );
+        assert!(
+            start_head_sha(&events, "impl", 1).is_none(),
+            "an isolated spawn records none"
+        );
+        assert!(spawn_base_sha(&events, "make", 1).is_none());
+    }
+
+    /// Another delivery moved the Run's branch while the node ran: from the
+    /// start head, the pair would hold that sibling's work too. No start head,
+    /// so the delivery falls back to the HEAD it finds (its own leftovers only).
+    #[test]
+    fn a_sibling_delivery_since_the_start_drops_the_start_head() {
+        let started = Event {
+            payload: Some(serde_json::json!({ "run_head_sha": "aaaa1111" })),
+            ..ev(EventKind::NodeStarted, Some("make"), Some(1))
+        };
+        let delivered = |node: &str| Event {
+            payload: Some(serde_json::json!({ "before": "x", "after": "y" })),
+            ..ev(EventKind::NodeDelivered, Some(node), Some(1))
+        };
+        let quiet = vec![delivered("lint"), started.clone()];
+        assert_eq!(
+            start_head_sha(&quiet, "make", 1).as_deref(),
+            Some("aaaa1111")
+        );
+        let moved = vec![started, delivered("lint")];
+        assert!(start_head_sha(&moved, "make", 1).is_none());
     }
 
     #[test]

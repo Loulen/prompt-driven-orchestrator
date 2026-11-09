@@ -49,8 +49,31 @@ impl Review {
                     .structured_worktree(dir, &from_ref, run_refs::WORKTREE_ID, three_dot)
             }
         };
+        // CORE-231: a side the caller gave as a raw revision is the likelier
+        // culprit of an unknown revision than a gone branch: name it.
+        let raw_revisions: Vec<&str> = [from, to]
+            .into_iter()
+            .flatten()
+            .filter(|value| {
+                matches!(
+                    run_refs::resolve_id(run_id, &run.state, &run.events, value),
+                    run_refs::Resolved::NotAnId
+                )
+            })
+            .collect();
         result.map_err(|e| {
-            if e.unknown_revision {
+            if e.unknown_revision && !raw_revisions.is_empty() {
+                Failure::Text(
+                    404,
+                    format!(
+                        "unknown ref: {}, or the Run's branch is gone (a side is a Run \
+                         ref: fork, tip, worktree, node:<id>:<iter>:before, \
+                         node:<id>:<iter>:after, live:<id>; or a revision of the Run's \
+                         repository)",
+                        raw_revisions.join(", ")
+                    ),
+                )
+            } else if e.unknown_revision {
                 Failure::Text(404, "run branch not found".into())
             } else {
                 Failure::Text(500, e.message)

@@ -61,8 +61,12 @@ pub enum ReviewAction {
         /// `git apply`; without the work not committed yet.
         #[arg(long, conflicts_with_all = ["from", "to", "json"])]
         git: bool,
+        /// A Run ref: `fork` (default), `tip`, `node:<id>:<iter>:before`,
+        /// `node:<id>:<iter>:after`, `live:<id>`, or a revision of the Run's
+        /// repository.
         #[arg(long)]
         from: Option<String>,
+        /// A Run ref, as `--from`, or `worktree` (the work not committed yet).
         #[arg(long)]
         to: Option<String>,
         /// The Run; defaults to the session's `PDO_RUN_ID`.

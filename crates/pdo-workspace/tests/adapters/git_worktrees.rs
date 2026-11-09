@@ -919,6 +919,53 @@ fn deliver_in_place_excludes_resources_materialized_by_provisioning() {
     );
 }
 
+/// A non-isolated node that commits its own work: the delivery takes no commit,
+/// but its `before` is the Run worktree's HEAD when the node started, so the
+/// pair still brackets what the node did (CORE-231).
+#[test]
+fn deliver_in_place_brackets_the_commits_the_node_made_itself() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    init_test_repo(repo);
+
+    let run_id = "test-deliver-self-commit";
+    let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+    let pipeline_branch = format!("pdo/run-{run_id}");
+    create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
+    let started_at = rev_parse(&wt_dir, "HEAD").unwrap();
+
+    std::fs::write(wt_dir.join("own.rs"), "pub fn own() {}\n").unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&wt_dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}: {out:?}");
+    };
+    git(&["add", "own.rs"]);
+    git(&["commit", "-m", "the node's own commit"]);
+    let tip = rev_parse(&wt_dir, "HEAD").unwrap();
+
+    let outcome = deliver_node_work(
+        &wt_dir,
+        &wt_dir,
+        false,
+        "unused",
+        "shared-1",
+        1,
+        Some(&started_at),
+        &CommitIdentity::default(),
+    )
+    .unwrap();
+    let DeliveryOutcome::Delivered(d) = outcome else {
+        panic!("a non-isolated delivery never conflicts");
+    };
+    assert!(d.changed(), "the node's own commit is its delivery");
+    assert_eq!(d.before, started_at);
+    assert_eq!(d.after, tip, "nothing left behind ⇒ no delivery commit");
+}
+
 /// The no-op reports itself as one: same tip on both sides, no commit taken.
 #[test]
 fn deliver_in_place_on_a_clean_tree_is_a_no_op() {

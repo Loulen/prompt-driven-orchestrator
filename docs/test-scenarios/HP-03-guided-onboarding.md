@@ -131,7 +131,8 @@ Features validated while crossing the tour:
     and offers *Finish here* or **Continue** (next: *First pipeline*).
 14. **Continue** → the artifact modal closes and the *First pipeline* tour starts on a clear screen.
     Carry it to its end card and `Finish`; the name to paste is `tutorial-implement-test-<id>`.
-    Right after **Save**, the card asks to **Validate the
+    Before the edges between the two agents, a card has you drag from the border of the **Start**
+    marker onto **implementer** (CORE-241). Right after **Save**, the card asks to **Validate the
     pipeline**: Validate (next to Save) opens the modal; tick **All projects (current and future)**
     and **Save validation** → the modal closes, the tab bar's indicator turns to the globe « All »,
     and the tour moves on. The step is skippable: skipping it leaves a test pipeline (flask, 0). Every card the tour has you create must be **on screen**
@@ -142,7 +143,10 @@ Features validated while crossing the tour:
     step before comes back and waits for `Next` (its condition already holds), and the tour carries
     on to its end card as usual, with no « this step could not be completed » card. **On *Select
     the node***, `‹ Previous` is greyed out: *Choose Node* needs the Add menu, which closed on the
-    pick.
+    pick. **The pipeline you built runs**: launch a Run on `tutorial-implement-test-<id>` (New Run,
+    or `pdo run create` with a target repository and a prompt) → **implementer** starts (the Run's
+    events hold a `node_started` for it), and the canvas shows the edge from Start. Stop the Run
+    once implementer has started.
 15. Open **Settings › Tutorials** → all three tours are ticked, *Overview* first, and the **Full
     tour** row is ticked too.
 16. **Make the instance yours** (drive-by, CORE-232): still in Settings, open **Appearance**, pick
@@ -192,6 +196,9 @@ Features validated while crossing the tour:
   into the background and eat every click the next tour asks for.
 - Each node the reader creates in *First pipeline* lands **clear of the others** and of the End
   marker, so the edges the tour then asks them to select can actually be clicked.
+- **The pipeline *First pipeline* builds starts**: Start is wired to implementer, and a Run launched
+  on it starts implementer instead of sitting `running` with no node started (CORE-241). The
+  banner above its canvas carries no "Start is connected to no node" once the tour has saved it.
 - **Every lit target is reachable with the mouse, at an ordinary window size** — no step asks for a
   click outside the visible canvas, and no step needs a wider window, a zoom-out or a pan to be
   satisfied. The tour overlay owns the wheel and the drag, so a target off screen is a dead end.

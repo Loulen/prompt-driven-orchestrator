@@ -16,6 +16,18 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 
 ## Unreleased
 
+### A pipeline whose Start leads nowhere says so, and its Run fails at once
+
+- The *First pipeline* tour now has you connect **Start to implementer** before wiring the loop. The
+  pipeline it used to end on had no edge out of Start, and its Runs stayed `running` forever without
+  starting a node.
+- A pipeline that nothing starts (Start connected to no node, no node without an incoming edge, no
+  on-demand node) shows a warning in the banner above the canvas: "Start is connected to no node,
+  and no node starts on its own, so a Run of this pipeline would start nothing". A Run launched on
+  it fails at once with that reason, instead of staying `running` with nothing live.
+- The banner above the canvas is read again after every Save, so a warning that a save brings
+  shows up at once, not only after a reload.
+
 ### Sandbox, harnesses, worktrees, multi-repo and live sessions: fixes from the vanilla acceptance tour
 
 - A declared wait is lifted by a person's answer only. What the browser's terminal answers by itself

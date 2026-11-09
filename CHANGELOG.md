@@ -33,6 +33,11 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   fast no longer exists"), in the warning above the canvas, on the node card's tooltip and in the
   inspector, wherever this browser listed the profile before; elsewhere it still shows the id.
 - The import window's second tab reads "Claude Code workflow".
+- A double-click on a pipeline in the library opens one tab, not two tabs on the same pipeline that
+  each kept their own Undo history. A second open that answers late leaves the open tab and its
+  edits alone.
+- Add › Note places the new note clear of the notes already on the canvas, as it already did for
+  nodes, instead of on top of the last one. A new node keeps clear of the notes too.
 - `pdo skill export --skill` takes a skill's name as well as its id, as every other `pdo skill`
   command does.
 - `pdo settings agent-profile delete --help` says what the daemon does: it deletes a profile even

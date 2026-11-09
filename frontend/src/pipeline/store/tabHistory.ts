@@ -222,9 +222,12 @@ export function replaceWithTab(
 // append + activate. Single-tab: replace the current tab — but if the replace
 // would discard unsaved work, PARK it for confirmation instead of destroying it
 // (the caller has already fetched, so the tab object is ready to apply on
-// confirm). Callers pass a tab whose id is NOT already open (the early-return in
-// openPipeline/openRunPipeline handles the already-open case).
+// confirm). A tab whose id is already open just gets activated: the open's
+// early-return misses a second open that started before the first one's fetch
+// answered (a double-click on a library row), and the tab already there keeps
+// its draft and history.
 export function placeOpenedTab(state: EditState, tab: OpenPipeline): Partial<EditState> {
+  if (state.openTabs.some((t) => t.id === tab.id)) return switchedTab(state, tab.id);
   if (!state.singleTabMode) {
     // A tab id opened afresh (a Run reopened) starts with nothing selected.
     const tabSelections = { ...leftSelection(state) };

@@ -18,7 +18,7 @@ import type { PortSide } from "../../shared/generated/PortSide";
 import { landsByDrop } from "../../lib/anchorSide";
 import type { Box } from "../../lib/compactLayout";
 import { growBands, growShift, growUnshift, type GrowRect } from "../../lib/growLayout";
-import { fallbackNodeSpot } from "../../lib/nodePlacement";
+import { fallbackNodeSpot, fallbackNoteSpot } from "../../lib/nodePlacement";
 import { COMPACT_CARD, estimateNoteHeight } from "./compactCanvas";
 import type { EditorPipelineDef } from "./pipeline";
 
@@ -65,7 +65,7 @@ export function grownCanvas(pipeline: EditorPipelineDef): GrownCanvas {
     rects.push({ id: n.id, x, y, w: COMPACT_CARD.width, h: COMPACT_CARD.detailed, hGrown: editCardHeight(n.outputs.length) });
   });
   (pipeline.notes ?? []).forEach((note, i) => {
-    const y = note.view?.y ?? 80 + i * 120;
+    const y = note.view?.y ?? fallbackNoteSpot(i).y;
     const h = estimateNoteHeight(note.content);
     rects.push({ id: `note:${note.id}`, x: 0, y, w: 0, h, hGrown: h });
   });
@@ -108,8 +108,9 @@ export function grownCanvas(pipeline: EditorPipelineDef): GrownCanvas {
   });
 
   const notes = pipeline.notes?.map((note, i) => {
-    const y = note.view?.y ?? 80 + i * 120;
-    return { ...note, view: { ...(note.view ?? {}), x: note.view?.x ?? 240, y: down(y) } };
+    const fallback = fallbackNoteSpot(i);
+    const y = note.view?.y ?? fallback.y;
+    return { ...note, view: { ...(note.view ?? {}), x: note.view?.x ?? fallback.x, y: down(y) } };
   });
 
   const toStored = (y: number, moving?: ReadonlySet<string>) => {

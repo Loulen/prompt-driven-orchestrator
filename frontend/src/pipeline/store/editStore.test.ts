@@ -2161,6 +2161,60 @@ describe("openPipeline (#320 / #216 canvas-open)", () => {
     expect(mockFetchPipeline).toHaveBeenCalledTimes(1);
   });
 
+  it("opens one tab when a double-click opens the pipeline twice before the fetch answers", async () => {
+    await Promise.all([
+      useEditStore.getState().openPipeline("pipe-a"),
+      useEditStore.getState().openPipeline("pipe-a"),
+    ]);
+
+    const state = useEditStore.getState();
+    expect(state.openTabs.filter((t) => t.id === "pipe-a")).toHaveLength(1);
+    expect(state.activeTabId).toBe("pipe-a");
+  });
+
+  it("keeps the tab and its edits when the second open of a double-click answers after an edit", async () => {
+    const detail = await fetchPipeline("pipe-b");
+    let answerLate: (value: typeof detail) => void = () => {};
+    vi.mocked(fetchPipeline)
+      .mockResolvedValueOnce(detail)
+      .mockReturnValueOnce(new Promise((resolve) => (answerLate = resolve)));
+
+    const first = useEditStore.getState().openPipeline("pipe-b");
+    const second = useEditStore.getState().openPipeline("pipe-b");
+    await first;
+    useEditStore.setState((s) => ({
+      openTabs: s.openTabs.map((t) => (t.id === "pipe-b" ? { ...t, dirty: true } : t)),
+    }));
+    answerLate(detail);
+    await second;
+
+    const tabs = useEditStore.getState().openTabs.filter((t) => t.id === "pipe-b");
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0].dirty).toBe(true);
+  });
+
+  it("keeps the edited tab in single-tab mode when the second open of a double-click answers late", async () => {
+    useEditStore.setState({ singleTabMode: true });
+    const detail = await fetchPipeline("pipe-c");
+    let answerLate: (value: typeof detail) => void = () => {};
+    vi.mocked(fetchPipeline)
+      .mockResolvedValueOnce(detail)
+      .mockReturnValueOnce(new Promise((resolve) => (answerLate = resolve)));
+
+    const first = useEditStore.getState().openPipeline("pipe-c");
+    const second = useEditStore.getState().openPipeline("pipe-c");
+    await first;
+    useEditStore.setState((s) => ({
+      openTabs: s.openTabs.map((t) => (t.id === "pipe-c" ? { ...t, dirty: true } : t)),
+    }));
+    answerLate(detail);
+    await second;
+
+    const state = useEditStore.getState();
+    expect(state.openTabs.map((t) => [t.id, t.dirty])).toEqual([["pipe-c", true]]);
+    expect(state.pendingSingleTab).toBeNull();
+  });
+
   it("forwards the scope arg to fetchPipeline for a library-scoped open", async () => {
     await useEditStore.getState().openPipeline("pipe-lib", "library");
     expect(mockFetchPipeline).toHaveBeenCalledWith("pipe-lib", "library");

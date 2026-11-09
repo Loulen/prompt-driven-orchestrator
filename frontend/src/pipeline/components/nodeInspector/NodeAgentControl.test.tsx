@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import NodeAgentControl from "./NodeAgentControl";
+import { forgetSessionProfileNames, rememberProfileNames } from "../../../settings/model/profileNames";
 import type { AgentProfile } from "../../../shared/generated/AgentProfile";
 import type { HarnessCatalog } from "../../../harness/model/catalog";
 
@@ -101,6 +102,18 @@ describe("NodeAgentControl (inspector.agentControl)", () => {
   it("warns of a missing profile on the summary line", () => {
     renderControl({ choice: { mode: "profile", profile_id: "gone" } });
     expect(screen.getByTestId("node-agent-control-resolved")).toHaveTextContent("missing");
+  });
+
+  it("names a deleted profile by the name this browser saw, not its id", () => {
+    rememberProfileNames([{ id: "agp-gone", name: "Reviewer fast" }]);
+    renderControl({ choice: { mode: "profile", profile_id: "agp-gone" } });
+    expect(screen.getByTestId("node-agent-control-resolved")).toHaveAttribute(
+      "title",
+      "Profile Reviewer fast is missing: the next tier resolves",
+    );
+    expect(screen.getByRole("button", { name: "Profile" })).toHaveTextContent("Reviewer fast");
+    localStorage.clear();
+    forgetSessionProfileNames();
   });
 
   it("puts harness, model and effort on one line", () => {

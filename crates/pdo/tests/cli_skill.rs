@@ -148,7 +148,8 @@ async fn a_skill_is_added_changed_and_removed_as_settings_skills_does() {
     .await;
     assert_eq!(gone.code, Some(4), "{}", gone.stderr);
 
-    // Export, then upload back: the bank keeps the id it already holds.
+    // Export (the skill named by its name, as everywhere else), then upload
+    // back: the bank keeps the id it already holds.
     let zip = dir.path().join("bank.zip");
     let exported = pdo(
         &daemon,
@@ -156,7 +157,7 @@ async fn a_skill_is_added_changed_and_removed_as_settings_skills_does() {
             "skill",
             "export",
             "--skill",
-            &id,
+            "crafty",
             "-o",
             zip.to_str().unwrap(),
         ],

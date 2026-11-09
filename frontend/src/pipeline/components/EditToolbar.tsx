@@ -174,7 +174,14 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
             onClick={() => undo()}
             disabled={!canUndo}
           />
-          <IconButton icon={Redo2} label="Redo" kbd="Ctrl+Y" data-testid="toolbar-redo" onClick={() => redo()} disabled={!canRedo} />
+          <IconButton
+            icon={Redo2}
+            label={draft?.redoLabel ? `Redo ${draft.redoLabel}` : "Redo"}
+            kbd="Ctrl+Y"
+            data-testid="toolbar-redo"
+            onClick={() => redo()}
+            disabled={!canRedo}
+          />
         </>
       )}
 

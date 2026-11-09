@@ -3,6 +3,7 @@ import type { AgentChoice } from "../../../shared/generated/AgentChoice";
 import type { AgentProfile } from "../../../shared/generated/AgentProfile";
 import type { AgentCombination } from "../../../settings/model/settings";
 import { combinationLabel, resolveAgentChoice } from "../../../settings/model/agentProfiles";
+import { profileLabel } from "../../../settings/model/profileNames";
 import type { HarnessCatalog } from "../../../harness/model/catalog";
 import { customDefaults, effortOffer, findHarnessOption } from "../../../harness/model/catalog";
 import { useEffect, useRef, useState } from "react";
@@ -113,6 +114,8 @@ export default function NodeAgentControl({
   const editingCustom = choice?.mode === "custom" && !readOnly;
   const resolved = resolveAgentChoice(choice, profiles, inherited);
   const broken = resolved.brokenId != null;
+  // The name this browser last saw: the node holds only the id (ADR-0057).
+  const brokenName = resolved.brokenId != null ? profileLabel(resolved.brokenId) : undefined;
   const custom: AgentCombination = choice?.mode === "custom" ? choice : inherited;
   const harnessOption = findHarnessOption(catalog, custom.harness);
   // #798: the effort offer is read against the model this choice has selected.
@@ -157,7 +160,7 @@ export default function NodeAgentControl({
             label="Profile"
             value={choice.profile_id}
             disabled={readOnly}
-            placeholder={resolved.brokenId}
+            placeholder={brokenName}
             onChange={(profile_id) => onChange({ mode: "profile", profile_id })}
             options={profiles.map((p) => ({ value: p.id, label: p.name, hint: combinationLabel(p) }))}
           />
@@ -219,7 +222,7 @@ export default function NodeAgentControl({
           data-testid={`${testId}-resolved`}
           title={
             broken
-              ? `Profile ${resolved.brokenId} is missing: the next tier resolves`
+              ? `Profile ${brokenName} is missing: the next tier resolves`
               : `Resolved agent · ${combinationLabel(resolved.combination)}`
           }
         >

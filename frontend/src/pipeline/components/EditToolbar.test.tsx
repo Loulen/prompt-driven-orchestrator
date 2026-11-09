@@ -6,6 +6,7 @@ import EditToolbar from "./EditToolbar";
 import { useEditStore } from "../store/editStore";
 import type { TabHistory } from "../store/editState";
 import type { EditorPipelineDef } from "../model/pipeline";
+import { INITIAL_DRAFT_STATE } from "../store/draftSession";
 
 describe("EditToolbar", () => {
   const onAddNode = vi.fn();
@@ -331,6 +332,19 @@ describe("EditToolbar undo/redo buttons (ADR-0014 / #226)", () => {
       </>,
     );
   }
+
+  it("names the change each button replays, from the shared draft", () => {
+    seed({ past: [], future: [], lastKey: null, lastAt: 0 });
+    useEditStore.setState((s) => ({
+      openTabs: s.openTabs.map((t) => ({
+        ...t,
+        draft: { ...INITIAL_DRAFT_STATE, canUndo: true, canRedo: true, undoLabel: "add note", redoLabel: "delete note" },
+      })),
+    }));
+    renderToolbar();
+    expect(screen.getByTestId("toolbar-undo")).toHaveAccessibleName("Undo add note");
+    expect(screen.getByTestId("toolbar-redo")).toHaveAccessibleName("Redo delete note");
+  });
 
   it("renders both buttons with their testids", () => {
     seed({ past: [], future: [], lastKey: null, lastAt: 0 });

@@ -71,6 +71,14 @@ export function fallbackNodeSpot(index: number): Point {
   return { x: 200, y: 80 + index * 140 };
 }
 
+/**
+ * Where the canvas lays out a note the document gives no position for: a column
+ * of its own, beside the nodes', in document order.
+ */
+export function fallbackNoteSpot(index: number): Point {
+  return { x: 240, y: 80 + index * 120 };
+}
+
 function overlaps(a: Point, b: Point): boolean {
   return Math.abs(a.x - b.x) < STEP_X && Math.abs(a.y - b.y) < STEP_Y;
 }

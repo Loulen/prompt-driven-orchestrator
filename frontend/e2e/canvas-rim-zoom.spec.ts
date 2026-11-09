@@ -222,6 +222,9 @@ test("renaming a wired output applies on validation, its edges and inputs follow
 
   await expect(page.getByTestId("edge-output-label-e-0-spec-v2")).toBeVisible();
   await expect(page.getByTestId("edge-output-label-e-1-spec-v2")).toBeVisible();
+  // The inspector narrowed the canvas the graph was fitted to: fit it again,
+  // or the downstream cards stay under the pane.
+  await page.getByRole("button", { name: "Fit view" }).click();
   for (const id of ["builder", "reviewer"]) {
     await page.locator(`.react-flow__node[data-id="${id}"]`).click();
     await expect(page.getByTestId("inspector-pane-edit")).toContainText("spec-v2");

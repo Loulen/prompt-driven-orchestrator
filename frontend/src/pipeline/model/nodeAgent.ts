@@ -19,12 +19,14 @@ const line = (...parts: (string | null | undefined)[]) => parts.filter(Boolean).
 
 /**
  * The agent of a node: `bash` for a script, the model of a custom agent or of
- * its profile, the harness a Run froze it on, else « inherit ».
+ * its profile, the harness a Run froze it on, else « inherit ». `nameOf` names
+ * a profile the list no longer has (by default, its id).
  */
 export function nodeAgentLabel(
   node: { type: NodeType; agent_choice?: AgentChoice | null },
   profiles: readonly ProfileBrief[],
   frozenHarness?: string | null,
+  nameOf: (profileId: string) => string = (profileId) => profileId,
 ): NodeAgentLabel {
   if (node.type === "script") return { short: "bash", title: "Script · bash" };
   const choice = node.agent_choice;
@@ -33,7 +35,7 @@ export function nodeAgentLabel(
   }
   if (choice?.mode === "profile") {
     const profile = profiles.find((p) => p.id === choice.profile_id);
-    if (!profile) return { short: "profile", title: `Missing profile ${choice.profile_id}` };
+    if (!profile) return { short: "profile", title: `Missing profile ${nameOf(choice.profile_id)}` };
     return {
       short: profile.model?.split("/").pop() || profile.name,
       title: line(profile.name, profile.harness, profile.model, profile.effort),

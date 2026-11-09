@@ -16,6 +16,33 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 
 ## Unreleased
 
+### Authoring: fixes from the vanilla acceptance tour
+
+- Importing a Claude Code workflow lists what it could not map in English, in the import modal and
+  on `pdo pipeline library import`, and the placeholder it writes into a node's prompt is English
+  too ("⟨TODO: prompt built at run time — write this node's role⟩").
+- Deleting an agent profile something still names says "1 reference moves to the next tier", and
+  "2 references move" from two on.
+- The Undo tooltip names a note or a loop added or deleted ("Undo add note", "Undo delete loop"),
+  as it already did for nodes and edges; "edit note" is left for a note whose text changed. The
+  Redo tooltip names the change it replays the same way ("Redo delete note").
+- A "changed outside" or library-assistant line above the canvas goes away once you save the draft
+  it changed as a version: that version holds the change, and "See v2" no longer points at a
+  version older than the one you just saved. A line that arrives while the save is under way stays,
+  and so do the lines in the other participants' tabs.
+- A node whose agent profile was deleted names the profile as you knew it ("Agent profile Reviewer
+  fast no longer exists"), in the warning above the canvas, on the node card's tooltip and in the
+  inspector, wherever this browser listed the profile before; elsewhere it still shows the id.
+- The import window's second tab reads "Claude Code workflow".
+- A double-click on a pipeline in the library opens one tab, not two tabs on the same pipeline that
+  each kept their own Undo history. A second open that answers late leaves the open tab and its
+  edits alone.
+- Add › Note places the new note clear of the notes already on the canvas, as it already did for
+  nodes, instead of on top of the last one. A new node keeps clear of the notes too.
+- `pdo skill export --skill` takes a skill's name as well as its id, as every other `pdo skill`
+  command does.
+- `pdo settings agent-profile delete --help` says what the daemon does: it deletes a profile even
+  while something names it, and each of those falls back to the next tier.
 ### Upgrading from 1.x
 
 This is the first 2.x release published in this repository: it replaces PDO 1.x in place.
@@ -151,6 +178,7 @@ This is the first 2.x release published in this repository: it replaces PDO 1.x 
   the page loads, or caught up after a reconnection, alerts nothing; neither does a parent node
   waiting on its child runs.
 - `GET /runs` gives each child Run its `root_run_id`, the Run at the top of its chain of parents.
+- While an alert switch is on, a hidden tab of the interface reopens its event stream after a drop (a daemon restart,
 - While an alert switch is on, a hidden interface tab reopens its event stream after a drop (a daemon restart,
   a network change) instead of waiting to be shown; `openProbedSocket` takes a `whileHidden` option.
 ### Tree cost: what an orchestration really cost

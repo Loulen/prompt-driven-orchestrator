@@ -26,6 +26,12 @@ Features validated while crossing the editing screens (grafted from retired per-
 - **Lint banner** renders **exactly once** (the canvas overlay, never duplicated in the inspector) (#63).
 - **Library duplicate**: a library-only template duplicates into an **unlinked clone** that preserves
   unknown YAML keys and comments verbatim, name suffixed `(copy)` (#224).
+- **Versions** (ADR-0088): after the Save, Pipeline info › **Versions** lists the new version (marked
+  `last`, with its author) above the older one; **View** opens one read only, **Restore** brings it
+  back into the draft without saving a version (CORE-228).
+- **Import a workflow** (ADR-0016): a Claude Code `.js` workflow imported from the Pipelines list
+  becomes a draft pipeline on the canvas; the modal lists what it could not map as warnings, in the
+  language of the interface (CORE-228).
 
 ## Preconditions
 

@@ -9,7 +9,7 @@ import type { Selection } from "./editState";
 import type { CanvasShift } from "./canvasShift";
 import type { NodeType } from "../../shared/generated/NodeType";
 import { generateNodeId } from "../../lib/nanoid";
-import { CARD_HEIGHT, CARD_WIDTH, fallbackNodeSpot, freeDropSpot } from "../../lib/nodePlacement";
+import { CARD_HEIGHT, CARD_WIDTH, fallbackNodeSpot, fallbackNoteSpot, freeDropSpot } from "../../lib/nodePlacement";
 // #723 — orchestrator pastilles on the run-view node card.
 import type { EditorNodeDef } from "../model/pipeline";
 const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
@@ -75,11 +75,18 @@ export function useCanvasPlacement({
     // A node with no persisted position is on screen too — a fresh pipeline's
     // Start and End are written without a `view`, and the search that could not
     // see them dropped the first agent right on End.
+    // A note is a card too: a second note dropped on the first hides it.
     const shift = shiftRef?.current;
-    const occupied = ((shift?.shown ?? pipeline)?.nodes ?? []).map((n, i) => {
+    const drawn = shift?.shown ?? pipeline;
+    const nodeSpots = (drawn?.nodes ?? []).map((n, i) => {
       const fallback = fallbackNodeSpot(i);
       return { x: n.view?.x ?? fallback.x, y: n.view?.y ?? fallback.y };
     });
+    const noteSpots = (drawn?.notes ?? []).map((note, i) => {
+      const fallback = fallbackNoteSpot(i);
+      return { x: note.view?.x ?? fallback.x, y: note.view?.y ?? fallback.y };
+    });
+    const occupied = [...nodeSpots, ...noteSpots];
     const spot = freeDropSpot(
       { x: Math.round(cx - CARD_WIDTH / 2), y: Math.round(cy - CARD_HEIGHT / 2) },
       occupied,

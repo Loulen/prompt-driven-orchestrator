@@ -27,6 +27,10 @@ describe("nodeAgentLabel", () => {
       short: "profile",
       title: "Missing profile gone",
     });
+    const named = (id: string) => (id === "gone" ? "Reviewer fast" : id);
+    expect(nodeAgentLabel({ type: "agent", agent_choice: { mode: "profile", profile_id: "gone" } }, profiles, null, named).title).toBe(
+      "Missing profile Reviewer fast",
+    );
   });
 
   it("names the harness a Run froze, else says the node inherits", () => {

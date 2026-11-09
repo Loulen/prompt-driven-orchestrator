@@ -7,6 +7,7 @@ import { useMemo } from "react";
 import { collectionFanoutNudges } from "../../lib/loopRegions";
 import type { LintBannerItem } from "../components/LintBanner";
 import { useDismissedNudges } from "../../hooks/useDismissedNudges";
+import { profileLabel } from "../../settings/model/profileNames";
 // #723 — orchestrator pastilles on the run-view node card.
 
 export function useCanvasLint(tab: OpenPipeline | undefined, agentProfileIds: Set<string>, skillIds: Set<string>, skillBankLoaded: boolean) {
@@ -31,7 +32,7 @@ export function useCanvasLint(tab: OpenPipeline | undefined, agentProfileIds: Se
       return [{
         id: `agent-profile:${node.id}:${choice.profile_id}`,
         kind: "lint" as const,
-        message: `Agent profile ${choice.profile_id} no longer exists. Node ${node.name ?? node.id} falls back to the next tier. Pick a profile or set Custom.`,
+        message: `Agent profile ${profileLabel(choice.profile_id)} no longer exists. Node ${node.name ?? node.id} falls back to the next tier. Pick a profile or set Custom.`,
       }];
     });
     // #669/ADR-0062: a node selecting a skill the bank no longer has. A warning,

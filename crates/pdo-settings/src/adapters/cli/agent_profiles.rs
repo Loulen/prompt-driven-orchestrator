@@ -17,6 +17,7 @@ pub enum AgentProfileAction {
         #[arg(long)]
         json: bool,
     },
+    /// A profile, as `list` prints it.
     Show {
         id: String,
         #[arg(long)]
@@ -55,7 +56,9 @@ pub enum AgentProfileAction {
         #[arg(long)]
         json: bool,
     },
-    /// Delete a profile. The daemon refuses while something names it.
+    /// Delete a profile, even one something still names (`referents` lists
+    /// who): each of them falls back to the next tier. `Default` is never
+    /// deleted.
     Delete {
         id: String,
         #[arg(long)]

@@ -79,7 +79,7 @@ impl Importer {
             }
             Statement::IfStatement(i) => self.walk_if(i, cursor, depth),
             Statement::TryStatement(t) => {
-                self.warn("`try/finally` (cleanup garanti) sans équivalent structurel — le corps est aplati, la garantie de nettoyage est perdue (idiome hors périmètre v1)");
+                self.warn("`try/finally` (guaranteed cleanup) has no structural equivalent — its body is flattened and the cleanup guarantee is lost (idiom outside the v1 subset)");
                 self.walk_block(&t.block.body, cursor, depth + 1);
                 if let Some(f) = &t.finalizer {
                     self.walk_block(&f.body, cursor, depth + 1);

@@ -43,11 +43,11 @@ impl Importer {
             .map(|n| n.id.clone())
             .collect();
         if members.is_empty() {
-            self.warn("`pipeline(...)` sans `agent()` détectable dans les stages — aucune région collection créée");
+            self.warn("`pipeline(...)` with no detectable `agent()` in its stages — no collection region created");
             return;
         }
         self.warn(format!(
-            "`pipeline(...)` -> région collection (fan-out par item) ; `over: {over}` inféré best-effort — vérifie le champ liste sur le canvas"
+            "`pipeline(...)` -> collection region (fan-out per item); `over: {over}` inferred best-effort — check the list field on the canvas"
         ));
         self.loop_ordinal += 1;
         let seed = format!("collection-{}", self.loop_ordinal);

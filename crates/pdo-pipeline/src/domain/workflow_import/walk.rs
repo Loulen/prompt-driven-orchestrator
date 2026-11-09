@@ -62,7 +62,7 @@ impl Importer {
         if !self.loop_stack.is_empty() {
             // Nested loop: ADR-0011 mandates flat iteration. Flatten the body inline
             // (so its agents still appear) but emit no nested region.
-            self.warn("boucle imbriquée non supportée (ADR-0011 : itération plate) — le corps est aplati sans région dédiée ; à recâbler à la main");
+            self.warn("nested loop not supported (ADR-0011: flat iteration) — its body is flattened with no region of its own; rewire it by hand");
             self.walk_stmt_loop_body(body, cursor, depth + 1);
             return;
         }
@@ -88,7 +88,7 @@ impl Importer {
             MaxIter::Value(v) => Some(serde_yaml::Value::Number(serde_yaml::Number::from(v))),
             MaxIter::Unresolved => {
                 self.warn(format!(
-                    "borne de boucle non résolue en littéral — défaut max_iter={DEFAULT_MAX_ITER} appliqué (ADR-0011)"
+                    "loop bound not resolved to a literal — default max_iter={DEFAULT_MAX_ITER} applied (ADR-0011)"
                 ));
                 Some(serde_yaml::Value::Number(serde_yaml::Number::from(
                     DEFAULT_MAX_ITER,
@@ -200,7 +200,7 @@ impl Importer {
                     }
                 }
                 None => {
-                    self.warn("garde `if (...) return` dont le prédicat n'est pas mappable sur un champ de frontmatter / iter / variable — ignorée (routing conditionnel non matérialisé)");
+                    self.warn("`if (...) return` guard whose predicate maps to no frontmatter field, `iter` or variable — ignored (no conditional routing materialized)");
                 }
             }
             return;

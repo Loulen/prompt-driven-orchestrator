@@ -103,7 +103,7 @@ export default function ImportWorkflowModal({
         <div className="mb-3 grid grid-cols-2 rounded border border-line-strong bg-surface-2 p-0.5">
           {([
             ["pdo", `${brandName()} pipeline`],
-            ["claude", "Workflow Claude Code"],
+            ["claude", "Claude Code workflow"],
           ] as const).map(([value, label]) => (
             <button
               key={value}

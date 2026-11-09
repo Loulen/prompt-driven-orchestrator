@@ -96,7 +96,7 @@ pub(super) fn render_into(
         }
         Expression::CallExpression(call) => {
             let desc = describe_expr(&call.callee);
-            out.push_str(&format!("⟨TODO: prompt dynamique via {desc}()⟩"));
+            out.push_str(&format!("⟨TODO: prompt built at run time by {desc}()⟩"));
         }
         other => {
             let desc = describe_expr(other);

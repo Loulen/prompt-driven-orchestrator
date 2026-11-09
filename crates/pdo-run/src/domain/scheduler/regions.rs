@@ -128,13 +128,16 @@ fn budget_exhausted(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn handle_region_reentry(
     pipeline: &PipelineDef,
     run_state: &RunState,
     region: &pdo_pipeline::domain::pipeline::LoopRegion,
     entry_id: &str,
+    completed_member: &str,
     source_iter: i64,
     frontmatter_fields: &HashMap<String, serde_yaml::Value>,
+    frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
     resolved_vars: &HashMap<String, serde_yaml::Value>,
 ) -> Vec<SchedulerAction> {
     let mut actions = Vec::new();
@@ -234,7 +237,20 @@ pub(super) fn handle_region_reentry(
                         .iter()
                         .find(|n| n.node_type == NodeType::End)
                         .map(|n| n.id.as_str());
-                    for target in targets {
+                    // An exit into a convergence (ADR-0082) starts it only once
+                    // its other branches are resolved too: a collection still
+                    // fanning out, a sibling still running. Their routing spawns
+                    // it when they resolve; the exhausted loop reads resolved then.
+                    for target in targets.into_iter().filter(|t| {
+                        check_all_upstream_completed(
+                            pipeline,
+                            run_state,
+                            t,
+                            completed_member,
+                            frontmatter_by_node,
+                            resolved_vars,
+                        )
+                    }) {
                         if end_node_id == Some(target.as_str()) {
                             actions.push(SchedulerAction::Complete);
                         } else {
@@ -293,97 +309,4 @@ pub(super) fn handle_region_reentry(
     }
 
     actions
-}
-
-/// Decides the iter for a generic forward spawn of `target_id` after `source_id`
-/// completed — or `None` when the target must not spawn:
-///
-/// - never run → iter 1;
-/// - fed by an on-demand node and already launched → never re-run (ADR-0086);
-/// - already ran → re-run ONLY when the fired edge closes an emergent cycle (the
-///   target reaches the source through forward edges), at `iter + 1`. Re-spawning
-///   a node reached only by forward edges is the "feeder dragged into a lap" bug;
-/// - a bounded-region member is never spawned past its effective `max_iter`;
-/// - a pure self-edge is inert outside a region.
-pub(super) fn forward_spawn_iter(
-    pipeline: &PipelineDef,
-    run_state: &RunState,
-    source_id: &str,
-    target_id: &str,
-    resolved_vars: &HashMap<String, serde_yaml::Value>,
-) -> Option<i64> {
-    if source_id == target_id {
-        return None;
-    }
-
-    let proposed = match run_state.nodes.get(target_id) {
-        None => 1,
-        // ADR-0086: an on-demand node serves a downstream not launched yet; a
-        // downstream already launched is not relaunched — Retry on it is the
-        // explicit gesture, a cascade down to `End` is not.
-        Some(_)
-            if pipeline
-                .nodes
-                .iter()
-                .any(|n| n.id == source_id && n.on_demand) =>
-        {
-            return None;
-        }
-        Some(ts) => {
-            if reaches(pipeline, target_id, source_id) {
-                ts.iter + 1
-            } else {
-                return None;
-            }
-        }
-    };
-
-    let member_region = crate::domain::loop_region::bounded_region_for_member(pipeline, target_id);
-    if let Some(region) = member_region {
-        // Honour a live `set_region_max_iter` raise here too: on the YAML bound,
-        // the region head would re-enter but its body node would refuse the new lap.
-        let max = effective_region_max_iter(run_state, region, resolved_vars);
-        if proposed > max {
-            return None;
-        }
-
-        // A member→member forward edge lifts the target to the source's lap. Fire
-        // only while the target is genuinely a lap behind: `reopen_run` re-fires
-        // every completed member's edges in one pass, and a target that already
-        // caught up would be re-spawned a lap ahead of the source's output.
-        if region.members.iter().any(|m| m == source_id) {
-            let source_iter = run_state.nodes.get(source_id).map(|n| n.iter).unwrap_or(1);
-            if run_state
-                .nodes
-                .get(target_id)
-                .is_some_and(|ts| ts.iter >= source_iter)
-            {
-                return None;
-            }
-        }
-    }
-
-    Some(proposed)
-}
-
-/// True when a directed path of forward edges leads from `from` to `to`
-/// (self-edges excluded: a node does not reach itself through its own edge).
-pub(super) fn reaches(pipeline: &PipelineDef, from: &str, to: &str) -> bool {
-    let mut visited: HashSet<&str> = HashSet::new();
-    let mut queue: Vec<&str> = vec![from];
-    while let Some(current) = queue.pop() {
-        for edge in &pipeline.edges {
-            if edge.source.node != current || edge.target.node == current {
-                continue;
-            }
-            let next = edge.target.node.as_str();
-            if next == to {
-                return true;
-            }
-            if visited.insert(next) {
-                queue.push(next);
-            }
-        }
-    }
-    false
 }

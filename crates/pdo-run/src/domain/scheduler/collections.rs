@@ -15,6 +15,8 @@ pub(super) fn handle_collection_entry(
     run_state: &RunState,
     region: &pdo_pipeline::domain::pipeline::LoopRegion,
     frontmatter_fields: &HashMap<String, serde_yaml::Value>,
+    frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
+    vars: &HashMap<String, serde_yaml::Value>,
 ) -> Vec<SchedulerAction> {
     let mut actions = Vec::new();
 
@@ -32,7 +34,13 @@ pub(super) fn handle_collection_entry(
         actions.push(SchedulerAction::CollectionDone {
             region_id: region.id.clone(),
         });
-        actions.extend(collection_barrier_spawns(pipeline, region));
+        actions.extend(collection_barrier_spawns(
+            pipeline,
+            run_state,
+            region,
+            frontmatter_by_node,
+            vars,
+        ));
         return actions;
     }
 
@@ -56,10 +64,18 @@ pub(super) fn handle_collection_entry(
 /// Evaluates the BARRIER of a `kind: collection` region (ADR-0011): once every
 /// member has completed every lap `1..=total`, emit `CollectionDone` and fire the
 /// region's exits once. Must be called on freshly projected state.
+///
+/// An exit target fed by other edges too is a convergence (ADR-0082): the
+/// barrier resolves the region's edges into it, and the target starts only once
+/// its other incoming edges are resolved as well. `frontmatter_by_node` (every
+/// completed producer's frontmatter) and `vars` are what tell those edges
+/// resolved; the edge that resolves last spawns it.
 pub fn evaluate_collection_barrier(
     pipeline: &PipelineDef,
     run_state: &RunState,
     region: &pdo_pipeline::domain::pipeline::LoopRegion,
+    frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
+    vars: &HashMap<String, serde_yaml::Value>,
 ) -> Vec<SchedulerAction> {
     let mut actions = Vec::new();
 
@@ -88,14 +104,29 @@ pub fn evaluate_collection_barrier(
     actions.push(SchedulerAction::CollectionDone {
         region_id: region.id.clone(),
     });
-    actions.extend(collection_barrier_spawns(pipeline, region));
+    actions.extend(collection_barrier_spawns(
+        pipeline,
+        run_state,
+        region,
+        frontmatter_by_node,
+        vars,
+    ));
 
     actions
 }
 
+/// What the barrier of `region` fires: its exit targets whose every other
+/// incoming edge is resolved, with the region's own edges resolved by the
+/// barrier itself ([`upstream_resolved`]). A target still waiting on another
+/// branch — a bounded loop that has not exited, a producer still running — is
+/// left to that branch: its routing spawns the target once the region reads
+/// `done`.
 pub(super) fn collection_barrier_spawns(
     pipeline: &PipelineDef,
+    run_state: &RunState,
     region: &pdo_pipeline::domain::pipeline::LoopRegion,
+    frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
+    vars: &HashMap<String, serde_yaml::Value>,
 ) -> Vec<SchedulerAction> {
     let end_node_id = pipeline
         .nodes
@@ -104,6 +135,17 @@ pub(super) fn collection_barrier_spawns(
         .map(|n| n.id.as_str());
     crate::domain::loop_region::collection_barrier_targets(pipeline, region)
         .into_iter()
+        .filter(|target| {
+            upstream_resolved(
+                pipeline,
+                run_state,
+                target,
+                None,
+                Some(region.id.as_str()),
+                frontmatter_by_node,
+                vars,
+            )
+        })
         .map(|target| {
             if end_node_id == Some(target.as_str()) {
                 SchedulerAction::Complete
@@ -122,6 +164,30 @@ pub(super) fn check_all_upstream_completed(
     run_state: &RunState,
     target_node_id: &str,
     just_completed_node_id: &str,
+    frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
+    vars: &HashMap<String, serde_yaml::Value>,
+) -> bool {
+    upstream_resolved(
+        pipeline,
+        run_state,
+        target_node_id,
+        Some(just_completed_node_id),
+        None,
+        frontmatter_by_node,
+        vars,
+    )
+}
+
+/// Is every incoming edge of `target_node_id` resolved (ADR-0082) — fired, or
+/// dead? `just_completed` is the producer whose completion is being routed (its
+/// edge is the one firing); `settled_collection` is a collection region whose
+/// barrier is firing now, its `done` not projected yet.
+fn upstream_resolved(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    target_node_id: &str,
+    just_completed: Option<&str>,
+    settled_collection: Option<&str>,
     frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
     vars: &HashMap<String, serde_yaml::Value>,
 ) -> bool {
@@ -154,12 +220,13 @@ pub(super) fn check_all_upstream_completed(
         if let Some(region) =
             crate::domain::loop_region::collection_region_for_member(pipeline, src)
         {
-            return run_state
-                .collection_states
-                .get(region.id.as_str())
-                .is_some_and(|cs| cs.done);
+            return settled_collection == Some(region.id.as_str())
+                || run_state
+                    .collection_states
+                    .get(region.id.as_str())
+                    .is_some_and(|cs| cs.done);
         }
-        if *src == just_completed_node_id {
+        if just_completed == Some(*src) {
             return true;
         }
         if run_state
@@ -167,7 +234,16 @@ pub(super) fn check_all_upstream_completed(
             .get(*src)
             .is_some_and(|n| n.status.is_settled_complete())
         {
-            return true;
+            // A bounded-loop member settled on an intermediate lap whose edge
+            // here did not fire is not resolved: a later lap can still fire it.
+            return !loop_exit_pending(
+                pipeline,
+                run_state,
+                src,
+                target_node_id,
+                frontmatter_by_node,
+                vars,
+            );
         }
         // ADR-0011 ("jamais de stall silencieux"): a convergence target (any
         // node fed by several edges) must not wait forever on an upstream branch that is dead — a

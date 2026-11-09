@@ -73,6 +73,9 @@ command.
 Branches converge on any node: wire several edges into an `agent` and it waits until each incoming
 edge has fired or died, receives only the outputs of the branches that fired (same-named edges group
 into one input), and finds each isolated branch's code already merged back on the run's branch. A
+guarded edge out of a bounded loop has not died while the loop still turns: the node waits for the
+loop to exit (on its guard, or exhausted), never starts on the FAIL of a lap in between. An edge out
+of a collection hands over the output of every lap, in the order of the items. A
 node whose every branch died is skipped; if that makes `End` unreachable, the run halts explicitly
 (« unrouted ») instead of stalling. There is no dedicated Merge node: the converging node carries its
 own prompt, so it can do real synthesis work.

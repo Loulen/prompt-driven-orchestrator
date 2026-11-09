@@ -60,8 +60,10 @@ pub(super) fn is_node_dead(
 }
 
 /// True when `src` is a member of a bounded loop region **still iterating** at its
-/// just-completed lap: a back-edge from `src` fired this lap and the region has not
-/// reached its effective `max_iter`.
+/// just-completed lap: the region has not reached its effective `max_iter`, and
+/// either a back-edge from `src` fired this lap or the region is still in flight
+/// ([`crate::domain::loop_region::bounded_region_in_flight`]: a member at work, a
+/// lap started that a member has not reached).
 ///
 /// [`edge_is_dead`] must consult this before pruning a member's exit edge: an exit
 /// that did not fire on lap N of a live loop is not permanently dead, since lap N+1
@@ -79,6 +81,14 @@ pub(super) fn bounded_loop_still_iterating(
     let Some(region) = crate::domain::loop_region::bounded_region_for_member(pipeline, src) else {
         return false;
     };
+    // Closed by `end_region`: no lap starts any more, whatever fired.
+    if run_state
+        .loop_states
+        .get(region.id.as_str())
+        .is_some_and(|ls| ls.done)
+    {
+        return false;
+    }
     // Exhausted: `handle_region_reentry` owns the exit at this lap (route or park
     // "exhausted — unrouted"); no future lap will re-fire the edge.
     let max_iter = effective_region_max_iter(run_state, region, vars);
@@ -88,7 +98,42 @@ pub(super) fn bounded_loop_still_iterating(
     fired.iter().any(|e| {
         crate::domain::loop_region::bounded_region_reentered_by_edge(pipeline, src, &e.target.node)
             .is_some()
-    })
+    }) || crate::domain::loop_region::bounded_region_in_flight(pipeline, region, run_state)
+}
+
+/// True when `src`, a settled member of a bounded region, may still feed
+/// `target` (outside the region) on a later lap: none of its edges into
+/// `target` fired at its latest lap, and the region is still iterating
+/// ([`bounded_loop_still_iterating`]). Such an edge is **not resolved** yet
+/// (ADR-0082): a convergence it feeds waits for the loop's exit — PASS or
+/// exhaustion — instead of starting on the FAIL of an intermediate lap.
+pub(super) fn loop_exit_pending(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    src: &str,
+    target: &str,
+    frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
+    vars: &HashMap<String, serde_yaml::Value>,
+) -> bool {
+    let Some(region) = crate::domain::loop_region::bounded_region_for_member(pipeline, src) else {
+        return false;
+    };
+    if region.members.iter().any(|m| m == target) {
+        return false;
+    }
+    let source_iter = run_state.nodes.get(src).map(|n| n.iter).unwrap_or(1);
+    let empty = HashMap::new();
+    let fm = frontmatter_by_node.get(src).unwrap_or(&empty);
+    let outgoing: Vec<&pdo_pipeline::domain::pipeline::EdgeDef> = pipeline
+        .edges
+        .iter()
+        .filter(|e| e.source.node == src)
+        .collect();
+    let fired = edge_router::fired_edges(&outgoing, fm, vars, source_iter);
+    if fired.iter().any(|e| e.target.node == target) {
+        return false;
+    }
+    bounded_loop_still_iterating(pipeline, run_state, src, source_iter, &fired, vars)
 }
 
 /// Is a single incoming `edge` **dead** — permanently unable to deliver its

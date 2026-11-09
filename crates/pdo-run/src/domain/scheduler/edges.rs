@@ -223,8 +223,10 @@ pub(super) fn route_outgoing_edges(
                 run_state,
                 region,
                 target_id,
+                completed_node_id,
                 source_iter,
                 frontmatter_fields,
+                frontmatter_by_node,
                 resolved_vars,
             ));
         } else if let Some(region) = crate::domain::loop_region::collection_region_entered_by_edge(
@@ -240,6 +242,8 @@ pub(super) fn route_outgoing_edges(
                 run_state,
                 region,
                 frontmatter_fields,
+                frontmatter_by_node,
+                resolved_vars,
             ));
         } else {
             let target_node = pipeline.nodes.iter().find(|n| n.id == *target_id);

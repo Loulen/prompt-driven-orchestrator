@@ -70,6 +70,18 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - `make demo-daemon … BIND=0.0.0.0` lets a sandboxed Run's containers reach the demo daemon; the docs
   of `pdo daemon --bind` and of the sandbox say a loopback daemon leaves a sandboxed node unable to
   call `pdo complete`.
+
+### Convergence: a node waits for a loop's exit and reads every lap of a collection
+
+- A node fed by a bounded loop's guarded exit (a `review` edge on `verdict = PASS`) and by other
+  branches waits for the loop to exit, on its guard or exhausted. It no longer starts when a
+  collection or another branch finishes while the loop is still turning, with its preamble saying
+  "not available yet" of the loop's output.
+- A collection's barrier starts the node downstream only once its other branches are resolved too;
+  the branch that resolves last starts it.
+- The node downstream of a collection receives the output of every lap, in the order of the items,
+  in its I/O, its preamble and `PDO_INPUT_<PORT>`. It used to receive the last lap only.
+
 ### Routing: a branch not taken stays dead downstream
 
 - A run whose only path to End goes through a branch that was not taken stays "awaiting you"

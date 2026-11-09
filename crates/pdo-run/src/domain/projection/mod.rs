@@ -1371,6 +1371,86 @@ mod tests {
     }
 
     #[test]
+    fn reopen_re_drives_the_nodes_a_cancel_stopped() {
+        // A cancel stops every live node and halts the Run; a reopen that kept
+        // them `stopped` re-parked it `run_stalled` behind them at once.
+        let reopen = Event {
+            id: None,
+            run_id: "run-1".into(),
+            ts: "2026-01-01T00:00:00.000Z".into(),
+            kind: EventKind::CommandIssued,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "command": "reopen_run" })),
+        };
+        let state = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeStarted, Some("done"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("done"), Some(1)),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            make_event(EventKind::RunPaused, None, None),
+            make_event(EventKind::NodeStopped, Some("worker"), Some(1)),
+            make_event_with_payload(
+                EventKind::RunHalted,
+                None,
+                serde_json::json!({ "message": "cancelled", "command": "cancel_run" }),
+            ),
+            reopen,
+        ])
+        .unwrap();
+        assert_eq!(state.status, RunStatus::Running);
+        assert_eq!(state.nodes["done"].status, NodeStatus::Completed);
+        assert!(
+            !state.nodes.contains_key("worker"),
+            "the stopped node is dropped so the scheduler runs it again"
+        );
+    }
+
+    #[test]
+    fn reopen_keeps_a_stopped_collection_member_with_its_laps() {
+        // Dropping a stopped fan-out member would drop its completed laps too,
+        // and the region (its state kept) would never start the stopped ones.
+        let mut state = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeStarted, Some("lap"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("lap"), Some(1)),
+            make_event(EventKind::NodeStarted, Some("lap"), Some(2)),
+            make_event(EventKind::NodeStopped, Some("lap"), Some(2)),
+            make_event(EventKind::NodeStarted, Some("solo"), Some(1)),
+            make_event(EventKind::NodeStopped, Some("solo"), Some(1)),
+            make_event(EventKind::RunHalted, None, None),
+        ])
+        .unwrap();
+        state.collection_states.insert(
+            "fan".into(),
+            CollectionState {
+                region_id: "fan".into(),
+                total_items: 2,
+                done: false,
+                entry: "lap".into(),
+                members: vec!["lap".into()],
+            },
+        );
+        command::apply_command_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "reopen_run" }),
+            ),
+        );
+        assert_eq!(state.status, RunStatus::Running);
+        assert!(
+            state.nodes.contains_key("lap"),
+            "the fan-out member keeps its laps"
+        );
+        assert!(
+            !state.nodes.contains_key("solo"),
+            "a plain stopped node runs again"
+        );
+    }
+
+    #[test]
     fn legacy_resume_run_command_still_reopens_a_completed_run() {
         // Back-compat: the historical `resume_run` command string re-opens exactly
         // like `reopen_run` (append-only log: every replayed run must still lift).

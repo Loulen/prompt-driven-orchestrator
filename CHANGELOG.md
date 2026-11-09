@@ -56,6 +56,18 @@ This is the first 2.x release published in this repository: it replaces PDO 1.x 
   nor an extension changes it. The daemon serves the logos of its Marque under `/shared/brand/`
   (`mark.svg`, `lockup.svg`, `favicon.svg`) for the pages an extension serves outside the
   interface; `/shared/favicon.svg` now answers the Marque's favicon.
+### Runs: a pause keeps the work in flight, a reopen relaunches stopped nodes
+
+- A node that finishes while its Run is paused now completes. Before, its completion was refused
+  ("resume the run first"): a `script` node, which completes once as its bash exits, lost its work,
+  and after Resume it read "session died" and had to run again. What the finished node would launch
+  still waits for Resume.
+- Reopening a Run (the Play button, `pdo run reopen`) runs again the nodes that were stopped, as it
+  already did for interrupted ones. A cancelled Run (`pdo run cancel`) used to park "run_stalled …
+  blocked behind" its stopped nodes as soon as it was reopened. A stopped lap of a collection
+  fan-out stays stopped, with the laps already done, until its node is retried.
+- A `script` lap of a collection fan-out gets its item in `$PDO_ITEM` and the number of laps in
+  `$PDO_ITEM_TOTAL`, as an agent lap reads them in its preamble.
 
 ## 2.75.0
 

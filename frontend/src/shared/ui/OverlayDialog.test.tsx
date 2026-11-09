@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { Plus } from "lucide-react";
+import { IconButton } from "./kit";
 import { useState } from "react";
 import OverlayDialog from "./OverlayDialog";
 
@@ -42,6 +45,36 @@ describe("OverlayDialog", () => {
   // The form renders its first state, then the opening intent swaps a section
   // (the Run name for a Trigger's) or disables the focused control: the focus
   // must not fall to the page, where Tab, Escape and Ctrl+Enter miss the dialog.
+  /**
+   * FP of CORE-227: after Launch closed New Run, a « New run » tooltip stood
+   * over the Run row the tour had just lit. The focus handed back to the opener
+   * is the dialog's doing, not a keyboard user's: it opens no tooltip.
+   */
+  it("hands the focus back without opening the opener's tooltip", async () => {
+    function Host() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <IconButton icon={Plus} label="New run" onClick={() => setOpen(true)} />
+          {open && (
+            <OverlayDialog title="New Run" onClose={() => setOpen(false)}>
+              <button type="button" onClick={() => setOpen(false)}>
+                Run
+              </button>
+            </OverlayDialog>
+          )}
+        </>
+      );
+    }
+    const user = userEvent.setup();
+    render(<Host />);
+    await user.click(screen.getByRole("button", { name: "New run" }));
+    await user.click(screen.getByRole("button", { name: "Run" }));
+    expect(screen.getByRole("button", { name: "New run" })).toHaveFocus();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 450)));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
   it("takes the focus back when the focused control goes away after the opening", async () => {
     let swap!: () => void;
     function Form() {

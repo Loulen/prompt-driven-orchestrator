@@ -43,14 +43,22 @@ export const WORKSPACE_CHOICES = [
   {
     isolated: true,
     label: "Isolated worktree",
+    /** What its button in the inspector's segmented control reads. */
+    button: "Isolated",
     hint: "a sub-worktree of the Node's own",
   },
   {
     isolated: false,
     label: "Run worktree",
+    button: "Shared",
     hint: "shared with the whole Run",
   },
 ] as const;
+
+/** What the inspector's button for a workspace reads — the word a tour names. */
+export function workspaceButton(isolated: boolean): string {
+  return WORKSPACE_CHOICES.find((c) => c.isolated === isolated)!.button;
+}
 
 /** The label for a workspace, for a surface too small to show both choices. */
 export function workspaceLabel(isolated: boolean): string {

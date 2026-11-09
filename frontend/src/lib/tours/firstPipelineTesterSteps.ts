@@ -30,6 +30,7 @@ import {
   nodeSel,
   outputSlot,
   selected,
+  startNode,
 } from "./firstPipelineReading";
 
 const TESTER_PROMPT = `Review the implementer's change and exercise the feature yourself.
@@ -234,6 +235,18 @@ export const TESTER_STEPS: TourStep[] = [
     value: "pass",
     why: "Both routes out of the tester are now explicit: pass ends the Run, fail sends it round again.",
   }),
+  {
+    // FP of CORE-227: without this edge the pipeline validated, and a Run of it
+    // started nothing. The implementer's only way in was the conditional edge
+    // back from the tester, so it was never an entry point, and the tester
+    // waited on it. The last wire, so the loop's edges keep their places.
+    id: "edge-start-implementer",
+    title: "Connect Start to implementer",
+    body: "Press on the border of the Start marker and drag onto implementer. Start hands the Run's prompt to the first node; without this edge, a Run of this pipeline would never start.",
+    target: (o) => [...nodeSel(startNode(o.app)), ...nodeSel(agent(o.app, 0))],
+    waitingFor: "the Start marker and the implementer card",
+    done: (o) => edgeIndex(o.app.pipeline, startNode(o.app), agent(o.app, 0)) >= 0,
+  },
   {
     id: "save",
     title: "Save the pipeline",

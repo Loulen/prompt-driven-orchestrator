@@ -18,7 +18,17 @@ fn target(root: PathBuf, latest_iter: bool, terminal: bool) -> PaneTarget {
         latest_iter,
         terminal,
         pending: false,
+        interrupted: false,
         repo_root: root,
+    }
+}
+
+/// The latest iteration of an `Interrupted` node (ADR-0049): not terminal, no
+/// session, waiting for a human gesture.
+fn interrupted(root: PathBuf) -> PaneTarget {
+    PaneTarget {
+        interrupted: true,
+        ..target(root, true, false)
     }
 }
 
@@ -102,6 +112,51 @@ async fn a_dead_latest_session_is_resumed_once_authorized() {
     let asked = host.asked();
     assert_eq!(asked[0].resource, ResourceKind::Session);
     assert_eq!(asked[0].verb, Verb::Action("resume".into()));
+}
+
+/// ADR-0049: an `Interrupted` node waits for a human gesture (`recover_node`,
+/// a restart). Reading its pane is no such gesture: a GET serves the last
+/// snapshot and never relaunches the harness — nor even asks to.
+#[tokio::test]
+async fn an_interrupted_node_serves_its_snapshot_and_is_never_resumed() {
+    let root = tempfile::tempdir().unwrap();
+    let snapshot = pane_snapshot_path(root.path(), RUN, "worker", 1);
+    std::fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+    std::fs::write(&snapshot, "the screen before the incident").unwrap();
+    let host = Host::allowing();
+    let (uc, panes) = read_pane(
+        Ok(Some(interrupted(root.path().into()))),
+        ReattachOutcome::Resumed,
+        Arc::new(FakeTmux::default()),
+        host.clone(),
+    );
+    let (_, pane) = uc
+        .execute(&Actor::LocalOperator, RUN, "worker", 1)
+        .await
+        .unwrap();
+    assert_eq!(pane.source, PaneSource::Snapshot);
+    assert_eq!(pane.content, "the screen before the incident");
+    assert!(!pane.resumed);
+    assert!(panes.reattached.lock().unwrap().is_empty());
+    assert!(host.asked().is_empty(), "a read asks for no resume");
+}
+
+#[tokio::test]
+async fn an_interrupted_node_without_a_snapshot_shows_nothing_and_is_never_resumed() {
+    let root = tempfile::tempdir().unwrap();
+    let (uc, panes) = read_pane(
+        Ok(Some(interrupted(root.path().into()))),
+        ReattachOutcome::Resumed,
+        Arc::new(FakeTmux::default()),
+        Host::allowing(),
+    );
+    let (_, pane) = uc
+        .execute(&Actor::LocalOperator, RUN, "worker", 1)
+        .await
+        .unwrap();
+    assert_eq!(pane.source, PaneSource::Unavailable);
+    assert!(!pane.resumed);
+    assert!(panes.reattached.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

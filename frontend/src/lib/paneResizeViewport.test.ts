@@ -115,6 +115,16 @@ describe("paneResizeAction (#949, FP iteration 2 of #43)", () => {
     expect(paneResizeAction({ ...base, msSinceMount: MOUNT_FIT_WINDOW_MS, paneToggled: true })).toBe("reframe");
   });
 
+  it("fits again on a pane toggle while the view is still the fit nobody moved", () => {
+    // A graph fitted on the full-width canvas does not fit beside the pane: a
+    // half-width pan keeps its zoom, and its right end lands under the pane.
+    expect(
+      paneResizeAction({ ...base, msSinceMount: MOUNT_FIT_WINDOW_MS, paneToggled: true, viewFitted: true }),
+    ).toBe("fit");
+    // Not on a drag of the handle or a window resize: React Flow's anchoring stays.
+    expect(paneResizeAction({ ...base, msSinceMount: MOUNT_FIT_WINDOW_MS + 1, viewFitted: true })).toBeNull();
+  });
+
   it("leaves a later drag or window resize to React Flow's own anchoring", () => {
     expect(paneResizeAction({ ...base, msSinceMount: MOUNT_FIT_WINDOW_MS + 1 })).toBeNull();
   });

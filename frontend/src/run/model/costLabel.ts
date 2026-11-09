@@ -15,13 +15,22 @@ export function costPrecision(usd: number): number {
   return usd < 1 ? 4 : 2;
 }
 
+/**
+ * Whether an amount is no figure at all: a lower bound of $0 means every token
+ * went to an unpriced model (they count $0, ADR-0022), so « at least $0 » says
+ * nothing and reads as free. It renders `—`, like any cost that cannot be had.
+ */
+export function isUnpricedAmount(usd: number | null, partial: boolean): boolean {
+  return usd === null || (partial && usd === 0);
+}
+
 /** Cost text shared by aggregate cells for derived and harness-reported values. */
 export function formatCostAmount(
   usd: number | null,
   partial: boolean,
   estimated: boolean,
 ): string {
-  if (usd === null) return "—";
+  if (usd === null || isUnpricedAmount(usd, partial)) return "—";
   const amount = `$${usd.toFixed(costPrecision(usd))}`;
   return `${estimated ? `~${amount}` : amount}${partial ? "†" : ""}`;
 }
@@ -46,6 +55,16 @@ export const COST_REPORTED_NOTE =
  */
 export const COST_REPORTED_IN_USD_NOTE =
   "Reported by the harness in dollars per message (conversion constant 1.0) — not an estimate, not re-derived from tokens.";
+
+/**
+ * A node's cost as text, under the slices' rule: no `~` only for a cost the
+ * harness reported in dollars (`pi`, #707); a converted reported cost
+ * (`copilot`) and a derived one are estimates.
+ */
+export function nodeCostAmount(cost: NodeCost): string {
+  const exact = cost.form === "reported" && cost.reported_in_usd;
+  return formatCostAmount(cost.usd, cost.partial, !exact);
+}
 
 export function nodeCostTitle(cost: NodeCost): string {
   const base =
@@ -85,8 +104,10 @@ function sliceIsExact(h: HarnessCost): boolean {
   return h.form === "reported" && h.reported_in_usd === true;
 }
 
-/** `$X` for an exact slice, `~$X` otherwise, at adaptive precision. */
+/** `$X` for an exact slice, `~$X` otherwise, at adaptive precision; `—` when
+ *  nothing in it could be priced. */
 function sliceAmount(h: HarnessCost): string {
+  if (isUnpricedAmount(h.usd, h.form === "derived" && h.partial)) return "—";
   const amount = `$${h.usd.toFixed(costPrecision(h.usd))}`;
   return sliceIsExact(h) ? amount : `~${amount}`;
 }
@@ -211,6 +232,18 @@ export function formatEstCost(
         .map(ventilationSentence)
         .join(" ")}`,
       ventilation: byHarness.map(ventilationSlice),
+    };
+  }
+
+  // Nothing priced: every token went to an unpriced model. No figure, and no
+  // slice to show beside it (they are all $0 too).
+  if (isUnpricedAmount(usd, partial)) {
+    return {
+      text: "—",
+      dagger: false,
+      title: `${COST_ESTIMATE_NOTE} Not priced: ${
+        unpricedModels.length > 0 ? unpricedModels.join(", ") : "an unpriced model"
+      } has no price in the table, so this cost cannot be estimated.`,
     };
   }
 

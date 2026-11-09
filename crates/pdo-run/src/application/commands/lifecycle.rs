@@ -105,7 +105,7 @@ pub(super) async fn resume_run(state: Arc<Runs>, run_id: String) -> Response {
     // EXPLICITLY — never a silent host fallback.
     if !run_state.sandbox.is_off() {
         let prep = match run_sandbox::context_from_state(&state, &run_state).await {
-            Ok(ctx) => tokio::task::spawn_blocking(move || ctx.ensure_ready())
+            Ok(ctx) => tokio::task::spawn_blocking(move || ctx.ensure_ready_for_nodes())
                 .await
                 .unwrap_or_else(|je| Err(anyhow::anyhow!("sandbox ensure_ready panicked: {je}"))),
             Err(e) => Err(e),
@@ -194,7 +194,7 @@ pub(super) async fn reopen_run(state: Arc<Runs>, run_id: String) -> Response {
     // into it (same guard as `resume_run`).
     if !run_state.sandbox.is_off() {
         let prep = match run_sandbox::context_from_state(&state, &run_state).await {
-            Ok(ctx) => tokio::task::spawn_blocking(move || ctx.ensure_ready())
+            Ok(ctx) => tokio::task::spawn_blocking(move || ctx.ensure_ready_for_nodes())
                 .await
                 .unwrap_or_else(|je| Err(anyhow::anyhow!("sandbox ensure_ready panicked: {je}"))),
             Err(e) => Err(e),

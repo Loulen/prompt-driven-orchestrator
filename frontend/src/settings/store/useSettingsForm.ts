@@ -88,9 +88,9 @@ export function useSettingsForm({
     }
     setSaveState({ status: "saving" });
     try {
-      await save(built.patch);
+      const updated = await save(built.patch);
       if (built.patch.skills) announceSkillTiersChanged();
-      announceSettingsChanged();
+      announceSettingsChanged(updated);
       onSaved?.();
       setDraft({});
       setSaveState({ status: "saved" });

@@ -39,6 +39,7 @@ import { carriedPorts, defaultConditionPort, withCarriedPorts } from "../edgePor
 import { requalifyWhen, rowsToWhen } from "../whenClause";
 import type { EditorNodeDef, EditorPipelineDef } from "../../pipeline/model/pipeline";
 import { probeReplay, type ReplayOutcome } from "../../test/tourReplay";
+import { workspaceButton } from "../nodeIsolation";
 
 const STEPS = FIRST_PIPELINE_TOUR.steps;
 
@@ -125,7 +126,7 @@ class FakeApp {
         variables: {},
         // The daemon's scaffold: a start and an end marker, no edges.
         nodes: [
-          { id: "start", name: "Start", type: "start", inputs: [], outputs: [], interactive: false },
+          { id: "start", name: "Start", type: "start", inputs: [], outputs: [{ name: "user_prompt" }], interactive: false },
           { id: "end", name: "End", type: "end", inputs: [], outputs: [], interactive: false },
         ],
         edges: [],
@@ -369,6 +370,8 @@ function gestures(fake: FakeApp): Record<string, () => void> {
       fake.addEdge({ source: { node: "n2", port: "out" }, target: { node: "end", port: "result" } }),
     "select-end-edge": () => fake.selectEdge(2),
     "end-condition": () => fake.writeCondition(2, "verdict", "pass"),
+    "edge-start-implementer": () =>
+      fake.addEdge({ source: { node: "start", port: "user_prompt" }, target: { node: "n1", port: "user_prompt" } }),
     // Saved, the pipeline is in the Library and Validate appears next to Save.
     save: () => {
       fake.save();
@@ -454,7 +457,25 @@ describe("walking the whole tour", () => {
       undefined,
       { verdict: { eq: "fail" } },
       { verdict: { eq: "pass" } },
+      undefined,
     ]);
+  });
+
+  /**
+   * FP of CORE-227: the pipeline the tour built had no Start → implementer
+   * edge. The implementer's only way in is the conditional edge back from the
+   * tester, so it is never an entry point (`graph_resolver::ready_nodes`), and
+   * the tester waits on it: a Run of it starts nothing. Start is wired.
+   */
+  it("wires Start to the implementer, or no Run of it would ever start", () => {
+    const fake = new FakeApp();
+    const script = gestures(fake);
+    for (const step of STEPS) script[step.id]();
+    const fromStart = fake.app.pipeline!.edges.filter((e) => e.source.node === "start");
+    expect(fromStart.map((e) => e.target.node)).toEqual(["n1"]);
+    expect(fromStart[0].when).toBeUndefined();
+    const ids = STEPS.map((s) => s.id);
+    expect(ids.indexOf("edge-start-implementer")).toBeLessThan(ids.indexOf("save"));
   });
 });
 
@@ -679,6 +700,8 @@ describe("an edge that carries the wrong output", () => {
       undefined,
       { "out.verdict": { eq: "fail" } },
       { "out.verdict": { eq: "pass" } },
+      // Start → implementer, the last wire.
+      undefined,
     ]);
   });
 });
@@ -795,6 +818,20 @@ describe("the shape of every step", () => {
     const ids = STEPS.map((s) => s.id);
     expect(ids.indexOf("validate")).toBe(ids.indexOf("save") + 1);
     expect(ids.indexOf("keep-or-delete")).toBe(ids.indexOf("validate") + 1);
+  });
+
+  /**
+   * FP of CORE-227: step 10 said « Pick Run worktree » over a segmented control
+   * whose buttons read Isolated and Shared. A card names what is written on the
+   * button, and the end card says the same word.
+   */
+  it("names the Worktree choice the way its button reads", () => {
+    const step = STEPS.find((s) => s.id === "implementer-worktree")!;
+    expect(bodyOf(step)).toContain(`Pick ${workspaceButton(false)}`);
+    expect(`${step.title} ${bodyOf(step)}`).not.toContain("Run worktree");
+    const recap = FIRST_PIPELINE_TOUR.recap as { label: string; text: string }[];
+    const implementer = recap.find((r) => r.label === "implementer")!;
+    expect(implementer.text).toContain(workspaceButton(false));
   });
 
   it("says in its recap what validating did", () => {
@@ -1119,7 +1156,7 @@ describe("replaying a step with Previous", () => {
   it("replays a condition step on its own edge when another edge is selected", () => {
     const fake = new FakeApp();
     let run = at(fake, "save");
-    for (const expected of ["end-condition", "select-end-edge", "edge-tester-end", "loop-condition"]) {
+    for (const expected of ["edge-start-implementer", "end-condition", "select-end-edge", "edge-tester-end", "loop-condition"]) {
       run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs());
       expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe(expected);
     }

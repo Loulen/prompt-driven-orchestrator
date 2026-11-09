@@ -94,6 +94,11 @@ describe("demo daemon environment", () => {
     assert.equal(env.SHELL, "/bin/bash");
   });
 
+  test("a sandboxed Run needs the daemon reachable from its container: bind all interfaces on request", () => {
+    assert.equal(demoEnv({ env: caller, paths, port: 6391, bind: "0.0.0.0" }).PDO_BIND, "0.0.0.0");
+    assert.throws(() => demoEnv({ env: caller, paths, port: 6391, extra: { PDO_BIND: "0.0.0.0" } }), /PDO_BIND/);
+  });
+
   test("extra variables are set explicitly, after the purge", () => {
     const extra = demoEnv({ env: caller, paths, port: 6391, extra: { PDO_TEST_INTEROP: "1" } });
     assert.equal(extra.PDO_TEST_INTEROP, "1");

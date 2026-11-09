@@ -27,6 +27,7 @@ import {
   startTour,
   stepBody,
   stepNote,
+  stepReadOnly,
   stepSoft,
   type TourRun,
 } from "../tour";
@@ -66,7 +67,8 @@ const t = (id: string) => `[data-testid="${id}"]`;
 const RUNS_TAB = t("left-tab-runs");
 const NEW_RUN = t("new-run-button");
 const NAME_INPUT = t("run-name-input");
-const AUTO_NAME = t("auto-name-checkbox");
+/** The whole Auto control, box and word (FP of CORE-227). */
+const AUTO_NAME = t("auto-name");
 const REPO_INPUT = t("target-repo-input");
 const BROWSE = t("repo-browse-trigger");
 const EXPLORER = t("repo-browser-modal");
@@ -91,6 +93,9 @@ const NODE_ID = "assistant";
 const NODE_CARD = `.react-flow__node[data-id="${NODE_ID}"]`;
 const INSPECTOR_RUN = t("inspector-pane-run");
 const TERMINAL = t("tmux-terminal");
+const ENLARGED_TERMINAL = t("terminal-fullsize");
+const INTERRUPTED_BANNER = t("interrupted-banner");
+const REOPEN = t("interrupted-reopen-btn");
 const RELEASE = t("approve-btn-menu");
 const APPROVE_MENU = '[role="menu"][aria-label="Approve options"]';
 const AUTO_APPROVE_ENTRY = `${APPROVE_MENU} [role="menuitemcheckbox"]`;
@@ -435,6 +440,21 @@ describe("targets that re-aim as the user works", () => {
     expect(stepById("open-new-run").target(fake.obs())).toEqual([RUNS_TAB]);
     fake.show(NEW_RUN);
     expect(stepById("open-new-run").target(fake.obs())).toEqual([NEW_RUN]);
+  });
+
+  /**
+   * FP of CORE-227: card 1/15 said « Click New Run » while the Runs tab was
+   * what was lit — the full tour arrives from the Pipelines tab. The body names
+   * the lit thing.
+   */
+  it("says to click the Runs tab while the tab is what is lit, then New Run", () => {
+    const fake = new FakeApp();
+    fake.hide(NEW_RUN);
+    const onTab = stepBody(stepById("open-new-run"), fake.obs());
+    expect(onTab).toMatch(/^Click the Runs tab/);
+    expect(onTab).not.toMatch(/^Click New Run/);
+    fake.show(NEW_RUN);
+    expect(stepBody(stepById("open-new-run"), fake.obs())).toMatch(/^Click New Run/);
   });
 
   it.each([
@@ -986,6 +1006,26 @@ describe("the completion guard", () => {
   });
 });
 
+/**
+ * FP of CORE-227: the node's session died during the tour, and « Reopen » —
+ * the one gesture that brings it back — sat under the dim while the step lit
+ * the node's terminal. On the steps about that node, its interrupted banner is
+ * lit beside the target and Reopen stays live.
+ */
+describe("a node whose session died during the tour", () => {
+  it.each(["talk-to-agent", "release-completion"])("leaves Reopen reachable on %s", (id) => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    const step = stepById(id);
+    expect(stepReadOnly(step, fake.obs())).toEqual([]);
+    fake.show(INTERRUPTED_BANNER, REOPEN);
+    expect(stepReadOnly(step, fake.obs())).toEqual([INTERRUPTED_BANNER]);
+    expect(step.explore).toContain(REOPEN);
+  });
+});
+
 describe("waiting for the node to finish", () => {
   const waitStep = () => stepById("wait-for-node");
 
@@ -1031,6 +1071,22 @@ describe("waiting for the node to finish", () => {
     expect(waitStep().target(fake.obs())).toEqual([INSPECTOR_RUN]);
     expect(waitStep().soft).toBe(true);
     expect(waitStep().waitingNote).toContain("no time limit");
+  });
+
+  /**
+   * FP of CORE-227: with the terminal enlarged over the whole app, the zone
+   * stayed the inspector's box — a dashed outline and a dim drawn across the
+   * enlarged terminal. The zone follows the terminal the reader enlarged.
+   */
+  it("follows the terminal the reader enlarged, instead of drawing across it", () => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    fake.show(ENLARGED_TERMINAL);
+    expect(waitStep().target(fake.obs())).toEqual([ENLARGED_TERMINAL]);
+    fake.hide(ENLARGED_TERMINAL);
+    expect(waitStep().target(fake.obs())).toEqual([INSPECTOR_RUN]);
   });
 
   it("slides on by itself when the node completes", () => {
@@ -1283,6 +1339,12 @@ describe("the definition holds the copy rules", () => {
       if (free.includes(step.id)) expect(step.confirm === true || !step.done, step.id).toBe(true);
     }
     expect(stepById("talk-to-agent").copyBlock).toBe(TUTORIAL_TERMINAL_LINE);
+  });
+
+  /** The card is placed beside its hole: the word « Auto » the copy points at
+   *  must be inside the hole, not under the card (FP of CORE-227). */
+  it("lights the Name field and the whole Auto control, word included", () => {
+    expect(stepById("name-run").target(new FakeApp().obs())).toEqual([NAME_INPUT, AUTO_NAME]);
   });
 
   /** The name to paste carries this browser's Identité de tour, and the card

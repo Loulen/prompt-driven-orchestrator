@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { dismissOverlaysAside } from "../../lib/overlays";
 import { describe, expect, it, vi } from "vitest";
 import SkillSelector from "./SkillSelector";
 import type { Skill } from "../../shared/generated/Skill";
@@ -395,5 +396,26 @@ describe("SkillSelector — dismissal", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByTestId("sel-popover")).toBeNull();
     expect(screen.getByTestId("sel")).toHaveAttribute("aria-expanded", "false");
+  });
+});
+
+/**
+ * A guided tour moving on from « tick both skills » to « paste the prompt »
+ * folds the picker, which otherwise stayed open over the lit Prompt field (FP of
+ * CORE-227): the count reads « 2 active skills » again. The picker says where it
+ * is, so one the next step points into stays.
+ */
+describe("SkillSelector — folded by whoever needs the screen", () => {
+  it("folds when the next gesture is outside it, and stays open when it is inside", () => {
+    render(<SkillSelector tier="run" own={[{ id: "a", name: "tdd" }]} bank={bank} onChange={vi.fn()} testId="sel" />);
+    fireEvent.click(screen.getByTestId("sel"));
+    expect(screen.getByTestId("sel-popover")).toBeInTheDocument();
+
+    act(() => dismissOverlaysAside([check("b")]));
+    expect(screen.getByTestId("sel-popover")).toBeInTheDocument();
+
+    act(() => dismissOverlaysAside([]));
+    expect(screen.queryByTestId("sel-popover")).toBeNull();
+    expect(screen.getByTestId("sel-count")).toHaveTextContent("1 active skill");
   });
 });

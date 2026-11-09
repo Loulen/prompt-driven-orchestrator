@@ -34,6 +34,11 @@ plays the same journeys on top of its own extensions, never instead of them. So:
 - no journey asserts the **product's name or logo**: they come from the binary's **Marque**
   (CONTEXT.md), « PDO » on the core, the Distribution's own elsewhere.
 
+Start the demo daemon with **`BIND_ALL=1`** for HP-02: its sandboxed Run calls the daemon from a
+container, which a loopback-only daemon refuses. Every harness HP-02 runs must be logged in on the
+machine (the demo daemon copies the logins it finds, and skips the others): a missing login is a
+precondition finding, not a product bug.
+
 ## Inventory
 
 | ID | Title | Covers | Status |

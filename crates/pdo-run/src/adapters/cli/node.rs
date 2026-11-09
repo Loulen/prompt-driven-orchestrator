@@ -330,8 +330,17 @@ fn node_command(
     let iter = iteration(daemon, run_id, node_id, iter)?;
     let body = json!({ "kind": kind, "node_id": node_id, "iter": iter });
     let answer: Value = command(daemon, run_id, body)?;
-    said(&answer, json, &format!("{node_id} {verb}"));
+    said(&answer, json, &done_line(node_id, verb, &answer));
     Ok(())
+}
+
+/// `worker recovered`, and why when the daemon says (a recovery that restarted
+/// a node instead of resuming it).
+fn done_line(node_id: &str, verb: &str, answer: &Value) -> String {
+    match answer["reason"].as_str() {
+        Some(reason) => format!("{node_id} {verb}: {reason}"),
+        None => format!("{node_id} {verb}"),
+    }
 }
 
 /// The iteration a gesture targets: the one given, else the node's latest,
@@ -375,5 +384,21 @@ mod tests {
         assert_eq!(outputs["out"], "done");
         assert_eq!(outputs["notes"], "a=b", "only the first `=` splits");
         assert!(port_contents(&["nothing".into()]).is_err());
+    }
+
+    #[test]
+    fn a_gesture_line_says_why_when_the_daemon_does() {
+        assert_eq!(
+            done_line("worker", "recovered", &json!({ "ok": true })),
+            "worker recovered"
+        );
+        assert_eq!(
+            done_line(
+                "worker",
+                "recovered",
+                &json!({ "reason": "no conversation to resume" })
+            ),
+            "worker recovered: no conversation to resume"
+        );
     }
 }

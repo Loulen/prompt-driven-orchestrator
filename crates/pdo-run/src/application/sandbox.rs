@@ -32,6 +32,15 @@ impl RunSandboxPrep {
     pub fn ensure_ready(&self) -> Result<()> {
         self.runtime.ensure_ready(&self.ctx)
     }
+
+    /// [`Self::ensure_ready`], then the container's call home
+    /// ([`SandboxRuntime::check_daemon_reachable`]): what a Run needs before its
+    /// container receives a node. A daemon its container cannot reach fails the
+    /// preparation, naming the address to listen on.
+    pub fn ensure_ready_for_nodes(&self) -> Result<()> {
+        self.runtime.ensure_ready(&self.ctx)?;
+        self.runtime.check_daemon_reachable(&self.ctx)
+    }
 }
 
 /// The sandbox runtime of this daemon: its docker, the local staged homes and

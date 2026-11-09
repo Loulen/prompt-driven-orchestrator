@@ -13,6 +13,10 @@ pub struct PaneTarget {
     pub terminal: bool,
     /// The node is still `pending`: it never had a session.
     pub pending: bool,
+    /// The node is `Interrupted` (ADR-0049): its session died with an infra
+    /// incident and only a human gesture (`recover_node`, a restart) brings it
+    /// back. Reading its pane is not that gesture.
+    pub interrupted: bool,
     /// The repository the Run's files live under.
     pub repo_root: PathBuf,
 }

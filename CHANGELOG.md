@@ -6,7 +6,14 @@ latest entries. The full history lives in the git log and in the
 [GitHub Releases](https://github.com/Loulen/prompt-driven-orchestrator/releases), generated from
 the commits.
 
-Work not released yet sits under `## Unreleased
+Work not released yet sits under `## Unreleased`, the first entry; "What's new" does not show it.
+`make release-bump` turns it into the version's entry when a story merges into `main`.
+
+The project follows semantic versioning. It has **no backward-compatibility goal**: a break is
+announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
+data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
+
+## Unreleased
 
 ### The Happy Paths describe the core alone
 
@@ -25,6 +32,74 @@ Work not released yet sits under `## Unreleased
   effort still leaves copilot on its own default.
 - `docs/reference/harnesses.md` › Prerequisites says that the autonomy flags do not cover a
   harness's "trust this folder" dialog.
+
+### Fixes found by replaying the Happy Paths
+
+Pipeline editor:
+
+- A pipeline output field typed `boolean`, `integer` or `array` is read as `bool`, `int` or `list`,
+  and the lint flags an unknown field type instead of showing it as a string.
+- The edge panel names the inputs an edge with several outputs actually lands under on its target.
+- Box-selecting cards with Shift and drag no longer selects text on the page.
+- Reshaping an edge segment reads "Undo reshape edge", and moving an edge label reads "Undo move
+  edge label".
+
+Runs and nodes:
+
+- A cost that no model price could cover shows "—" instead of an estimated zero.
+- A node's cost reported by copilot is marked as an estimate, as the Run's breakdown already did.
+- A long cost line in the Run's stats ends with an ellipsis and shows the whole line in its tooltip.
+- An edge into End reads fired once the Run reaches End.
+- A newly opened Run tab fits its whole graph beside the right pane, End included.
+- A node that finishes while its terminal is open shows its saved pane instead of a disconnected
+  terminal ending on "[exited]".
+- A node's terminal reconnects by itself when the node's session comes back after a restart or a
+  recovery.
+- Opening a node's terminal no longer counts the terminal's automatic replies as typing.
+- Reading the terminal of an interrupted node no longer relaunches the agent: it shows the node's
+  last saved screen, or nothing when none was saved.
+- A completion refused for missing outputs no longer commits the node's work or records it as
+  delivered.
+- Approving or marking a node done closes its terminal session, sandboxed nodes included.
+- Recovering a node whose conversation was never written restarts it and says why, instead of
+  failing on a resume.
+- A sandboxed Run whose container cannot reach the daemon fails its preparation with a message
+  saying where the daemon must listen, instead of leaving its node running forever.
+- The copilot and pi catalogues are read even when their CLI takes several seconds to start, and
+  the settings page no longer waits for a harness version check.
+
+New Run, Settings and the folder explorer:
+
+- The folder explorer sorts a whole folder before applying its 1000-folder limit and never drops a
+  git repository, so a repository in a crowded `/tmp` is always listed.
+- New Run's default sandbox label changes as soon as the setting is saved in Settings.
+- A staging profile's hidden Delete button waits at the end of its row, so a click sent to it no
+  longer selects the row instead.
+- The editor tells the assistant which pipeline is open once per change, not on every view switch.
+- Closing a dialog no longer leaves the opening button's tooltip on screen.
+
+Tours:
+
+- Moving to the next step closes the folder explorer or skills picker the previous step left open,
+  so the skills picker folds back to its count.
+- *First run*'s first card tells you to click the Runs tab when that tab is what is lit.
+- "Name the Run" lights the whole Auto checkbox, label included, so the card no longer covers it.
+- Pressing Next right after pasting into a field is no longer lost.
+- A step scrolls its target into view when it is cut off at a side of the window or by its panel.
+- With the terminal enlarged, the wait step outlines the enlarged terminal instead of drawing
+  across it.
+- During *First run*, Reopen on an interrupted node stays clickable on the steps about that node.
+- *First pipeline* names the worktree buttons as they read (Shared and Isolated), and wires Start
+  to the implementer: without that edge, a Run of the pipeline it builds would never start.
+
+Agentic tests:
+
+- `make demo-daemon BIND_ALL=1` listens on all interfaces, so a sandboxed Run's container reaches
+  the demo daemon. The demo daemon also stages copilot's logged-in user and trusts `/tmp` for
+  claude and copilot.
+- The Happy Paths and the driving playbook say how to answer claude's trust dialog (its cursor
+  starts on "No, exit"), which harness logins a journey needs, that the undo history does not
+  survive a reload, and where Pipeline info and the Node sessions stat are.
 
 ## 2.75.0
 

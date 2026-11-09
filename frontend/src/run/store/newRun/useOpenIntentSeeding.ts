@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { fetchSettings } from "../../../settings/api/settings";
-import { SETTINGS_CHANGED } from "../../../settings/store/useSettings";
+import { announcedSettings, SETTINGS_CHANGED } from "../../../settings/store/useSettings";
 import { cronToPreset, parseDailyTime } from "../../../trigger/model/cronPresets";
 import { EMPTY_PROVISIONING_RULES } from "../../../workspace/model/provisioning";
 import { prefillOf, type NewRunPrefill, type OpenIntent } from "../../model/openIntent";
@@ -254,10 +254,17 @@ export function useOpenIntentSeeding(open: boolean, openIntent: OpenIntent, s: N
         });
     };
     load();
-    window.addEventListener(SETTINGS_CHANGED, load);
+    // A save that answered the settings is applied at once; anything else is re-read.
+    const onChanged = (event: Event) => {
+      const fresh = announcedSettings(event);
+      if (!fresh) return load();
+      setSettings(fresh);
+      setSettingsFailed(false);
+    };
+    window.addEventListener(SETTINGS_CHANGED, onChanged);
     return () => {
       cancelled = true;
-      window.removeEventListener(SETTINGS_CHANGED, load);
+      window.removeEventListener(SETTINGS_CHANGED, onChanged);
     };
   }, [open, setSettings, setSettingsFailed]);
 

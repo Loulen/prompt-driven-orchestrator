@@ -58,11 +58,14 @@ pub fn installed_catalogue_reader() -> CatalogueReader {
 }
 
 /// How long a catalogue / version probe is allowed to run before it is killed and
-/// treated as "no answer" (#616). `--help` / `--version` exit immediately on every
-/// harness in play; the cap is a defence against a binary that blocks (a broken
-/// install, a prompt on stdin), so a probe can never wedge the boot task or the
-/// `/settings` response.
-pub(crate) const CATALOGUE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+/// treated as "no answer" (#616). The cap is a defence against a binary that
+/// blocks (a broken install, a prompt on stdin), not a performance budget: a
+/// healthy harness CLI can be slow to start — `copilot --help` and
+/// `copilot --version` measured 5 to 10.6 s on a loaded host, so the former 5 s
+/// cap read no catalogue at all. No page fetch waits on it: the boot task warms
+/// the catalogues, and a version re-check runs in the background
+/// ([`CatalogueReader::read`]).
+pub(crate) const CATALOGUE_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The version string of `binary`, read by running `<binary> --version` on the
 /// harness probe `PATH` (#616, ADR-0053 §3). `None` when the binary can't be run,
@@ -72,8 +75,8 @@ pub(crate) const CATALOGUE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 ///
 /// UNLIKE [`binary_available`](crate::adapters::binary_path::binary_available), this **executes** the binary — deliberately, and
 /// only ever off the resident hot path: at daemon boot, and on a throttled version
-/// re-check behind the `/settings` fetch. `--version` is non-interactive and exits
-/// at once; the timeout is the backstop.
+/// re-check run in the background of a `/settings` fetch. `--version` is
+/// non-interactive; the timeout is the backstop.
 pub fn probe_version(binary: &str) -> Option<String> {
     probe_version_on(binary, &harness_probe_path())
 }
@@ -106,8 +109,7 @@ pub fn probe_version_on(binary: &str, path: &str) -> Option<String> {
 /// the correctness of the whole ladder. Measured: `claude` has no `completion` and no
 /// `help` subcommand, and treats either as a *prompt* — `claude completion bash` opens
 /// a session and idles until the probe's timeout kills it. Walking the ladder blind
-/// would spend two five-second timeouts on every claude re-probe, one of them inside a
-/// `/settings` response.
+/// would spend two full probe timeouts on every claude re-probe.
 ///
 /// The **preference** order of ADR-0056 is independent of the run order: an answer from
 /// the generated completion script outranks one from the settings prose, which outranks

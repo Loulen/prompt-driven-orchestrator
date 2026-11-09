@@ -45,7 +45,9 @@ Features validated while crossing the editing screens:
   and drive it; no hard-coded ports, ids or paths in the journey.
 - The **Pipelines** tab lists at least one pipeline with **two agent nodes or more**. A fresh
   instance has none: seed one (a YAML under the demo `HOME`'s `~/.pdo/pipelines/`, or « New
-  pipeline » in the Pipelines tab and two nodes added by hand).
+  pipeline » in the Pipelines tab and two nodes added by hand). Step 5 needs a **boolean** field on
+  the source's output: declare it `type: bool` in the seed's output schema (`boolean` is read as the
+  same type).
 
 ## Journey
 
@@ -83,12 +85,14 @@ Features validated while crossing the editing screens:
    (type a name, Enter) and undo → the whole name reverts in one step.
 9. **Reload the page without saving**, reopen the copy from the Pipelines tab → every edit from
    steps 3–8 is there, the tab is still dirty, the row reads `draft: N changes` and the canvas banner
-   « Draft · N changes since vM ».
+   « Draft · N changes since vM ». Undo and Redo are disabled now: the undo history lives in the
+   tab, in memory, and the reload opened a new tab (CONTEXT.md « Undo/redo »).
 10. **Save**: the tab bar's « Save… » (or Ctrl/Cmd+S) opens the window « Save `<name>` »: « Save as »
     offers « New version vN+1 » (the default), « Keep vN apart » and « Replace vN », with a Title
     field. Confirm with « Save vN+1 » → a toast « Saved … », the tab's unsaved dot clears, « Saved
     just now » shows, the Save button disables and the draft banner is gone.
-11. Open **Pipeline info** (the right pane with nothing selected) › **Versions** → the new version is
+11. Open **Pipeline info** (the toolbar's ⓘ button; with nothing selected the right pane is
+    closed) › **Versions** → the new version is
     listed. « View vN » on the previous one → a read-only tab `<id>-copy.yaml @ vN` opens without the
     edits; close it.
 12. **Validate**: the tab bar's « Validate » (next to Save) opens its modal; tick « All projects
@@ -142,7 +146,8 @@ Features validated while crossing the editing screens:
   writes the YAML and a version. Asserting the file before step 10 is a false finding.
 - **A file written outside PDO merges into the draft** rather than wiping it: the notice reads
   « `<id>.yaml` changed outside · kept as vN », the local edits and the dirty state stay, and no
-  conflict window opens. Only a draft the daemon starts afresh clears the undo history.
+  conflict window opens. The undo history is the tab's, in memory: a page reload clears it (the
+  draft stays), and so does a draft the daemon starts afresh.
 - **Undo history survives a Save**: the Save only moves the draft's baseline.
 - The edit toolbar has **no Switch, Loop, ForEach nor Merge button** — routing lives on edges,
   loops are regions drawn as cycles, a convergence is any node fed by several edges.

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { dismissOverlaysAside } from "../../lib/overlays";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import FsExplorerModal from "./FsExplorerModal";
@@ -395,5 +396,24 @@ describe("FsExplorerModal — the folder in its title bar (CORE-116)", () => {
     expect(event.defaultPrevented).toBe(true);
     expect(outer).not.toHaveBeenCalled();
     document.removeEventListener("keydown", outer);
+  });
+});
+
+/**
+ * The New Run tour moves from « pick the repository » to « choose the
+ * pipeline »: the explorer left open stood over the lit Pipeline field, its
+ * Cancel under the dim (FP of CORE-227). It folds when the next gesture is
+ * outside it, and stays while the gesture is one of its rows.
+ */
+describe("FsExplorerModal — folded by whoever needs the screen", () => {
+  it("closes when the next gesture is outside it, not when it is one of its rows", async () => {
+    const props = renderModal();
+    const row = await screen.findAllByTestId("fs-browse-entry");
+
+    act(() => dismissOverlaysAside([row[0]]));
+    expect(props.onClose).not.toHaveBeenCalled();
+
+    act(() => dismissOverlaysAside([]));
+    expect(props.onClose).toHaveBeenCalledTimes(1);
   });
 });

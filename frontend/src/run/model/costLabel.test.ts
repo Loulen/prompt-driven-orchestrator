@@ -4,6 +4,7 @@ import {
   formatCostAmount,
   formatEstCost,
   nodeCostTitle,
+  nodeCostAmount,
   COST_ESTIMATE_NOTE,
   COST_REPORTED_NOTE,
   COST_REPORTED_IN_USD_NOTE,
@@ -251,5 +252,68 @@ describe("formatEstCost (single run, #272)", () => {
     expect(c.title).toContain("claude-opus-6");
     // The reported slice never contributes an unpriced-model name.
     expect(c.title).toMatch(/via `copilot` \(reported\)/);
+  });
+
+  it("keeps the dagger on the total, never on a slice", () => {
+    const c = formatEstCost(7.0, true, ["claude-opus-6"], [], [
+      { reported_in_usd: false, harness: "claude", usd: 5.0, form: "derived", partial: true, unpriced_models: ["claude-opus-6"] },
+      { reported_in_usd: false, harness: "copilot", usd: 2.0, form: "reported", partial: false, unpriced_models: [] },
+    ]);
+    expect(c.ventilation?.map((v) => v.text)).toEqual(["~$5.00", "~$2.00"]);
+  });
+});
+
+describe("a cost nothing could price", () => {
+  // A lower bound of $0 is no figure: every token went to an unpriced model.
+  it("renders — for a lower-bound amount of zero, never ~$0.0000†", () => {
+    expect(formatCostAmount(0, true, true)).toBe("—");
+    expect(formatCostAmount(0, false, true)).toBe("~$0.0000");
+  });
+
+  it("renders the Run total as — and names the unpriced model", () => {
+    const c = formatEstCost(0, true, ["claude-haiku-5-5"], [], [
+      { reported_in_usd: false, harness: "claude", usd: 0, form: "derived", partial: true, unpriced_models: ["claude-haiku-5-5"] },
+    ]);
+    expect(c.text).toBe("—");
+    expect(c.dagger).toBe(false);
+    expect(c.title).toContain("claude-haiku-5-5");
+    expect(c.title).toMatch(/not priced/i);
+    expect(c.ventilation ?? []).toEqual([]);
+  });
+
+  it("renders an unpriced slice as — beside priced ones", () => {
+    const c = formatEstCost(0.0302, true, ["claude-haiku-5-5"], [], [
+      { reported_in_usd: false, harness: "claude", usd: 0, form: "derived", partial: true, unpriced_models: ["claude-haiku-5-5"] },
+      { reported_in_usd: false, harness: "copilot", usd: 0.0302, form: "reported", partial: false, unpriced_models: [] },
+    ]);
+    expect(c.ventilation).toEqual([
+      { harness: "claude", text: "—", form: "derived" },
+      { harness: "copilot", text: "~$0.0302", form: "reported" },
+    ]);
+  });
+});
+
+describe("nodeCostAmount: the estimate marker follows the slices' rule", () => {
+  const base: NodeCost = {
+    usd: 0.0302,
+    form: "reported",
+    reported_in_usd: false,
+    partial: false,
+    executions: 1,
+    readable_executions: 1,
+  };
+
+  it("keeps the ~ on a reported cost converted from another unit (copilot)", () => {
+    expect(nodeCostAmount(base)).toBe("~$0.0302");
+  });
+
+  it("drops the ~ only on a cost reported in dollars (pi)", () => {
+    expect(nodeCostAmount({ ...base, reported_in_usd: true })).toBe("$0.0302");
+  });
+
+  it("keeps the ~ on a derived estimate and says — for an unpriced one", () => {
+    expect(nodeCostAmount({ ...base, form: "derived" })).toBe("~$0.0302");
+    expect(nodeCostAmount({ ...base, form: "derived", usd: 0, partial: true })).toBe("—");
+    expect(nodeCostAmount({ ...base, usd: null, form: null })).toBe("—");
   });
 });

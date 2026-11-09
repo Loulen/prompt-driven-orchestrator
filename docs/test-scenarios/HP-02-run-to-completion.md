@@ -42,7 +42,8 @@ Features validated while crossing the run screens:
 - **Artifact rendering** (#240 / ADR-0013): an output opens in the markdown modal; a ` ```mermaid `
   block renders as inline SVG and invalid mermaid degrades to its raw source.
 - **Run stats** (#100 / #272): the **Info** tab's « Stats » strip shows Duration (ticking live),
-  Node sessions started (manager excluded), Changes (`+N −M`, a click opens the Diff tab) and the
+  Node sessions started (manager excluded; **hidden by default**: turn on Settings › Appearance ›
+  Run info › Stats › « Node sessions » first), Changes (`+N −M`, a click opens the Diff tab) and the
   **Est. cost** (« — » when it cannot be computed); every label is the cell's tooltip.
 - **Runs grouped by Project** (#258, ADR-0087): the Runs list groups by Project, falling back to
   the repository for Runs outside any Project, as soon as there are two groups or one Project group.
@@ -65,11 +66,17 @@ Features validated while crossing the run screens:
   bar shows « Daemon: connected ». See `docs/agents/run-scenario.md` to start a demo daemon and
   probe side-effects; no hard-coded ports, ids or paths in the journey.
 - `claude`, `opencode`, `copilot` and `pi` are on the **daemon's** `PATH` (enriched from your login
-  shell, ADR-0055) and **logged in**. The target repository's root has been **trusted once** for
-  `copilot` (`docs/reference/harnesses.md` § Prerequisites): the trust dialog is not covered by its
-  autonomy flags, and trust cascades to every node sub-worktree.
+  shell, ADR-0055) and **logged in** on this machine: `opencode` needs its
+  `~/.local/share/opencode/auth.json` (a provider login, `opencode auth login`), or its node dies
+  at once with `ProviderModelNotFoundError`. The target repository's root has been **trusted
+  once** for `copilot` (`docs/reference/harnesses.md` § Prerequisites): the trust dialog is not
+  covered by its autonomy flags, and trust cascades to every node sub-worktree. The demo daemon
+  stages `copilot`'s logged-in user and trusts `/tmp` for it: keep the target repo under `/tmp`.
 - Docker is available for the sandbox pair; the sandbox image may be built on the first sandboxed
-  Run (minutes, once per image change).
+  Run (minutes, once per image change). The daemon listens on an address the container reaches:
+  start the demo daemon with **`BIND_ALL=1`** (`docs/agents/run-scenario.md`). A loopback-only
+  daemon refuses the container's `host.docker.internal` calls, and the sandboxed node can never
+  complete.
 - A target git repository, and the pipelines the journey seeds (a dataflow pipeline with a
   conditional edge, a bounded review loop and a collection region converging on an agent; a
   one-node pipeline; a four-node pipeline). A pipeline created for the journey is born a **test
@@ -97,7 +104,7 @@ Features validated while crossing the run screens:
    **received**.
 7. Open an output → the **markdown modal** renders it (a mermaid diagram as SVG).
 8. Open the Run's **Info** tab → the **Stats** strip shows Duration (frozen now), Node sessions
-   started, Changes and Est. cost.
+   started (switched on beforehand, see the description), Changes and Est. cost.
 9. Find the Run in the **Runs list** (grouped by Project, or by repository outside a Project, when
    there are two groups or one Project group).
 10. **Sandboxed twin.** Seed (or reuse) a **one-node pipeline** whose node writes a single line and
@@ -131,7 +138,9 @@ Features validated while crossing the run screens:
     harnesses, one outcome.
 16. **The `copilot` node, end to end.** Watch it without touching it: it starts, its terminal shows
     an **interactive** `copilot` session (not a one-shot that exits), and when its turn ends the
-    node goes **completed on its own** — nobody typed `pdo complete`, nobody pressed Approve. Then
+    node goes **completed on its own**: nobody pressed Approve, nobody typed in its pane. The agent
+    may run `pdo complete` itself (its preamble asks every agent to); when it doesn't, the runtime
+    completes the node on turn end. Either way the node must not stay running. Then
     open the Run's **Info** tab: Est. cost reads « — » followed by one slice per costed harness, in
     alphabetical order — `— · ~$… via claude · ~$… via copilot · $… via pi` (`~` marks an estimate;
     `pi` reports exact dollars) — its tooltip naming `opencode` as the harness with no cost
@@ -246,9 +255,11 @@ Harness four-way choice, read-only probes:
   answers `source: "snapshot"` with the conversation that ran there; the tmux session is **gone**
   (reaped on the terminal transition, every harness). A live session outliving a terminal node, or
   an empty pane, is a finding.
-- The `copilot` node's completion reads as runtime-initiated on turn end, not as an agent-typed
-  `pdo complete`. A journal ending in `session.error` must **not** have completed the node
-  (`copilot` exits 0 on a hard model failure, ADR-0052).
+- The `copilot` node's completion comes from the node itself: the agent's own `pdo complete`, or
+  the runtime's on turn end (`assistant.turn_end` in its journal) when the agent didn't run it. Both
+  are fine; which one happened depends on the model, so don't assert it. A journal ending in
+  `session.error` must **not** have completed the node (`copilot` exits 0 on a hard model failure,
+  ADR-0052).
 - All four outputs carry the expected line. A `completed` status alone is not evidence (#490):
   read the artifact.
 - **Do not assert the `opencode` node's model** (see the notes).
@@ -270,9 +281,10 @@ Harness four-way choice, read-only probes:
   admission-slot leak, mid-run edit rejection are covered by the layer-3 automated tests.
 - **Select data by characteristics, not hard-coded ids**: if no data satisfies a condition, that is
   a finding, not an excuse to bypass the UI.
-- A first `claude` launch in a fresh worktree lands on its trust dialog — confirm it (see the
-  driving playbook). That one is `claude`'s, not the product's; `copilot`'s is a prerequisite, set
-  once before the Run.
+- A `claude` launch in a worktree its config doesn't trust lands on its trust dialog. The demo
+  daemon trusts `/tmp`; if the dialog shows anyway, accept it with **Down, then Enter**: its cursor
+  starts on « ❯ No, exit », and a bare Enter ends the session (see the driving playbook). That
+  dialog is `claude`'s, not the product's; `copilot`'s is a prerequisite, set once before the Run.
 - Nothing in the journey names the product or shows its logo: the brand shown in the window is out
   of scope here.
 

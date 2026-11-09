@@ -78,9 +78,14 @@ const STEPS: TourStep[] = [
   {
     id: "open-new-run",
     title: "Open New Run",
-    body: "Click New Run. A Run is one execution of a pipeline on a repository; the form that opens describes it.",
     // The button only exists on the Runs tab, so a reader who is somewhere else is
-    // sent to the tab first — one step, two targets, whichever is reachable.
+    // sent to the tab first — one step, two targets, whichever is reachable. The
+    // body names the one that is lit (FP of CORE-227: « Click New Run » over a
+    // lit Runs tab).
+    body: (o) =>
+      o.present(NEW_RUN_BUTTON)
+        ? "Click New Run, the + at the top of the Runs list. A Run is one execution of a pipeline on a repository; the form that opens describes it."
+        : "Click the Runs tab first: New Run is the + at the top of its list. A Run is one execution of a pipeline on a repository.",
     target: (o) => (o.present(NEW_RUN_BUTTON) ? [NEW_RUN_BUTTON] : [RUNS_TAB]),
     waitingFor: "the New Run button",
     failureHint: "It lives at the top of the Runs tab, on the left.",

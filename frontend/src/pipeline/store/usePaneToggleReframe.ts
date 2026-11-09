@@ -3,7 +3,7 @@
  */
 
 import type { ReactFlowInstance } from "@xyflow/react";
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { CARD_HEIGHT, CARD_WIDTH } from "../../lib/nodePlacement";
 import { paneResizeAction, reframeOnPaneResize } from "../../lib/paneResizeViewport";
 import { useEditStore } from "./editStore";
@@ -44,7 +44,31 @@ export function usePaneToggleReframe(
   reactFlow: ReactFlowInstance,
   hasCanvas: boolean,
   rightPaneCollapsed: boolean,
+  tabId?: string,
 ) {
+  // F3-4: the viewport the last automatic fit left, while the reader has not
+  // moved it. A fit nobody moved is the canvas's opening frame: a pane toggle
+  // fits it again (the same zoom cannot hold a graph fitted on a wider canvas).
+  const fittedRef = useRef<{ x: number; y: number; zoom: number } | null>(null);
+  const fit = useCallback(() => {
+    void reactFlow.fitView(canvasFitViewOptions()).then(() => {
+      fittedRef.current = reactFlow.getViewport();
+    });
+  }, [reactFlow]);
+  // When the canvas opened: its mount, or a tab it shows for the first time.
+  const openedAtRef = useRef(0);
+  // F3-4: the canvas outlives its tabs, and React Flow fits only on its mount:
+  // a tab shown for the first time (a fresh Run) is fitted, and its opening
+  // window lets the pane unfolding with it fit it again.
+  const framedTabsRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (!tabId || framedTabsRef.current.has(tabId)) return;
+    const first = framedTabsRef.current.size === 0;
+    framedTabsRef.current.add(tabId);
+    openedAtRef.current = performance.now();
+    if (!first) fit();
+  }, [tabId, fit]);
+
   // #949 (FP iteration 1): the right pane folding or unfolding resizes the
   // canvas from the right; without this, a graph fit-viewed on the full-width
   // canvas slides under the unfolded pane, clicked card included. The toggle
@@ -74,19 +98,22 @@ export function usePaneToggleReframe(
     const wrapper = reactFlowRef.current;
     if (!hasCanvas || !wrapper || typeof ResizeObserver === "undefined") return;
     lastCanvasWidthRef.current = null;
-    const mountedAt = performance.now();
+    openedAtRef.current = performance.now();
     const observer = new ResizeObserver(() => {
       const { width, height } = wrapper.getBoundingClientRect();
       const prevWidth = lastCanvasWidthRef.current;
       lastCanvasWidthRef.current = width;
-      const msSinceMount = performance.now() - mountedAt;
-      const action = paneResizeAction({ prevWidth, width, msSinceMount, paneToggled: paneToggledRef.current });
+      const msSinceMount = performance.now() - openedAtRef.current;
+      const fitted = fittedRef.current;
+      const now = reactFlow.getViewport();
+      const viewFitted = fitted != null && fitted.x === now.x && fitted.y === now.y && fitted.zoom === now.zoom;
+      const action = paneResizeAction({ prevWidth, width, msSinceMount, paneToggled: paneToggledRef.current, viewFitted });
       if (action == null) return;
       paneToggledRef.current = false;
       if (action === "fit" || prevWidth == null) {
         // Queued by React Flow until the nodes are measured; this observer was
         // created after React Flow's own, so its width is already current.
-        void reactFlow.fitView(canvasFitViewOptions());
+        fit();
         return;
       }
       const selection = useEditStore.getState().selection;
@@ -104,5 +131,5 @@ export function usePaneToggleReframe(
     });
     observer.observe(wrapper);
     return () => observer.disconnect();
-  }, [hasCanvas, reactFlow, reactFlowRef]);
+  }, [hasCanvas, reactFlow, reactFlowRef, fit]);
 }

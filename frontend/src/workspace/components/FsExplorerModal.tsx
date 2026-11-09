@@ -5,6 +5,7 @@ import { browseFs } from "../api/browse";
 import type { BrowseEntry } from "../../shared/generated/BrowseEntry";
 import type { BrowseOptions } from "../api/browse";
 import { useDialogFocus } from "../store/useDialogFocus";
+import { registerTransientOverlay } from "../../lib/overlays";
 import { Button, IconButton } from "../../shared/ui/kit";
 import MidPath from "../../shared/ui/MidPath";
 
@@ -169,6 +170,11 @@ export default function FsExplorerModal({
 
   // Initial focus, its restitution, and the Tab trap (#437).
   useDialogFocus(dialogRef);
+
+  // A picker someone else may need folded: a guided tour moving on to the
+  // Pipeline field must not leave it there, its Cancel under the dim (FP of
+  // CORE-227).
+  useEffect(() => registerTransientOverlay(onClose, () => dialogRef.current), [onClose]);
 
   const handleRow = (entry: BrowseEntry, event?: React.MouseEvent) => {
     // Dir mode: the listing is directories-only by contract, so a row is ALWAYS a

@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import NewRunModal from "./NewRunModal";
 import { mergeAttachments, overLimitIndices } from "../model/attachments";
 import { useEditStore } from "../../pipeline/store/editStore";
+import { announceSettingsChanged } from "../../settings/store/useSettings";
 import type { BranchList } from "../../shared/generated/BranchList";
 import type { BranchRef } from "../../shared/generated/BranchRef";
 import type { InstanceSettings } from "../../settings/model/settings";
@@ -1844,6 +1845,16 @@ describe("NewRunModal run name field", () => {
     expect(screen.getByTestId("auto-name-checkbox").closest("label")).toHaveTextContent("Auto");
   });
 
+  // FP of CORE-227: a tour lit the bare box, and its card, placed beside the
+  // hole, covered the word « Auto » its own copy pointed at. The whole control —
+  // box and word — is one target.
+  it("names the whole Auto control, box and word, as one target", () => {
+    renderModal();
+    const control = screen.getByTestId("auto-name");
+    expect(control).toHaveTextContent("Auto");
+    expect(control).toContainElement(screen.getByTestId("auto-name-checkbox"));
+  });
+
   it("name input is disabled when auto-generated is checked", () => {
     renderModal();
 
@@ -2944,6 +2955,21 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       await waitFor(() => expect(Array.from(select.options).map((o) => o.value)).toContain("mine"));
       // Offered, not selected: the field still asserts nothing.
       expect(select.value).toBe("");
+    });
+
+    it("follows a default changed in Settings at once, from the settings the save answered", async () => {
+      vi.mocked(fetchSettings).mockResolvedValue(settingsFixture());
+      vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
+      render(<NewRunModal open onClose={noop} onCreated={noop} onManageStagingProfiles={noop} />);
+      const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+      await waitFor(() => expect(select.options[0].textContent).toBe("Default (off)"));
+      // GET /settings is slow (it probes Docker): it must not be what the label waits on.
+      vi.mocked(fetchSettings).mockReturnValue(new Promise(() => {}));
+      const saved = settingsFixture({
+        default_sandbox: { effective: "full", source: "stored", stored: "full", env: null, default: "off", reason: null },
+      });
+      act(() => announceSettingsChanged(saved));
+      expect(select.options[0].textContent).toBe("Default (full)");
     });
   });
 });

@@ -69,6 +69,12 @@ function fakeHostHome() {
     ".claude/settings.json": '{"model":"mine"}',
     ".pi/agent/auth.json": '{"key":"TEST-ONLY"}',
     ".local/share/opencode/auth.json": '{"key":"TEST-ONLY"}',
+    ".copilot/config.json": `// managed automatically\n${JSON.stringify({
+      trustedFolders: ["/home/me/secret"],
+      lastLoggedInUser: { host: "https://github.com", login: "me" },
+      loggedInUsers: [{ host: "https://github.com", login: "me" }],
+      recentModelIds: ["gpt-x"],
+    })}`,
   };
   for (const [rel, content] of Object.entries(files)) {
     fs.mkdirSync(path.dirname(path.join(home, rel)), { recursive: true });
@@ -109,11 +115,26 @@ describe("credentials staging", () => {
     assert.deepEqual(snapshot(hostHome), before, "the real config is untouched");
   });
 
+  test("copilot gets its logged-in user and trusts /tmp, where the journeys' repos live; not the user's own folders", () => {
+    const hostHome = fakeHostHome();
+    const demoHome = path.join(tmpRoot, "staged-copilot");
+    const staged = stageHarnessCredentials({ hostHome, demoHome });
+    const file = path.join(demoHome, ".copilot", "config.json");
+    assert.ok(staged.includes(file), "recorded for the wipe");
+    const config = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.deepEqual(config.trustedFolders, ["/tmp"]);
+    assert.deepEqual(config.loggedInUsers, [{ host: "https://github.com", login: "me" }]);
+    assert.deepEqual(config.lastLoggedInUser, { host: "https://github.com", login: "me" });
+    assert.equal(config.recentModelIds, undefined);
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  });
+
   test("a harness without auth on this machine is skipped", () => {
     const hostHome = fs.mkdtempSync(path.join(tmpRoot, "bare-host-"));
     const demoHome = path.join(tmpRoot, "bare-staged");
     stageHarnessCredentials({ hostHome, demoHome });
     assert.ok(!fs.existsSync(path.join(demoHome, ".pi")));
+    assert.ok(!fs.existsSync(path.join(demoHome, ".copilot")));
     assert.ok(!fs.existsSync(path.join(demoHome, ".claude", ".credentials.json")));
   });
 });

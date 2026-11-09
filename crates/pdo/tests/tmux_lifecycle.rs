@@ -374,6 +374,82 @@ async fn dead_session_respawn_via_pane_endpoint() {
     std::env::remove_var(pdo_kernel::env::REAPER_INTERVAL_SECS_ENV);
 }
 
+/// ADR-0049: an `Interrupted` node comes back on a human gesture only. Reading
+/// its pane over HTTP is not one: the GET never relaunches its harness.
+#[tokio::test]
+// Intentional: the guard must span the `.await`s so env-var-sensitive reaper
+// tests can't race.
+#[allow(clippy::await_holding_lock)]
+async fn pane_of_an_interrupted_node_never_relaunches_it() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+    let _serial = serial_guard();
+
+    std::env::set_var(pdo_kernel::env::REAPER_TTL_SECS_ENV, "3600");
+    std::env::set_var(pdo_kernel::env::REAPER_INTERVAL_SECS_ENV, "3600");
+
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let socket = daemon.tmux_socket();
+    let run_id = create_run(&daemon).await;
+    let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
+    assert!(
+        wait_for_session(&socket, &session, Duration::from_secs(5)).await,
+        "session should appear after POST /runs"
+    );
+
+    // An infra incident: the session dies and the node is `Interrupted`.
+    crate::common::tmux(&socket).kill(&session);
+    daemon
+        .seed_event(pdo_run::domain::event::Event {
+            id: None,
+            run_id: run_id.clone(),
+            ts: pdo_kernel::clock::now_iso(),
+            kind: pdo_run::domain::event::EventKind::NodeInterrupted,
+            node_id: Some(NODE_ID.into()),
+            iter: Some(1),
+            payload: Some(serde_json::json!({
+                "reason": "session_died: test",
+                "reason_code": "session_died",
+            })),
+        })
+        .await;
+    let started_before = run_events(&daemon, &run_id)
+        .await
+        .iter()
+        .filter(|e| e["kind"] == "node_started")
+        .count();
+
+    let resp = reqwest::Client::new()
+        .get(format!(
+            "{}/runs/{run_id}/nodes/{NODE_ID}/pane?iter=1",
+            daemon.url()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let pane: serde_json::Value = resp.json().await.unwrap();
+    assert_ne!(pane["source"], "resumed", "{pane}");
+    assert_eq!(pane["resumed"], false, "{pane}");
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !tmux_has_session(&socket, &session),
+        "reading an interrupted node's pane must not relaunch its session"
+    );
+    let started_after = run_events(&daemon, &run_id)
+        .await
+        .iter()
+        .filter(|e| e["kind"] == "node_started")
+        .count();
+    assert_eq!(started_after, started_before, "no resurrection NodeStarted");
+
+    std::env::remove_var(pdo_kernel::env::REAPER_TTL_SECS_ENV);
+    std::env::remove_var(pdo_kernel::env::REAPER_INTERVAL_SECS_ENV);
+}
+
 // #485 / ADR-0038 — the sweep must not kill the session it just spawned.
 //
 // Driven through the deterministic `run_orphan_sweep_tick()` seam, never by

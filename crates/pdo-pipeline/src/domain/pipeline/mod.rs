@@ -7,6 +7,7 @@
 mod definition;
 mod diagnostic;
 mod edge;
+mod field_type;
 mod legacy_ports;
 mod node;
 mod normalize;
@@ -19,6 +20,7 @@ pub use definition::{
 };
 pub use diagnostic::{Diagnostic, ParseError, ParseResult, Severity};
 pub use edge::{EdgeAnchor, EdgeDef, EdgeEndpoint, EdgeRouteMode, EdgeSource, EdgeWaypoint};
+pub use field_type::{canonical_field_type, FIELD_TYPES};
 pub use legacy_ports::{
     convert_legacy_ports, node_has_legacy_port_key, strip_legacy_port_keys, LegacyPortsReport,
 };

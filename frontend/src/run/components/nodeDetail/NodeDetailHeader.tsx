@@ -6,7 +6,7 @@ import type { NodeState } from "../../../shared/generated/NodeState";
 import { ExtensionActionButtons } from "../../../shared/extensions/ExtensionActions";
 import type { NodeEntity } from "../../../shared/extensions/contract";
 import type { ScopedProvisioningRules } from "../../../shared/generated/ScopedProvisioningRules";
-import { formatCostAmount, nodeCostTitle } from "../../model/costLabel";
+import { nodeCostAmount, nodeCostTitle } from "../../model/costLabel";
 import ProvisioningRulesEditor from "../../../workspace/components/ProvisioningRulesEditor";
 import {
   EMPTY_PROVISIONING_RULES,
@@ -112,7 +112,7 @@ export default function NodeDetailHeader({
         {node.cost && (
           <span data-testid="node-cost" className="ri-nh__cost" title={nodeCostTitle(node.cost)}>
             {" · "}
-            {formatCostAmount(node.cost.usd, node.cost.partial, node.cost.form !== "reported")}
+            {nodeCostAmount(node.cost)}
           </span>
         )}
       </span>

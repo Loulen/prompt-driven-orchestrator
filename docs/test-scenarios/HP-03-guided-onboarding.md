@@ -143,7 +143,9 @@ Features validated while crossing the tour:
     when it asks you to click it. Every edge is drawn from the **border** of the source card (there is
     no output dot), and the two edges out of the tester carry **`out`**, its first output — if one
     carries another port, the card sends you to the edge's **Outputs** section to tick `out`, and
-    only then advances. **Midway (e.g. on *Name it tester*), press `‹ Previous`, then `Next`** → the
+    only then advances. Before Save, the tour has you **connect Start to implementer**: without
+    that edge no node of the pipeline could start (the implementer's only other way in is the
+    tester's conditional edge). **Midway (e.g. on *Name it tester*), press `‹ Previous`, then `Next`** → the
     step before comes back and waits for `Next` (its condition already holds), and the tour carries
     on to its end card as usual, with no « this step could not be completed » card. **On *Select
     the node***, `‹ Previous` is greyed out: *Choose Node* needs the Add menu, which closed on the
@@ -235,8 +237,10 @@ Features validated while crossing the tour:
 
 ## Notes
 
-- **A brand-new folder makes the harness ask for trust** the first time it opens a session there.
-  Answering it is part of step 7, not a failure.
+- **A brand-new folder may make the harness ask for trust** the first time it opens a session
+  there (the demo daemon trusts `/tmp`, so it usually doesn't). Answering it is part of step 7, not a
+  failure: its cursor starts on « ❯ No, exit », so pick « Yes » (Down, then Enter). A bare Enter
+  ends the session, and the tour then waits on a dead node.
 - **Quitting a tour marks nothing.** A run of this journey that stops halfway must not leave a
   checkmark behind — if it does, that is the finding.
 - The chain of a full tour lives in the page, not on disk: reloading mid-way ends the chain (a stated

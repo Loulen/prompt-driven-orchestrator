@@ -21,20 +21,25 @@ import { demoEnv, demoPaths, TMUX_VARS } from "./env.mjs";
 const STAGED_LIST = "credentials.txt";
 const READY_TIMEOUT_MS = 60_000;
 
+/** Where the journeys put their target repos (`docs/agents/run-scenario.md`):
+ *  trusted by the harnesses that ask, so no trust dialog stops a node. */
+const TRUSTED_DIRS = ["/tmp"];
+
 /** Copy the auth files of every harness this machine has into `demoHome`;
  *  never a link, never a write to `hostHome`. Returns the files staged. */
 export function stageHarnessCredentials({ hostHome, demoHome }) {
-  return stageCredentials({ harnesses: Object.keys(HARNESS_AUTH), hostHome, demoHome, trustedDirs: [] });
+  return stageCredentials({ harnesses: Object.keys(HARNESS_AUTH), hostHome, demoHome, trustedDirs: TRUSTED_DIRS });
 }
 
 /**
  * Start a demo daemon on `port`. `testExt`: the test extension's demo daemon
  * instead of the bare one. `extra`: variables set explicitly on the daemon.
+ * `bindAll`: listen on all interfaces, so a sandboxed Run's container reaches it.
  * `build`: run cargo's incremental build of `pdo` first, so a branch that moved
  * since the last build is not tested on a stale binary (false: build only if
  * the binary is missing). Resolves to `{ url, pdo, pid, paths, env }`.
  */
-export async function startDemo({ port, testExt = false, extra = {}, build = true, repoRoot, tmpRoot = "/tmp", env = process.env, log = console.log }) {
+export async function startDemo({ port, testExt = false, bindAll = false, extra = {}, build = true, repoRoot, tmpRoot = "/tmp", env = process.env, log = console.log }) {
   const paths = demoPaths(port, tmpRoot);
   const running = readPid(paths.pidfile);
   if (running && isAlive(running)) {
@@ -57,7 +62,7 @@ export async function startDemo({ port, testExt = false, extra = {}, build = tru
   const staged = stageHarnessCredentials({ hostHome: env.HOME, demoHome: paths.home });
   fs.writeFileSync(path.join(paths.root, STAGED_LIST), staged.map((file) => `${file}\n`).join(""));
 
-  const daemonEnv = demoEnv({ env, paths, port, extra: { ...extra, ...own } });
+  const daemonEnv = demoEnv({ env, paths, port, extra: { ...extra, ...own }, bind: bindAll ? "0.0.0.0" : "127.0.0.1" });
   const logFile = fs.openSync(paths.log, "a");
   const child = spawn(command, args, { cwd: paths.cwd, env: daemonEnv, detached: true, stdio: ["ignore", logFile, logFile] });
   fs.closeSync(logFile);

@@ -46,6 +46,30 @@ export const HARNESS_AUTH = {
       fs.writeFileSync(settings, `${JSON.stringify({ skipDangerousModePermissionPrompt: true, statusLine: MODEL_STATUS_LINE }, null, 2)}\n`);
     },
   },
+  // copilot keeps its token in the system keyring, under the user named in
+  // `~/.copilot/config.json`; that file also lists the folders it trusts
+  // without asking. Only those two keys are carried over.
+  copilot: {
+    copy: [],
+    derive({ hostHome, demoHome, trustedDirs, record }) {
+      let host;
+      try {
+        // The file opens with `//` comment lines.
+        const text = fs.readFileSync(path.join(hostHome, ".copilot", "config.json"), "utf8");
+        host = JSON.parse(text.replace(/^\s*\/\/.*$/gm, ""));
+      } catch {
+        return;
+      }
+      const config = {
+        ...(host.lastLoggedInUser ? { lastLoggedInUser: host.lastLoggedInUser } : {}),
+        ...(host.loggedInUsers ? { loggedInUsers: host.loggedInUsers } : {}),
+        trustedFolders: trustedDirs,
+      };
+      const target = path.join(demoHome, ".copilot", "config.json");
+      record(target);
+      writePrivate(target, `${JSON.stringify(config, null, 2)}\n`);
+    },
+  },
   pi: { copy: [".pi/agent/auth.json"] },
   opencode: { copy: [".local/share/opencode/auth.json"] },
 };

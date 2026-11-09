@@ -954,6 +954,81 @@ async fn restart_node_happy_path_emits_command_issued_and_restarts() {
 }
 
 #[tokio::test]
+async fn recover_node_restarts_a_node_whose_conversation_was_never_written() {
+    // The First run tour's node died before its agent wrote a turn. Re-attaching
+    // it ran `claude --resume <id>`, which answered « No conversation found » and
+    // exited: the node died again, twice, while `restart_node` worked. A
+    // resuming harness with no conversation on disk is restarted instead, and
+    // the answer says so.
+    let tmp = tempfile::tempdir().unwrap();
+    write_test_pipeline(tmp.path(), "recover-pipe");
+    let state = test_state_with_dir(tmp.path()).await;
+    let run_id = "recover-no-conversation";
+    seed_run_for_node_control(&state, run_id, "recover-pipe").await;
+    for (kind, payload) in [
+        (
+            event_log::EventKind::NodeStarted,
+            serde_json::json!({
+                "node_type": "agent",
+                "harness": "claude",
+                "session_id": "9d3c3a61-0000-4000-8000-000000000001",
+            }),
+        ),
+        (
+            event_log::EventKind::NodeInterrupted,
+            serde_json::json!({ "reason": "session died" }),
+        ),
+    ] {
+        let ev = event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: pdo_kernel::clock::now_iso(),
+            kind,
+            node_id: Some("worker".into()),
+            iter: Some(1),
+            payload: Some(payload),
+        };
+        append_event(&state, &ev).await.unwrap();
+    }
+
+    let (status, _, body) = command_triplet(
+        &state,
+        run_id,
+        r#"{"kind":"recover_node","node_id":"worker","iter":1}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "got {body}");
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["mechanism"], "restart_with_artifacts", "got {body}");
+    assert!(
+        parsed["reason"]
+            .as_str()
+            .is_some_and(|r| r.contains("no conversation to resume")),
+        "the fallback says why: {body}"
+    );
+    assert_eq!(
+        parsed["spawned"],
+        serde_json::json!([{ "node_id": "worker", "iter": 1 }]),
+        "the restart's own answer is kept: {body}"
+    );
+
+    let events = load_events(&state.db, run_id).await.unwrap();
+    let issued = events
+        .iter()
+        .find(|e| {
+            e.kind == event_log::EventKind::CommandIssued
+                && e.payload
+                    .as_ref()
+                    .is_some_and(|p| p["command"] == "recover_node")
+        })
+        .expect("recover_node appends a CommandIssued");
+    assert_eq!(
+        issued.payload.as_ref().unwrap()["mechanism"],
+        "restart_with_artifacts"
+    );
+}
+
+#[tokio::test]
 async fn restart_node_on_an_isolated_node_reuses_its_sub_worktree() {
     // #489, the class that mattered. `write_test_pipeline`'s `worker` is
     // non-isolated, so the repo's only `restart_node` happy path was

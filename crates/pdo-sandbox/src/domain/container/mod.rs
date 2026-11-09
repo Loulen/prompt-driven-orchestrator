@@ -49,6 +49,7 @@
 //! [`crate::application::ports::DockerCli`], dans [`crate::application::container`].
 
 pub mod create;
+pub mod reach;
 
 use std::path::Path;
 

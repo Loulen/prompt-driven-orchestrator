@@ -25,6 +25,7 @@ to be running.
 ```bash
 make demo-daemon PORT=6491             # this branch's `pdo daemon`
 make demo-daemon PORT=6491 TEST_EXT=1  # the demo daemon of the test extension instead
+make demo-daemon PORT=6491 BIND_ALL=1  # listening on all interfaces: needed by a sandboxed Run
 ```
 
 Without `TEST_EXT`, the demo daemon is the **vanilla core**: this repository's binary with no
@@ -41,11 +42,14 @@ user's ports (5172, 5272, 6160, 6172…) and the caller's own daemon are refused
   start empty;
 - builds its environment from yours, minus every `PDO_*` (a node's `PDO_PORT`, `PDO_TOKEN`,
   `PDO_NODE_ID`: the demo daemon is never in nested mode), `TMUX` and `TMUX_PANE`; it sets `PDO_PORT`,
-  `PDO_BIND=127.0.0.1`, `PDO_UPDATE_CHECK=off`, `PDO_PRICE_SYNC=off`, and keeps `RUSTUP_HOME`,
+  `PDO_BIND=127.0.0.1` (`0.0.0.0` with `BIND_ALL=1`), `PDO_UPDATE_CHECK=off`, `PDO_PRICE_SYNC=off`, and keeps `RUSTUP_HOME`,
   `CARGO_HOME` and `COREPACK_HOME` on the real toolchains;
 - **copies** the harnesses' auth files (`~/.claude/.credentials.json` and the account block of
-  `~/.claude.json`, `~/.pi/agent/auth.json`, `~/.local/share/opencode/auth.json`) into the demo
-  `HOME`; your own config folders are never linked nor written;
+  `~/.claude.json`, `~/.pi/agent/auth.json`, `~/.local/share/opencode/auth.json`, and the logged-in
+  user of `~/.copilot/config.json`) into the demo `HOME`, with `/tmp` marked trusted for `claude`
+  and `copilot` (put the journey's target repos there); your own config folders are never linked
+  nor written. A harness with no auth on this machine (no file to copy, e.g. opencode never logged
+  in) is not staged: a journey that runs it fails on a **precondition**, not a product bug;
 - writes the pidfile `/tmp/pdo-demo-<port>/daemon.pid`, waits for the daemon to answer, then prints
   `PDO_DAEMON_URL=…`, `PDO=…` (the branch's `pdo`, not the one on your `PATH`) and a ready command.
 
@@ -68,6 +72,11 @@ curl -fs http://127.0.0.1:6491/runs          # the daemon answers JSON
 The Runs it launches open their tmux sessions on the socket `pdo-<port>`
 (`tmux -L pdo-6491 ls`), never on your default tmux server. Open `http://127.0.0.1:<port>` in the
 browser for a UI journey; the status bar shows the daemon **connected**.
+
+A **sandboxed** Run's container calls the daemon at `host.docker.internal:<port>` (the docker
+bridge), which a loopback-only daemon refuses: its node can't `pdo complete` and stays running.
+Start the demo daemon with `BIND_ALL=1` for any journey that runs a sandbox. It then listens on
+your network too: stop it as soon as the journey ends.
 
 If a precondition the journey lists isn't met, that's a **finding**: report it, don't try to "fix"
 the setup.
@@ -98,11 +107,14 @@ The point of this layer is that the UI alone doesn't tell the full story — ver
 
 - **tmux sessions**: `tmux -L pdo-<port> capture-pane -p -t pdo-<run_id>-<node_id>-iter-<n>`. The session-name
   pattern is fixed; confirm it shows the expected program (e.g. `claude` running, not a bare shell
-  that exited). A first `claude` launch in a fresh worktree lands on the "Quick safety check" trust
-  dialog — confirm it with `tmux -L pdo-<port> send-keys -t <session> Enter`. `copilot`'s equivalent is **not** a
-  step to drive: approve the target repository's root once, outside the journey, and it cascades to
-  every node sub-worktree (`docs/reference/harnesses.md` § Prerequisites). A `copilot` pane parked on it means the
-  prerequisite was never met.
+  that exited). A target repo under `/tmp` is trusted by the staged config. If a `claude` launch
+  still lands on the "Quick safety check" trust dialog, read the pane first: the cursor sits on
+  « ❯ No, exit » by default, so a bare `Enter` **ends the session**. Accept with
+  `tmux -L pdo-<port> send-keys -t <session> Down Enter` (the cursor on « Yes, I trust this
+  folder »). `copilot`'s equivalent is **not** a step to drive: the staged config trusts `/tmp`, and
+  for a repo elsewhere approve its root once, outside the journey; it cascades to every node
+  sub-worktree (`docs/reference/harnesses.md` § Prerequisites). A `copilot` pane parked on it means
+  the prerequisite was never met.
 - **Filesystem** (read with `cat` / Read):
   - Pipelines: `.pdo/pipelines/<name>.yaml` of the target repo, or the demo library
     `/tmp/pdo-demo-<port>/home/.pdo/pipelines/`, with the sidecar `<name>.prompts/<node>.md`

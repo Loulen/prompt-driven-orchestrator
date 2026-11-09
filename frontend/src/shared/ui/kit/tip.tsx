@@ -5,6 +5,7 @@
 import * as React from "react";
 import { Floating, type Side } from "./layer";
 import { tip } from "./util";
+import { givenBack } from "./focusGivenBack";
 
 // ================================================================== key
 
@@ -29,35 +30,6 @@ const TOOLTIP_DELAY = 300;
 /** Within this time after a tooltip closed, the next shows at once (along a toolbar). */
 const TOOLTIP_SKIP = 300;
 let lastTipClose = 0;
-/**
- * A focus given back by code within this time after Escape, or after Enter,
- * Space or a pointer-down in an open layer (a menu closed or picked from
- * returns to its trigger), opens no tooltip; Tab and the arrows do.
- */
-const GIVEN_BACK = 500;
-const LAYER = '.d-pop, [role="menu"], [role="listbox"]';
-let lastGiving: number | null = null;
-const inLayer = (t: EventTarget | null) => t instanceof Element && !!t.closest(LAYER);
-if (typeof window !== "undefined") {
-  window.addEventListener(
-    "keydown",
-    (e) => (lastGiving = e.key === "Escape" || ((e.key === "Enter" || e.key === " ") && inLayer(e.target)) ? Date.now() : null),
-    true,
-  );
-  window.addEventListener(
-    "pointerdown",
-    (e) => {
-      if (inLayer(e.target)) lastGiving = Date.now();
-    },
-    true,
-  );
-}
-/** Whether a focus now is one given back by code. A clock set back (a test's fake timers) counts as long ago. */
-function givenBack(): boolean {
-  if (lastGiving === null) return false;
-  const since = Date.now() - lastGiving;
-  return since >= 0 && since <= GIVEN_BACK;
-}
 
 /** First element with a box under `el` (the wrapper is `display: contents`). */
 function firstBox(el: Element | null): HTMLElement | null {

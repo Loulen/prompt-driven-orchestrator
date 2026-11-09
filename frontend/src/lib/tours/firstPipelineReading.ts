@@ -39,6 +39,10 @@ export function agent(app: TourAppState, i: number): EditorNodeDef | null {
   return agents(app)[i] ?? null;
 }
 
+export function startNode(app: TourAppState): EditorNodeDef | null {
+  return (app.pipeline?.nodes ?? []).find((n) => n.type === "start") ?? null;
+}
+
 export function endNode(app: TourAppState): EditorNodeDef | null {
   return (app.pipeline?.nodes ?? []).find((n) => n.type === "end") ?? null;
 }

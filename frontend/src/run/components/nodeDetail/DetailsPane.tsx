@@ -1,7 +1,7 @@
 import { useMemo, type ReactNode } from "react";
 import { ArrowLeftRight, MessageSquare, Network } from "lucide-react";
 import { KeyValue, Section, StatusIcon, type KeyValueRow } from "../../../shared/ui/kit";
-import { formatCostAmount, nodeCostTitle } from "../../model/costLabel";
+import { nodeCostAmount, nodeCostTitle } from "../../model/costLabel";
 import { formatTime } from "../../model/nodeDetailFormat";
 import { STATUS_LABELS } from "./labels";
 import type { NodeState } from "../../../shared/generated/NodeState";
@@ -236,7 +236,7 @@ function NodeProperties({ node, runId, selectedIter }: { node: NodeState; runId:
   if (node.cost && node.cost.usd != null) {
     rows.push({
       k: "Cost",
-      v: `${formatCostAmount(node.cost.usd, node.cost.partial, node.cost.form !== "reported")} · ${node.cost.executions}×`,
+      v: `${nodeCostAmount(node.cost)} · ${node.cost.executions}×`,
       mono: true,
       tip: nodeCostTitle(node.cost),
     });

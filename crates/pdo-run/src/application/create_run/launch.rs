@@ -78,7 +78,9 @@ pub(super) async fn launch(
             };
             // `ensure_ready` blocks on docker build/probe, so it must run under
             // `spawn_blocking` — which also isolates its panic into a `JoinError`.
-            match tokio::task::spawn_blocking(move || ctx.ensure_ready()).await {
+            // Up, AND reachable from inside: a container that cannot call the
+            // daemon would leave every node running for ever.
+            match tokio::task::spawn_blocking(move || ctx.ensure_ready_for_nodes()).await {
                 Ok(Ok(())) => {
                     // The Run may have gone terminal WHILE the prep ran. Emitting
                     // `SandboxPrepReady` and spawning into a dead Run would leave a

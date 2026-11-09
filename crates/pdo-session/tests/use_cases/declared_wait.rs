@@ -349,6 +349,37 @@ async fn ten_keystrokes_after_a_take_over_are_one_turn_of_speech() {
     assert!(world.waits.resumed.lock().unwrap().is_empty());
 }
 
+/// Opening a node's terminal attaches its first poste as the pilot
+/// (`NodeTakenOver`, CORE-202), but the replies the browser's terminal sends on
+/// its own as tmux attaches — colours, version, attributes, focus — are no
+/// turn of speech: no `NodeTyped` until a key is pressed.
+#[tokio::test]
+async fn the_terminals_own_replies_on_attach_are_no_turn_of_speech() {
+    let world = World::new(running(None), Host::allowing());
+    let lift = world.lift();
+    let session = node_session_name(RUN, "griller", 1);
+
+    lift.taken_over(&person("bob"), &session).await;
+    for reply in [
+        &b"\x1b[?1;2c\x1b[>0;276;0c"[..],
+        b"\x1bP>|xterm.js(5.5.0)\x1b\\",
+        b"\x1b]10;rgb:d8d8/d8d8/d8d8\x1b\\\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\",
+        b"\x1b[I",
+    ] {
+        lift.note_input(&person("bob"), &session, reply).await;
+    }
+    assert_eq!(
+        gestures(&world),
+        [(TerminalGesture::TakenOver, "bob".to_string())]
+    );
+
+    lift.note_input(&person("bob"), &session, b"y").await;
+    assert_eq!(
+        gestures(&world).last(),
+        Some(&(TerminalGesture::Typed, "bob".to_string()))
+    );
+}
+
 #[tokio::test]
 async fn the_same_pilot_attaching_again_takes_nothing() {
     let world = World::new(running(None), Host::allowing());

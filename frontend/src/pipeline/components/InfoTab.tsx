@@ -102,6 +102,9 @@ function RunStats({ run, onOpenDiff, marks }: { run: RunState; onOpenDiff: () =>
   // genuinely mixed Run (≥ 2 slices), or any slice when the total is withheld.
   const slices = cost?.ventilation ?? [];
   const ventilated = cost != null && slices.length > (cost.text === "—" ? 0 : 1);
+  const breakdown = ventilated ? ` · ${slices.map((v) => `${v.text} via ${v.harness}`).join(" · ")}` : "";
+  // The line ellipsizes in a narrow strip: the tooltip leads with all of it.
+  const costLine = cost ? `${cost.text}${cost.dagger ? "†" : ""}${breakdown}` : "";
   const files = run.loc ? `${run.loc.files_changed.toLocaleString()} ${run.loc.files_changed === 1 ? "file" : "files"}` : "";
   const [duration, sessions, changes, estCost] = STATS.map(marks);
   return (
@@ -136,12 +139,10 @@ function RunStats({ run, onOpenDiff, marks }: { run: RunState; onOpenDiff: () =>
       {estCost && !run.tree_cost && (
         <Stat icon={Coins} label="Est. cost" title={cost?.title ?? "Est. cost"} testid="stat-cost" marks={estCost}>
           {cost ? (
-            <span title={cost.title}>
+            <span className="pi-stats__value" title={`${costLine}\n${cost.title}`} data-testid="stat-cost-value">
               {cost.text}
               {cost.dagger && <span className="ei-warn">†</span>}
-              {ventilated && (
-                <span className="pi-sub"> · {slices.map((v) => `${v.text} via ${v.harness}`).join(" · ")}</span>
-              )}
+              {ventilated && <span className="pi-sub">{breakdown}</span>}
             </span>
           ) : (
             "—"

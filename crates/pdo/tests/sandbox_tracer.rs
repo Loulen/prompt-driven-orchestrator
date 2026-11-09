@@ -326,6 +326,61 @@ async fn docker_unavailable_fails_run_with_no_host_spawn() {
     );
 }
 
+/// A fake docker whose container answers everything but the daemon
+/// reachability probe, refused as a daemon bound to `127.0.0.1` refuses it on a
+/// Linux engine.
+fn write_fake_docker_daemon_unreachable() -> (TempDir, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("fake-docker");
+    let script = "#!/usr/bin/env bash\n\
+         case \"$1\" in\n\
+         image) exit 0 ;;\n\
+         container) printf '%s' 'Error: No such container' >&2; exit 1 ;;\n\
+         exec) case \"$*\" in *'/dev/tcp/host.docker.internal/'*) \
+               printf '%s\\n' 'bash: connect: Connection refused' >&2; exit 1 ;; esac\n\
+               if [ \"$2\" = -i ] && [ \"$3\" = -t ]; then exec sleep 300; fi; exit 0 ;;\n\
+         *) exit 0 ;;\n\
+         esac\n";
+    std::fs::write(&bin, script).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (dir, bin.to_str().unwrap().to_string())
+}
+
+/// A sandboxed Run whose container cannot reach the daemon fails its
+/// preparation, saying where the daemon must listen — never a node started
+/// whose `pdo complete` would be refused for ever.
+#[tokio::test]
+async fn a_daemon_the_container_cannot_reach_fails_the_prep_naming_the_bind() {
+    ensure_pdo_on_path();
+    let (_fake_dir, docker) = write_fake_docker_daemon_unreachable();
+    let daemon =
+        TestDaemon::spawn_with_docker_override(seed("#!/usr/bin/env bash\ntrue\n"), docker)
+            .await
+            .unwrap();
+
+    let run_id = start_run(&daemon, Some("minimal")).await;
+    let run = wait_run_status(&daemon, &run_id, "failed").await;
+    assert_eq!(run["status"], "failed", "{run}");
+    assert!(
+        run["nodes"].get(NODE_ID).is_none()
+            || run["nodes"][NODE_ID]["status"] == serde_json::Value::Null,
+        "no node is handed to a container that cannot call home: {run}"
+    );
+
+    let evs = run_events(&daemon, &run_id).await;
+    let failed = evs
+        .iter()
+        .find(|e| e["kind"] == "run_failed")
+        .unwrap_or_else(|| panic!("a RunFailed event must be recorded; events: {evs:#?}"));
+    let reason = failed["payload"]["reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.contains("cannot reach the PDO daemon at http://host.docker.internal:"),
+        "{reason}"
+    );
+    assert!(reason.contains("Connection refused"), "{reason}");
+    assert!(reason.contains("PDO_BIND"), "{reason}");
+}
+
 #[tokio::test]
 async fn off_run_never_invokes_docker() {
     ensure_pdo_on_path();

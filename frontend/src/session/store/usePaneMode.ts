@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { fetchPane } from "../api/sessions";
 import {
   REAPED_STATUSES,
@@ -15,12 +15,17 @@ import {
  * may not even have frozen the snapshot yet), while a node opened after it
  * settled reads the snapshot. A retry spawns a new iteration — a new session name
  * — so the live path is re-entered there, which is what this re-decision is for.
+ *
+ * `reprobe` takes a live terminal back to the probe: for the node that settled
+ * under the user's eyes once its socket fell. The daemon froze the pane before
+ * it killed the session, so the snapshot is there to read — instead of a live
+ * xterm showing tmux's `[exited]` and a « disconnected » badge.
  */
 export function usePaneMode(
   session: string,
   status: string | undefined,
   paneSource: PaneSource | undefined,
-): { mode: PaneMode; frozen: FrozenPane | null } {
+): { mode: PaneMode; frozen: FrozenPane | null; reprobe: () => void } {
   const reaped =
     paneSource !== undefined &&
     status !== undefined &&
@@ -75,5 +80,7 @@ export function usePaneMode(
     };
   }, [mode, paneRunId, paneNodeId, paneIter]);
 
-  return { mode, frozen };
+  const reprobe = useCallback(() => setMode((current) => (current === "live" ? "probing" : current)), []);
+
+  return { mode, frozen, reprobe };
 }

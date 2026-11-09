@@ -64,9 +64,12 @@ function portOf(url) {
 /**
  * The demo daemon's environment, from the caller's `env` (left untouched).
  * `extra` holds variables the caller asks for explicitly (`DEMO_ENV=`), set
- * after the purge; it may not undo the isolation (NOT_EXTRA).
+ * after the purge; it may not undo the isolation (NOT_EXTRA). `bind`: the
+ * address the daemon listens on, loopback unless a sandboxed Run needs it
+ * reachable from its container (`BIND_ALL=1`: all interfaces, since the
+ * container calls `host.docker.internal`, the docker bridge).
  */
-export function demoEnv({ env, paths, port, extra = {} }) {
+export function demoEnv({ env, paths, port, extra = {}, bind = "127.0.0.1" }) {
   const refused = Object.keys(extra).filter((key) => NOT_EXTRA.includes(key));
   if (refused.length > 0) throw new Error(`DEMO_ENV may not set ${refused.join(", ")}: the demo daemon's isolation sets them`);
   const realHome = env.HOME;
@@ -84,7 +87,7 @@ export function demoEnv({ env, paths, port, extra = {} }) {
     CARGO_HOME: env.CARGO_HOME ?? path.join(realHome, ".cargo"),
     COREPACK_HOME: env.COREPACK_HOME ?? path.join(cacheHome, "node", "corepack"),
     PDO_PORT: String(port),
-    PDO_BIND: "127.0.0.1",
+    PDO_BIND: bind,
     PDO_UPDATE_CHECK: "off",
     PDO_PRICE_SYNC: "off",
     // The nodes' PATH (ADR-0055 reads it from an interactive shell, which under

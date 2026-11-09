@@ -14,11 +14,14 @@ import {
 import {
   APPROVE_MENU,
   AUTO_APPROVE_ENTRY,
+  ENLARGED_TERMINAL,
   INSPECTOR_RUN,
+  INTERRUPTED_BANNER,
   OUT_MODAL,
   OUT_ROW,
   READING_TIMEOUT_MS,
   RELEASE_BUTTON,
+  REOPEN_BUTTON,
   TERMINAL,
   endedBadly,
   followedNode,
@@ -27,6 +30,16 @@ import {
   runIsOpen,
   runRowSel,
 } from "./firstRunReading";
+
+/**
+ * A node whose session died while the tour talks about it (FP of CORE-227):
+ * its banner is lit beside the step's target and Reopen — the one gesture that
+ * brings it back — stays live, instead of sitting under the dim.
+ */
+const REOPEN_REACHABLE: Pick<TourStep, "readOnly" | "explore"> = {
+  readOnly: (o) => (o.present(INTERRUPTED_BANNER) ? [INTERRUPTED_BANNER] : []),
+  explore: [REOPEN_BUTTON],
+};
 
 export const READING_STEPS: TourStep[] = [
   // ---- reading the Run (#825) ---------------------------------------------
@@ -106,6 +119,7 @@ export const READING_STEPS: TourStep[] = [
     title: "Talk to the agent",
     body: "Click in the terminal and paste the line, then press Enter. This is the agent's own session; if it first asks whether you trust the folder, answer yes.",
     target: () => [TERMINAL],
+    ...REOPEN_REACHABLE,
     waitingFor: "the agent's terminal in the Run inspector",
     failureHint: "The terminal is in the Run tab of the inspector, above the buttons.",
     targetTimeoutMs: READING_TIMEOUT_MS,
@@ -124,6 +138,7 @@ export const READING_STEPS: TourStep[] = [
     // then a soft zone, so the entry stays clickable.
     target: (o) => (o.present(APPROVE_MENU) ? [AUTO_APPROVE_ENTRY] : [RELEASE_BUTTON]),
     soft: (o) => o.present(APPROVE_MENU),
+    ...REOPEN_REACHABLE,
     waitingFor: "the Approve ▾ button",
     failureHint: "It sits at the right of the I/O and Transcript tabs while the node is live.",
     targetTimeoutMs: READING_TIMEOUT_MS,
@@ -158,8 +173,10 @@ export const READING_STEPS: TourStep[] = [
         : "If the agent asks you something in the terminal above, answer it — the step waits for as long as it takes.",
     // The whole inspector, as a zone rather than a target: during a wait of
     // unknown length the reader must keep the terminal — read it, scroll it,
-    // answer a late question. The rest of the app stays blocked.
-    target: () => [INSPECTOR_RUN],
+    // answer a late question. The rest of the app stays blocked. An enlarged
+    // terminal is the zone then: the inspector's box would draw a dashed
+    // outline and a dim across it (FP of CORE-227).
+    target: (o) => (o.present(ENLARGED_TERMINAL) ? [ENLARGED_TERMINAL] : [INSPECTOR_RUN]),
     soft: true,
     // The one step with no limit (ticket: « sans limite de temps »). An agent
     // takes as long as it takes, and a countdown here would be the tour deciding

@@ -39,8 +39,26 @@ function describeNode(before: EditorNodeDef, after: EditorNodeDef): string {
   return `edit ${changed[0] ?? "node"} of ${nodeName(after)}`;
 }
 
-/** What changed from `before` to `after`, in a few words. */
-export function describeChange(before: EditorPipelineDef, after: EditorPipelineDef): string {
+/** Where an edge is drawn (its route), apart from what it is. */
+const ROUTE_KEYS = ["mode", "waypoints", "target_side", "source_anchor", "target_anchor"];
+/** Where an edge's labels sit. */
+const LABEL_KEYS = ["output_label_pos", "condition_label_pos", "show_output_labels"];
+
+function edgeChange(before: EditorPipelineDef["edges"], after: EditorPipelineDef["edges"]): string {
+  const keys = new Set<string>();
+  after.forEach((edge, i) => {
+    const old = (before[i] ?? {}) as Record<string, unknown>;
+    const next = edge as Record<string, unknown>;
+    for (const key of Object.keys({ ...old, ...next })) if (!same(old[key], next[key])) keys.add(key);
+  });
+  const only = (group: string[]) => [...keys].every((key) => group.includes(key));
+  if (only(ROUTE_KEYS)) return "reshape edge";
+  if (only(LABEL_KEYS)) return "move edge label";
+  return "edit edge";
+}
+
+/** What changed from `before` to `after`, in a few words; `null` when nothing did. */
+export function describeChange(before: EditorPipelineDef, after: EditorPipelineDef): string | null {
   const old = new Map(before.nodes.map((n) => [n.id, n]));
   const next = new Map(after.nodes.map((n) => [n.id, n]));
   const added = after.nodes.filter((n) => !old.has(n.id));
@@ -56,11 +74,11 @@ export function describeChange(before: EditorPipelineDef, after: EditorPipelineD
   if (changed.length > 0) return describeNode(old.get(changed[0].id)!, changed[0]);
   if (after.edges.length > before.edges.length) return "add edge";
   if (after.edges.length < before.edges.length) return "delete edge";
-  if (!same(after.edges, before.edges)) return "edit edge";
+  if (!same(after.edges, before.edges)) return edgeChange(before.edges, after.edges);
   if (!same(after.notes, before.notes)) return "edit note";
   if (!same(after.loops, before.loops)) return "edit loop";
   const field = Object.keys({ ...before, ...after }).find(
     (key) => !same(before[key as keyof EditorPipelineDef], after[key as keyof EditorPipelineDef]),
   );
-  return field ? `edit pipeline ${field}` : "edit pipeline";
+  return field ? `edit pipeline ${field}` : null;
 }

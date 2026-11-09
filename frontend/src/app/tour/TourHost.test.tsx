@@ -3,9 +3,9 @@
  * the end card writes the "done" key and the failure card names what was missing.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import TourHost from "./TourHost";
 import { useTour } from "../../hooks/useTour";
 import { loadTourOffered, loadToursDone } from "../../lib/tourMemory";
@@ -157,6 +157,24 @@ describe("running a tour", () => {
     await user().click(screen.getByTestId("do-it"));
     tick();
     expect(screen.getByTestId("tour-popover")).toHaveAttribute("data-step", "two");
+  });
+
+  /**
+   * FP of CORE-227: the first click on Next after pasting was lost two times
+   * out of three. Pressing it blurred the field just pasted into; the field
+   * re-rendered under the press (several commit on blur) and the card moved
+   * with its hole before the release, so the click landed nowhere. The card's
+   * buttons act on the click and leave the focus where it is.
+   */
+  it("keeps the focus in the field on a press of the card's buttons", async () => {
+    render(<Harness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    const next = screen.getByTestId("tour-next");
+    // `dispatchEvent` answers false when the default — moving the focus — is prevented.
+    expect(fireEvent.mouseDown(next)).toBe(false);
   });
 
   it("quits on Escape, and says where to find the tour again", async () => {
@@ -483,6 +501,97 @@ describe("a tour starts on a clear stage", () => {
     expect(screen.queryByTestId("fake-overlay")).not.toBeInTheDocument();
     expect(screen.getByTestId("tour-popover")).toHaveTextContent("First run");
     expect(screen.getByTestId("tour-progress")).toHaveTextContent("1/1");
+  });
+});
+
+/**
+ * A picker the step before opened must not stay over the next step's target —
+ * the folder explorer over the Pipeline field, its Cancel under the dim; the
+ * skills picker over the Prompt (FP of CORE-227). Entering a step folds the
+ * pickers its target is not in; the one it points into stays open.
+ */
+describe("a step change folds the pickers left open", () => {
+  const PICKER_TOUR: TourDef = {
+    ...TOUR,
+    steps: [
+      {
+        id: "pick",
+        title: "Pick in the picker",
+        body: "Inside the picker.",
+        target: () => ["#picker"],
+        waitingFor: "the picker",
+        done: (o) => o.present("#picked"),
+      },
+      {
+        id: "inside",
+        title: "Still in the picker",
+        body: "Its row.",
+        target: () => ["#picker-row"],
+        waitingFor: "the picker's row",
+        done: (o) => o.present("#elsewhere-done"),
+      },
+      {
+        id: "elsewhere",
+        title: "Fill the next field",
+        body: "Outside the picker.",
+        target: () => ["#target"],
+        waitingFor: "the field",
+      },
+    ],
+  };
+
+  function Picker({ onPick, onClose }: { onPick: () => void; onClose: () => void }) {
+    const ref = useRef<HTMLDivElement>(null);
+    useEffect(() => registerTransientOverlay(onClose, () => ref.current), [onClose]);
+    return (
+      <div id="picker" ref={ref} data-testid="picker">
+        <button id="picker-row" data-testid="picker-row" onClick={onPick}>
+          row
+        </button>
+      </div>
+    );
+  }
+
+  function PickerHarness() {
+    const controller = useTour([]);
+    const [open, setOpen] = useState(false);
+    const [picked, setPicked] = useState(false);
+    const [next, setNext] = useState(false);
+    return (
+      <>
+        <button data-testid="start" onClick={() => controller.start(PICKER_TOUR)}>
+          start
+        </button>
+        <button data-testid="open-picker" onClick={() => setOpen(true)}>
+          open picker
+        </button>
+        {open && <Picker onPick={() => setPicked(true)} onClose={() => setOpen(false)} />}
+        {picked && <div id="picked" />}
+        {next && <div id="elsewhere-done" />}
+        <button data-testid="go-on" onClick={() => setNext(true)}>
+          go on
+        </button>
+        <div id="target" />
+        <TourHost controller={controller} showWelcome={false} onWelcomeAnswered={() => {}} onOpenTutorials={() => {}} />
+      </>
+    );
+  }
+
+  it("keeps the picker the next step points into, and folds it once the step points elsewhere", async () => {
+    render(<PickerHarness />);
+    await user().click(screen.getByTestId("start"));
+    // A tour starts on a clear stage: the picker is opened by its first step.
+    await user().click(screen.getByTestId("open-picker"));
+    tick();
+    await user().click(screen.getByTestId("picker-row"));
+    tick();
+    expect(screen.getByTestId("tour-popover")).toHaveAttribute("data-step", "inside");
+    expect(screen.getByTestId("picker")).toBeInTheDocument();
+
+    act(() => screen.getByTestId("go-on").click());
+    tick();
+    expect(screen.getByTestId("tour-popover")).toHaveAttribute("data-step", "elsewhere");
+    expect(screen.queryByTestId("picker")).not.toBeInTheDocument();
   });
 });
 

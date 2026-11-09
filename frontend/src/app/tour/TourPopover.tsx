@@ -207,7 +207,12 @@ export default function TourPopover({
           waiting for the right click says so in its title, and an empty row
           under the progress bar would be a control that is not there. */}
       {(showBack || skippable || awaitingConfirm || step.advanceHint) && (
-        <div className="tr-cfoot">
+        // A press here leaves the focus where it is (FP of CORE-227): moving it
+        // blurred the field just pasted into, which re-rendered under the press —
+        // several fields commit on blur — and the card moved with its hole
+        // before the release, so the first Next landed nowhere. The buttons act
+        // on the click; the keyboard reaches them as before.
+        <div className="tr-cfoot" onMouseDown={(e) => e.preventDefault()}>
           {showBack && <PreviousButton enabled={canGoBack} onBack={onBack} />}
           {skippable ? (
             <Button tone="ghost" size="sm" onClick={onSkip} data-testid="tour-skip">

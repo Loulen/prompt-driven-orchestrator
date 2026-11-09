@@ -1002,6 +1002,13 @@
   .pi-stats__link:hover {
     text-decoration-color: currentColor;
   }
+  /* A cost line wider than the strip (a Run on three harnesses) ellipsizes;
+     its tooltip carries all of it. */
+  .pi-stats__value {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .pi-sub {
     color: var(--text-3);
     font-size: var(--fs-xs);

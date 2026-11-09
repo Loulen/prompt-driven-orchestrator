@@ -10,7 +10,7 @@ import {
   TERMINAL_TYPOGRAPHY_RESET,
   type PaneSource,
 } from "../model/terminalPane";
-import { CONNECTION_CLOSED_LABEL, isVeiled, RECONNECT_LABEL } from "../model/terminalConnection";
+import { CONNECTION_CLOSED_LABEL, isVeiled, RECONNECT_LABEL, sessionCameBack } from "../model/terminalConnection";
 import { usePaneMode } from "../store/usePaneMode";
 import { useXtermSession } from "../store/useXtermSession";
 import { useFileDropTarget } from "../../skill/store/useFileDropTarget";
@@ -68,7 +68,7 @@ export default function TmuxTerminal({
   fontScale = 1,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const { mode, frozen } = usePaneMode(session, status, paneSource);
+  const { mode, frozen, reprobe } = usePaneMode(session, status, paneSource);
   const xterm = useXtermSession(containerRef, session, mode, frozen, fontScale);
   const { connected, termRole, reconnect } = xterm;
 
@@ -76,6 +76,26 @@ export default function TmuxTerminal({
   // settles under the user's eyes loses its session on purpose: no veil.
   const settled = paneSource !== undefined && status !== undefined && REAPED_STATUSES.has(status);
   const veiled = isVeiled(mode, xterm.dropped, settled);
+
+  // A settled node whose live socket fell (the daemon reaped its session) reads
+  // the pane it froze, as it would on its next selection — not a « disconnected »
+  // xterm ending on tmux's `[exited]`. The socket closes before the status
+  // arrives: whichever comes last decides.
+  const wasConnected = useRef(false);
+  useEffect(() => {
+    if (mode !== "live") {
+      wasConnected.current = false;
+      return;
+    }
+    if (connected) {
+      wasConnected.current = true;
+      return;
+    }
+    if (settled && wasConnected.current) {
+      wasConnected.current = false;
+      reprobe();
+    }
+  }, [mode, connected, settled, reprobe]);
 
   // While veiled, the probe reopens the socket on its own (its backoff); back
   // on the tab or online, a fresh socket is opened at once, which also covers
@@ -92,6 +112,16 @@ export default function TmuxTerminal({
       window.removeEventListener("online", wake);
     };
   }, [veiled, reconnect]);
+
+  // The node's session came back under the same name (a restart, a recovery):
+  // a socket that fell with the old one reconnects by itself.
+  const previousStatus = useRef(status);
+  const dropped = mode === "live" && xterm.dropped;
+  useEffect(() => {
+    const previous = previousStatus.current;
+    previousStatus.current = status;
+    if (dropped && sessionCameBack(previous, status)) reconnect();
+  }, [status, dropped, reconnect]);
 
   // #588: report the live-socket state to the parent (banner hint A1 vs A4).
   useEffect(() => {

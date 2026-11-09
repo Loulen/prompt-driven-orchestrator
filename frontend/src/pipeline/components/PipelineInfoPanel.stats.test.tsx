@@ -274,6 +274,29 @@ describe("PipelineInfoPanel — Stats block (#100)", () => {
     expect(title).toMatch(/cost unavailable/i);
   });
 
+  it("ellipsizes a long cost line and puts the whole of it in the tooltip", () => {
+    renderPanel(
+      makeRun({
+        cost: {
+          usd: 0,
+          partial: false,
+          unpriced_models: [],
+          uncosted_harnesses: ["opencode"],
+          by_harness: [
+            { reported_in_usd: false, harness: "claude", usd: 0.342386, form: "derived", partial: false, unpriced_models: [] },
+            { reported_in_usd: false, harness: "copilot", usd: 0.1005058, form: "reported", partial: false, unpriced_models: [] },
+            { reported_in_usd: true, harness: "pi", usd: 0.25, form: "reported", partial: false, unpriced_models: [] },
+          ],
+        },
+      }),
+    );
+    const value = screen.getByTestId("stat-cost-value");
+    expect(value).toHaveClass("pi-stats__value");
+    const title = value.getAttribute("title") ?? "";
+    expect(title.split("\n")[0]).toBe("— · ~$0.3424 via claude · ~$0.1005 via copilot · $0.2500 via pi");
+    expect(title).toMatch(/cost unavailable/i);
+  });
+
   it("shows a single slice beside an unavailable total, where a summable one hides it", () => {
     // The ">1 slice" rule exists so a breakdown never repeats the total. When the
     // total is withheld, even one slice says something it cannot.

@@ -12,7 +12,8 @@ use anyhow::{Context, Result};
 use tracing::{info, warn};
 
 use super::container::{
-    binary_present_in_container, ensure_running, kill_session_in_container, remove,
+    binary_present_in_container, daemon_reachable_from_container, ensure_running,
+    kill_session_in_container, remove,
 };
 use super::context::SandboxContext;
 use super::image::ensure_image;
@@ -151,6 +152,26 @@ impl SandboxRuntime {
             .context("failed to ensure the sandbox container is running")?;
 
         Ok(())
+    }
+
+    /// Whether the Run's container reaches the daemon, asked from inside it once
+    /// [`Self::ensure_ready`] has it up. A sandboxed Run whose container cannot
+    /// call home could never hear from its nodes (`pdo complete`, `pdo fail`), so
+    /// the paths that hand the container to nodes fail its preparation with the
+    /// cause instead of letting a node run for ever. Not part of `ensure_ready`:
+    /// the run shell opens a container to look around, and needs no daemon.
+    /// No-op for `off`. **Sync** — wrap it in `spawn_blocking`.
+    pub fn check_daemon_reachable(&self, ctx: &SandboxContext) -> Result<()> {
+        if ctx.entries.is_none() {
+            return Ok(());
+        }
+        daemon_reachable_from_container(
+            self.docker.as_ref(),
+            &ctx.run_id,
+            ctx.uid,
+            ctx.gid,
+            ctx.daemon_port,
+        )
     }
 
     /// Merge the transcripts back, destroy the Run's container, then purge its staging

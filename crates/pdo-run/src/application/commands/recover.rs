@@ -100,6 +100,62 @@ pub(super) fn recover_response(
     }
 }
 
+/// What the harness's store says about the conversation a re-attach would resume.
+fn conversation_on_disk(
+    state: &Runs,
+    events: &[event::Event],
+    run_state: &state::RunState,
+    node_id: &str,
+    iter: i64,
+) -> crate::domain::recovery::Conversation {
+    use crate::application::node::transcript::{locate, StoreRoots, TranscriptSource};
+    use crate::domain::recovery::Conversation;
+    let Ok((home_root, sandbox_root)) = run_sandbox::sandbox_home_roots(state) else {
+        return Conversation::Unknown;
+    };
+    let roots = StoreRoots {
+        home_root,
+        sandbox_root,
+    };
+    let repo_root = effective_repo_root(state, run_state);
+    match locate(events, run_state, &repo_root, node_id, iter, &roots) {
+        TranscriptSource::File { path, .. } if path.is_file() => Conversation::OnDisk,
+        TranscriptSource::File { .. } | TranscriptSource::NotWritten { .. } => {
+            Conversation::Missing
+        }
+        TranscriptSource::Unavailable { .. } => Conversation::Unknown,
+    }
+}
+
+/// The restart's own answer, plus the mechanism that ran and, for a fallback a
+/// resuming harness did not ask for, why. A refusal is forwarded untouched.
+async fn with_recovery(
+    response: Response,
+    mechanism: crate::domain::recovery::RecoveryMechanism,
+    reason: Option<&str>,
+) -> Response {
+    if !response.status().is_success() {
+        return response;
+    }
+    let status = response.status();
+    let Ok(bytes) = axum::body::to_bytes(response.into_body(), 1 << 20).await else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "error: unreadable restart response",
+        )
+            .into_response();
+    };
+    let mut body = match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => return (status, bytes).into_response(),
+    };
+    body.insert("mechanism".into(), mechanism.as_str().into());
+    if let Some(reason) = reason {
+        body.insert("reason".into(), reason.into());
+    }
+    (status, Json(serde_json::Value::Object(body))).into_response()
+}
+
 pub(super) async fn recover_node(
     state: Arc<Runs>,
     run_id: String,
@@ -149,7 +205,12 @@ pub(super) async fn recover_node(
             }
             None => pdo_harness::registry::claude(),
         };
-    let mechanism = crate::domain::recovery::choose_recovery(descriptor.can_resume());
+    // A resume of a conversation that was never written dies at once (`claude
+    // --resume` answers « No conversation found » and exits): the node is
+    // restarted instead, and the response says why.
+    let conversation = conversation_on_disk(&state, &events, &run_state, &node_id, iter);
+    let mechanism = crate::domain::recovery::choose_recovery(descriptor.can_resume(), conversation);
+    let reason = crate::domain::recovery::fallback_reason(descriptor.can_resume(), conversation);
 
     // Audit the intent, naming the mechanism so the automatic fallback is
     // legible in the log (parity with the other arms' `CommandIssued`).
@@ -165,6 +226,7 @@ pub(super) async fn recover_node(
             "node_id": node_id,
             "iter": iter,
             "mechanism": mechanism.as_str(),
+            "reason": reason,
         })),
     };
     if let Err(e) = append_event(&state, &cmd_event).await {
@@ -175,18 +237,26 @@ pub(super) async fn recover_node(
         crate::domain::recovery::RecoveryMechanism::RestartWithArtifacts => {
             // The automatic fallback: a fresh agent handed the partial
             // artifacts as input, reusing the sub-worktree in place so the
-            // partial work is never overwritten. Boxed because `dispatch`
-            // recurses here.
+            // partial work is never overwritten.
             info!(
-                "recover_node: {node_id} iter {iter} in {run_id} -> \
-                 restart_with_artifacts (harness cannot resume)"
+                "recover_node: {node_id} iter {iter} in {run_id} -> restart_with_artifacts ({})",
+                reason.unwrap_or("harness cannot resume")
             );
-            Box::pin(dispatch(
-                state,
-                run_id,
-                RunCommand::RestartNode { node_id, iter },
+            // On its own task, not polled inside this one: nested in the
+            // recover arm of `dispatch`, a second `dispatch` overflowed the stack
+            // of a debug build — the fallback had never been exercised.
+            let restarted = match tokio::spawn(super::restart::restart_node(
+                state, run_id, node_id, iter,
             ))
             .await
+            {
+                Ok(response) => response,
+                Err(e) => {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}"))
+                        .into_response();
+                }
+            };
+            with_recovery(restarted, mechanism, reason).await
         }
         crate::domain::recovery::RecoveryMechanism::Reattach => {
             // The optimal path: re-attach the SAME session in place, without

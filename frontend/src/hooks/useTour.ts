@@ -13,8 +13,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { dismissTransientOverlays } from "../lib/overlays";
-import { canvasNodeIdOf, revealCanvasNode } from "../lib/canvasReveal";
+import { dismissOverlaysAside, dismissTransientOverlays } from "../lib/overlays";
 import {
   beginSteps,
   canAdvance,
@@ -52,6 +51,7 @@ import {
   type TourRunsInput,
 } from "./tour/tourObservation";
 import { resolvePanels } from "./tour/tourPanels";
+import { revealTarget } from "./tour/tourReveal";
 import type { TourAsideView, TourController, TourPrepView, TourRect, TourView } from "./tour/tourView";
 import { useTourTidyUp } from "./tour/useTourTidyUp";
 import { useTourPreparation } from "./useTourPreparation";
@@ -100,6 +100,8 @@ export function useTour(
   const guardRef = useRef<ReadOnlyScope | null>(null);
   /** The last aim scrolled to — step and selectors both (see the pump's scroll block). */
   const scrolledFor = useRef<string | null>(null);
+  /** The step the pickers were last folded for (see the pump). */
+  const enteredStep = useRef<string | null>(null);
   // What the app looked like when this tour started — every observation carries
   // it, so a step can ask "did THIS tour cause that?" (#824).
   const baselineRef = useRef<TourAppState | null>(null);
@@ -161,6 +163,7 @@ export function useTour(
       observation(runsRef.current, runDetailRef.current, launchedRunIdRef.current, baseline),
     );
     scrolledFor.current = null;
+    enteredStep.current = null;
     tourRef.current = next;
     runRef.current = first;
     setTour(next);
@@ -267,6 +270,18 @@ export function useTour(
       const selectors = step.target(obs);
       const elements = selectors.map(query).filter(visible);
 
+      // Entering a step folds the pickers the step before left open, unless its
+      // target is inside one: the folder explorer must not stay over the
+      // Pipeline field with its Cancel under the dim, nor the skills picker over
+      // the Prompt (FP of CORE-227). A picker the step points into stays: the
+      // fold waits for the step's target to render, so a target still mounting
+      // inside a picker is never folded away.
+      const entered = `${tour.id}:${active.index}`;
+      if (enteredStep.current !== entered && elements.length > 0) {
+        enteredStep.current = entered;
+        dismissOverlaysAside(elements);
+      }
+
       const nextHole = union(elements.map(rectOf), HOLE_PADDING);
       setHole((prev) => (sameRect(prev, nextHole) ? prev : nextHole));
 
@@ -313,38 +328,17 @@ export function useTour(
           : nextChecklist,
       );
 
-      // One scrollIntoView per **aim**, not per step (design Q5, fixed in #824).
-      // Following the target continuously would fight the user's own scrolling,
-      // so the scroll only ever fires when the step points somewhere new — and a
-      // step does point somewhere new while the user works: `pick-repo` rings the
-      // explorer dialog while its listing loads, and the `pdo-tutorial` row only
-      // once that row exists. Keyed on the step alone, the single scroll was spent
-      // on the dialog, and the row stayed wherever an eleven-thousand-pixel `/tmp`
-      // had put it — a dimmed explorer with nothing on screen to click.
-      //
-      // What keeps this from chasing the user is the out-of-view test below, not
-      // the key: once a target has been brought into view, re-aiming back onto it
-      // scrolls nothing. So the key can be "the last aim" rather than "every aim
-      // seen", and a user who climbs out of `/tmp` and back gets the row put in
-      // front of them a second time instead of the dimmed explorer again.
+      // One reveal per **aim**, not per step (design Q5, fixed in #824):
+      // following the target continuously would fight the user's own
+      // scrolling, so it only fires when the step points somewhere new — and a
+      // step does re-aim while the user works (`pick-repo` rings the explorer,
+      // then the `pdo-tutorial` row once it exists). What keeps this from
+      // chasing the user is the cut-off test in `revealTarget`, not the key: a
+      // target already in view scrolls nothing.
       const aim = `${tour.id}:${active.index}:${selectors.join("|")}`;
       if (elements[0] && scrolledFor.current !== aim) {
         scrolledFor.current = aim;
-        // A canvas card cannot be scrolled to: it is absolutely positioned inside
-        // a transformed viewport, so `scrollIntoView` on it moves nothing and a
-        // node outside the visible canvas stays outside it — lit, unreachable, and
-        // with the overlay owning the wheel there is no panning out of that (#825,
-        // FP iteration 2). The canvas is asked instead, and decides for itself
-        // whether the card is already in frame.
-        const nodeId = canvasNodeIdOf(elements[0]);
-        if (nodeId) {
-          revealCanvasNode(nodeId);
-        } else {
-          const r = elements[0].getBoundingClientRect();
-          if (r.top < 0 || r.bottom > window.innerHeight) {
-            elements[0].scrollIntoView({ block: "center", behavior: "smooth" });
-          }
-        }
+        revealTarget(elements[0]);
       }
     };
 

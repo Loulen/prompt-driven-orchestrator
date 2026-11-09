@@ -26,7 +26,12 @@ pub struct Runs {
     /// The Actor each start of the manager was asked for.
     pub manager_started_by: Mutex<Vec<Actor>>,
     pub manager_refusal: Mutex<Option<(u16, serde_json::Value)>>,
-    pub handed: Mutex<Vec<(String, String, bool)>>,
+    /// The message each manager start carried in its launch prompt.
+    pub launched_with: Mutex<Vec<String>>,
+    /// What the manager's session shows while it runs (CORE-239).
+    pub screen: Mutex<String>,
+    /// The messages typed into a running manager.
+    pub pasted: Mutex<Vec<(String, String)>>,
     /// The Projets of each Run; none for a Run absent from it.
     pub projects: Mutex<HashMap<String, Vec<String>>>,
 }
@@ -80,6 +85,7 @@ impl ReviewRuns for Runs {
         _run_id: &'a str,
         _run: &'a RunState,
         actor: &'a Actor,
+        first_message: &'a str,
     ) -> BoxFuture<'a, Result<bool, (u16, serde_json::Value)>> {
         Box::pin(async move {
             if let Some(refusal) = self.manager_refusal.lock().unwrap().clone() {
@@ -89,21 +95,40 @@ impl ReviewRuns for Runs {
             let created = !*running;
             if created {
                 self.manager_started_by.lock().unwrap().push(actor.clone());
+                self.launched_with
+                    .lock()
+                    .unwrap()
+                    .push(first_message.to_string());
             }
             *running = true;
             Ok(created)
         })
     }
 
-    fn hand_to_manager(&self, run_id: &str, message: String, just_started: bool) {
-        self.handed
+    fn manager_screen(&self, _run_id: &str) -> Option<String> {
+        let running = *self.manager_running.lock().unwrap();
+        running.then(|| self.screen.lock().unwrap().clone())
+    }
+
+    fn paste_to_manager(&self, run_id: &str, message: &str) {
+        self.pasted
             .lock()
             .unwrap()
-            .push((run_id.to_string(), message, just_started));
+            .push((run_id.to_string(), message.to_string()));
     }
 }
 
 impl Runs {
+    /// The manager's session ends (CORE-239).
+    pub fn manager_exits(&self) {
+        *self.manager_running.lock().unwrap() = false;
+    }
+
+    /// What the manager's session shows from now on.
+    pub fn manager_shows(&self, screen: &str) {
+        *self.screen.lock().unwrap() = screen.to_string();
+    }
+
     /// The kinds appended to `run_id`, in order.
     pub fn kinds(&self, run_id: &str) -> Vec<EventKind> {
         self.logs

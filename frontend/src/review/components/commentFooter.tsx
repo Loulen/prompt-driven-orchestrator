@@ -1,4 +1,4 @@
-import { CheckCircle2, Hourglass, Undo2 } from "lucide-react";
+import { CheckCircle2, CircleAlert, Hourglass, PauseCircle, Undo2 } from "lucide-react";
 import { useActorDisplay } from "../../shared/actors/store";
 import { authorKind, authorLabel, footerStatus, relativeTime } from "../model/commentStatus";
 import { AuthorGlyph, Refusable, Spinner } from "./commentBits";
@@ -7,7 +7,7 @@ import { AuthorGlyph, Refusable, Spinner } from "./commentBits";
 
 export function FooterStatusView({ status }: { status: ReturnType<typeof footerStatus> }) {
   // CORE-63: the name an extension gives the Actor who acted, in the tooltips.
-  const name = useActorDisplay(status.kind === "awaiting" ? null : status.actor)?.name;
+  const name = useActorDisplay("actor" in status ? status.actor : null)?.name;
   switch (status.kind) {
     case "awaiting":
       return (
@@ -15,6 +15,19 @@ export function FooterStatusView({ status }: { status: ReturnType<typeof footerS
           <Spinner dim />
           Awaiting manager reply
         </>
+      );
+    // CORE-239: held on its way — the notice above the footer says why.
+    case "blocked":
+      return (
+        <span className="inline-flex items-center gap-1 text-st-await" title={status.reason}>
+          <PauseCircle size={10} /> Held for you
+        </span>
+      );
+    case "exited":
+      return (
+        <span className="inline-flex items-center gap-1 text-st-failed" title={status.reason}>
+          <CircleAlert size={10} /> Manager exited
+        </span>
       );
     case "replied":
       return (

@@ -216,6 +216,7 @@ pub async fn seed_sent_comment(state: &Arc<TestState>, run_id: &str, id: &str) {
         reopened_at: None,
         reopened_by_actor: None,
         proposal_declined: false,
+        delivery: None,
     };
     append_event(
         state,

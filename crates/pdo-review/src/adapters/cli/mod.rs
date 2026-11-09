@@ -103,6 +103,16 @@ pub enum ReviewAction {
         #[arg(long)]
         json: bool,
     },
+    /// Send comments the manager never answered again, as written, as the
+    /// Review page's « Send again » (started if it is not running).
+    Resend {
+        #[arg(required = true)]
+        ids: Vec<String>,
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Resolve a comment, as the Review page's Resolve.
     Resolve {
         id: String,
@@ -277,6 +287,19 @@ fn run_review_page(action: ReviewAction) -> Result<()> {
             } else {
                 let ids = sent_ids(&sent);
                 println!("{} sent · {path}:{line} · run {run_id}", ids.join(", "));
+            }
+        }
+        ReviewAction::Resend { ids, run, json } => {
+            let run_id = run_of(run)?;
+            let path = format!("/runs/{}/review/comments/resend", segment(&run_id));
+            let resent = daemon
+                .post(&path, Some(&json!({ "ids": ids })))?
+                .ok()?
+                .json()?;
+            if json {
+                print_json(&resent);
+            } else {
+                println!("{} sent again · run {run_id}", ids.join(", "));
             }
         }
         ReviewAction::Resolve { id, run, json } => {

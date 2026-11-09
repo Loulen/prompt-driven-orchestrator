@@ -762,6 +762,7 @@ Who opens and leaves a Run arrives as `presence_arrived` and `presence_left` (0.
 | `review_comment_sent` | the comment: `id`, `path`, `side`, `line`, `from_ref`, `to_ref`, `text`, `excerpt`, `author`, `actor`, `sent_at`, `batch_id` |
 | `review_comment_replied` | `id`, `author`, `actor`, `text`, `proposes_resolution` |
 | `review_comment_resolved`, `review_comment_reopened` | `id`, `by`, `actor` |
+| `review_comment_delivery` | `ids`, `state` (`awaiting`, `blocked`, `exited`), `reason`; `actor` on a « Send again » |
 
 `author` and `by` name the role: `user` for a person, `manager` or a node id for an agent (read
 from the session the call came from, even when an extension identified its caller). `actor` is

@@ -1,6 +1,17 @@
 import type { ReviewComment } from "../../shared/generated/ReviewComment";
 import type { Anchor } from "./drafts";
 
+/** CORE-239: what a sent card needs to say a comment is held on its way to the manager. */
+export interface SentDelivery {
+  /** The Run's `has_manager`; `undefined` when not known. */
+  managerRunning?: boolean;
+  runHref: string;
+  onResend?: () => void;
+  resending: boolean;
+  resendCount: number;
+  resendRefused?: string;
+}
+
 /** What the page hands every card to act on comments (#750). */
 export interface ReviewCommentsApi {
   /** Draft key currently opened for edit (its card becomes the editor). */
@@ -42,4 +53,6 @@ export interface ReviewCommentsApi {
   showOutdated: boolean;
   /** #752: the label of the ref a sent comment was written against (its anchored side). */
   writtenOnLabel: (comment: ReviewComment) => string;
+  /** CORE-239: whether the manager runs, and « Send again » for the comments it left unanswered. */
+  delivery: SentDelivery;
 }

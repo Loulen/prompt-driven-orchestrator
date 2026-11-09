@@ -880,7 +880,7 @@ describe("a condition on an edge that carries two outputs", () => {
     fake.setEdgePorts(index, ["out", "image_list"]);
 
     expect(step.done!(fake.obs())).toBe(false);
-    expect(stepBody(step, fake.obs())).toMatch(new RegExp(`^Add the condition verdict eq ${value}\\.`));
+    expect(stepBody(step, fake.obs())).toMatch(new RegExp(`^Add the condition verdict = ${value}\\.`));
 
     fake.writeCondition(index, "verdict", value);
     expect(fake.app.pipeline?.edges[index].when).toEqual({ "out.verdict": { eq: value } });
@@ -910,7 +910,7 @@ describe("a condition on an edge that carries two outputs", () => {
     fake.writeCondition(1, "verdict", "pass");
     expect(step.done!(fake.obs())).toBe(false);
     expect(stepBody(step, fake.obs())).toContain("Not there yet");
-    expect(stepBody(step, fake.obs())).toContain("verdict eq fail");
+    expect(stepBody(step, fake.obs())).toContain("verdict = fail");
   });
 });
 
@@ -1116,6 +1116,15 @@ describe("replaying a step with Previous", () => {
    * failure » with the tester → End edge selected: the step lights the edge it
    * is about, not the When editor of another one, and says its condition is set.
    */
+  it("lights the Save dialog once it opens, not the button under it (CORE-232)", () => {
+    const fake = new FakeApp();
+    at(fake, "save");
+    const step = STEPS.find((s) => s.id === "save")!;
+    expect(step.target(fake.obs())).toEqual(['[data-testid="save-button"]']);
+    fake.show('[data-testid="save-version-modal"]');
+    expect(step.target(fake.obs())).toEqual(['[data-testid="save-version-modal"]']);
+  });
+
   it("replays a condition step on its own edge when another edge is selected", () => {
     const fake = new FakeApp();
     let run = at(fake, "save");
@@ -1126,7 +1135,7 @@ describe("replaying a step with Previous", () => {
     const step = currentStep(FIRST_PIPELINE_TOUR, run)!;
     expect(fake.app.selection).toEqual({ kind: "edge", id: null, edgeIndex: 2 });
     expect(step.target(fake.obs())).toEqual(['.react-flow__edge[data-id="e-1"]']);
-    expect(stepBody(step, fake.obs())).toMatch(/^Already set: the condition reads verdict eq fail\./);
+    expect(stepBody(step, fake.obs())).toMatch(/^Already set: the condition reads verdict = fail\./);
     expect(needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(true);
   });
 
@@ -1137,10 +1146,10 @@ describe("replaying a step with Previous", () => {
     const edges = fake.app.pipeline!.edges.map((e, i) => (i === 1 ? { ...e, when: undefined } : e));
     fake.app = { ...fake.app, pipeline: { ...fake.app.pipeline!, edges } };
     const step = STEPS.find((s) => s.id === "loop-condition")!;
-    expect(stepBody(step, fake.obs())).toMatch(/^Click the edge first, then add the condition verdict eq fail/);
+    expect(stepBody(step, fake.obs())).toMatch(/^Click the edge first, then add the condition verdict = fail/);
     fake.selectEdge(1);
     expect(step.target(fake.obs())).toEqual(['[data-testid="when-editor"]']);
-    expect(stepBody(step, fake.obs())).toMatch(/^Add the condition verdict eq fail\./);
+    expect(stepBody(step, fake.obs())).toMatch(/^Add the condition verdict = fail\./);
   });
 });
 

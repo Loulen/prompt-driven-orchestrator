@@ -422,6 +422,7 @@ vi.mock("../platform/api/update", () => ({
     checked_at: null,
     source: "GitHub Releases",
     source_url: "https://example.invalid/releases/latest",
+    source_page_url: null,
     check_enabled: true,
     install_method: "unknown",
     manual_command: "Build from source, then restart the daemon.",

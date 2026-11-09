@@ -268,7 +268,7 @@ async fn the_primary_repository_of_the_projet_is_a_folder_and_nothing_else_resol
     for (open, words) in [
         (
             OpenSession::shell("a").in_folder(HostedFolder::ProjectRepo),
-            "needs the session's Projet",
+            "needs the session's Project",
         ),
         (
             OpenSession::shell("b")

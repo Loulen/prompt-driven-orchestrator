@@ -172,6 +172,11 @@ describe("ProjectEditModal", () => {
   });
 
   // #930 FP: an extension refusing only updates must not break naming a group.
+  it("keeps its hidden harness select out of the tab order (CORE-232)", () => {
+    renderModal();
+    expect(screen.getByTestId("project-harness-hidden")).toHaveAttribute("inert");
+  });
+
   it("names a group with no settings in one creation, without any update", async () => {
     createProject.mockResolvedValue({
       id: "p9",

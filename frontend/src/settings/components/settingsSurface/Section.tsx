@@ -36,7 +36,10 @@ export default function Section({
       className="set-sec"
     >
       <header className="set-sec__head">
-        {inSearch && page.category && <span className="set-sec__cat">{page.category} ›</span>}
+        {/* A section named like its category (Appearance › Appearance) is named once. */}
+        {inSearch && page.category && page.category !== section.label && (
+          <span className="set-sec__cat">{page.category} ›</span>
+        )}
         <h3 className="set-sec__title">{section.label}</h3>
         {scope && <ScopeIcon scope={scope} testId={`settings-section-${section.id}-scope`} />}
         {section.readOnly && <span className="d-chip">read-only</span>}

@@ -20,6 +20,7 @@ function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
     checked_at: "2026-09-05T08:00:00Z",
     source: "GitHub Releases",
     source_url: "https://example.invalid/latest",
+    source_page_url: null,
     check_enabled: true,
     install_method: "script",
     manual_command: "curl … | sh",
@@ -43,8 +44,10 @@ describe("updateStatus helpers (#697)", () => {
     expect(newerAvailable(null)).toBe(false);
   });
 
-  it("upToDate is only claimed when latest is known and equal — never when off or unknown", () => {
+  it("upToDate is only claimed when latest is known and not newer — never when off or unknown", () => {
     expect(upToDate(status({ latest_version: "1.58.1", newer_available: false }))).toBe(true);
+    // A build ahead of the latest release has nothing to update to (CORE-232).
+    expect(upToDate(status({ installed_version: "2.75.0", latest_version: "1.126.0", newer_available: false }))).toBe(true);
     expect(upToDate(status())).toBe(false);
     expect(upToDate(status({ latest_version: null, newer_available: false }))).toBe(false);
     expect(

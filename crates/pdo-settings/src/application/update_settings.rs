@@ -37,6 +37,7 @@ impl Settings {
             .update(edit)
             .await
             .map_err(|e| SettingsError::Storage(e.0))?;
+        self.catalogue_events.settings_changed();
         // #697: re-enabling the check runs one at once, detached — the section
         // reads "Not checked yet since re-enabling." until it lands. Turning it
         // off needs nothing: the read path already answers `null` when off.

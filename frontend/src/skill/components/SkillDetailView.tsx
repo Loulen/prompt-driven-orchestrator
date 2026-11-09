@@ -2,6 +2,7 @@ import { useEffect, useMemo } from "react";
 import { Copy, FolderInput, Lock, Pencil, Puzzle, Trash2 } from "lucide-react";
 import type { Skill } from "../../shared/generated/Skill";
 import type { SkillDetail } from "../model/skill";
+import { useReferentCount } from "../store/useReferentCount";
 import type { SkillFolder } from "../../shared/generated/SkillFolder";
 import { timeAgo } from "../model/skillMd";
 import { displaySourceUrl, shortCommit } from "../model/skillSource";
@@ -105,6 +106,8 @@ export default function SkillDetailView({
   // the pane with the drop overlay (#671 design 02/05) — never on a locked
   // skill, whose files refuse every write.
   const locked = isLocked(skill);
+  // CORE-232: the tiers that select the skill, read from the daemon.
+  const referenced = useReferentCount(skill.id);
   // Refused writes: nothing dropped, nothing added (the gestures are greyed below).
   const writesRefused = locked || !!refused.update;
   // #33: a skill an extension provides, seeded with the extension's version.
@@ -217,10 +220,16 @@ export default function SkillDetailView({
           </span>
         ) : provider ? (
           <span data-testid="skill-detail-provided-by">provided by the extension {provider.id}</span>
+        ) : locked ? (
+          <span data-testid="skill-detail-built-in">built in</span>
         ) : (
           <span>created by paste</span>
         )}
-        <span>referenced by 0 tiers</span>
+        {referenced !== null && (
+          <span data-testid="skill-detail-referenced">
+            referenced by {referenced} {referenced === 1 ? "tier" : "tiers"}
+          </span>
+        )}
       </div>
 
       <div className="mt-3 flex items-center gap-2">

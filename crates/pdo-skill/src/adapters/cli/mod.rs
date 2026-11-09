@@ -76,7 +76,7 @@ pub enum SkillAction {
         #[arg(long)]
         json: bool,
     },
-    /// Who selects the skill: the instance, Projets, Triggers, pipeline
+    /// Who selects the skill: the instance, Projects, Triggers, pipeline
     /// nodes, Runs not started yet.
     Referents {
         id: String,

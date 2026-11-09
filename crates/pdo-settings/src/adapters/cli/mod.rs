@@ -67,8 +67,8 @@ pub enum SettingsAction {
         #[command(subcommand)]
         action: ProvisioningAction,
     },
-    /// Your Apparence: Theme, Mode sombre, Palette daltonienne, Nodes compactes,
-    /// Éléments masquables.
+    /// Your Appearance: Theme, Dark mode, Colour-blind friendly status colours, Compact nodes,
+    /// hidden elements.
     Appearance {
         /// Replace it with the document of this file (`-` for the standard
         /// input), shaped as `--json` prints it under `appearance`.
@@ -116,7 +116,7 @@ pub enum ProvisioningAction {
         /// The ref its worktree starts from.
         #[arg(long, default_value = "HEAD")]
         git_ref: String,
-        /// The Projet the Run is launched in, whose rules it inherits.
+        /// The Project the Run is launched in, whose rules it inherits.
         #[arg(long)]
         project: Option<String>,
         /// Rules to preview instead of the stored instance rules (JSON file,

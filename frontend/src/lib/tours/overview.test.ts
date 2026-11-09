@@ -501,12 +501,12 @@ describe("gestures advance only on the observed state", () => {
     fake.openRun();
     const run = at("open-end-edge", fake);
     expect(stepById("open-end-edge").target(fake.obs())).toEqual([END_EDGE, END_PILL]);
-    fake.select("edge", null, 2); // reviewer → implementer, verdict eq fail
+    fake.select("edge", null, 2); // reviewer → implementer, verdict = fail
     fake.show(EDGE_PANEL);
     expect(observeTour(TOUR, run, fake.obs(), 100).index).toBe(run.index);
     fake.clickEndEdge();
     expectStopsForNext(run, fake, 200);
-    expect(stepBody(stepById("open-end-edge"), fake.obs())).toContain("verdict eq pass");
+    expect(stepBody(stepById("open-end-edge"), fake.obs())).toContain("verdict = pass");
   });
 
   it("lights the edge alone while its condition pill is not rendered", () => {
@@ -792,7 +792,7 @@ describe("gestures advance only on the observed state", () => {
     fake.clickEndEdge();
     const [condition] = stepAsides(stepById("open-end-edge"), fake.obs());
     expect(condition.target).toBe(EDGE_CONDITION);
-    expect(condition.text).toContain("verdict eq pass");
+    expect(condition.text).toContain("verdict = pass");
     fake.clickStart();
     const [prompt] = stepAsides(stepById("open-start"), fake.obs());
     expect(prompt.target).toBe(START_INPUT);
@@ -877,7 +877,7 @@ describe("the tutorial-overview pipeline", () => {
     expect(OVERVIEW_PIPELINE_YAML).not.toContain("pin_harness");
   });
 
-  it("routes reviewer → End on verdict eq pass and back on verdict eq fail", () => {
+  it("routes reviewer → End on verdict = pass and back on verdict = fail", () => {
     const edges = OVERVIEW_PIPELINE_YAML.split("edges:")[1];
     expect(edges).toMatch(/node: reviewer, port: review \}\n\s+target: \{ node: end[\s\S]*?verdict: \{ eq: pass \}/);
     expect(edges).toMatch(/node: reviewer, port: review \}\n\s+target: \{ node: implementer[\s\S]*?verdict: \{ eq: fail \}/);

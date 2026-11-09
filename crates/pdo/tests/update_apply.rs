@@ -297,6 +297,11 @@ async fn a_failed_executor_is_recorded_with_its_exit_code_and_does_not_block_a_r
         .await
         .unwrap();
     assert_eq!(resp.status(), 404);
+    // The answer names the attempt asked for (CORE-232).
+    assert_eq!(
+        resp.text().await.unwrap(),
+        "no log for the update attempt nope-000000"
+    );
     let resp = reqwest::get(format!("{}/update/attempts/..%2Fx/log", daemon.url()))
         .await
         .unwrap();

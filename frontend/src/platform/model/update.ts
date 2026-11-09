@@ -34,6 +34,8 @@ export interface UpdateStatus {
   source: string | null;
   /** `null` when the channel declares no release source: nothing is checked. */
   source_url: string | null;
+  /** The page a human opens for the source (GitHub: the repository's releases page), for the tooltip; `null` without a source. */
+  source_page_url: string | null;
   check_enabled: boolean;
   install_method: InstallMethod;
   /** The exact command a manual update runs; `null` when the channel declares none. */

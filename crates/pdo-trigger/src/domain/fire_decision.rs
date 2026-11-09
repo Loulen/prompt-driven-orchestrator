@@ -36,7 +36,9 @@ pub fn overlap_ceiling(overlap: OverlapPolicy, max_concurrent: Option<usize>) ->
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuardResult {
     /// Guard exited 0; its (possibly empty) stdout becomes the input source.
-    Pass { stdout: String },
+    /// Its stderr (tail-capped) is diagnostics only: the dry run shows it, a
+    /// guard's warnings are not lost because it passed.
+    Pass { stdout: String, stderr: String },
     /// Guard exited non-zero: no work to do, skip without error. Carries what the
     /// guard printed (tail-capped diagnostics) so the fire history can explain
     /// *why* it skipped (#244). `exit_code` is `None` when signal-killed.
@@ -141,17 +143,24 @@ pub fn decide(inputs: &FireInputs) -> FireDecision {
                 }),
             };
         }
-        Some(GuardResult::Pass { stdout }) => Some(stdout.as_str()),
+        Some(GuardResult::Pass { stdout, .. }) => Some(stdout.as_str()),
         None => None,
     };
 
     let resolved_input = resolve_input(guard_stdout, inputs.input_template);
 
     if resolved_input.trim().is_empty() && inputs.prompt_required {
+        // Say what this fire lacked: the creation-time advice (« add a guard »)
+        // misleads when the guard is there and printed nothing.
+        let reason = if guard_stdout.is_some() {
+            "this pipeline requires a prompt; the guard printed nothing and there \
+             is no input template"
+        } else {
+            "this pipeline requires a prompt; add a guard, an input template, or \
+             mark the pipeline prompt-not-required"
+        };
         return FireDecision::Reject {
-            reason: "this pipeline requires a prompt; add a guard, an input \
-                     template, or mark the pipeline prompt-not-required"
-                .to_string(),
+            reason: reason.to_string(),
         };
     }
 
@@ -401,6 +410,7 @@ mod tests {
         let inputs = FireInputs {
             guard: Some(GuardResult::Pass {
                 stdout: "issues from guard".to_string(),
+                stderr: String::new(),
             }),
             input_template: "static template",
             ..base()
@@ -418,6 +428,7 @@ mod tests {
         let inputs = FireInputs {
             guard: Some(GuardResult::Pass {
                 stdout: "   \n".to_string(),
+                stderr: String::new(),
             }),
             input_template: "static template",
             ..base()
@@ -439,6 +450,26 @@ mod tests {
         };
         match decide(&inputs) {
             FireDecision::Reject { reason } => assert!(reason.contains("requires a prompt")),
+            other => panic!("expected Reject, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_silent_guard_on_a_prompt_required_pipeline_says_the_guard_printed_nothing() {
+        let inputs = FireInputs {
+            guard: Some(GuardResult::Pass {
+                stdout: "\n".to_string(),
+                stderr: String::new(),
+            }),
+            input_template: "",
+            prompt_required: true,
+            ..base()
+        };
+        match decide(&inputs) {
+            FireDecision::Reject { reason } => {
+                assert!(reason.contains("the guard printed nothing"), "{reason}");
+                assert!(!reason.contains("add a guard"), "{reason}");
+            }
             other => panic!("expected Reject, got {other:?}"),
         }
     }

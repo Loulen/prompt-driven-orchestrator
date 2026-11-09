@@ -104,10 +104,16 @@ pub trait Harnesses: Send + Sync {
     fn refresh<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Option<serde_json::Value>>;
 }
 
-/// Who hears that a harness's catalogue was probed again: every open page
-/// reads it anew.
+/// Who hears that what `GET /settings` serves changed: every open page reads
+/// it anew.
 pub trait CatalogueEvents: Send + Sync {
+    /// A harness's catalogue was probed again.
     fn catalogue_refreshed(&self, harness: &str);
+    /// What the page serves changed outside a harness refresh: the instance
+    /// settings were written (`PUT /settings`, from the UI, the CLI or another
+    /// browser), or the boot warm-up probed every catalogue. An open Settings
+    /// page shows the new values of the fields it is not editing (CORE-232).
+    fn settings_changed(&self);
 }
 
 /// The staging profiles (the sandbox context).

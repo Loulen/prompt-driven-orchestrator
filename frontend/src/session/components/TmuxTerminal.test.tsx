@@ -842,7 +842,47 @@ describe("TmuxTerminal", () => {
           .join("");
         // A bare \n moves down without returning: every line would start where the
         // previous one ended.
-        expect(written).toBe("first line\r\nsecond line\r\n");
+        expect(written).toBe("first line\r\nsecond line");
+      });
+    });
+
+    // CORE-232: tmux captures the whole pane, so a script's few lines come with the
+    // empty rows under them. Written as is, they overflowed the folded terminal's 20
+    // rows, and xterm, bottom-aligned, showed the empty rows with the lines in its
+    // scrollback: a black pane.
+    it("drops the empty rows under the last line, so the lines show at the top", async () => {
+      frozenPane(["about to fail", "", "boom", ...Array(22).fill(""), "   ", "\x1b[0m", ""].join("\n"));
+      render(
+        <TmuxTerminal
+          session="pdo-run-1-cop-iter-1"
+          status="failed"
+          paneSource={paneSource}
+        />,
+      );
+      await waitFor(() => {
+        expect(mockTerminalInstances).toHaveLength(1);
+        const written = mockTerminalInstances[0].write.mock.calls
+          .map((c) => c[0])
+          .join("");
+        expect(written).toBe("about to fail\r\n\r\nboom");
+      });
+    });
+
+    it("keeps a last row painted with a background colour: a TUI's bar is not empty", async () => {
+      frozenPane(["❯ ", "\x1b[44m      \x1b[0m", ""].join("\n"));
+      render(
+        <TmuxTerminal
+          session="pdo-run-1-cop-iter-1"
+          status="completed"
+          paneSource={paneSource}
+        />,
+      );
+      await waitFor(() => {
+        expect(mockTerminalInstances).toHaveLength(1);
+        const written = mockTerminalInstances[0].write.mock.calls
+          .map((c) => c[0])
+          .join("");
+        expect(written).toBe("❯ \r\n\x1b[44m      \x1b[0m");
       });
     });
 

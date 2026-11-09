@@ -25,7 +25,7 @@ use crate::application::gesture;
 use crate::application::node::launch::node_run_isolation;
 use crate::application::node::output_validation::check_output_validation_with_retry;
 use crate::application::node::reap::reap_dead_node_after_run_failure;
-use crate::application::node::reap::reap_node_session;
+use crate::application::node::reap::{freeze_node_pane, reap_node_session};
 use crate::application::operations::on_node;
 use crate::application::paths::effective_repo_root;
 use crate::application::paths::resolve_run_pipeline_path;
@@ -190,6 +190,10 @@ pub async fn complete_node_iteration(
     if let Some(refusal) =
         run_advance::parent_node_binding_refusal(state, &events, &run_id, &node_id, iter).await
     {
+        // A held script's shell exits on this refusal: its pane is frozen now, the
+        // reap that follows the children's end keeps it. An agent's session lives on,
+        // and that reap captures it again.
+        freeze_node_pane(state, &repo_root, &run_id, &node_id, iter);
         return CompletionAttempt::refused(refusal);
     }
 
@@ -235,6 +239,14 @@ pub async fn complete_node_iteration(
     )
     .await
     {
+        // A script whose outputs failed is ruled now (exit 4): its shell exits on the
+        // answer, so its pane — what tells why — is frozen first.
+        if matches!(
+            refusal,
+            completion_refusal::CompletionRefusal::ScriptValidationFailed { .. }
+        ) {
+            freeze_node_pane(state, &repo_root, &run_id, &node_id, iter);
+        }
         return CompletionAttempt::refused(refusal);
     }
 
@@ -257,6 +269,9 @@ pub async fn complete_node_iteration(
             error: e.to_string(),
         });
     }
+
+    // The pane is frozen before the answer: a script's shell exits right after it.
+    freeze_node_pane(state, &repo_root, &run_id, &node_id, iter);
 
     // Detached tail (ADR-0023): the reap below kills the very tmux session
     // `pdo complete` runs in, closing this request's client socket — inline, hyper

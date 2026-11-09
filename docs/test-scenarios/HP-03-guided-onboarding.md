@@ -1,6 +1,6 @@
 ---
 id: HP-03
-covers: [tour, tour-step, step-replay, projecteur, training-repository, welcome-modal, run, interactive-node, completion-guard, artifact, script-node, trigger, tidy-up, pipeline-validation, tour-identity, status-icon]
+covers: [tour, tour-step, step-replay, projecteur, training-repository, welcome-modal, run, interactive-node, completion-guard, artifact, script-node, trigger, tidy-up, pipeline-validation, tour-identity, status-icon, theme, dark-mode, settings-search, version-update, command-field]
 ---
 
 # HP-03 — A newcomer takes the full tour
@@ -81,7 +81,7 @@ Features validated while crossing the tour:
    card advances on the close), then unfold its folded **Terminal** (frozen on the script's lines;
    its expand button lifts it over the app as the **enlarged terminal**, still lit, and the same
    button puts it back),
-   click the **reviewer → End** edge (a bubble points at `verdict eq pass`), click **Start** — the
+   click the **reviewer → End** edge (a bubble points at `verdict = pass`), click **Start** — the
    card says first that it shows the prompt the Run was started with, and a bubble points at that
    input once it is open — read the Runs tab (the card sends you back to it if you left it) and the
    **status icon** (the card explains the shapes and draws four Status icons: a check, a turning
@@ -143,7 +143,15 @@ Features validated while crossing the tour:
     on to its end card as usual, with no « this step could not be completed » card. **On *Select
     the node***, `‹ Previous` is greyed out: *Choose Node* needs the Add menu, which closed on the
     pick.
-15. Open **Settings › Tutorials** → all three tours are ticked, *Overview* first.
+15. Open **Settings › Tutorials** → all three tours are ticked, *Overview* first, and the **Full
+    tour** row is ticked too.
+16. **Make the instance yours** (drive-by, CORE-232): still in Settings, open **Appearance**, pick
+    the **Classic** Theme and turn **Dark mode** off → the interface turns emerald and light at
+    once; reload → it stays so (`GET /actors/me/appearance` holds the two choices). Type
+    `iteration` in the Settings search → the matching switch of the Run canvas block shows, not a
+    bare section title. Open **General › Version & update** → `[PDO mark] PDO <version>`, signed
+    « by Acogni », What's new opens this build's changelog. Close Settings, press **Ctrl+K**, type
+    `sett`, Enter → Settings opens again. Put Acogni and Dark mode back.
 
 ## Checks
 

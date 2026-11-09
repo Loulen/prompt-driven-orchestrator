@@ -8,7 +8,7 @@ import {
 } from "../../../run/store/waitingAlertSettings";
 import type { Project } from "../../../workspace/model/project";
 import { findCategory, SETTINGS_CATEGORIES } from "../../model/settingsCategories";
-import NotificationsCategory, { SOUND_NOTE } from "./NotificationsCategory";
+import NotificationsCategory from "./NotificationsCategory";
 
 const playChime = vi.fn(() => true);
 vi.mock("../../../run/store/soundAdapter", () => ({
@@ -66,9 +66,9 @@ describe("Settings › Notifications", () => {
     expect(findCategory("notifications").sections).toEqual([{ id: "waiting-alerts", label: "Waiting alerts", deviceLocal: true }]);
     renderCategory();
     expect(screen.getByTestId("settings-section-waiting-alerts-scope")).toHaveAttribute("data-scope", "device");
-    expect(screen.getByTestId("waiting-alerts-description")).toHaveTextContent(
-      "Alert this browser when a node starts waiting for you and no PDO tab is in view. Saved on this device only.",
-    );
+    // Density (CORE-232): no sentence of explanation on the page; the rows' tooltips carry it.
+    expect(screen.queryByTestId("waiting-alerts-description")).toBeNull();
+    expect(screen.queryByTestId("setting-sound-status")).toBeNull();
   });
 
   it("nothing on by default; each Test is greyed while its switch is off", () => {
@@ -77,10 +77,7 @@ describe("Settings › Notifications", () => {
     expect(switchOf("sound")).toHaveAttribute("aria-checked", "false");
     expect(screen.getByTestId("setting-browser-notification-test")).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByTestId("setting-sound-test")).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByTestId("setting-browser-notification-status")).toHaveTextContent(
-      "Turning it on asks your browser for permission.",
-    );
-    expect(screen.getByTestId("setting-sound-status")).toHaveTextContent(SOUND_NOTE);
+    expect(screen.getByTestId("setting-browser-notification-status")).toHaveTextContent("Asks your browser's permission");
     expect(within(row("alert-scope")).getByRole("radio", { name: "Runs I launched" })).toHaveAttribute("aria-checked", "true");
   });
 

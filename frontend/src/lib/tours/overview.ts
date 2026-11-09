@@ -268,7 +268,7 @@ export const OVERVIEW_TOUR: TourDef = {
   recapIntro: `You toured ${brandName()} on a real Run of ${TUTORIAL_OVERVIEW_PIPELINE_ID}:`,
   recap: (app) => [
     { label: "Canvas", text: "nodes linked by edges, listed and detailed around it" },
-    { label: "Edges", text: "conditions on outputs, like `verdict eq pass`" },
+    { label: "Edges", text: "conditions on outputs, like `verdict = pass`" },
     { label: "Run", text: isArchived(app) ? "archived, its outputs stay" : "still in your list, with its worktree" },
     { label: "Trigger", text: "the example one is gone" },
   ],

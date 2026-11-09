@@ -843,7 +843,7 @@ describe("NewRunModal — pipeline sections", () => {
     expect(pipelineOptions().map((o) => o.id)).toEqual(["alpha-only", "common", "legacy"]);
   });
 
-  it("shows the test pipelines under « Unvalidated pipelines » on demand, and lets one be launched", async () => {
+  it("shows the test pipelines under « Test pipelines · not validated » on demand, and lets one be launched", async () => {
     renderModal();
     await enterValidRepo("/repos/alpha");
     await openPipelineMenu();
@@ -853,7 +853,7 @@ describe("NewRunModal — pipeline sections", () => {
     // The menu stays open: unfolding is not a choice.
     expect(screen.getByTestId("pipeline-select-menu")).toBeInTheDocument();
     expect(screen.getByTestId("pipeline-select-section-test")).toHaveTextContent(
-      "Unvalidated pipelines",
+      "Test pipelines · not validated",
     );
     expect(sectionIds("test")).toEqual(["draft"]);
 
@@ -2027,7 +2027,11 @@ describe("NewRunModal — Trigger mode (#160)", () => {
   it("relabels the prompt field as an optional input template in Trigger mode", async () => {
     await selectPipelineAndRepo();
     fireEvent.click(screen.getByTestId("mode-trigger"));
-    expect(screen.getByLabelText("Input")).toHaveAttribute("placeholder", "{{guard.stdout}}");
+    // No template syntax: the guard's stdout replaces the input, it is never interpolated (CORE-232).
+    expect(screen.getByLabelText("Input")).toHaveAttribute("placeholder", "Free-text input");
+    expect(screen.getByLabelText("Input").getAttribute("placeholder")).not.toMatch(/\{\{/);
+    // A guard example that exits non-zero when there is nothing to do: an empty list skips.
+    expect(screen.getByTestId("guard-command-input")).toHaveAttribute("placeholder", "gh issue list --label ready | grep .");
   });
 
   it("creates a trigger with the compiled cron and chosen pipeline", async () => {

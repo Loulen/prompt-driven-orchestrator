@@ -624,6 +624,26 @@ describe("SkillBankPanel (#668)", () => {
     expect(screen.queryByTestId("rename-input")).toBeNull();
   });
 
+  it("a built-in skill says so, and the tiers that select a skill are counted (CORE-232)", async () => {
+    const seeded: Skill = { ...skill("pdo-interactive", "pdo-interactive", "skf-a", "Talk."), locked: true };
+    const bank: SkillBank = { root_path: "/home/user/.pdo/skills", folders: [folder("skf-a", "A")], skills: [seeded] };
+    fetchSkillMock.mockImplementation(async () => detailOf(seeded));
+    fetchSkillReferentsMock.mockResolvedValue({
+      skill_id: "pdo-interactive",
+      instance: true,
+      projects: [{ id: "p1", name: "Shop" }],
+      pipelines: [],
+      runs: [],
+    });
+    setup(bank);
+
+    fireEvent.click(screen.getByLabelText("Expand A"));
+    fireEvent.click(screen.getByTestId("tree-skill-pdo-interactive"));
+    expect(await screen.findByTestId("skill-detail-built-in")).toHaveTextContent("built in");
+    expect(screen.queryByText("created by paste")).toBeNull();
+    expect(await screen.findByTestId("skill-detail-referenced")).toHaveTextContent("referenced by 2 tiers");
+  });
+
   it("a skill an extension provides (#33) is locked and names its extension and version", async () => {
     const provided: Skill = {
       ...skill("ext-demo-demo", "demo", "skf-ext-demo", "Drive the demo extension."),
@@ -892,8 +912,11 @@ describe("SkillBankPanel: gestures the caller's rights refuse (CORE-205)", () =>
     fireEvent.click(screen.getByText("grilling"));
     const remove = await screen.findByTestId("skill-detail-delete");
     await waitFor(() => expect(remove).toHaveAttribute("aria-disabled", "true"));
+    // The detail counts the tiers that select the skill (CORE-232): one read, no more.
+    await waitFor(() => expect(fetchSkillReferentsMock).toHaveBeenCalledTimes(1));
     fireEvent.click(remove);
-    expect(fetchSkillReferentsMock).not.toHaveBeenCalled();
+    // The refused delete opens no flow: no second read of the referents.
+    expect(fetchSkillReferentsMock).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("skill-delete")).toBeNull();
     expect(screen.getByTestId("skill-detail-rename")).not.toHaveAttribute("aria-disabled");
   });

@@ -12,12 +12,13 @@ use serde_json::{json, Value};
 
 use body::template_body;
 pub use body::{Overlap, TemplateFields};
-use render::{done, fire_line, fire_lines, guard_text, list_lines, show_text};
+use render::{done, fire_failed, fire_line, fire_lines, guard_text, list_lines, show_text};
 
 #[derive(Subcommand, Debug)]
 pub enum TriggerAction {
     /// List the Triggers, one tab-separated line each: id, state (`enabled`,
-    /// `paused`, `suspended`), cron, pipeline, name, next fire.
+    /// `disabled`, `suspended`), cron, pipeline, name, next fire. While every
+    /// Trigger is paused (`pause --all`), standard error says so.
     List {
         #[arg(long)]
         json: bool,
@@ -71,7 +72,7 @@ pub enum TriggerAction {
         /// Back to the instance's harness.
         #[arg(long, conflicts_with = "harness")]
         clear_harness: bool,
-        /// Launch the fired Runs in no Projet.
+        /// Launch the fired Runs in no Project.
         #[arg(long, conflicts_with = "project")]
         clear_project: bool,
         /// Remove every skill the fired Runs carry.
@@ -86,13 +87,16 @@ pub enum TriggerAction {
         #[arg(long)]
         json: bool,
     },
-    /// Fire a Trigger now. A guard or overlap skip is an answer, not an error.
+    /// Fire a Trigger now. A guard or overlap skip is an answer, not an error;
+    /// an error outcome (a refused Run, a guard that could not run) exits 1.
     Fire {
         id: String,
         #[arg(long)]
         json: bool,
     },
-    /// Pause a Trigger, or every Trigger with `--all` (the global switch).
+    /// Disable a Trigger (it does not fire), or pause every Trigger with
+    /// `--all` (the global switch, which leaves each one's state alone).
+    #[command(visible_alias = "disable")]
     Pause {
         #[arg(required_unless_present = "all", conflicts_with = "all")]
         id: Option<String>,
@@ -101,7 +105,8 @@ pub enum TriggerAction {
         #[arg(long)]
         json: bool,
     },
-    /// Resume a paused Trigger, or lift the global switch with `--all`.
+    /// Enable a disabled Trigger, or lift the global switch with `--all`.
+    #[command(visible_alias = "enable")]
     Resume {
         #[arg(required_unless_present = "all", conflicts_with = "all")]
         id: Option<String>,
@@ -156,6 +161,15 @@ pub fn run_trigger(action: TriggerAction) -> Result<()> {
                 print_json(&triggers);
             } else {
                 print!("{}", list_lines(&triggers));
+                // The global switch, apart from each one's state: stdout stays one
+                // line per Trigger.
+                let paused = daemon
+                    .get("/triggers/health")
+                    .and_then(|r| r.ok()?.json())
+                    .is_ok_and(|h| h["paused"] == true);
+                if paused {
+                    eprintln!("every Trigger is paused: pdo trigger resume --all");
+                }
             }
         }
         TriggerAction::Show { id, json } => {
@@ -244,7 +258,13 @@ pub fn run_trigger(action: TriggerAction) -> Result<()> {
                 .json()?;
             if json {
                 print_json(&answer);
-            } else {
+            }
+            // An error outcome fails the command (exit 1, its line on stderr);
+            // a skip is an answer.
+            if fire_failed(&answer) {
+                anyhow::bail!("{}", fire_line(&id, &answer));
+            }
+            if !json {
                 println!("{}", fire_line(&id, &answer));
             }
         }
@@ -339,6 +359,8 @@ fn switch(daemon: &Daemon, id: Option<String>, all: bool, pause: bool, json: boo
     }
     let id = id.context("a Trigger id, or --all")?;
     let trigger = patch(daemon, &id, &json!({ "enabled": !pause }))?;
-    done(&trigger, json, if pause { "paused" } else { "resumed" });
+    // One Trigger is disabled or enabled, as the list says it: « paused » is
+    // the global switch's word (CORE-232).
+    done(&trigger, json, if pause { "disabled" } else { "enabled" });
     Ok(())
 }

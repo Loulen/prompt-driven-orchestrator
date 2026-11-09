@@ -16,34 +16,34 @@ pub enum SessionAction {
         #[arg(long)]
         json: bool,
     },
-    /// Show a Session hébergée: its extension, kind, state, folder and
+    /// Show a hosted session: its extension, kind, state, folder and
     /// configuration.
     Show {
         id: String,
         #[arg(long)]
         json: bool,
     },
-    /// The events of a Session hébergée, oldest first, one tab-separated line
+    /// The events of a hosted session, oldest first, one tab-separated line
     /// each: when, what, who, message.
     Events {
         id: String,
         #[arg(long)]
         json: bool,
     },
-    /// Terminate a Session hébergée.
+    /// Terminate a hosted session.
     Terminate {
         id: String,
         #[arg(long)]
         json: bool,
     },
-    /// Relaunch an ended Session hébergée, resuming its conversation when its
+    /// Relaunch an ended hosted session, resuming its conversation when its
     /// harness can.
     Relaunch {
         id: String,
         #[arg(long)]
         json: bool,
     },
-    /// Change the configuration of a Session hébergée, applied at its next
+    /// Change the configuration of a hosted session, applied at its next
     /// relaunch. Only the flags given change; an empty value clears the field.
     Configure {
         id: String,

@@ -219,6 +219,74 @@ async fn completed_node_session_is_reaped_on_terminal_transition() {
     std::env::remove_var(pdo_kernel::env::REAPER_INTERVAL_SECS_ENV);
 }
 
+/// A `script` node's shell exits as soon as `pdo complete` / `pdo fail` answers,
+/// so its session is gone before the detached reap runs (CORE-232: the Overview
+/// tour's frozen terminal was blank). The pane is frozen before the answer, and
+/// the reap of a session already gone keeps that snapshot.
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn a_session_that_exits_right_after_its_terminal_call_keeps_its_pane() {
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping");
+        return;
+    }
+    let _serial = serial_guard();
+    std::env::set_var(pdo_kernel::env::REAPER_TTL_SECS_ENV, "3600");
+    std::env::set_var(pdo_kernel::env::REAPER_INTERVAL_SECS_ENV, "3600");
+
+    for verb in ["done", "fail"] {
+        let daemon = TestDaemon::spawn(seed).await.unwrap();
+        let socket = daemon.tmux_socket();
+        let run_id = create_run(&daemon).await;
+        let session = pdo_session::domain::names::node_session_name(&run_id, NODE_ID, 1);
+        assert!(
+            wait_for_session(&socket, &session, Duration::from_secs(5)).await,
+            "session should appear after POST /runs"
+        );
+        let port_dir = daemon
+            .repo_root()
+            .join(".pdo/runs")
+            .join(&run_id)
+            .join("worktree/.pdo/artifacts/worker/iter-1/out");
+        std::fs::create_dir_all(&port_dir).unwrap();
+        std::fs::write(port_dir.join("output.md"), "# Output\nDone.").unwrap();
+
+        // The detached tail parks at its head; the session dies meanwhile.
+        daemon.arm_node_done_gate();
+        let resp = reqwest::Client::new()
+            .post(format!(
+                "{}/runs/{run_id}/nodes/{NODE_ID}/{verb}",
+                daemon.url()
+            ))
+            .json(&serde_json::json!({ "reason": "script exited 1" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "{verb}");
+        let _ = std::process::Command::new("tmux")
+            .args(["-L", &socket, "kill-session", "-t", &session])
+            .output();
+        daemon.release_node_done_gate();
+
+        let snapshot = daemon
+            .repo_root()
+            .join(".pdo/runs")
+            .join(&run_id)
+            .join("nodes/worker/pane-iter-1.snapshot");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !snapshot.exists() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            snapshot.exists(),
+            "`{verb}`: the pane must be frozen before the session that called it exits"
+        );
+    }
+
+    std::env::remove_var(pdo_kernel::env::REAPER_TTL_SECS_ENV);
+    std::env::remove_var(pdo_kernel::env::REAPER_INTERVAL_SECS_ENV);
+}
+
 /// Layer 3a: At daemon boot, pre-existing orphan pdo-* sessions get swept.
 #[tokio::test]
 // Intentional: the guard must span the `.await`s so env-var-sensitive reaper

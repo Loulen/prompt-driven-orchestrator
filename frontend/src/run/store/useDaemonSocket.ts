@@ -52,6 +52,8 @@ const RELAYED: ReadonlySet<WsMessage["type"]> = new Set<WsMessage["type"]>([
   "project_changed",
   // A harness's model catalogue probed again (« Refresh models »).
   "harness_catalogue_changed",
+  // The instance settings written elsewhere (`pdo settings set`, another browser).
+  "instance_settings_changed",
   // The validation of a Pipeline changed (CONTEXT.md « Pipeline validé »).
   "pipeline_validation_changed",
   // ADR-0088: who has a Pipeline's shared draft open, and its changes.

@@ -169,6 +169,8 @@ import { useWiringStore } from "../../stores/wiringStore";
 import { resetCompactNodes } from "../../hooks/useCompactNodes";
 import type { InstanceSettings } from "../model/settings";
 import type { SandboxProfile } from "../../sandbox/model/sandbox";
+import { SETTINGS_WRITTEN } from "../store/useSettings";
+import { TOUR_CATALOG } from "../../lib/tours";
 
 function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
   return {
@@ -544,6 +546,22 @@ describe("SettingsSurface", () => {
     ).toBe("50");
   });
 
+  it("follows a write made elsewhere on the fields it is not editing; an edit in progress stays (CORE-232)", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsSurface open onClose={() => {}} />);
+    const cap = (await screen.findByTestId("setting-session-cap")) as HTMLInputElement;
+    fireEvent.change(cap, { target: { value: "5" } });
+    // `pdo settings set reaper_ttl_secs=1800`, relayed by the daemon.
+    fetchSettingsMock.mockResolvedValue(
+      sample({ reaper_ttl_secs: { effective: 1800, source: "stored", stored: 1800, env: null, default: 3600 } }),
+    );
+    act(() => {
+      window.dispatchEvent(new Event(SETTINGS_WRITTEN));
+    });
+    await waitFor(() => expect((screen.getByTestId("setting-reaper-ttl") as HTMLInputElement).value).toBe("1800"));
+    expect((screen.getByTestId("setting-session-cap") as HTMLInputElement).value).toBe("5");
+  });
+
   it("saves the attachment budget and refuses one outside 1–4096 MB (#779)", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     updateSettingsMock.mockResolvedValue(
@@ -848,6 +866,8 @@ describe("SettingsSurface", () => {
     const onClose = vi.fn();
     render(<SettingsSurface open onClose={onClose} />);
 
+    // Its models are claude's: the row says so (CORE-232).
+    expect(await screen.findByTestId("setting-row-default-model")).toHaveTextContent("Default model · claude");
     await user.click(await screen.findByTestId("default-model-trigger"));
     await user.click(await screen.findByTestId("default-model-option-opus"));
     fireEvent.click(screen.getByTestId("settings-save"));
@@ -2352,6 +2372,54 @@ describe("SettingsSurface — search line, Save bar (CORE-117)", () => {
     expect(screen.getByTestId("settings-search")).toHaveValue("");
     expect(screen.getByTestId("setting-row-session-cap")).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("names the block of an Appearance switch its search found: two « Cost » read apart (CORE-232)", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "cost" } });
+    const name = (id: string) => screen.getByTestId(id).querySelector(".set-row__name")?.textContent;
+    await screen.findByTestId("setting-row-runs.list.cost");
+    expect(name("setting-row-runs.list.cost")).toBe("Runs list · Cost");
+    expect(name("setting-row-run.canvas.cost")).toBe("Run canvas · Cost");
+    // Under its block's header, the row needs no prefix.
+    fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "" } });
+    fireEvent.click(screen.getByTestId("settings-category-appearance"));
+    await screen.findByTestId("setting-row-runs.list.cost");
+    expect(name("setting-row-runs.list.cost")).toBe("Cost");
+  });
+
+  it("does not name a category twice: Appearance › Appearance reads Appearance (CORE-232)", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "cost" } });
+    const head = (await screen.findByTestId("settings-section-body-appearance")).querySelector(".set-sec__head");
+    expect(head?.querySelector(".set-sec__cat")).toBeNull();
+    expect(head?.querySelector(".set-sec__title")).toHaveTextContent("Appearance");
+  });
+
+  it("finds a tour by its name and counts the tours it shows (CORE-232)", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "full tour" } });
+    expect(await screen.findByTestId("tutorials-full")).toBeVisible();
+    expect(screen.queryByTestId("tutorials-row-overview")).not.toBeInTheDocument();
+    // A section not found by its name hides what is not a row; the table of tours,
+    // whose rows the search filters, is marked to stay (the CSS reads the class).
+    expect(screen.getByTestId("settings-tutorials").parentElement).toHaveClass("set-extra--rows");
+    await waitFor(() => expect(screen.getByTestId("settings-search-count").textContent).toBe("1"));
+    // The section found by its own name: every tour shows, and each counts once.
+    fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "tutorials" } });
+    expect(await screen.findByTestId("tutorials-row-overview")).toBeVisible();
+    const tours = screen.getAllByTestId(/^tutorials-(full|row-[a-z-]+)$/).length;
+    expect(tours).toBe(TOUR_CATALOG.length + 1);
+    await waitFor(() => expect(screen.getByTestId("settings-search-count").textContent).toBe(String(tours)));
+    // A tour's blurb is not its name: « canvas » finds no tour.
+    fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "canvas" } });
+    expect(screen.queryByTestId("tutorials-row-overview")).not.toBeInTheDocument();
+    // A search that finds no tour leaves the table out.
+    fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "ttl" } });
+    expect(screen.queryByTestId("settings-tutorials")).not.toBeInTheDocument();
   });
 
   it("finds a row by its help, and keeps a panel mounted while it hides it", async () => {

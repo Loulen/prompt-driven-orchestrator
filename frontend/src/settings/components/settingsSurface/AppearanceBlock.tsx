@@ -1,5 +1,5 @@
 import { useContext, type ReactNode } from "react";
-import { searching, SearchContext, SectionMatchContext } from "./search";
+import { HeadlessBlockContext, searching, SearchContext, SectionMatchContext } from "./search";
 
 /**
  * One surface's block of Settings › Appearance › Appearance: its name and what it always
@@ -27,7 +27,9 @@ export default function AppearanceBlock({
 }) {
   const query = useContext(SearchContext);
   const labelMatch = useContext(SectionMatchContext);
-  if (searching(query) && !labelMatch) return <>{children}</>;
+  if (searching(query) && !labelMatch) {
+    return <HeadlessBlockContext.Provider value={title}>{children}</HeadlessBlockContext.Provider>;
+  }
   return (
     <div className="set-ablock" data-testid={`appearance-block-${id}`}>
       <header className="set-ablock__head">

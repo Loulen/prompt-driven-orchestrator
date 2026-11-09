@@ -17,6 +17,11 @@ import { RESERVED_PORTS } from "../../readme-media/lib/demo-instance.mjs";
 /** The caller's tmux: the demo tmux server must not nest in it. */
 export const TMUX_VARS = ["TMUX", "TMUX_PANE"];
 
+/** The service manager's marks: inherited from a caller that systemd started (the
+ *  user's daemon, its nodes), they would make the demo daemon read itself as a
+ *  supervised service (CORE-232: « Method: Unknown · systemd service »). */
+export const SUPERVISOR_VARS = ["INVOCATION_ID", "JOURNAL_STREAM", "NOTIFY_SOCKET"];
+
 /** What `extra` may not set: the isolation itself (HOME, port, nested mode). */
 const NOT_EXTRA = ["HOME", "PATH", "PDO_PORT", "PDO_BIND", "PDO_NODE_ID", "PDO_DAEMON_NO_CLEANUP", "PDO_TOKEN", ...TMUX_VARS];
 
@@ -78,7 +83,13 @@ export function demoEnv({ env, paths, port, extra = {}, bind = "127.0.0.1" }) {
   const cacheHome = env.XDG_CACHE_HOME ?? path.join(realHome, ".cache");
   const out = {};
   for (const [key, value] of Object.entries(env)) {
-    if (key.startsWith("PDO_") || TMUX_VARS.includes(key) || REAL_CONFIG_VARS.includes(key)) continue;
+    if (
+      key.startsWith("PDO_") ||
+      TMUX_VARS.includes(key) ||
+      REAL_CONFIG_VARS.includes(key) ||
+      SUPERVISOR_VARS.includes(key)
+    )
+      continue;
     out[key] = value;
   }
   const searchPath = `${paths.bin}:${env.PATH ?? ""}`;

@@ -30,10 +30,10 @@ pub struct GuardTestResponse {
 impl From<GuardResult> for GuardTestResponse {
     fn from(r: GuardResult) -> Self {
         match r {
-            GuardResult::Pass { stdout } => Self {
+            GuardResult::Pass { stdout, stderr } => Self {
                 outcome: "pass",
                 stdout,
-                stderr: String::new(),
+                stderr,
                 exit_code: Some(0),
                 detail: None,
             },

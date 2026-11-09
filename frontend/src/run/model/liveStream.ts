@@ -25,6 +25,8 @@ export interface WsMessage {
     | "project_changed"
     /** A harness's model catalogue was probed again (« Refresh models »). */
     | "harness_catalogue_changed"
+    /** The instance settings were written (UI, CLI or another browser). */
+    | "instance_settings_changed"
     | "pipeline_validation_changed"
     /** Who has a Pipeline's shared draft open, and its changes (ADR-0088). */
     | "pipeline_draft_changed"

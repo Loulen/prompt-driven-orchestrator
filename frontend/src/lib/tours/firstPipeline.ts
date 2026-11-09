@@ -3,8 +3,8 @@
  *
  * Order and content come from the ticket: create a pipeline, build an
  * **implementer** and a **tester**, give the tester a `verdict` enum and an
- * annotated screenshot, then wire the loop (`verdict eq fail` back to the
- * implementer, `verdict eq pass` to End), save, validate it for the projects
+ * annotated screenshot, then wire the loop (`verdict = fail` back to the
+ * implementer, `verdict = pass` to End), save, validate it for the projects
  * that should see it, and decide whether to keep it.
  *
  * Copy rules the implementer of a new step must keep (design round 1):
@@ -159,7 +159,7 @@ const STEPS: TourStep[] = [
   {
     id: "implementer-worktree",
     title: "Put it in the Run worktree",
-    body: "Pick Run worktree. This node then works in the branch the Run itself owns, so what it writes is what the Run carries.",
+    body: "Pick Shared, under Worktree. This node then works in the Run's own worktree and branch, so what it writes is what the Run carries.",
     target: () => ['[data-testid="workspace-shared"]'],
     waitingFor: "the Workspace choice",
     done: (o) => agent(o.app, 0)?.isolated_worktree === false,
@@ -207,7 +207,7 @@ export const FIRST_PIPELINE_TOUR: TourDef = {
     },
     {
       label: "Loop",
-      text: "tester → implementer when verdict eq fail; tester → End when verdict eq pass.",
+      text: "tester → implementer when verdict = fail; tester → End when verdict = pass.",
     },
     {
       label: "Validate",

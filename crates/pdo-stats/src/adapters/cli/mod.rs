@@ -26,7 +26,7 @@ pub enum StatsAction {
     /// The Triggers tab: fires that created a Run, Triggers fired of the
     /// enabled ones, fires, then fires by Pipeline.
     Triggers(Filters),
-    /// The Cost tab: total and median, by harness, then by Pipeline, Projet
+    /// The Cost tab: total and median, by harness, then by Pipeline, Project
     /// and model.
     Cost(Filters),
     /// The Performance tab: median peak context, median duration and steered

@@ -146,7 +146,7 @@ impl TriggerFires for NoFires {
         Box::pin(async {
             Ok(TriggersCreatedRuns {
                 fired: 3,
-                distinct_triggers: 2,
+                distinct_triggers: 1,
                 enabled_triggers: 1,
             })
         })

@@ -109,6 +109,27 @@ describe("useDaemonEvents", () => {
     }
   });
 
+  it("tells an open Settings page, New Run and the status bar on an instance_settings_changed (CORE-232)", async () => {
+    const { SETTINGS_WRITTEN, SETTINGS_CHANGED } = await import("../settings/store/useSettings");
+    const written = vi.fn();
+    const changed = vi.fn();
+    window.addEventListener(SETTINGS_WRITTEN, written);
+    window.addEventListener(SETTINGS_CHANGED, changed);
+    try {
+      const { targets, emit } = mount();
+      emit({ type: "instance_settings_changed" });
+      expect(written).toHaveBeenCalledTimes(1);
+      expect(changed).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(1_000);
+      expect(targets.refreshRuns).not.toHaveBeenCalled();
+      // The status bar's gauge reads the session cap again (`pdo settings set session_cap`).
+      expect(targets.refreshSessions).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener(SETTINGS_WRITTEN, written);
+      window.removeEventListener(SETTINGS_CHANGED, changed);
+    }
+  });
+
   it("reads the Pipelines again on a pipeline_validation_changed", async () => {
     const { useEditStore } = await import("../pipeline/store/editStore");
     const original = useEditStore.getState().loadPipelines;

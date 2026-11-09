@@ -52,7 +52,7 @@ export const START_INSPECTOR = testId("start-inspector");
 /** The Run's input, as the Start inspector prints it. */
 export const START_INPUT = `${START_INSPECTOR} ${testId("start-input-text")}`;
 export const EDGE_PANEL = testId("edge-detail-panel");
-/** The first condition row of the edge panel — `verdict eq pass` on reviewer → End. */
+/** The first condition row of the edge panel — `verdict = pass` on reviewer → End. */
 export const EDGE_CONDITION = `${EDGE_PANEL} ${testId("condition-row")}`;
 /**
  * The row's leading slot, not the dot in it: on row hover the resting dot is

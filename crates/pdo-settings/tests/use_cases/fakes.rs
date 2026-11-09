@@ -315,6 +315,8 @@ pub struct KnownHarnesses {
     pub warmed: Mutex<usize>,
     pub refreshed: Mutex<Vec<String>>,
     pub announced: Mutex<Vec<String>>,
+    /// How many times the settings were announced as changed.
+    pub settings_announced: Mutex<usize>,
 }
 
 impl Harnesses for KnownHarnesses {
@@ -344,6 +346,10 @@ impl Harnesses for KnownHarnesses {
 impl CatalogueEvents for KnownHarnesses {
     fn catalogue_refreshed(&self, harness: &str) {
         self.announced.lock().unwrap().push(harness.to_string());
+    }
+
+    fn settings_changed(&self) {
+        *self.settings_announced.lock().unwrap() += 1;
     }
 }
 

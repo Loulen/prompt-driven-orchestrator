@@ -1,5 +1,5 @@
 import type { Skill } from "../../shared/generated/Skill";
-import type { SkillReferents } from "../model/skill";
+import { referentCount, type SkillReferents } from "../model/skill";
 import type { SkillFolder } from "../../shared/generated/SkillFolder";
 import { displaySourceUrl } from "../model/skillSource";
 
@@ -19,12 +19,7 @@ export function DeleteSkillConfirm({
   onConfirm: () => void;
 }) {
   const triggers = referents.triggers ?? [];
-  const count =
-    Number(referents.instance) +
-    referents.projects.length +
-    triggers.length +
-    referents.pipelines.length +
-    referents.runs.length;
+  const count = referentCount(referents);
   return (
     <div className="flex min-h-0 flex-1 flex-col p-5" data-testid="skill-delete">
       <h3 className="font-semibold text-text text-xl">

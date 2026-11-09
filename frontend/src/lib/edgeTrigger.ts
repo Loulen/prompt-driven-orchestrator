@@ -29,7 +29,10 @@ export function deriveEdgeTrigger(
   if (!source || source.status !== "completed") return null;
 
   const target = runState.nodes[edge.target.node];
-  const fired = target != null && target.status !== "pending";
+  const fired =
+    runState.end_node && edge.target.node === runState.end_node.id
+      ? endFired(runState, edge)
+      : target != null && target.status !== "pending";
 
   const runEdge = findRunEdge(runState.edges, edge);
   const whenClause = runEdge?.when_clause ?? edge.when ?? null;
@@ -46,6 +49,17 @@ export function deriveEdgeTrigger(
     evaluated_at: source.completed_at,
     iter: source.iter,
   };
+}
+
+/**
+ * An edge into `End` (CORE-232: it always read « not fired », End being no node of the
+ * Run): fired when the End port it feeds fired; for a port the Run does not list, when
+ * the Run completed.
+ */
+function endFired(runState: RunState, edge: EdgeDef): boolean {
+  const port = runState.end_node?.ports.find((p) => p.port_name === edge.target.port);
+  if (port) return port.fired_at != null;
+  return runState.status === "completed";
 }
 
 function findRunEdge(edges: EdgeInfo[], edge: EdgeDef): EdgeInfo | undefined {

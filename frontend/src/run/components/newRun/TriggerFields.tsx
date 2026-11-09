@@ -101,13 +101,13 @@ export default function TriggerFields({ form }: { form: NewRunForm }) {
         )}
       </FormRow>
 
-      <FormRow label="Guard" top title="Exit 0 fires, its stdout is the input; non-zero skips. 60 s timeout.">
+      <FormRow label="Guard" top title="Exit 0 fires, its stdout is the input; non-zero skips. Timeout: Settings › General.">
         <div className="ln-col ln-grow">
           <div className="ln-line">
             <TextInput
               mono
               className="ln-grow"
-              placeholder="gh issue list --label ready-for-agent"
+              placeholder="gh issue list --label ready | grep ."
               aria-label="Guard command"
               spellCheck={false}
               value={guardCommand}

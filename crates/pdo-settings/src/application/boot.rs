@@ -38,8 +38,11 @@ pub async fn warn_about_retired_settings(config: &dyn InstanceConfigStore) -> Op
 
 impl Settings {
     /// Probe every installed harness's catalogue once, so the first page
-    /// fetch answers warm.
+    /// fetch answers warm. A page opened before the probes answered reads the
+    /// settings anew once they have (CORE-232: Diagnostics kept « probe
+    /// failed » for a harness the warm-up had since loaded).
     pub async fn warm_harness_catalogues(&self) {
         self.harnesses.warm().await;
+        self.catalogue_events.settings_changed();
     }
 }

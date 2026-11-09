@@ -62,7 +62,7 @@ export const EXAMPLE_TRIGGER_INPUT =
  * No `image_list` port: a script has nothing to take a screenshot of.
  *
  * Edge order matters to the tour: the canvas keys an edge by its index, and the
- * edge step points at reviewer → End (`verdict eq pass`), the one the Run takes.
+ * edge step points at reviewer → End (`verdict = pass`), the one the Run takes.
  */
 export const OVERVIEW_PIPELINE_YAML = `name: ${TUTORIAL_OVERVIEW_PIPELINE_ID}
 version: "1.0"
@@ -218,8 +218,8 @@ The change holds up. The edge reviewer → End reads this verdict and ends the R
 \`\`\`mermaid
 flowchart LR
   Start --> implementer --> reviewer
-  reviewer -- verdict eq pass --> End
-  reviewer -- verdict eq fail --> implementer
+  reviewer -- verdict = pass --> End
+  reviewer -- verdict = fail --> implementer
 \`\`\`
 OUT
 

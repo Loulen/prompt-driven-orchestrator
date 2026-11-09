@@ -61,7 +61,13 @@ pub(super) fn appearance_lines(document: &Value) -> String {
     }
     let mut out = String::new();
     for key in ["theme", "dark_mode", "colour_blind_status", "compact_nodes"] {
-        out.push_str(&format!("{key}\t{}\n", inline(&document[key])));
+        // Only the departures from the defaults are stored: an absent one is the
+        // interface's default, said in a word, as `settings get` says its source.
+        let value = match &document[key] {
+            Value::Null => "default".to_string(),
+            value => inline(value),
+        };
+        out.push_str(&format!("{key}\t{value}\n"));
     }
     if let Some(elements) = document["elements"].as_object() {
         for (id, visible) in elements {
@@ -180,7 +186,7 @@ mod tests {
         }));
         assert_eq!(
             lines,
-            "theme\tclassic\ndark_mode\ttrue\ncolour_blind_status\t-\ncompact_nodes\t-\nelement\truns.cost\thidden\n"
+            "theme\tclassic\ndark_mode\ttrue\ncolour_blind_status\tdefault\ncompact_nodes\tdefault\nelement\truns.cost\thidden\n"
         );
     }
 

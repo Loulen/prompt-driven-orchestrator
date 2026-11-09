@@ -458,6 +458,24 @@ describe("TriggerDetailPanel — sections and the fires table (CORE-116)", () =>
     expect(onEdit).toHaveBeenCalledTimes(1);
   });
 
+  it("greys Run now on a disabled trigger: the daemon would refuse it (CORE-232)", async () => {
+    fetchTriggerFires.mockResolvedValue([]);
+    const onRunNow = vi.fn();
+    render(<TriggerDetailPanel trigger={trigger({ enabled: false })} onSelectRun={noop} onRunNow={onRunNow} />);
+    const run = screen.getByTestId("trigger-detail-run-now");
+    expect(run).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(run);
+    expect(onRunNow).not.toHaveBeenCalled();
+    act(() => run.focus());
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Disabled: enable it first");
+  });
+
+  it("says a sleeping trigger is not scheduled, and what wakes it (CORE-232)", () => {
+    fetchTriggerFires.mockResolvedValue([]);
+    render(<TriggerDetailPanel trigger={trigger({ enabled: true, next_fire_at: undefined })} onSelectRun={noop} />);
+    expect(screen.getByTestId("trigger-detail-next")).toHaveTextContent("Not scheduled");
+  });
+
   it("greys a refused Run now with the sentence; a click does nothing; Edit stays active (CORE-205)", async () => {
     const onRunNow = vi.fn();
     const onEdit = vi.fn();

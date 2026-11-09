@@ -316,6 +316,8 @@ export default function ProvisioningRulesEditor({
                     onChange={(event) => update(key, event.target.value)}
                     readOnly={readOnly}
                     aria-invalid={conflictingPatterns[key].size > 0}
+                    // Paths, not prose: no spell-check squiggles (CORE-232).
+                    spellCheck={false}
                     rows={5}
                     className={`w-full resize-y bg-surface-1 p-2 pr-14 font-mono text-2xs text-text outline-none ${conflictingPatterns[key].size ? "ring-1 ring-inset ring-st-failed" : ""}`}
                     placeholder={"one pattern per line\n!path excludes"}

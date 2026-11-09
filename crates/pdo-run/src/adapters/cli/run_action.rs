@@ -13,8 +13,7 @@ use super::run_read::RunRead;
 // behind `Commands::Run`).
 #[allow(clippy::large_enum_variant)]
 pub enum RunAction {
-    /// Create a Run — the thin CLI client of the daemon's `POST /runs`
-    /// (issue #721, ADR-0064).
+    /// Create a Run — the thin CLI client of the daemon's `POST /runs`.
     ///
     /// Identity travels with the session, never in the body: run from a node
     /// session (the `PDO_RUN_ID` / `PDO_NODE_ID` env vars the session is
@@ -31,16 +30,16 @@ pub enum RunAction {
         /// the empty default.
         #[arg(short, long, default_value = "", conflicts_with = "input_file")]
         input: String,
-        /// Read the prompt from a file instead of `--input` (#779) — e.g. the
+        /// Read the prompt from a file instead of `--input` — e.g. the
         /// spec an upstream node wrote: `--input-file "$PDO_INPUT_SPEC"`.
         #[arg(long, value_name = "PATH")]
         input_file: Option<std::path::PathBuf>,
-        /// Attach an image (#779, repeatable): sent in the multipart `images`
+        /// Attach an image (repeatable): sent in the multipart `images`
         /// field, written to the child's `_input/`, listed under
         /// `## Input Images` in its entry node's preamble.
         #[arg(long, value_name = "PATH")]
         image: Vec<std::path::PathBuf>,
-        /// Attach any file (#779, repeatable): sent in the multipart `files`
+        /// Attach any file (repeatable): sent in the multipart `files`
         /// field, written to the child's `_input/`, listed under
         /// `## Input Files`. Any extension; one size budget per run
         /// (`max_attachments_mb` in Settings); duplicate names are refused.
@@ -49,32 +48,32 @@ pub enum RunAction {
         /// Run variables as a JSON object: `--variables '{"pool":"a"}'`.
         #[arg(long)]
         variables: Option<String>,
-        /// Skills selected at the Run tier (#669, ADR-0062): comma-separated
+        /// Skills selected at the Run tier: comma-separated
         /// ids (`--skills a,b`) or a JSON list of `{id, name}` objects.
         #[arg(long)]
         skills: Option<String>,
-        /// Agentic profile at the Run tier (ADR-0057) as JSON —
+        /// Agentic profile at the Run tier as JSON —
         /// `{"mode":"profile","profile_id":"…"}` or
         /// `{"mode":"custom","harness":"…","model":"…","effort":"…"}`.
         #[arg(long)]
         agent_choice: Option<String>,
-        /// Agentic harness (ADR-0046): free text, validated at spawn.
+        /// Agentic harness: free text, validated at spawn.
         #[arg(long)]
         harness: Option<String>,
         /// Sandbox isolation: `off`, or the name of a staging profile.
         #[arg(long)]
         sandbox: Option<String>,
         /// Primary target repo (path or URL, like the UI's create modal).
-        /// Overrides the parent Run's project — ADR-0033 keeps the boundary.
+        /// Overrides the parent Run's project.
         #[arg(long)]
         target_repo: Option<String>,
-        /// The Projet the Run is launched in (ADR-0087); it must hold the
+        /// The Project the Run is launched in; it must hold the
         /// primary repo. From a node session, the Run stays in its parent's.
         #[arg(long)]
         project: Option<String>,
         /// The Run's repositories as a JSON list of `{repo, base_branch?,
         /// read_only?}`, the primary first (the same as `--target-repo`), then
-        /// the secondaries (ADR-0042).
+        /// the secondaries.
         #[arg(long)]
         target_repos: Option<String>,
         /// Branch the primary repo starts from (default: its local HEAD).
@@ -87,10 +86,10 @@ pub enum RunAction {
         /// daemon from the presence of `--name`).
         #[arg(long)]
         auto_name: Option<bool>,
-        /// The Run's `auto_fail` preference (ADR-0049).
+        /// The Run's `auto_fail` preference.
         #[arg(long)]
         auto_fail: Option<bool>,
-        /// Run-level provisioning rules as JSON (ADR-0061).
+        /// Run-level provisioning rules as JSON.
         #[arg(long)]
         provisioning: Option<String>,
         /// Data for an extension (repeatable): `--ext <id>.<key>=<value>` sets
@@ -101,7 +100,7 @@ pub enum RunAction {
         #[arg(long = "ext", value_name = "ID.KEY=VALUE")]
         ext: Vec<String>,
     },
-    /// Block until a child run of this node becomes terminal (#588, ADR-0069):
+    /// Block until a child run of this node becomes terminal:
     /// a long-poll on the daemon, never a push into your pane. Prints one JSON
     /// line per child that settled (`run_id`, `name`, `status`, `reason`,
     /// `children_active`) and exits 0; exits **2** with nothing on stdout when

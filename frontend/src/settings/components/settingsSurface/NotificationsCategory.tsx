@@ -19,10 +19,6 @@ import { SettingRow } from "./fields";
 import Section from "./Section";
 import { brandName } from "../../../shared/ui/brand/brand";
 
-export const WAITING_ALERTS_DESCRIPTION =
-  `Alert this browser when a node starts waiting for you and no ${brandName()} tab is in view. Saved on this device only.`;
-
-export const SOUND_NOTE = "A different chime per reason, at most once every 10 s. Needs no permission.";
 
 const SCOPE_ITEMS: { value: AlertScope; label: string; description: string }[] = [
   { value: "launched", label: "Runs I launched", description: "The Runs you launched, and the Runs they launched" },
@@ -69,7 +65,7 @@ function permissionNote(permission: AlertPermission, requesting: boolean): { not
     case "unavailable":
       return warn(TriangleAlert, "This browser has no notification support. Sound still works.", "unavailable");
     default:
-      return { note: "Turning it on asks your browser for permission.", state: "default" };
+      return { note: "Asks your browser's permission", state: "default" };
   }
 }
 
@@ -95,9 +91,6 @@ export default function NotificationsCategory({
 
   return (
     <Section section={sections[0]}>
-      <p className="set-sec__desc" data-testid="waiting-alerts-description">
-        {WAITING_ALERTS_DESCRIPTION}
-      </p>
       <SettingRow
         label="Browser notification"
         help={`A system notification when a node of a Run in your scope starts waiting for you (a question, a completion to approve, a Run paused on an incident) and no ${brandName()} tab is in view. Clicking it opens the Run on the node.`}
@@ -127,12 +120,10 @@ export default function NotificationsCategory({
       </SettingRow>
       <SettingRow
         label="Sound"
-        help="A short chime under the same conditions, one per reason. At most one every 10 seconds, however many nodes start waiting."
+        help="A short chime under the same conditions, a different one per reason. At most one every 10 seconds, however many nodes start waiting. Needs no permission."
         keywords="chime alert audio"
         scope="device"
         testId="setting-row-sound"
-        note={SOUND_NOTE}
-        noteTestId="setting-sound-status"
       >
         <Switch label="Sound" checked={prefs.sound} onChange={setSoundEnabled} />
         <Button

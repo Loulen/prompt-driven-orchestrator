@@ -61,6 +61,7 @@ import {
   skillRow,
 } from "./firstRunReading";
 import { READING_STEPS } from "./firstRunReadingSteps";
+import { brandName, CORE_NAME } from "../../shared/ui/brand/brand";
 
 /**
  * This browser's Launch got an id back since the tour started. Not « the button
@@ -153,7 +154,7 @@ const STEPS: TourStep[] = [
   {
     id: "add-skills",
     title: "Add the two built-in skills",
-    body: "In the PDO folder, tick both skills. A skill is text added to the agent's prompt: one teaches it to drive Acogni Driver, the other to talk with you inside a node.",
+    body: `In the ${CORE_NAME} folder, tick both skills. A skill is text added to the agent's prompt: one teaches it to drive ${brandName()}, the other to talk with you inside a node.`,
     // The folder and its two children are lit as one rectangle; ticking the
     // folder's own box satisfies the step too, since it selects both.
     //
@@ -171,7 +172,7 @@ const STEPS: TourStep[] = [
       return [SKILLS_PDO_FOLDER, ...rows];
     },
     soft: true,
-    waitingFor: "the PDO folder in the Skills picker",
+    waitingFor: `the ${CORE_NAME} folder in the Skills picker`,
     failureHint: "Type pdo in the picker's filter if the folder is out of view.",
     // The honest answer to "I ticked one and nothing happened": something did.
     checklist: (o) => [

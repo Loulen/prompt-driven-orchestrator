@@ -5,7 +5,7 @@ import ExtensionDecorations from "../shared/extensions/ExtensionDecorations";
 import ExtensionNavigation from "../shared/extensions/ExtensionNavigation";
 import ExtensionPageHost from "../shared/extensions/ExtensionPageHost";
 import ExtensionTopbarEnd from "../shared/extensions/ExtensionTopbarEnd";
-import { AcogniMark } from "../shared/ui/brand/AcogniMark";
+import { BrandMark } from "../shared/ui/brand/BrandMark";
 import { SettingsIcon, StatsIcon } from "../shared/ui/brand/AccentIcons";
 import { IconButton } from "../shared/ui/kit";
 import { useTheme } from "../hooks/useTheme";
@@ -18,7 +18,8 @@ import CommandPalette from "./palette/CommandPalette";
 const ACCOUNT_ITEM: Omit<DecorationContext, "location" | "run" | "project"> = { entity: null };
 
 /**
- * The app's top bar, 36 px: the Acogni mark, the extensions' `topbar/start`
+ * The app's top bar, 36 px: the mark of the Marque (decorative: no click, no
+ * tab stop), the extensions' `topbar/start`
  * entries, the command field in the middle, then the right-hand group: the
  * extensions' `topbar/end` icons, New run, Stats, Settings, the Dark mode, and the
  * extensions' `topbar/account` components (an avatar menu, say). Under it, the
@@ -49,7 +50,7 @@ export default function TopBar({
     <>
       <header className="sh-tb" data-testid="topbar">
         <span className="sh-tb__mark">
-          <AcogniMark size={16} />
+          <BrandMark size={16} />
         </span>
 
         {/* ADR-0081: the extensions' `topbar/start` entries (none without extension). */}

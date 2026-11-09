@@ -17,9 +17,10 @@ import type { Project } from "../../../workspace/model/project";
 import type { SettingsSection } from "../../model/settingsCategories";
 import { SettingRow } from "./fields";
 import Section from "./Section";
+import { brandName } from "../../../shared/ui/brand/brand";
 
 export const WAITING_ALERTS_DESCRIPTION =
-  "Alert this browser when a node starts waiting for you and no PDO tab is in view. Saved on this device only.";
+  `Alert this browser when a node starts waiting for you and no ${brandName()} tab is in view. Saved on this device only.`;
 
 export const SOUND_NOTE = "A different chime per reason, at most once every 10 s. Needs no permission.";
 
@@ -62,7 +63,7 @@ function permissionNote(permission: AlertPermission, requesting: boolean): { not
     case "insecure":
       return warn(
         Lock,
-        `Browsers only allow notifications on https or localhost. You opened PDO at ${currentOrigin()}. Sound still works.`,
+        `Browsers only allow notifications on https or localhost. You opened ${brandName()} at ${currentOrigin()}. Sound still works.`,
         "insecure",
       );
     case "unavailable":
@@ -99,7 +100,7 @@ export default function NotificationsCategory({
       </p>
       <SettingRow
         label="Browser notification"
-        help="A system notification when a node of a Run in your scope starts waiting for you (a question, a completion to approve, a Run paused on an incident) and no PDO tab is in view. Clicking it opens the Run on the node."
+        help={`A system notification when a node of a Run in your scope starts waiting for you (a question, a completion to approve, a Run paused on an incident) and no ${brandName()} tab is in view. Clicking it opens the Run on the node.`}
         keywords="notifications alert permission"
         scope="device"
         testId="setting-row-browser-notification"

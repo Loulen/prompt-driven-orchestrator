@@ -635,7 +635,7 @@ mod tests {
     fn app(extensions: Vec<Box<dyn Extension>>) -> Router {
         let extensions = Extensions::register(extensions).unwrap();
         mount(
-            Router::new().fallback(crate::spa::static_handler),
+            Router::new().fallback(crate::spa::static_handler(crate::Brand::Pdo)),
             &extensions,
         )
     }

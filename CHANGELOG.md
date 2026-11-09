@@ -13,6 +13,29 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+### The interface takes the Marque of its binary: PDO, or Acogni Driver
+
+- The vanilla binary now calls itself **PDO** everywhere it names the product: the browser tab
+  (title and favicon, written into the page by the daemon so no other name flashes on load), the
+  mark at the left of the top bar, the welcome modal ("Welcome to PDO", the PDO lockup), the tours,
+  the import of a pipeline ("PDO pipeline"), the notifications, and Settings › Version & update,
+  whose Installed row reads `PDO 2.76.0` after the mark. A distribution that declares Acogni
+  Driver shows "Acogni Driver" and its logo instead, and `Acogni Driver 1.4.0 (core PDO 2.76.0)`.
+- New PDO logo: three steps of a Run (done, running in ruby, to come) joined by two edges. Acogni
+  Driver's mark is the A of Acogni, its hollow in ruby. Both keep their ruby under the Classic
+  Theme, in dark and light.
+- The gear of Acogni is the Settings icon now, in the top bar and in the Settings header; it no
+  longer stands for the product, so the top bar never shows two gears. It signs "by Acogni" under
+  the PDO lockup of the welcome modal and after the title of Settings › Version & update.
+- The Acogni wordmark of the Acogni Driver lockup is no longer clipped under its "g".
+- New seam for distributions: `Config::with_brand(pdo::Brand::AcogniDriver)`, next to
+  `with_release_channel`; without it a binary is PDO. Neither an environment variable, a setting
+  nor an extension changes it. The daemon serves the logos of its Marque under `/shared/brand/`
+  (`mark.svg`, `lockup.svg`, `favicon.svg`) for the pages an extension serves outside the
+  interface; `/shared/favicon.svg` now answers the Marque's favicon.
+
 ## 2.75.0
 
 ### Tours: Previous replays the step before, and the arrow keys drive the card

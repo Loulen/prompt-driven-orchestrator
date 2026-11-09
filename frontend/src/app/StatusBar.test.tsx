@@ -57,7 +57,7 @@ describe("StatusBar — the version of the release channel", () => {
       // `/sessions` reports the core's version: it must not be passed off as the distribution's.
       "2.0.0",
     );
-    expect(badge).toHaveTextContent("acme-pdo 0.3.0 (core 2.0.0)");
+    expect(badge).toHaveTextContent("acme-pdo 0.3.0 (core PDO 2.0.0)");
     expect(badge).not.toHaveTextContent("v2.0.0");
   });
 
@@ -75,7 +75,7 @@ describe("StatusBar — the version of the release channel", () => {
       }),
       "2.0.0",
     );
-    expect(badge).toHaveTextContent("acme-pdo 0.3.0 (core 2.0.0)");
+    expect(badge).toHaveTextContent("acme-pdo 0.3.0 (core PDO 2.0.0)");
     expect(screen.getByTestId("statusbar-version-badge")).toHaveTextContent("→ 0.4.0");
   });
 });

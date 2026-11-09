@@ -56,7 +56,7 @@ test.afterAll(async () => {
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByTestId("acogni-mark")).toBeVisible();
+  await expect(page.getByTestId("brand-mark")).toBeVisible();
   await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
@@ -103,7 +103,7 @@ test("drag divider persists layout to localStorage across reload", async ({
 
   // Reload and verify size is preserved
   await page.reload();
-  await expect(page.getByTestId("acogni-mark")).toBeVisible();
+  await expect(page.getByTestId("brand-mark")).toBeVisible();
 
   const leftPanelAfterReload = page
     .locator('[data-slot="resizable-panel"]')

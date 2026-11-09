@@ -21,6 +21,7 @@ import { addProjectMember, createProject, fetchProjects } from "../../workspace/
 import { writeLastProject } from "../../run/model/launchProject";
 import { createRepo } from "../../workspace/api/repos";
 import { withTourIdentity } from "../tourMemory";
+import { brandName } from "../../shared/ui/brand/brand";
 
 /** Where the training repository is created, and the folder the explorer opens on. */
 export const TUTORIAL_REPO_PARENT = "/tmp";
@@ -51,8 +52,7 @@ export function firstRunName(): string {
 
 /** The block step 8 asks the user to paste. Deliberately concrete: the agent edits
  *  `notes.txt` and writes its output file, which the reading tour then shows. */
-export const TUTORIAL_PROMPT =
-  "Add a line saying hello from Acogni Driver to notes.txt, then write a short summary of what you did in your output file.";
+export const TUTORIAL_PROMPT = `Add a line saying hello from ${brandName()} to notes.txt, then write a short summary of what you did in your output file.`;
 
 /** The line step 12 asks the user to type INTO the agent's own session (#825).
  *  An interactive node waits for a human; this is what telling it "go ahead"
@@ -66,7 +66,7 @@ const TUTORIAL_OUT_EXPECTED = "Summary of what you changed";
 
 const README = `# pdo-tutorial
 
-A throwaway repository Acogni Driver created for the First run tour. Delete it whenever you like.
+A throwaway repository ${brandName()} created for the First run tour. Delete it whenever you like.
 `;
 
 const NOTES = `Notes\n`;

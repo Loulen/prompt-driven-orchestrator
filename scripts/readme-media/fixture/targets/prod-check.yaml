@@ -6,13 +6,13 @@ nodes:
     type: start
     outputs:
       - { name: user_prompt }
-    view: { x: 197, y: 23 }
+    view: { x: 270, y: 20 }
   - id: end
     name: End
     type: end
     inputs:
       - { name: result }
-    view: { x: 209, y: 378 }
+    view: { x: 272, y: 430 }
   - id: RlRyUvAz
     name: Incident-debugger
     type: agent
@@ -23,7 +23,7 @@ nodes:
       - name: incidents
         frontmatter:
           Incident_found: { type: bool }
-    view: { x: 202, y: 120 }
+    view: { x: 196, y: 90 }
   - id: wHpeFwT0
     name: Orchestrate Fix
     type: agent
@@ -37,7 +37,7 @@ nodes:
       - name: report
         frontmatter:
           fixed: { type: bool }
-    view: { x: 203, y: 202 }
+    view: { x: 196, y: 215 }
   - id: XxIN3yX6
     name: Notify Slack
     type: agent
@@ -46,7 +46,7 @@ nodes:
       - { name: in }
     outputs:
       - { name: out }
-    view: { x: 209, y: 281 }
+    view: { x: 196, y: 320 }
 edges:
   - source: { node: RlRyUvAz, port: incidents }
     target: { node: wHpeFwT0, port: in }
@@ -54,42 +54,42 @@ edges:
       Incident_found: { eq: true }
     mode: manual
     waypoints:
-      - { x: 280, y: 162 }
+      - { x: 300, y: 185 }
     target_side: top
-    source_anchor: { side: bottom, offset: 78 }
-    target_anchor: { side: top, offset: 77 }
-    condition_label_pos: { x: 276, y: 177 }
+    source_anchor: { side: bottom, offset: 104 }
+    target_anchor: { side: top, offset: 104 }
+    condition_label_pos: { x: 300, y: 185 }
   - source: { node: RlRyUvAz, port: incidents }
     target: { node: end, port: result }
     when:
       Incident_found: { eq: false }
     mode: manual
     waypoints:
-      - { x: 162, y: 399 }
-    source_anchor: { side: left, offset: 10 }
-    target_anchor: { side: left, offset: 21 }
-    condition_label_pos: { x: 104, y: 245 }
+      - { x: 150, y: 442 }
+    source_anchor: { side: left, offset: 32 }
+    target_anchor: { side: left, offset: 12 }
+    condition_label_pos: { x: 110, y: 290 }
   - source: { node: wHpeFwT0, port: report }
     target: { node: XxIN3yX6, port: in }
     mode: manual
     waypoints:
-      - { x: 280, y: 241 }
+      - { x: 300, y: 300 }
     target_side: top
-    source_anchor: { side: bottom, offset: 77 }
-    target_anchor: { side: top, offset: 71 }
+    source_anchor: { side: bottom, offset: 104 }
+    target_anchor: { side: top, offset: 104 }
   - source: { node: XxIN3yX6, port: out }
     target: { node: end, port: result }
     mode: manual
     waypoints:
-      - { x: 280, y: 338 }
+      - { x: 300, y: 408 }
     target_side: top
-    source_anchor: { side: bottom, offset: 71 }
-    target_anchor: { side: top, offset: 71 }
+    source_anchor: { side: bottom, offset: 104 }
+    target_anchor: { side: top, offset: 28 }
   - source: { node: start, port: user_prompt }
     target: { node: RlRyUvAz, port: in }
     mode: manual
     waypoints:
-      - { x: 280, y: 80 }
+      - { x: 300, y: 67 }
     target_side: top
-    source_anchor: { side: bottom, offset: 83 }
-    target_anchor: { side: top, offset: 78 }
+    source_anchor: { side: bottom, offset: 30 }
+    target_anchor: { side: top, offset: 104 }

@@ -63,11 +63,11 @@ test("the canvas scenes (#858): hero, pipelines and routing, two variants each a
   assert.deepEqual(scenes.get("hero").live, ["claude"]);
   assert.deepEqual(scenes.get("pipelines").live, []);
   assert.deepEqual(scenes.get("routing").live, []);
-  // The published hero is design variant B: full window 1280×760, inspector at 43 %, no crop.
+  // The published hero is design variant B: full window 1280×760, the left panel at its floor, inspector at 40 %, no crop.
   const heroB = scenes.get("hero").variants.find((v) => v.id === "b");
   assert.deepEqual(heroB.viewport, { width: 1280, height: 760 });
   assert.equal(heroB.crop, undefined);
-  assert.deepEqual(heroB.localStorage["pdo.layout.run"], { left: 15, center: 42, right: 43 });
+  assert.deepEqual(heroB.localStorage["pdo.layout.run"], { left: 19, center: 41, right: 40 });
 });
 
 test("the live row scenes: outputs, review and interactive-orchestrator, two variants each and their markers", async () => {
@@ -104,10 +104,11 @@ test("review is zoomed on the hunk and its thread: a ~700 px crop under the tool
     assert.ok(v.crop, `review/${v.id} has a crop`);
     assert.ok(v.crop.width >= 680 && v.crop.width <= 760, `review/${v.id}: crop ${v.crop.width} px wide`);
     assert.ok((v.gifWidth ?? 960) / v.crop.width > 1.25, `review/${v.id}: scaled up in the GIF`);
-    assert.ok(v.crop.y >= 36, `review/${v.id}: the Review toolbar (36 px) is out of frame`);
+    assert.ok(v.crop.y >= 68, `review/${v.id}: the Review toolbar (two rows, 68 px at the 100 % UI scale) is out of frame`);
+    assert.equal(v.localStorage["pdo.ui.scale"], "100", `review/${v.id}: filmed at the 100 % UI scale`);
     assert.equal(v.localStorage["pdo.review.list"], "closed", `review/${v.id}: the file list is out of frame`);
-    // The send bar is sticky 8 px above the bottom: the crop ends with it, the rows scrolling under it stay out.
-    assert.equal(v.crop.y + v.crop.height, v.viewport.height - 8, `review/${v.id}: the crop ends at the send bar's bottom`);
+    // The send bar is sticky at the very bottom: the crop ends with it, and with the window.
+    assert.equal(v.crop.y + v.crop.height, v.viewport.height, `review/${v.id}: the crop ends at the send bar's bottom`);
   }
 });
 

@@ -12,7 +12,7 @@
 //       `implementer` → live terminal (×8) → cut → click `reviewer` → its typed
 //       outputs: the verdict and the `image_list` of annotated screenshots.
 //       Big, full window, no camera zoom: 1280×760 with the inspector widened to
-//       43 % (`pdo.layout.run`), the final frame on the `image_list`. The
+//       40 % (`pdo.layout.run`), the final frame on the `image_list`. The
 //       manifest notes the choice (label: « … ends on the reviewer's outputs »).
 //
 // Both variants play their run to its end. A lap the reviewer sends back
@@ -24,10 +24,12 @@
 // models, so the rail is never empty and the cost reads in dollars.
 
 import { sleep } from "../lib/demo-instance.mjs";
-import { DEMO_TASK, nodeState, openRun, startDemoRun, stopDemoRun, waitPane, waitRunPassed } from "./_live.mjs";
+import { DEMO_TASK, nodeState, openRun, openRunsRail, startDemoRun, stopDemoRun, waitPane, waitRunPassed } from "./_live.mjs";
 
 const VIEWPORT = { width: 1280, height: 760 };
-const LAYOUT = { "pdo.layout.run": { left: 15, center: 42, right: 43 } };
+// The left panel at its floor (200 CSS px, 240 px at the default UI scale of
+// 120 %), the canvas wide enough for the loop's `review.verdict = fail` pill.
+const LAYOUT = { "pdo.layout.run": { left: 19, center: 41, right: 40 } };
 /** Claude Code is up: its status line names the model (lib/credentials.mjs). */
 const CLAUDE_UP = /Opus 5\.5 · claude-opus-5-5/;
 /** A variant A run of its own, so the two runs never share a rail row. */
@@ -41,9 +43,16 @@ const TASK_A = {
  *  Opening a run selects its live node by itself; this puts the inspector back
  *  on a neutral page before a filmed click, so the click visibly opens a node. */
 async function selectStart(ctx) {
-  await ctx.click(ctx.page.getByTestId("rf__node-start"), { duration: 150, pause: 40 });
-  await ctx.page.getByText("Run start").first().waitFor({ timeout: 10_000 });
-  await sleep(500);
+  // The run selects its live node by itself when one starts or ends: a click
+  // landing at that moment is overridden. Click again until Start holds.
+  const runStart = ctx.page.getByText("Run start", { exact: true }).locator("visible=true").first();
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    await ctx.click(ctx.page.getByTestId("rf__node-start"), { duration: 150, pause: 40 });
+    const shown = await runStart.waitFor({ timeout: 4_000 }).then(() => true, () => false);
+    await sleep(500);
+    if (shown && (await runStart.isVisible())) return;
+  }
+  throw new Error("the inspector never held on Start (« Run start »)");
 }
 
 /** Click `implementer` on the run canvas (filmed), then wait off camera until
@@ -51,7 +60,8 @@ async function selectStart(ctx) {
 async function openImplementerTerminal(ctx, runId) {
   const { page, instance } = ctx;
   await ctx.keep(() => ctx.click(page.getByTestId("rf__node-implementer"), { duration: 750 }));
-  await page.getByText("attached · live").waitFor({ timeout: 30_000 });
+  // Attached live, this browser at the keys: the terminal bar reads « You pilot ».
+  await page.locator('[data-testid="term-mode"][data-role="pilot"]').waitFor({ timeout: 30_000 });
   await waitPane(instance, runId, "implementer", CLAUDE_UP);
   await sleep(400);
 }
@@ -114,15 +124,16 @@ export default {
       localStorage: LAYOUT,
       // The canvas and the inspector — `implementer` next to its terminal — from
       // the tab bar down to the node's outputs (the runs rail is cut).
-      crop: { x: 193, y: 44, width: 1087, height: 646 },
+      crop: { x: 241, y: 44, width: 1039, height: 646 },
       gifWidth: 1200,
       markers: ["run-started", "zoom", "terminal-active", "verdict"],
       async play(ctx) {
         const { page, instance } = ctx;
         let runId;
         try {
+          await openRunsRail(ctx);
           runId = await startDemoRun(instance, TASK_A);
-          await openRun(ctx, TASK_A.name);
+          await openRun(ctx, TASK_A.name, { goto: false });
           await selectStart(ctx);
           ctx.mark("run-started", { before: 0, after: 900 });
           const implementer = page.getByTestId("rf__node-implementer");
@@ -167,8 +178,9 @@ export default {
         const { page, instance } = ctx;
         let runId;
         try {
+          await openRunsRail(ctx);
           runId = await startDemoRun(instance, DEMO_TASK);
-          await openRun(ctx, DEMO_TASK.name);
+          await openRun(ctx, DEMO_TASK.name, { goto: false });
           await selectStart(ctx);
           // Opens on a run already moving: `implementer` running on the canvas.
           ctx.mark("run-started", { before: 0, after: 900 });

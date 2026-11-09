@@ -196,8 +196,8 @@ Which harness reports what: [harnesses.md](reference/harnesses.md).
 
 ## Interactive and orchestrator nodes
 
-Two flags of an agent node, independent of its type (`agent`, `script`): together they
-make its **node kind**, and a node can be both.
+Two flags of a node, apart from its type (`agent`, `script`): **Interactive** (any node) and
+**Orchestrator** (an `agent` node). Together they make its **node kind**, and a node can be both.
 
 Turn **Interactive** on and a human talks to the node. When its agent needs you (a question, a
 choice, a review), it declares the wait with `pdo wait-user --message "<question>"`: the node and its
@@ -304,8 +304,11 @@ Decisions: [ADR-0066](adr/0066-les-page-mounts-servent-du-html-navigable-sur-ges
 ### Service & in-app update
 
 `pdo service install` installs a systemd user unit or a launchd agent, so PDO starts at boot and
-keeps running after logout. When a new release is out, one click on the version in the status bar
-updates PDO with your install method and reloads the page. See [cli.md](reference/cli.md).
+keeps running after logout. When a new release is out, the version in the status bar says so
+(`→ <version>`): click it to read what changed, then **Update** › **Update now**, and PDO updates
+with your install method and reloads the page. Settings › General › Version & update shows the
+installed and latest versions (read from the public repository's releases), your install method and
+the command it runs. See [cli.md](reference/cli.md).
 
 Decisions: [ADR-0019](adr/0019-persistent-daemon-service-unit.md).
 

@@ -7,10 +7,23 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { sleep } from "../lib/demo-instance.mjs";
-import { Recorder } from "../lib/recorder.mjs";
+import { Recorder, withLayoutWidth } from "../lib/recorder.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..", "..", "..");
+
+test("a stored Workbench layout is given the CSS width of its window, at the scene's UI scale", () => {
+  const layout = { left: 18, center: 57, right: 25 };
+  // The front's default UI scale is 120 %: 1200 viewport px are 1000 CSS px.
+  assert.deepEqual(withLayoutWidth({ "pdo.layout.run": layout }, { width: 1200, height: 760 }), {
+    "pdo.layout.run": layout,
+    "pdo.layout.run.width": "1000",
+  });
+  assert.equal(withLayoutWidth({ "pdo.layout.run": layout, "pdo.ui.scale": "100" }, { width: 1100 })["pdo.layout.run.width"], "1100");
+  // Nothing to restore: nothing added; a width the scene sets is kept.
+  assert.deepEqual(withLayoutWidth({ "pdo.tour.offered": "1" }, { width: 1100 }), { "pdo.tour.offered": "1" });
+  assert.equal(withLayoutWidth({ "pdo.layout.run": layout, "pdo.layout.run.width": "900" }, { width: 1100 })["pdo.layout.run.width"], "900");
+});
 
 let chromium = null;
 try {

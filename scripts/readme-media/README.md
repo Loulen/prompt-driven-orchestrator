@@ -130,7 +130,8 @@ For each scene, in its own throwaway instance:
 3. **Bootstrap** (the config's `seed`). The core's is its **mocked history** (`needs: ["history"]`, `lib/history-plan.mjs` + `lib/history-write.mjs`). About
    205 runs of `implement-review` over the last 30 days (their run snapshot is derived from the
    complete target, `lib/demo-pipeline.mjs`), with synthetic claude/copilot/pi transcripts and
-   a manual price table. Apart from them, 100 fires of the (disabled) `prod-health-check` trigger, each
+   a manual price table. Like a real run, each one leaves its pipeline in the fixture repo
+   (`.pdo/runs/<run>/pipeline.yaml` and `pipeline.prompts/`): a mocked run clicked in the rail opens. Apart from them, 100 fires of the (disabled) `prod-health-check` trigger, each
    the start of a `prod-check` run (its own target's snapshot): 10 found a real incident
    (`Incident_found = true`: Orchestrate Fix, then Notify Slack), the others were false alarms
    (`Incident_found = false`: straight to End). Their sessions bill no turn and name no model, so they
@@ -285,7 +286,17 @@ Nothing on screen may change after the final `hold`: the video runs a beat past 
 can become the poster.
 A row GIF shows a ~480 px cell: crop on the panel that matters so its text reads at about 1:1
 (crop width close to the GIF's content width, ~910 px); a narrower `viewport` lets the page reflow
-into that crop. Record the scene, open both GIFs from `.readme-media/`, pick one in `selection.txt`, then
+into that crop.
+
+Pixels and panes. The front draws at its UI scale, 120 % by default (`pdo.ui.scale`, 100 / 110 /
+120): a crop measured on screen is in screen px, 1.2 per CSS px. A scene may film at another scale
+by setting `pdo.ui.scale` in its `localStorage` (pipelines and review film at 100 %). The
+Workbench restores `pdo.layout.run` (the panes in % of the window) only with the CSS width of the
+window it was saved in, `pdo.layout.run.width`: the recorder adds it from the viewport and the
+scale, so a scene gives the shares alone. The left panel never goes under 200 CSS px, nor the
+inspector under 240, whatever the shares say. An empty inspector folds and a selection unfolds
+it, resizing the canvas: a scene that films the canvas keeps the inspector open from the start
+(Pipeline info, or the selection it films). Record the scene, open both GIFs from `.readme-media/`, pick one in `selection.txt`, then
 `make readme-media-publish`.
 
 ## The scenes so far
@@ -296,7 +307,7 @@ into that crop. Record the scene, open both GIFs from `.readme-media/`, pick one
 | `pipelines` | — | builds the target `implement-review.pipelines`: from Start and End, + → Node, `implementer` dragged to its place, then `Start → implementer` and `implementer → End` from the rims (see [Scenes that build](#scenes-that-build)) | `scenes/_canvas.mjs`, `lib/build-scene.mjs` |
 | `routing` | — | builds the complete target: the loop edge `reviewer → implementer` and its region ↻ 5, `review.verdict = fail` then `verdict = pass` on the exit, each pill dragged to its place | `scenes/_canvas.mjs`, `lib/build-scene.mjs` |
 | `stats` | — | the Stats page over the mocked history | |
-| `outputs` | `claude` | a finished run's `reviewer`: its two ports in Edit, then in Run an annotated screenshot (lightbox) and the `review` markdown with its Mermaid diagram rendered | `scenes/_live.mjs` |
+| `outputs` | `claude` | a finished run's `reviewer`: its two ports in the pipeline's editor, then on the run an annotated screenshot (lightbox) and the `review` markdown with its Mermaid diagram rendered | `scenes/_live.mjs` |
 | `review` | `claude` | a finished run's Review page, zoomed on the commented hunk: a comment on a line, sent to the manager, cut ×8, the manager's own answer in the thread, on one line (the demo HOME's `~/.claude/CLAUDE.md` asks for it; a wrapped answer fails the variant) | `scenes/_live.mjs` |
 | `interactive-orchestrator` | `claude` | `implementer`, interactive and orchestrator, asks a question (the « awaiting you » banner), the cursor types the answer in its terminal, then it starts two child runs of `implement-review`, nested under it in the run tree, and waits for them with one bare `pdo run wait --all` | `scenes/_live.mjs`, `scenes/_canvas.mjs` |
 | `triggers`, `profiles`, `skills` | — | settings, no agent (see below): the trigger on `prod-check`, profiles and skills on `implement-review` | `scenes/_no-agent.mjs` |
@@ -355,8 +366,14 @@ contract, `lib/build-scene.mjs`, is two pure functions any new building scene re
    axis each, without the reversals the canvas merges away. A diagonal move would let the editor's
    grid trace pick its bends by pointer sampling, so the saved route would change from take to take. `dragLabelTo` drags a condition pill or an output tag
    so its centre lands on its `condition_label_pos` / `output_label_pos`. Each measures first,
-   then keeps only the gesture on camera (`film: false`: off camera).
-4. **`saveCanvas`, then `landOnTarget(ctx, id)`**, off camera, after the last gesture:
+   then keeps only the gesture on camera (`film: false`: off camera). A stored ordinate is not
+   always where the canvas draws it: a card with several outputs is drawn taller than the 65 px
+   it was placed for and pushes everything below it down (the front's `lib/growLayout.ts`), so
+   the gestures aim through `drawnY(target)`, its copy in `lib/build-scene.mjs`. The press lands
+   on the source card's border itself: its rim strip runs from 3 screen px inside to 5 outside,
+   and a press deeper inside drags the card.
+4. **`saveCanvas`, then `landOnTarget(ctx, id)`**, off camera, after the last gesture (Ctrl+S
+   opens the Save dialog, Ctrl+Enter saves a new version, the « Saved » toast is dismissed):
    `gestureDrift(saved, target)` lists where the saved file differs *visibly* from the target
    (node set, positions and isolation marker, edges and the ports their tags name, conditions,
    anchor sides, routes end to end, label positions, loop regions; `DRIFT_TOLERANCE` = 6 flow px).
@@ -366,7 +383,8 @@ contract, `lib/build-scene.mjs`, is two pure functions any new building scene re
    `ctx.warn`: the take is kept, the maintainer knows the scene needs a retouch. Then the target
    is reinstalled; the helper waits out the daemon's 2 s self-write window (its own save would
    swallow the change), until the tab has reloaded every node at its `view`, and until the tab's
-   « changed » dot has faded. The final `hold` films the target: no jump, no « changed on disk ».
+   « changed » dot has faded; the « changed outside » notice the reinstall raises is dismissed.
+   The final `hold` films the target: no jump, no « changed on disk ».
    The one trace of the reinstall is the toolbar's Undo/Redo turning grey at the cut: the reload
    resets the editor's history.
 
@@ -385,7 +403,9 @@ shows.
   The reviewer's prompt (`fixture/targets/implement-review.prompts/reviewer.md`) keeps the review
   short, with a small left-to-right Mermaid diagram (three or four boxes) right after the verdict:
   it reads in the modal without a scroll (a top-down one scales to the modal's width and overflows). The wait for the Mermaid render is cut; the thumbnails and the lightbox image are loaded
-  before they are filmed. The poster checks the run tab has nothing unsaved. On the Run tab the
+  before they are filmed. A run is read-only and its Config tab lists no ports: the declared ports
+  are filmed in the pipeline's editor (opened off camera, `reviewer` selected), checked unsaved
+  before the take goes back to the run from the rail. On the Run tab the
   finished node's terminal is folded to a bar (#346) and the panel lists its I/O: the one input
   (`code`) above the two outputs. That is how the app shows a finished node, and the scene films it
   as is.

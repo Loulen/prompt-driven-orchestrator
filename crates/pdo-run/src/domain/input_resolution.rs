@@ -64,15 +64,24 @@ pub fn resolved_source_iters(
         .collect()
 }
 
-/// The upstream nodes feeding `node_id` that have no completed iteration yet:
-/// what a node launched ahead of its producers — an on-demand node (ADR-0086),
-/// a force-started node — finds absent. `Start` is never absent (it is the
-/// Run's prompt).
+/// Why an upstream node has nothing for its consumer to read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Absence {
+    /// It has no completed iteration yet: the consumer was launched ahead of it
+    /// (an on-demand node, ADR-0086, a force-started node).
+    NotYet,
+    /// It was pruned: its branch was not taken, so it never ran and fires
+    /// nothing. A convergence consumes only the branches that fired (ADR-0082).
+    NotTaken,
+}
+
+/// The upstream nodes feeding `node_id` that delivered nothing to read, and
+/// why. `Start` is never absent (it is the Run's prompt).
 pub fn absent_sources(
     pipeline: &PipelineDef,
     run_state: &RunState,
     node_id: &str,
-) -> std::collections::HashSet<String> {
+) -> HashMap<String, Absence> {
     pipeline
         .edges
         .iter()
@@ -83,8 +92,16 @@ pub fn absent_sources(
                 n.id == *src && n.node_type == pdo_pipeline::domain::pipeline::NodeType::Start
             })
         })
-        .filter(|src| run_state.latest_completed_iter(src).is_none())
-        .map(str::to_string)
+        .filter_map(|src| {
+            let absence = if run_state.is_pruned(src) {
+                Absence::NotTaken
+            } else if run_state.latest_completed_iter(src).is_none() {
+                Absence::NotYet
+            } else {
+                return None;
+            };
+            Some((src.to_string(), absence))
+        })
         .collect()
 }
 
@@ -268,6 +285,7 @@ mod tests {
             completed_at: None,
             failure_reason: None,
             skip_reason: None,
+            pruned: false,
             iterations: iters
                 .iter()
                 .map(|(iter, status)| IterationInfo {

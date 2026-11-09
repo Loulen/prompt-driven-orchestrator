@@ -198,7 +198,7 @@ export default function ReviewFileCard({
         startingManager={comments.startingManager}
         pairLabel={comments.pairLabel}
         sendDisabledReason={comments.sendDisabledReason}
-                    sendRefused={comments.sendRefused}
+        sendRefused={comments.sendRefused}
         onEdit={() => key && comments.editDraft(key)}
         onDelete={() => key && comments.deleteDraft(key)}
         onSend={() => key && comments.sendDraft(key)}
@@ -212,6 +212,7 @@ export default function ReviewFileCard({
         onSeen={sent ? () => comments.markSeen(sent) : undefined}
         outdated={entry.kind === "sent" && entry.outdated && sent ? { writtenOn: comments.writtenOnLabel(sent) } : undefined}
         movedFrom={entry.kind === "sent" ? entry.movedFrom : undefined}
+        delivery={sent ? comments.delivery : undefined}
       />
     );
   };
@@ -307,7 +308,7 @@ export default function ReviewFileCard({
                     pair={pair}
                     wipKey={wipKey(runId, anchor, pair)}
                     sendDisabledReason={comments.sendDisabledReason}
-                    sendRefused={comments.sendRefused}
+        sendRefused={comments.sendRefused}
                     onSave={(text) => {
                       comments.saveNew(anchor, text);
                       onClose();
@@ -331,7 +332,7 @@ export default function ReviewFileCard({
                       initial={entry.draft.text}
                       wipKey={wipKey(runId, entry.anchor, pair)}
                       sendDisabledReason={comments.sendDisabledReason}
-                    sendRefused={comments.sendRefused}
+        sendRefused={comments.sendRefused}
                       onSave={(text) => comments.updateDraft(entry.draft.key, text)}
                       onSend={(text) => {
                         comments.updateDraft(entry.draft.key, text);

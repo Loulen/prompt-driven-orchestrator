@@ -6,6 +6,7 @@ use pdo_pipeline::domain::pipeline::{NodeType, PortType, IMAGE_EXTENSIONS};
 use super::inputs::{resolve_input_paths, resolve_output_paths};
 use super::sections::*;
 use super::{AugmentContext, InputResolution, OutputDeclaration};
+use crate::domain::input_resolution::Absence;
 
 pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
     let inputs = resolve_input_paths(ctx);
@@ -49,10 +50,18 @@ pub(super) fn push_inputs(
         preamble.push_str("No inputs.\n\n");
     } else {
         for input in inputs {
-            // When the pipeline is prompt-optional and no prompt was supplied,
-            // the node must source its own work; a supplied prompt is merely
-            // additional info layered on the node's own brief.
-            if !input.from_start && ctx.absent_sources.contains(&input.source_node) {
+            let absence = (!input.from_start)
+                .then(|| ctx.absent_sources.get(&input.source_node))
+                .flatten();
+            if let Some(Absence::NotTaken) = absence {
+                // ADR-0082: a convergence consumes only the branches that fired;
+                // this one was not taken, so it has nothing to read.
+                preamble.push_str(&format!(
+                    "- `{}`: not taken — its upstream `{}` was skipped because its branch \
+                     was not taken in this Run. Work without it.\n",
+                    input.port_name, input.source_node
+                ));
+            } else if let Some(Absence::NotYet) = absence {
                 // ADR-0086: a node launched ahead of its producer (an on-demand
                 // node, a force-start) gets no file for this input. Say so,
                 // rather than point at a path nothing wrote.
@@ -62,6 +71,9 @@ pub(super) fn push_inputs(
                     input.port_name, input.source_node
                 ));
             } else if input.from_start && !ctx.pipeline.prompt_required {
+                // When the pipeline is prompt-optional and no prompt was supplied,
+                // the node must source its own work; a supplied prompt is merely
+                // additional info layered on the node's own brief.
                 // `from_start` is always a single path.
                 let path = input
                     .paths

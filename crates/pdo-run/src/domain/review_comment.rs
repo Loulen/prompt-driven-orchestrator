@@ -83,6 +83,48 @@ pub struct ReviewReply {
     pub proposes_resolution: bool,
 }
 
+/// Why a sent comment has not reached an answering manager (CORE-239), as
+/// `review_comment_delivery` events fold it. A comment on its way, or answered,
+/// has none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewDeliveryState {
+    /// The manager is up, but its agent shows a prompt only a person can
+    /// answer (its folder-trust check): the batch waits, nothing is typed into
+    /// it, and goes out once the prompt is answered.
+    Blocked,
+    /// The manager's session ended before answering: « Send again » hands the
+    /// comment to a new one.
+    Exited,
+}
+
+impl ReviewDeliveryState {
+    /// The wire word, as `review_comment_delivery`'s `state` carries it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReviewDeliveryState::Blocked => "blocked",
+            ReviewDeliveryState::Exited => "exited",
+        }
+    }
+}
+
+/// The `state` a `review_comment_delivery` event carries: the batch is on its
+/// way again (`awaiting`), or held for one of [`ReviewDeliveryState`]'s causes.
+pub const DELIVERY_AWAITING: &str = "awaiting";
+
+/// What the thread says while a comment is held on its way to the manager.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ReviewDelivery {
+    pub state: ReviewDeliveryState,
+    /// Why, and the way out, in a sentence; absent when nothing more is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reason: Option<String>,
+    pub at: String,
+}
+
 /// A sent comment as projected into `RunState::review_comments`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -163,6 +205,12 @@ pub struct ReviewComment {
     /// next reply.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub proposal_declined: bool,
+    /// CORE-239: the comment is held on its way to the manager (a prompt
+    /// blocks it, or the manager exited before answering). `None` while it is
+    /// on its way or once answered: a reply clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub delivery: Option<ReviewDelivery>,
 }
 
 fn default_status() -> ReviewCommentStatus {
@@ -239,7 +287,10 @@ pub fn fold(comments: &mut Vec<ReviewComment>, event: &Event) {
                 c.proposal_pending = true;
             }
             c.proposal_declined = false;
+            // An answer arrived: whatever held the comment is behind it.
+            c.delivery = None;
         }
+        EventKind::ReviewCommentDelivery => fold_delivery(comments, event, payload),
         EventKind::ReviewCommentResolved | EventKind::ReviewCommentReopened => {
             let Some(id) = payload.get("id").and_then(|v| v.as_str()) else {
                 return;
@@ -280,6 +331,38 @@ pub fn fold(comments: &mut Vec<ReviewComment>, event: &Event) {
     }
 }
 
+/// Fold a `review_comment_delivery`: `awaiting` clears each named comment's
+/// `delivery`, `blocked` / `exited` set it. An unknown state or id is skipped.
+fn fold_delivery(comments: &mut [ReviewComment], event: &Event, payload: &serde_json::Value) {
+    let state = payload.get("state").and_then(|v| v.as_str()).unwrap_or("");
+    let delivery = match state {
+        DELIVERY_AWAITING => None,
+        "blocked" | "exited" => Some(ReviewDelivery {
+            state: if state == "blocked" {
+                ReviewDeliveryState::Blocked
+            } else {
+                ReviewDeliveryState::Exited
+            },
+            reason: payload
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            at: event.ts.clone(),
+        }),
+        other => {
+            tracing::warn!("review_comment_delivery carries an unknown state {other:?}; skipped");
+            return;
+        }
+    };
+    let ids = payload.get("ids").and_then(|v| v.as_array());
+    for id in ids.into_iter().flatten().filter_map(|v| v.as_str()) {
+        match comments.iter_mut().find(|c| c.id == id) {
+            Some(c) => c.delivery = delivery.clone(),
+            None => tracing::warn!("review_comment_delivery names unknown comment {id}; skipped"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,6 +393,7 @@ mod tests {
             reopened_at: None,
             reopened_by_actor: None,
             proposal_declined: false,
+            delivery: None,
         }
     }
 
@@ -590,5 +674,79 @@ mod tests {
         assert!(v.get("replies").is_none(), "empty replies are skipped");
         let back: ReviewComment = serde_json::from_value(v).unwrap();
         assert_eq!(back.side, ReviewSide::New);
+    }
+
+    #[test]
+    fn a_delivery_holds_the_named_comments_until_awaiting_or_a_reply_clears_it() {
+        let mut list = vec![];
+        for id in ["rc-001", "rc-002", "rc-003"] {
+            fold(
+                &mut list,
+                &ev(
+                    EventKind::ReviewCommentSent,
+                    serde_json::to_value(sent(id, 3)).unwrap(),
+                ),
+            );
+        }
+        fold(
+            &mut list,
+            &ev(
+                EventKind::ReviewCommentDelivery,
+                serde_json::json!({ "ids": ["rc-001", "rc-002", "rc-404"], "state": "blocked", "reason": "answer the trust prompt" }),
+            ),
+        );
+        let held = list[0].delivery.clone().expect("rc-001 is held");
+        assert_eq!(held.state, ReviewDeliveryState::Blocked);
+        assert_eq!(held.reason.as_deref(), Some("answer the trust prompt"));
+        assert_eq!(held.at, "2026-09-09T10:00:00.000Z");
+        assert!(list[2].delivery.is_none(), "rc-003 was not in the batch");
+
+        fold(
+            &mut list,
+            &ev(
+                EventKind::ReviewCommentDelivery,
+                serde_json::json!({ "ids": ["rc-001", "rc-002"], "state": "exited" }),
+            ),
+        );
+        assert_eq!(
+            list[1].delivery.as_ref().map(|d| d.state),
+            Some(ReviewDeliveryState::Exited)
+        );
+        assert_eq!(list[1].delivery.as_ref().unwrap().reason, None);
+
+        // An unknown state changes nothing.
+        fold(
+            &mut list,
+            &ev(
+                EventKind::ReviewCommentDelivery,
+                serde_json::json!({ "ids": ["rc-001"], "state": "lost" }),
+            ),
+        );
+        assert!(list[0].delivery.is_some());
+
+        // Sent again: on its way.
+        fold(
+            &mut list,
+            &ev(
+                EventKind::ReviewCommentDelivery,
+                serde_json::json!({ "ids": ["rc-001"], "state": "awaiting" }),
+            ),
+        );
+        assert!(list[0].delivery.is_none());
+
+        // Answered: nothing holds it any more.
+        fold(
+            &mut list,
+            &ev(
+                EventKind::ReviewCommentReplied,
+                serde_json::json!({ "id": "rc-002", "author": "manager", "text": "on it" }),
+            ),
+        );
+        assert!(list[1].delivery.is_none());
+        let wire = serde_json::to_value(&list[0]).unwrap();
+        assert!(
+            wire.get("delivery").is_none(),
+            "nothing held, nothing on the wire"
+        );
     }
 }

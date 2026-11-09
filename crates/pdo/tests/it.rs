@@ -378,6 +378,9 @@ mod review_comments;
 #[path = "review_comment_actor.rs"]
 mod review_comment_actor;
 
+#[path = "review_delivery.rs"]
+mod review_delivery;
+
 #[path = "run_pause_reopen.rs"]
 mod run_pause_reopen;
 
@@ -425,6 +428,9 @@ mod skill_seed;
 
 #[path = "sandbox_tracer.rs"]
 mod sandbox_tracer;
+
+#[path = "pruned_routing.rs"]
+mod pruned_routing;
 
 #[path = "script_node.rs"]
 mod script_node;

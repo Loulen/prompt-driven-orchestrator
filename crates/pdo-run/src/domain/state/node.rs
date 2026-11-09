@@ -71,6 +71,19 @@ pub struct NodeState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub skip_reason: Option<String>,
+    /// The node was **pruned**: the reachability auto-skip settled it because
+    /// the branch feeding it was not taken, and it never ran. A pruned node is
+    /// dead for routing (ADR-0082): its edges never fire, the convergence
+    /// downstream does not consume it, and an `End` it fed stays unreached.
+    ///
+    /// Distinct from a skip by the operator (`pdo node skip [--output …]`), which
+    /// settles the node as if it had run and keeps feeding downstream: both
+    /// project `Skipped`, only the skip event's `source` tells them apart.
+    /// Cleared when the node starts (the ▶ of a skipped node). Absent from the
+    /// wire when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub pruned: bool,
     #[serde(default)]
     pub iterations: Vec<IterationInfo>,
     #[serde(default)]
@@ -140,6 +153,20 @@ pub struct AwaitingInfo {
 pub const AWAITING_CAUSE_DECLARED: &str = "declared";
 pub const AWAITING_CAUSE_COMPLETION_NOT_RELEASED: &str = "completion_not_released";
 pub const AWAITING_CAUSE_CHILD_AWAITING: &str = "child_awaiting";
+
+/// The `awaiting_reason_code`s of a Run its routing parked
+/// ([`super::RunState::is_parked_by_routing`]): no live branch reaches `End`.
+pub const PARK_UNROUTED: &str = "unrouted";
+/// A bounded region reached `max_iter` with no matching exit edge.
+pub const PARK_REGION_EXHAUSTED: &str = "region_exhausted";
+/// A bounded region closed by `end_region` with no matching exit edge.
+pub const PARK_REGION_ENDED_UNROUTED: &str = "region_ended_unrouted";
+/// A bounded region reached its cost cap.
+pub const PARK_REGION_BUDGET_EXHAUSTED: &str = "region_budget_exhausted";
+
+/// The `source` of the skip event the reachability sweep appends for a node
+/// whose branch was not taken: what makes a [`NodeState::pruned`] node.
+pub const AUTO_SKIP_UNREACHABLE_SOURCE: &str = "auto_skip_unreachable";
 
 /// The two Run-branch tips one delivery moved between (#654 / ADR-0060).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

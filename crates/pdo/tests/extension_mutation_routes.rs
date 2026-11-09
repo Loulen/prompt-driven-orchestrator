@@ -332,6 +332,12 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
         ),
         call(
             "POST",
+            "/runs/{run_id}/review/comments/resend",
+            format!("/runs/{RUN}/review/comments/resend"),
+            Some(json!({ "ids": ["rc-001"] })),
+        ),
+        call(
+            "POST",
             "/runs/{run_id}/review/comments/{comment_id}/reply",
             format!("/runs/{RUN}/review/comments/rc-001/reply"),
             Some(json!({ "text": "done", "resolved": true })),

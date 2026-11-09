@@ -41,10 +41,11 @@ async fn with_sent(n: usize) -> World {
     w
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_send_records_one_event_per_comment_and_hands_the_manager_one_message() {
     let w = World::new();
     w.completed_run("r1").await;
+    w.runs.manager_shows("╭───╮\n│ > │\n╰───╯");
     w.git.files.lock().unwrap().insert(
         ("pdo/run-r1".into(), "src/a.rs".into()),
         "one\ntwo\nthree\n".into(),
@@ -80,15 +81,18 @@ async fn a_send_records_one_event_per_comment_and_hands_the_manager_one_message(
         .filter(|k| *k == EventKind::ReviewCommentSent)
         .count();
     assert_eq!(sent_events, 2);
-    let handed = w.runs.handed.lock().unwrap().clone();
-    assert_eq!(handed.len(), 1, "one message for the batch");
-    assert!(handed[0].1.contains("[rc-001]") && handed[0].1.contains("[rc-002]"));
+    // CORE-239: the manager the send starts reads the batch in its launch
+    // prompt; nothing is typed into a harness still starting.
+    let launched = w.runs.launched_with.lock().unwrap().clone();
+    assert_eq!(launched.len(), 1, "one message for the batch");
+    assert!(launched[0].contains("[rc-001]") && launched[0].contains("[rc-002]"));
     assert!(
-        handed[0].1.contains("(Fork point → Run tip)"),
+        launched[0].contains("(Fork point → Run tip)"),
         "{}",
-        handed[0].1
+        launched[0]
     );
-    assert!(handed[0].2, "the manager was just started");
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    assert!(w.runs.pasted.lock().unwrap().is_empty());
 
     // The next batch continues the sequence, into the running manager.
     let next = w
@@ -98,6 +102,10 @@ async fn a_send_records_one_event_per_comment_and_hands_the_manager_one_message(
         .unwrap();
     assert_eq!(next["sent"][0]["id"], "rc-003");
     assert_eq!(next["manager_started"], false);
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let pasted = w.runs.pasted.lock().unwrap().clone();
+    assert_eq!(pasted.len(), 1, "typed into the running manager");
+    assert!(pasted[0].1.contains("[rc-003]"), "{}", pasted[0].1);
 }
 
 /// CORE-61: the manager a send starts is started by the author of the
@@ -190,7 +198,7 @@ async fn drafts_stay_drafts_when_the_send_is_refused() {
         other => panic!("{other:?}"),
     }
     assert!(!w.runs.kinds("r1").contains(&EventKind::ReviewCommentSent));
-    assert!(w.runs.handed.lock().unwrap().is_empty());
+    assert!(w.runs.launched_with.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

@@ -113,6 +113,11 @@ pub fn resolve(
     let mut input_index: HashMap<String, usize> = HashMap::new();
 
     for input in resolved {
+        // ADR-0082: a convergence consumes only the branches that fired. A
+        // pruned source's branch was not taken: it is no input of this node.
+        if run_state.is_pruned(&input.source_node) {
+            continue;
+        }
         // A `files` source hands over its folder: list the files in it.
         let mut files: Vec<FileInfo> = input
             .paths
@@ -323,6 +328,7 @@ mod tests {
             completed_at: None,
             failure_reason: None,
             skip_reason: None,
+            pruned: false,
             iterations: iters
                 .iter()
                 .map(|(iter, status)| IterationInfo {

@@ -89,6 +89,7 @@ pub(super) fn node_interrupted(state: &mut RunState, event: &Event) {
                 completed_at: None,
                 failure_reason: None,
                 skip_reason: None,
+                pruned: false,
                 iterations: Vec::new(),
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),

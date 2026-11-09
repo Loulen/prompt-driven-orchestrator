@@ -125,7 +125,8 @@ pub fn project(events: &[Event]) -> Option<RunState> {
             EventKind::ReviewCommentSent
             | EventKind::ReviewCommentReplied
             | EventKind::ReviewCommentResolved
-            | EventKind::ReviewCommentReopened => {
+            | EventKind::ReviewCommentReopened
+            | EventKind::ReviewCommentDelivery => {
                 crate::domain::review_comment::fold(&mut state.review_comments, event)
             }
 
@@ -658,6 +659,7 @@ mod tests {
             completed_at: None,
             failure_reason: None,
             skip_reason: None,
+            pruned: false,
             iterations: vec![],
             frontmatter_retries: 0,
             frontmatter_violations: vec![],
@@ -3906,6 +3908,7 @@ mod tests {
             completed_at: None,
             failure_reason: None,
             skip_reason: None,
+            pruned: false,
             iterations: iters
                 .iter()
                 .map(|(i, s)| IterationInfo {
@@ -5082,6 +5085,68 @@ mod tests {
             state.all_nodes_completed(&["orphan".into()]),
             "a pruned node counts as done for run completion"
         );
+    }
+
+    #[test]
+    fn only_the_reachability_sweep_prunes_a_node_and_its_restart_revives_it() {
+        // ADR-0082: the sweep's skip (`auto_skip_unreachable`) prunes the node —
+        // dead for routing. The operator's skip of a never-started node
+        // (`skip_node`) settles it as if it had run: `Skipped`, not pruned.
+        let mut state = RunState::new("r".into(), String::new());
+        apply_node_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::NodeCompleted,
+                Some("untaken"),
+                serde_json::json!({
+                    "source": "auto_skip_unreachable", "skipped": true, "reason": "unreachable"
+                }),
+            ),
+        );
+        apply_node_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::NodeCompleted,
+                Some("operator"),
+                serde_json::json!({
+                    "source": "skip_node", "skipped": true,
+                    "reason": "skipped locally by operator"
+                }),
+            ),
+        );
+        assert_eq!(state.nodes["untaken"].status, NodeStatus::Skipped);
+        assert!(state.is_pruned("untaken"));
+        assert_eq!(state.nodes["operator"].status, NodeStatus::Skipped);
+        assert!(!state.is_pruned("operator"));
+        assert!(
+            serde_json::to_value(&state.nodes["operator"])
+                .unwrap()
+                .get("pruned")
+                .is_none(),
+            "absent from the wire when false"
+        );
+
+        // Two sweeps that raced past the guard append the same prune twice:
+        // the duplicate leaves the node pruned and `Skipped`.
+        apply_node_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::NodeCompleted,
+                Some("untaken"),
+                serde_json::json!({
+                    "source": "auto_skip_unreachable", "skipped": true, "reason": "unreachable"
+                }),
+            ),
+        );
+        assert_eq!(state.nodes["untaken"].status, NodeStatus::Skipped);
+        assert!(state.is_pruned("untaken"));
+
+        // The ▶ of the pruned node runs its branch as if it was taken.
+        apply_node_event(
+            &mut state,
+            &make_event(EventKind::NodeStarted, Some("untaken"), Some(2)),
+        );
+        assert!(!state.is_pruned("untaken"));
     }
 
     #[test]

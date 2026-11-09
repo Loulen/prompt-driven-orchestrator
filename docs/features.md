@@ -77,6 +77,11 @@ node whose every branch died is skipped; if that makes `End` unreachable, the ru
 (« unrouted ») instead of stalling. There is no dedicated Merge node: the converging node carries its
 own prompt, so it can do real synthesis work.
 
+A node skipped because its branch was not taken fires nothing: what it fed does not receive it (its
+preamble says « not taken », a `script` gets an empty `PDO_INPUT_<PORT>`), and an `End` reachable only
+through it stays unreached, so the run waits « unrouted » for you to force a route. A node you skip
+yourself (`pdo node skip`, with or without `--output`) feeds what comes after it as if it had run.
+
 A skipped node keeps a ▶: it runs the branch as if it had been taken (a Retry: next iteration, the
 skipped nodes downstream evaluated again, a finished run re-opened).
 

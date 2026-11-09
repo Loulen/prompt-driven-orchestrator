@@ -133,6 +133,7 @@ pub fn end_reached_action(
                 vars,
                 fields,
                 frontmatter_by_node,
+                None,
             )
             .into_iter()
             .filter(ends_the_run),

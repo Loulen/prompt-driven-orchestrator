@@ -16,6 +16,19 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 
 ## Unreleased
 
+### Routing: a branch not taken stays dead downstream
+
+- A run whose only path to End goes through a branch that was not taken stays "awaiting you"
+  with the reason "unrouted" until you force a route, instead of finishing green with End
+  "reached". The same holds for a bounded loop that runs out of laps while its exit goes through
+  a branch not taken: the run stays "exhausted".
+- A node where branches converge receives only the branches that fired. An input whose branch was
+  not taken is no longer listed in the node's I/O; its preamble says "not taken", and a `script`
+  gets an empty `PDO_INPUT_<PORT>` (an input of the same name that did fire keeps its path).
+- A node you skip yourself (`pdo node skip`, with or without `--output`) still feeds what comes
+  after it, as if it had run. The ▶ of a skipped node is unchanged.
+- The run state marks a node skipped because its branch was not taken with `pruned: true`.
+
 ### Authoring: fixes from the vanilla acceptance tour
 
 - Importing a Claude Code workflow lists what it could not map in English, in the import modal and

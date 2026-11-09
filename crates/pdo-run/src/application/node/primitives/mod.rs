@@ -367,6 +367,7 @@ mod tests {
             completed_at: None,
             failure_reason: None,
             skip_reason: None,
+            pruned: false,
             iterations: vec![IterationInfo {
                 iter,
                 status: NodeStatus::Running,
@@ -400,6 +401,7 @@ mod tests {
             completed_at: Some("t1".into()),
             failure_reason: None,
             skip_reason: None,
+            pruned: false,
             iterations: vec![IterationInfo {
                 iter,
                 status: NodeStatus::Completed,
@@ -433,6 +435,7 @@ mod tests {
             completed_at: None,
             failure_reason: None,
             skip_reason: None,
+            pruned: false,
             iterations: Vec::new(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
@@ -1157,6 +1160,7 @@ mod tests {
             completed_at: None,
             failure_reason: None,
             skip_reason: None,
+            pruned: false,
             iterations: iters
                 .iter()
                 .map(|(iter, status)| IterationInfo {

@@ -4,14 +4,12 @@
 //! started nodes ends only once they are done.
 
 use pdo_kernel::Actor;
-use pdo_pipeline::domain::pipeline::parse_pipeline;
 use pdo_run::application::complete_node::CompleteNode;
 use pdo_run::application::retry_node::RetryNode;
 use pdo_run::application::scheduler::advance::advance_run;
 use pdo_run::application::start_node::StartNode;
-use pdo_run::domain::event::{edge_info_from_pipeline, node_def_from_pipeline, EventKind};
-use pdo_run::domain::projection::project;
-use pdo_run::domain::state::{NodeStatus, RunState, RunStatus};
+use pdo_run::domain::event::EventKind;
+use pdo_run::domain::state::{NodeStatus, RunStatus};
 
 use crate::fakes::*;
 
@@ -66,61 +64,11 @@ edges:
     target: { node: end, port: result }
 "#;
 
-/// A started Run of `yaml`, its `RunStarted` carrying the frozen graph the
-/// way the create path writes it.
-async fn seed(w: &World, run_id: &str, yaml: &str) {
-    let repo = w.repo.path();
-    let run_dir = repo.join(".pdo").join("runs").join(run_id);
-    std::fs::create_dir_all(run_dir.join("worktree").join(".pdo").join("artifacts")).unwrap();
-    std::fs::write(run_dir.join("pipeline.yaml"), yaml).unwrap();
-    let prompts = run_dir.join("pipeline.prompts");
-    std::fs::create_dir_all(&prompts).unwrap();
-    let pipeline = parse_pipeline(yaml).unwrap().pipeline;
-    for node in &pipeline.nodes {
-        std::fs::write(prompts.join(format!("{}.md", node.id)), "Do it.\n").unwrap();
-    }
-    let node_defs: Vec<_> = pipeline.nodes.iter().map(node_def_from_pipeline).collect();
-    let edges: Vec<_> = pipeline.edges.iter().map(edge_info_from_pipeline).collect();
-    let mut started = event(run_id, EventKind::RunStarted, None);
-    started.payload = Some(serde_json::json!({
-        "pipeline_name": pipeline.name,
-        "input": "go",
-        "target_repo": repo.to_string_lossy(),
-        "node_defs": node_defs,
-        "edges": edges,
-    }));
-    if pipeline.wait_for_started_nodes {
-        started.payload.as_mut().unwrap()["wait_for_started_nodes"] = serde_json::json!(true);
-    }
-    w.runs.append_event().execute(&started).await.unwrap();
-}
-
-fn state(w: &World, run_id: &str) -> RunState {
-    let events: Vec<_> = w
-        .store
-        .events
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|e| e.run_id == run_id)
-        .cloned()
-        .collect();
-    project(&events).unwrap()
-}
-
 fn status_of(w: &World, run_id: &str, node_id: &str) -> Option<NodeStatus> {
     state(w, run_id)
         .nodes
         .get(node_id)
         .map(|n| n.status.clone())
-}
-
-fn worktree(w: &World, run_id: &str) -> std::path::PathBuf {
-    w.repo
-        .path()
-        .join(".pdo/runs")
-        .join(run_id)
-        .join("worktree")
 }
 
 /// The preamble `node_id` was spawned with at `iter`.
@@ -156,11 +104,6 @@ async fn complete(w: &World, run_id: &str, node_id: &str, iter: i64) {
         .await;
     assert_eq!(answer.status(), 200, "completion of {node_id} refused");
     settle().await;
-}
-
-/// Let the detached completion tails run to the end.
-async fn settle() {
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 }
 
 async fn start(w: &World, run_id: &str, node_id: &str) -> u16 {
@@ -205,7 +148,7 @@ fn completions(w: &World, run_id: &str) -> usize {
 #[tokio::test]
 async fn the_runtime_neither_launches_nor_skips_an_on_demand_node() {
     let w = world();
-    seed(&w, "r1", PIPELINE).await;
+    seed_frozen(&w, "r1", PIPELINE).await;
 
     advance_run(&w.runs, "r1").await;
     assert_eq!(status_of(&w, "r1", "worker"), Some(NodeStatus::Running));
@@ -262,7 +205,7 @@ edges:
     target: { node: end, port: result }
 "#;
     let w = world();
-    seed(&w, "r1", yaml).await;
+    seed_frozen(&w, "r1", yaml).await;
     advance_run(&w.runs, "r1").await;
     assert_eq!(status_of(&w, "r1", "lonely"), None, "a root on demand ran");
 
@@ -330,7 +273,7 @@ edges:
 #[tokio::test]
 async fn a_downstream_node_is_not_held_by_an_on_demand_node_never_launched() {
     let w = world();
-    seed(&w, "r1", DOWNSTREAM).await;
+    seed_frozen(&w, "r1", DOWNSTREAM).await;
     advance_run(&w.runs, "r1").await;
     assert_eq!(
         status_of(&w, "r1", "follow"),
@@ -352,7 +295,7 @@ async fn a_downstream_node_is_not_held_by_an_on_demand_node_never_launched() {
 async fn an_on_demand_node_serves_the_downstream_not_launched_yet_and_never_relaunches_a_settled_one(
 ) {
     let w = world();
-    seed(&w, "r1", DOWNSTREAM).await;
+    seed_frozen(&w, "r1", DOWNSTREAM).await;
     advance_run(&w.runs, "r1").await;
     complete(&w, "r1", "worker", 1).await;
     complete(&w, "r1", "join", 1).await;
@@ -392,7 +335,7 @@ async fn an_on_demand_node_serves_the_downstream_not_launched_yet_and_never_rela
 #[tokio::test]
 async fn an_on_demand_node_reads_the_last_completed_iteration_and_names_an_absent_input() {
     let w = world();
-    seed(&w, "r1", PIPELINE).await;
+    seed_frozen(&w, "r1", PIPELINE).await;
     advance_run(&w.runs, "r1").await;
 
     // Launched before its upstream produced anything: the input is absent.
@@ -419,7 +362,7 @@ async fn an_on_demand_node_reads_the_last_completed_iteration_and_names_an_absen
 #[tokio::test]
 async fn retrying_a_skipped_node_runs_its_branch_as_if_taken() {
     let w = world();
-    seed(&w, "r1", PIPELINE).await;
+    seed_frozen(&w, "r1", PIPELINE).await;
     advance_run(&w.runs, "r1").await;
     complete(&w, "r1", "worker", 1).await;
     // The Run ends with the branch it did not take skipped, not pending.
@@ -462,7 +405,7 @@ fn waiting_pipeline() -> String {
 #[tokio::test]
 async fn a_run_that_waits_for_its_started_nodes_stays_running_at_end_until_they_are_done() {
     let w = world();
-    seed(&w, "r1", &waiting_pipeline()).await;
+    seed_frozen(&w, "r1", &waiting_pipeline()).await;
     advance_run(&w.runs, "r1").await;
     assert_eq!(start(&w, "r1", "review").await, 200);
 
@@ -500,7 +443,7 @@ async fn a_run_that_waits_for_its_started_nodes_stays_running_at_end_until_they_
 #[tokio::test]
 async fn without_the_option_a_run_ends_at_end_while_a_started_node_runs() {
     let w = world();
-    seed(&w, "r1", PIPELINE).await;
+    seed_frozen(&w, "r1", PIPELINE).await;
     advance_run(&w.runs, "r1").await;
     assert_eq!(start(&w, "r1", "review").await, 200);
 
@@ -512,7 +455,7 @@ async fn without_the_option_a_run_ends_at_end_while_a_started_node_runs() {
 #[tokio::test]
 async fn an_on_demand_node_never_launched_holds_no_waiting_run() {
     let w = world();
-    seed(&w, "r1", &waiting_pipeline()).await;
+    seed_frozen(&w, "r1", &waiting_pipeline()).await;
     advance_run(&w.runs, "r1").await;
     complete(&w, "r1", "worker", 1).await;
     assert_eq!(state(&w, "r1").status, RunStatus::Completed);
@@ -523,7 +466,7 @@ async fn an_on_demand_node_never_launched_holds_no_waiting_run() {
 #[tokio::test]
 async fn a_forced_route_to_end_ends_the_run_once_the_started_nodes_are_done() {
     let w = world();
-    seed(&w, "r1", &waiting_pipeline()).await;
+    seed_frozen(&w, "r1", &waiting_pipeline()).await;
     advance_run(&w.runs, "r1").await;
     assert_eq!(start(&w, "r1", "review").await, 200);
     let forced = w
@@ -568,7 +511,7 @@ async fn a_halt_at_end_waits_for_the_started_nodes_and_stays_a_halt() {
     );
     assert!(yaml.contains("reason: \"enough\""));
     let w = world();
-    seed(&w, "r1", &yaml).await;
+    seed_frozen(&w, "r1", &yaml).await;
     advance_run(&w.runs, "r1").await;
     assert_eq!(start(&w, "r1", "review").await, 200);
 
@@ -590,7 +533,7 @@ async fn a_halt_at_end_waits_for_the_started_nodes_and_stays_a_halt() {
 #[tokio::test]
 async fn stopping_the_last_started_node_ends_a_waiting_run() {
     let w = world();
-    seed(&w, "r1", &waiting_pipeline()).await;
+    seed_frozen(&w, "r1", &waiting_pipeline()).await;
     advance_run(&w.runs, "r1").await;
     assert_eq!(start(&w, "r1", "review").await, 200);
     complete(&w, "r1", "worker", 1).await;

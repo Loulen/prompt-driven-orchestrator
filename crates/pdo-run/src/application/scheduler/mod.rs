@@ -9,6 +9,7 @@ mod completion_head;
 pub mod frontmatter;
 pub mod interpreter;
 pub mod node_completion;
+pub mod prune;
 pub mod stall;
 
 /// The scheduler's **cost input** (ADR draft plafond-de-cout-de-boucle). When

@@ -60,7 +60,20 @@ skipped_skills?: Array<SkippedSkill>, cost?: NodeCost, status: NodeStatus, iter:
  * Absent on every other status — `skip_serializing_if` keeps the wire shape
  * byte-identical for a non-skipped node.
  */
-skip_reason?: string, iterations: Array<IterationInfo>, frontmatter_retries: number, frontmatter_violations?: Array<FrontmatterViolation>, 
+skip_reason?: string, 
+/**
+ * The node was **pruned**: the reachability auto-skip settled it because
+ * the branch feeding it was not taken, and it never ran. A pruned node is
+ * dead for routing (ADR-0082): its edges never fire, the convergence
+ * downstream does not consume it, and an `End` it fed stays unreached.
+ *
+ * Distinct from a skip by the operator (`pdo node skip [--output …]`), which
+ * settles the node as if it had run and keeps feeding downstream: both
+ * project `Skipped`, only the skip event's `source` tells them apart.
+ * Cleared when the node starts (the ▶ of a skipped node). Absent from the
+ * wire when `false`.
+ */
+pruned?: boolean, iterations: Array<IterationInfo>, frontmatter_retries: number, frontmatter_violations?: Array<FrontmatterViolation>, 
 /**
  * #490: declared output ports the validator found empty, from a `script`
  * node's fail-fast branch (`ValidationError::MissingOutputs`). Mutually

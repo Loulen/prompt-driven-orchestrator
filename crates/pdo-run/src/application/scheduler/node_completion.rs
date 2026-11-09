@@ -112,21 +112,40 @@ pub async fn handle_node_completion(
         }
     }
 
+    settle_loops_collections_and_end(state, &spawn_ctx, source_iter).await;
+}
+
+/// The structures a settled node may close, evaluated on a fresh projection:
+/// the body of each legacy `loop` node, the barrier of each `collection`
+/// region, then the end of the Run (ADR-0086). The tail of a node's completion,
+/// and of a pruning (a pruned member settles a lap like a completed one).
+pub(super) async fn settle_loops_collections_and_end(
+    state: &Runs,
+    ctx: &SpawnContext<'_>,
+    source_iter: i64,
+) {
+    let (pipeline, run_id) = (ctx.pipeline, ctx.run_id);
+    let (pipeline_path, worktree_dir, artifacts_dir, repo_root) = (
+        ctx.pipeline_path,
+        ctx.worktree_dir,
+        ctx.artifacts_dir,
+        ctx.repo_root,
+    );
     // Pass 1 may have appended events (e.g. LoopBreakReceived). Re-project, or
     // `evaluate_loop_body_completion` races its own predecessors and advances the
     // loop one extra iteration after a break.
     let Some((fresh_events, fresh_run_state)) = reload_run_state(state, run_id).await else {
         return;
     };
-    let fresh_resolved_vars = resolve_run_variables(&pipeline, &fresh_events);
+    let fresh_resolved_vars = resolve_run_variables(pipeline, &fresh_events);
     let fresh_spawn_ctx = SpawnContext {
-        pipeline: &pipeline,
+        pipeline,
         run_id,
-        pipeline_path: &pipeline_path,
-        worktree_dir: &worktree_dir,
-        artifacts_dir: &artifacts_dir,
+        pipeline_path,
+        worktree_dir,
+        artifacts_dir,
         resolved_vars: &fresh_resolved_vars,
-        repo_root: &repo_root,
+        repo_root,
     };
 
     for loop_node in pipeline
@@ -135,7 +154,7 @@ pub async fn handle_node_completion(
         .filter(|n| n.node_type == pipeline::NodeType::Loop)
     {
         let loop_actions = scheduler::evaluate_loop_body_completion(
-            &pipeline,
+            pipeline,
             &fresh_run_state,
             &loop_node.id,
             &fresh_resolved_vars,
@@ -169,7 +188,7 @@ pub async fn handle_node_completion(
         .filter(|r| r.kind == pipeline::LoopKind::Collection)
     {
         let collection_actions =
-            scheduler::evaluate_collection_barrier(&pipeline, &fresh_run_state, region);
+            scheduler::evaluate_collection_barrier(pipeline, &fresh_run_state, region);
         for action in &collection_actions {
             match scheduler_interpreter::interpret(
                 state,

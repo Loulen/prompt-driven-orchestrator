@@ -95,6 +95,10 @@ pub(super) fn bounded_loop_still_iterating(
 /// artifact (ADR-0011)? Separate from [`is_node_dead`] so the reachability
 /// auto-skip can reason per required-input port, not only per whole node.
 ///
+/// Dead when the producer is **pruned** ([`RunState::is_pruned`]): its branch
+/// was not taken, so none of its edges ever fires (ADR-0082, death propagates
+/// downstream).
+///
 /// Live (keep waiting rather than skip) when the producer is still running, is a
 /// Switch (routes by port), or is a still-iterating bounded-loop member — see
 /// [`bounded_loop_still_iterating`].
@@ -107,10 +111,13 @@ pub(super) fn edge_is_dead(
     visiting: &mut HashSet<String>,
 ) -> bool {
     let src = edge.source.node.as_str();
+    if run_state.is_pruned(src) {
+        return true;
+    }
     let producer = pipeline.nodes.iter().find(|n| n.id == src);
-    // A **skipped** producer must count as completed: otherwise control falls to
-    // the "spawned but not completed" arm, keeps all its edges live, and hangs any
-    // downstream join / `End` on a producer that will never run.
+    // A producer the operator **skipped** counts as completed: otherwise control
+    // falls to the "spawned but not completed" arm, keeps all its edges live, and
+    // hangs any downstream join / `End` on a producer that will never run.
     let producer_completed = run_state
         .nodes
         .get(src)
@@ -244,4 +251,77 @@ pub fn unreachable_nodes(
         }
     }
     out
+}
+
+/// What the pruning of `pruned` releases (ADR-0082): a pruned node fires no
+/// edge, so a convergence that was only waiting on it — `End` included — is not
+/// reached through it. It is reached by the routing of its **live** producers:
+/// their edges into it are replayed here, now that the pruned branch is
+/// resolved — the convergence's spawn with what goes with it (a region's lap,
+/// a collection's fan-out, a Switch's routing), or the end of the Run.
+///
+/// Only the targets of the pruned nodes' edges are considered, and only those
+/// not launched yet; a target every edge of which is dead is pruned in turn,
+/// never released. Deferred like any end of the Run (ADR-0086). When nothing is
+/// released and the pruning left `End` with no live branch, the Run is parked
+/// `unrouted` — unless it already is.
+pub fn released_by_pruning(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    pruned: &[String],
+    frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
+    vars: &HashMap<String, serde_yaml::Value>,
+) -> Vec<SchedulerAction> {
+    let mut targets: Vec<&str> = pipeline
+        .edges
+        .iter()
+        .filter(|e| pruned.contains(&e.source.node))
+        .map(|e| e.target.node.as_str())
+        .filter(|t| !run_state.nodes.contains_key(*t))
+        .collect();
+    targets.sort_unstable();
+    targets.dedup();
+
+    let empty = HashMap::new();
+    let mut actions = Vec::new();
+    for target in targets {
+        let mut producers: Vec<&str> = pipeline
+            .edges
+            .iter()
+            .filter(|e| e.target.node == target && e.source.node != target)
+            .map(|e| e.source.node.as_str())
+            .filter(|src| {
+                !run_state.is_pruned(src)
+                    && run_state
+                        .nodes
+                        .get(*src)
+                        .is_some_and(|n| n.status.is_settled_complete())
+            })
+            .collect();
+        producers.sort_unstable();
+        producers.dedup();
+        for producer in producers {
+            let fields = frontmatter_by_node.get(producer).unwrap_or(&empty);
+            for action in route_outgoing_edges(
+                pipeline,
+                run_state,
+                producer,
+                vars,
+                fields,
+                frontmatter_by_node,
+                Some(target),
+            ) {
+                if !actions.contains(&action) {
+                    actions.push(action);
+                }
+            }
+        }
+    }
+    if actions.is_empty()
+        && run_state.status == crate::domain::state::RunStatus::Running
+        && end_is_dead(pipeline, run_state, frontmatter_by_node, vars)
+    {
+        return vec![unrouted_by_pruning(pruned)];
+    }
+    defer_end_for_started_nodes(pipeline, run_state, actions)
 }

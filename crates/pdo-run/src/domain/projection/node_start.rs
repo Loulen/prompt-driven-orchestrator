@@ -28,6 +28,7 @@ pub(super) fn node_waiting(state: &mut RunState, event: &Event) {
                 completed_at: None,
                 failure_reason: None,
                 skip_reason: None,
+                pruned: false,
                 iterations: Vec::new(),
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),
@@ -37,6 +38,8 @@ pub(super) fn node_waiting(state: &mut RunState, event: &Event) {
             });
         node.status = NodeStatus::Waiting;
         node.iter = iter;
+        // A pruned node launched by its ▶ runs its branch as if it was taken.
+        node.pruned = false;
     }
 }
 
@@ -80,6 +83,7 @@ pub(super) fn node_started(state: &mut RunState, event: &Event) {
                 completed_at: None,
                 failure_reason: None,
                 skip_reason: None,
+                pruned: false,
                 iterations: Vec::new(),
                 frontmatter_retries: 0,
                 frontmatter_violations: Vec::new(),
@@ -92,6 +96,9 @@ pub(super) fn node_started(state: &mut RunState, event: &Event) {
         node.started_at = Some(event.ts.clone());
         node.completed_at = None;
         node.failure_reason = None;
+        // The ▶ of a pruned node runs its branch as if it was taken
+        // (« Forcer un nœud skipped »): from here on it is alive for routing.
+        node.pruned = false;
         // #588: a re-spawn (retry / restart) is a fresh agent that knows
         // no declared wait.
         node.awaiting = None;

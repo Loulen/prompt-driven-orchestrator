@@ -670,6 +670,7 @@ SwapFree:         204800 kB
         outputs_valid: bool,
         pane: Option<String>,
         diagnostics: SessionDeathDiagnostics,
+        closed_at: Option<SystemTime>,
         tail_calls: std::cell::Cell<usize>,
         validate_calls: std::cell::Cell<usize>,
     }
@@ -682,6 +683,7 @@ SwapFree:         204800 kB
                 outputs_valid: false,
                 pane: None,
                 diagnostics: SessionDeathDiagnostics::default(),
+                closed_at: None,
                 tail_calls: std::cell::Cell::new(0),
                 validate_calls: std::cell::Cell::new(0),
             }
@@ -727,6 +729,9 @@ SwapFree:         204800 kB
         }
         fn session_death_diagnostics(&self) -> SessionDeathDiagnostics {
             self.diagnostics.clone()
+        }
+        fn session_closed_at(&self) -> Option<SystemTime> {
+            self.closed_at
         }
     }
 
@@ -780,9 +785,13 @@ SwapFree:         204800 kB
     /// after its start, and the banner said only « tmux session … no longer
     /// exists ». A session that dies this soon never got to work: the reason
     /// says so, and what to check.
-    fn dead_after(started: Duration) -> Assessment {
+    ///
+    /// `started` is how long before the sweep the node started; `closed`, how
+    /// long after its start tmux closed its session, when tmux wrote it down.
+    fn dead_after(started: Duration, closed: Option<Duration>) -> Assessment {
         let now = SystemTime::now();
-        let ts = chrono::DateTime::<chrono::Utc>::from(now - started).to_rfc3339();
+        let start = now - started;
+        let ts = chrono::DateTime::<chrono::Utc>::from(start).to_rfc3339();
         let prior = vec![event::Event {
             id: None,
             run_id: "run1".to_string(),
@@ -794,6 +803,7 @@ SwapFree:         204800 kB
         }];
         let probes = FakeProbes {
             session_alive: false,
+            closed_at: closed.map(|c| start + c),
             ..FakeProbes::alive()
         };
         assess_node(
@@ -817,7 +827,10 @@ SwapFree:         204800 kB
 
     #[test]
     fn a_session_dead_seconds_after_its_start_says_the_harness_never_started() {
-        let reason = reason_of(&dead_after(Duration::from_secs(4)));
+        let reason = reason_of(&dead_after(
+            Duration::from_secs(19),
+            Some(Duration::from_secs(4)),
+        ));
         assert!(
             reason.starts_with("session_died: tmux session "),
             "{reason}"
@@ -826,9 +839,69 @@ SwapFree:         204800 kB
         assert!(reason.contains("logged in"), "{reason}");
     }
 
+    /// The sweep comes up to a tick late: an early death it sees past
+    /// [`EARLY_DEATH`] is still one, measured from when tmux closed the session.
+    #[test]
+    fn an_early_death_swept_late_is_still_told() {
+        let reason = reason_of(&dead_after(
+            Duration::from_secs(45),
+            Some(Duration::from_secs(4)),
+        ));
+        assert!(reason.contains("ended 4 s after it started"), "{reason}");
+    }
+
+    /// A death within the second of the start reads its closing time, rounded
+    /// down to the second, before the start: still this session's.
+    #[test]
+    fn a_closing_time_rounded_before_the_start_is_still_this_sessions() {
+        let now = SystemTime::now();
+        let start = now - Duration::from_secs(45);
+        let ts = chrono::DateTime::<chrono::Utc>::from(start).to_rfc3339();
+        let prior = vec![event::Event {
+            id: None,
+            run_id: "run1".to_string(),
+            ts,
+            kind: EventKind::NodeStarted,
+            node_id: Some("worker".to_string()),
+            iter: Some(1),
+            payload: None,
+        }];
+        let probes = FakeProbes {
+            session_alive: false,
+            closed_at: Some(start - Duration::from_millis(400)),
+            ..FakeProbes::alive()
+        };
+        let a = assess_node(
+            &probes,
+            &prior,
+            "run1",
+            "worker",
+            1,
+            now,
+            true,
+            pdo_harness::registry::OPENCODE,
+        );
+        let reason = reason_of(&a);
+        assert!(reason.contains("ended 0 s after it started"), "{reason}");
+    }
+
+    /// No closing time (the tmux server exited with the session): the sweep's
+    /// own time is only a bound, and the reason says so.
+    #[test]
+    fn without_its_closing_time_the_lifetime_is_a_bound() {
+        let reason = reason_of(&dead_after(Duration::from_secs(19), None));
+        assert!(
+            reason.contains("ended within 19 s of its start"),
+            "{reason}"
+        );
+    }
+
     #[test]
     fn a_session_dead_after_working_a_while_says_nothing_more() {
-        let reason = reason_of(&dead_after(Duration::from_secs(600)));
+        let worked = Some(Duration::from_secs(590));
+        let reason = reason_of(&dead_after(Duration::from_secs(600), worked));
+        assert!(reason.ends_with("no longer exists"), "{reason}");
+        let reason = reason_of(&dead_after(Duration::from_secs(600), None));
         assert!(reason.ends_with("no longer exists"), "{reason}");
     }
 

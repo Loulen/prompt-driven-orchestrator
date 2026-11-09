@@ -98,6 +98,10 @@ impl stale_detector::NodeProbes for SweepNodeProbes<'_> {
         self.tmux.capture(self.session_name)
     }
 
+    fn session_closed_at(&self) -> Option<std::time::SystemTime> {
+        self.tmux.session_closed_at(self.session_name)
+    }
+
     fn session_death_diagnostics(&self) -> stale_detector::SessionDeathDiagnostics {
         gather_session_death_diagnostics(
             self.tmux,

@@ -1,13 +1,15 @@
 // `make demo-daemon PORT=<p> [TEST_EXT=1] [BIND_ALL=1] [DEMO_ENV='K=V …']` and `make
-// demo-daemon-stop PORT=<p> [KEEP=1]`: a PDO daemon for an agentic test,
+// demo-daemon-stop PORT=<p> [KEEP=1]` (and `make demo-daemon-resync PORT=<p>`, the
+// host's harness logins copied in again): a PDO daemon for an agentic test,
 // sealed off from the user's (lib/daemon.mjs). See docs/agents/run-scenario.md.
 //
 //   node scripts/demo-daemon/demo-daemon.mjs start <port> [--test-ext] [--bind-all] [--env 'K=V …']
 //   node scripts/demo-daemon/demo-daemon.mjs stop <port> [--keep]
+//   node scripts/demo-daemon/demo-daemon.mjs resync <port>
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { startDemo, stopDemo } from "./lib/daemon.mjs";
+import { resyncDemo, startDemo, stopDemo } from "./lib/daemon.mjs";
 import { parsePort } from "./lib/env.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -44,8 +46,12 @@ async function main(argv) {
     const port = parsePort(portText, process.env);
     stopDemo({ port, keep: flag("--keep") });
     console.log(`demo daemon of port ${port} stopped (tmux socket pdo-${port} killed)`);
+  } else if (verb === "resync") {
+    const port = parsePort(portText, process.env);
+    const staged = resyncDemo({ port });
+    console.log(`demo daemon of port ${port}: ${staged.length} auth files copied in again from ${process.env.HOME}`);
   } else {
-    throw new Error("usage: demo-daemon.mjs start|stop <port>");
+    throw new Error("usage: demo-daemon.mjs start|stop|resync <port>");
   }
 }
 

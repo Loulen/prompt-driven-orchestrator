@@ -118,3 +118,55 @@ fn a_client_that_is_not_attached_cannot_have_its_size_flag_flipped() {
         ]
     );
 }
+
+/// FP of CORE-227: a harness that dies four seconds after its start was told
+/// « ended 19 s after it started », the time the liveness sweep took to see it.
+/// The adapter keeps the moment tmux closed the session, so the sweep measures
+/// the session's real lifetime.
+#[test]
+fn a_closed_session_leaves_the_moment_it_closed() {
+    let server = Server::new("closed");
+    let tmux = &server.0;
+    let dir = tempfile::tempdir().unwrap();
+    // The server outlives the session that dies (it exits with its last one).
+    tmux.new_session("pdo-it-keep", dir.path(), "sleep 30", None)
+        .unwrap();
+    let before = std::time::SystemTime::now();
+    tmux.new_session("pdo-it brief;$(touch pwned)", dir.path(), "sleep 1", None)
+        .unwrap();
+    assert_eq!(
+        tmux.session_closed_at("pdo-it brief;$(touch pwned)"),
+        None,
+        "still alive"
+    );
+    assert!(wait_until(|| tmux
+        .session_closed_at("pdo-it brief;$(touch pwned)")
+        .is_some()));
+
+    // Read well after the close: the time is the close's, not the read's
+    // (whole seconds, so up to one second earlier than the close itself).
+    std::thread::sleep(Duration::from_secs(2));
+    let closed = tmux
+        .session_closed_at("pdo-it brief;$(touch pwned)")
+        .unwrap();
+    let read = std::time::SystemTime::now();
+    assert!(
+        closed + Duration::from_secs(1) >= before,
+        "{closed:?} vs {before:?}"
+    );
+    assert!(
+        read.duration_since(closed).unwrap() >= Duration::from_secs(2),
+        "{closed:?}"
+    );
+    assert!(closed.duration_since(before).unwrap_or_default() < Duration::from_secs(4));
+    assert_eq!(tmux.session_closed_at("pdo-it-keep"), None);
+    // The name reached the hook's shell as a name, never as a command.
+    assert!(!dir.path().join("pwned").exists());
+    assert!(!Path::new("pwned").exists());
+
+    // The same name again (a relaunched iteration): alive, so not closed.
+    tmux.new_session("pdo-it brief;$(touch pwned)", dir.path(), "sleep 30", None)
+        .unwrap();
+    assert_eq!(tmux.session_closed_at("pdo-it brief;$(touch pwned)"), None);
+    assert_eq!(tmux.session_closed_at("pdo-it-never"), None);
+}

@@ -287,7 +287,8 @@ Harness four-way choice, read-only probes:
 - **Select data by characteristics, not hard-coded ids**: if no data satisfies a condition, that is
   a finding, not an excuse to bypass the UI.
 - A `claude` launch in a worktree its config doesn't trust lands on its trust dialog. The demo
-  daemon trusts `/tmp`; if the dialog shows anyway, accept it with **Down, then Enter**: its cursor
+  daemon trusts `/tmp`, but in a git worktree `claude` checks the repository's root only, so the
+  first `claude` node on each target repo shows it: accept it with **Down, then Enter**: its cursor
   starts on « ❯ No, exit », and a bare Enter ends the session (see the driving playbook). That
   dialog is `claude`'s, not the product's; `copilot`'s is a prerequisite, set once before the Run.
 - Nothing in the journey names the product or shows its logo: the brand shown in the window is out

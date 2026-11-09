@@ -46,6 +46,11 @@ pub trait NodeProbes {
     /// Best-effort session-death forensics (#234). Gathered lazily — only when
     /// the session is found dead — so no tmux/proc I/O runs on a healthy node.
     fn session_death_diagnostics(&self) -> SessionDeathDiagnostics;
+
+    /// When tmux closed the node's session, if it wrote it down. Read only on
+    /// the `SessionDied` path: the sweep sees a death up to a tick late, and the
+    /// early-death hint ([`EARLY_DEATH`]) measures the session's real lifetime.
+    fn session_closed_at(&self) -> Option<SystemTime>;
 }
 
 /// Outcome of [`assess_node`]: the raw detection plus the events to append and
@@ -98,14 +103,47 @@ fn episode_has_event(
 /// know (FP of CORE-227: an `opencode` with no login exits in four seconds).
 const EARLY_DEATH: Duration = Duration::from_secs(30);
 
-/// How long the session of `node_id` iter `iter` lived, from its
-/// `NodeStarted` in `prior_events` to `now`; `None` without a readable start.
+/// The grain of [`NodeProbes::session_closed_at`]: tmux writes it down in
+/// whole seconds.
+const CLOSED_AT_GRAIN: Duration = Duration::from_secs(1);
+
+/// How long a dead session lived.
+#[derive(Debug, Clone, Copy)]
+enum Lifetime {
+    /// From its `NodeStarted` to the moment tmux closed it.
+    Measured(Duration),
+    /// No closing time: at most this, from its `NodeStarted` to the sweep.
+    AtMost(Duration),
+}
+
+impl Lifetime {
+    /// The lifetime that decides the hint: a bound counts as its own length,
+    /// so a death the sweep caught past [`EARLY_DEATH`] with no closing time
+    /// gets no hint rather than a wrong one.
+    fn length(self) -> Duration {
+        match self {
+            Self::Measured(d) | Self::AtMost(d) => d,
+        }
+    }
+
+    fn told(self) -> String {
+        match self {
+            Self::Measured(d) => format!("it ended {} s after it started", d.as_secs()),
+            Self::AtMost(d) => format!("it ended within {} s of its start", d.as_secs()),
+        }
+    }
+}
+
+/// How long the session of `node_id` iter `iter` lived, from its `NodeStarted`
+/// in `prior_events` to `closed_at` (when tmux closed it), else to `now`;
+/// `None` without a readable start.
 fn lifetime(
     prior_events: &[event::Event],
     node_id: &str,
     iter: i64,
+    closed_at: Option<SystemTime>,
     now: SystemTime,
-) -> Option<Duration> {
+) -> Option<Lifetime> {
     let started = prior_events.iter().rev().find(|e| {
         e.kind == EventKind::NodeStarted
             && e.node_id.as_deref() == Some(node_id)
@@ -115,13 +153,21 @@ fn lifetime(
         .ok()?
         .with_timezone(&chrono::Utc)
         .into();
-    now.duration_since(started).ok()
+    // The closing time is in whole seconds, so a death within the second of
+    // the start may read up to one second before it. Earlier still is another
+    // iteration's session of the same name: it says nothing of this one.
+    match closed_at.filter(|closed| *closed + CLOSED_AT_GRAIN >= started) {
+        Some(closed) => Some(Lifetime::Measured(
+            closed.duration_since(started).unwrap_or_default(),
+        )),
+        None => now.duration_since(started).ok().map(Lifetime::AtMost),
+    }
 }
 
 /// The reason of a session-death event, told when the session died within
 /// [`EARLY_DEATH`] of its start: the harness never started, and what to check.
-fn tell_early_death(events: &mut [event::Event], lived: Duration) {
-    if lived >= EARLY_DEATH {
+fn tell_early_death(events: &mut [event::Event], lived: Lifetime) {
+    if lived.length() >= EARLY_DEATH {
         return;
     }
     for event in events.iter_mut() {
@@ -130,9 +176,9 @@ fn tell_early_death(events: &mut [event::Event], lived: Duration) {
         };
         if let Some(reason) = obj.get("reason").and_then(|r| r.as_str()) {
             let told = format!(
-                "{reason} · it ended {} s after it started: check that its harness is \
-                 logged in and knows the node's model",
-                lived.as_secs()
+                "{reason} · {}: check that its harness is logged in and knows the \
+                 node's model",
+                lived.told()
             );
             obj.insert("reason".to_string(), serde_json::Value::String(told));
         }
@@ -221,7 +267,8 @@ pub fn assess_node(
                 .and_then(|tail| pdo_harness::probes::hard_error(harness, &tail.text));
         }
         attach_diagnostics(&mut events, &diag);
-        if let Some(lived) = lifetime(prior_events, node_id, iter, now) {
+        let closed_at = probes.session_closed_at();
+        if let Some(lived) = lifetime(prior_events, node_id, iter, closed_at, now) {
             tell_early_death(&mut events, lived);
         }
         return Assessment {

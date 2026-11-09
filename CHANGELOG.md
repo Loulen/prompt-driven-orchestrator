@@ -32,6 +32,11 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   effort still leaves copilot on its own default.
 - `docs/reference/harnesses.md` › Prerequisites says that the autonomy flags do not cover a
   harness's "trust this folder" dialog.
+- `make demo-daemon-resync PORT=<p>` copies the host's harness logins into a running demo daemon
+  again, for when the host refreshed its `claude` login during a journey and the demo's nodes read
+  "Login expired".
+- The journeys say why `claude` asks to trust a Run's worktree under `/tmp` anyway: in a git
+  worktree it checks trust on the repository's root only.
 
 ### Fixes found by replaying the Happy Paths
 
@@ -44,7 +49,10 @@ Pipeline editor:
 - Reshaping an edge segment reads "Undo reshape edge", and moving an edge label reads "Undo move
   edge label".
 - An output field of an unknown type shows that type, marked "(unknown)", in the schema editor,
-  and editing another field no longer rewrites it as `string`.
+  and editing another field no longer rewrites it as `string`. Its closed type selector is outlined
+  in red and names the unknown type in its tooltip.
+- Undo after drawing an edge reads "Undo add edge", not "Undo reshape edge".
+- A node added with `+` no longer lands inside a loop region, under its corner counter.
 - A collection or loop badge on a card no longer clips "⇉ 2/2 items".
 - Saving a pipeline whose edges were drawn by hand leaves its draft at zero changes: an edge's
   sub-pixel anchor offsets are read back exactly, so the saved file and the draft agree.
@@ -73,7 +81,9 @@ Runs and nodes:
 - The copilot and pi catalogues are read even when their CLI takes several seconds to start, and
   the settings page no longer waits for a harness version check.
 - A node whose session dies within 30 seconds of its start says how long it lived and to check
-  that its harness is logged in and knows the node's model.
+  that its harness is logged in and knows the node's model. The time runs to the moment tmux
+  closed the session, not to the liveness check that noticed it, so a harness that exits in 4
+  seconds reads "4 s" even when the check comes 30 seconds later.
 - A sandboxed completion no longer logs a failed targeted kill when the session was already gone.
 
 New Run, Settings and the folder explorer:

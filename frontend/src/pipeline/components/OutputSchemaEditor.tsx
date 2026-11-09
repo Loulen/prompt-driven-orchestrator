@@ -125,6 +125,8 @@ function SchemaFieldRow({
         onChange={(e) => onUpdate({ type: e.target.value })}
         className="ei-select ei-select--sm ei-select--mono"
         aria-label="Field type"
+        aria-invalid={known(entry.type) ? undefined : true}
+        title={known(entry.type) ? undefined : `Unknown type: ${entry.type}`}
         data-testid="schema-field-type"
       >
         {!known(entry.type) && <option value={entry.type}>{entry.type} (unknown)</option>}

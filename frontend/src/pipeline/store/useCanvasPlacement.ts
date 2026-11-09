@@ -10,6 +10,7 @@ import type { CanvasShift } from "./canvasShift";
 import type { NodeType } from "../../shared/generated/NodeType";
 import { generateNodeId } from "../../lib/nanoid";
 import { CARD_HEIGHT, CARD_WIDTH, fallbackNodeSpot, freeDropSpot } from "../../lib/nodePlacement";
+import { deriveLoopRegions } from "../components/loopRegionDerivation";
 // #723 — orchestrator pastilles on the run-view node card.
 import type { EditorNodeDef } from "../model/pipeline";
 const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
@@ -76,14 +77,19 @@ export function useCanvasPlacement({
     // Start and End are written without a `view`, and the search that could not
     // see them dropped the first agent right on End.
     const shift = shiftRef?.current;
-    const occupied = ((shift?.shown ?? pipeline)?.nodes ?? []).map((n, i) => {
+    const drawn = shift?.shown ?? pipeline;
+    const occupied = (drawn?.nodes ?? []).map((n, i) => {
       const fallback = fallbackNodeSpot(i);
       return { x: n.view?.x ?? fallback.x, y: n.view?.y ?? fallback.y };
     });
+    // Nor inside a loop region: its corner counter would sit over a card that
+    // is not one of its members, and the card would read as one.
+    const regions = drawn ? deriveLoopRegions(drawn, null).flatMap((r) => (r.box ? [r.box] : [])) : [];
     const spot = freeDropSpot(
       { x: Math.round(cx - CARD_WIDTH / 2), y: Math.round(cy - CARD_HEIGHT / 2) },
       occupied,
       visible,
+      regions,
     );
     return shift ? { x: spot.x, y: Math.round(shift.toStored(spot.y)) } : spot;
   };

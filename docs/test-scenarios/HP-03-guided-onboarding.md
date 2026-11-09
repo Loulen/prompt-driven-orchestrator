@@ -243,8 +243,10 @@ Features validated while crossing the tour:
 
 ## Notes
 
-- **A brand-new folder may make the harness ask for trust** the first time it opens a session
-  there (the demo daemon trusts `/tmp`, so it usually doesn't). Answering it is part of step 7, not a
+- **A brand-new folder makes `claude` ask for trust** the first time it opens a session there:
+  in a git worktree it checks the repository's root only, so the demo daemon's trust of `/tmp`
+  does not cover `/tmp/pdo-tutorial`, and a newcomer whose `claude` never opened that repo sees the
+  same dialog. Answering it is part of step 7, not a
   failure: its cursor starts on « ❯ No, exit », so pick « Yes » (Down, then Enter). A bare Enter
   ends the session, and the tour then waits on a dead node.
 - **Quitting a tour marks nothing.** A run of this journey that stops halfway must not leave a

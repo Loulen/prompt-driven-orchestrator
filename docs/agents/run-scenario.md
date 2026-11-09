@@ -49,7 +49,11 @@ user's ports (5172, 5272, 6160, 6172…) and the caller's own daemon are refused
   user of `~/.copilot/config.json`) into the demo `HOME`, with `/tmp` marked trusted for `claude`
   and `copilot` (put the journey's target repos there); your own config folders are never linked
   nor written. A harness with no auth on this machine (no file to copy, e.g. opencode never logged
-  in) is not staged: a journey that runs it fails on a **precondition**, not a product bug;
+  in) is not staged: a journey that runs it fails on a **precondition**, not a product bug.
+  The copies are taken once: when your own `claude` refreshes its login during a long journey, the
+  demo's token is retired and its nodes read « Login expired » (in a sandbox, the node stays
+  `running` and silent). Run `make demo-daemon-resync PORT=<port>` to copy your current logins in
+  again, then relaunch the node; that is an environment step, not a product finding;
 - writes the pidfile `/tmp/pdo-demo-<port>/daemon.pid`, waits for the daemon to answer, then prints
   `PDO_DAEMON_URL=…`, `PDO=…` (the branch's `pdo`, not the one on your `PATH`) and a ready command.
 
@@ -107,8 +111,11 @@ The point of this layer is that the UI alone doesn't tell the full story — ver
 
 - **tmux sessions**: `tmux -L pdo-<port> capture-pane -p -t pdo-<run_id>-<node_id>-iter-<n>`. The session-name
   pattern is fixed; confirm it shows the expected program (e.g. `claude` running, not a bare shell
-  that exited). A target repo under `/tmp` is trusted by the staged config. If a `claude` launch
-  still lands on the "Quick safety check" trust dialog, read the pane first: the cursor sits on
+  that exited). The staged config trusts `/tmp`, but `claude` does **not** carry that trust into a
+  Run: in a git worktree it checks trust on the repository's root only, without walking up to `/tmp`
+  (checked on Claude Code 2.1.316). So the **first** `claude` launch on each target repo lands on
+  the "Quick safety check" trust dialog; once accepted, the repo's later Runs pass. Read the pane
+  first: the cursor sits on
   « ❯ No, exit » by default, so a bare `Enter` **ends the session**. Accept with
   `tmux -L pdo-<port> send-keys -t <session> Down Enter` (the cursor on « Yes, I trust this
   folder »). `copilot`'s equivalent is **not** a step to drive: the staged config trusts `/tmp`, and

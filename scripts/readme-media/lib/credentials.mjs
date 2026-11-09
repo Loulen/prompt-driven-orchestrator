@@ -81,9 +81,10 @@ function writePrivate(target, content) {
 
 /**
  * Stage the auth of `harnesses` from `hostHome` into `demoHome`. `onStaged` is
- * called with each path BEFORE its content is written.
+ * called with each path BEFORE its content is written. `derive: false` copies
+ * the token files only, and leaves the configs a running demo has written to.
  */
-export function stageCredentials({ harnesses, hostHome, demoHome, trustedDirs, onStaged }) {
+export function stageCredentials({ harnesses, hostHome, demoHome, trustedDirs, onStaged, derive = true }) {
   const staged = [];
   const record = (file) => {
     staged.push(file);
@@ -99,7 +100,7 @@ export function stageCredentials({ harnesses, hostHome, demoHome, trustedDirs, o
       record(to);
       writePrivate(to, fs.readFileSync(from));
     }
-    auth.derive?.({ hostHome, demoHome, trustedDirs, record });
+    if (derive) auth.derive?.({ hostHome, demoHome, trustedDirs, record });
   }
   return staged;
 }

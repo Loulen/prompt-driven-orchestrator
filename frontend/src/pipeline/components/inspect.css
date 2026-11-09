@@ -203,6 +203,11 @@
     height: var(--h-control-sm);
     font-size: var(--fs-xs);
   }
+  /* a value nobody knows, kept as written (a field type the lint names) */
+  .ei-select[aria-invalid="true"] {
+    border-color: var(--color-st-failed);
+    color: var(--color-st-failed);
+  }
 
   /* a read-only field: a disabled input that still reads */
   .ei .d-input:disabled,

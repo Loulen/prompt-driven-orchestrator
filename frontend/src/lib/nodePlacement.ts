@@ -126,6 +126,16 @@ function onScreenCandidates(base: Point, visible: Rect): Point[] {
     .map((c) => c.spot);
 }
 
+/** The card at `spot` covers part of `area`. */
+function covers(spot: Point, area: Rect): boolean {
+  return (
+    spot.x < area.x + area.width &&
+    spot.x + CARD_WIDTH > area.x &&
+    spot.y < area.y + area.height &&
+    spot.y + CARD_HEIGHT > area.y
+  );
+}
+
 /**
  * The top-left corner for a new card whose ideal spot is `base`, moved aside
  * until it clears every existing card — and, when the caller can say what part
@@ -134,9 +144,13 @@ function onScreenCandidates(base: Point, visible: Rect): Point[] {
  * `visible` omitted is the honest answer for a caller with no canvas to measure
  * (a test, a canvas not laid out yet): the search then walks blind, which is
  * what it did before it could see.
+ *
+ * `avoided`: areas a new card must not cover either — a loop region's box,
+ * whose corner counter would sit over a card that is not one of its members.
  */
-export function freeDropSpot(base: Point, existing: Point[], visible?: Rect | null): Point {
-  const free = (spot: Point) => !existing.some((other) => overlaps(spot, other));
+export function freeDropSpot(base: Point, existing: Point[], visible?: Rect | null, avoided: Rect[] = []): Point {
+  const free = (spot: Point) =>
+    !existing.some((other) => overlaps(spot, other)) && !avoided.some((area) => covers(spot, area));
 
   if (visible && visible.width > 0 && visible.height > 0) {
     const onScreen = onScreenCandidates(base, visible).find(free);

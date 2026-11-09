@@ -92,6 +92,16 @@ describe("OutputSchemaEditor", () => {
     render(<OutputSchemaEditor schema={{ title: { type: "string" } }} onChange={vi.fn()} />);
     const select = screen.getByTestId("schema-field-type") as HTMLSelectElement;
     expect(Array.from(select.options).map((o) => o.value)).toEqual(["enum", "int", "string", "bool", "list"]);
+    expect(select).not.toHaveAttribute("aria-invalid");
+  });
+
+  /** The closed dropdown is too narrow for « banana (unknown) »: it shows it
+   *  is wrong, and says why when hovered. */
+  it("marks a closed dropdown that holds an unknown type", () => {
+    render(<OutputSchemaEditor schema={{ ripe: { type: "banana" } }} onChange={vi.fn()} />);
+    const select = screen.getByTestId("schema-field-type");
+    expect(select).toHaveAttribute("aria-invalid", "true");
+    expect(select).toHaveAttribute("title", "Unknown type: banana");
   });
 
   it("shows allowed chip list when type is enum", () => {

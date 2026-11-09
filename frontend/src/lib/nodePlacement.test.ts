@@ -148,6 +148,20 @@ describe("dropping a node on the canvas", () => {
 
   /** A canvas with no free spot left still gets an answer: searching forever is
    *  not an option, and landing somewhere plausible beats not landing. */
+  // FP of CORE-227: a `+` › Node card landed on a loop region's corner, its
+  // « max 7 » counter drawn over the card, and inside a region it is no member of.
+  it("keeps a new card out of a loop region's box", () => {
+    const region: Rect = { x: 380, y: 270, width: 500, height: 140 };
+    const spot = freeDropSpot(BASE, [], null, [region]);
+    const intersects =
+      spot.x < region.x + region.width &&
+      spot.x + CARD_WIDTH > region.x &&
+      spot.y < region.y + region.height &&
+      spot.y + CARD_HEIGHT > region.y;
+    expect(intersects).toBe(false);
+    expect(freeDropSpot(BASE, [], null, [{ x: 4_000, y: 4_000, width: 10, height: 10 }])).toEqual(BASE);
+  });
+
   it("gives up gracefully on a canvas packed with cards", () => {
     const packed: Point[] = [];
     for (let row = 0; row < 8; row++) {

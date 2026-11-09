@@ -69,6 +69,8 @@ export class DraftSession {
   private pipelineMap!: Y.Map<unknown>;
   private promptMap!: Y.Map<unknown>;
   private undo!: Y.UndoManager;
+  /** My last transaction added an undo step, or folded into the top one. */
+  private stepTouched = false;
   private generation: string | null = null;
   private canWrite = false;
   private synced = false;
@@ -112,8 +114,12 @@ export class DraftSession {
       captureTimeout: CAPTURE_MS,
     });
     this.undo.on("stack-item-added", (event: { type: "undo" | "redo" }) => {
+      if (event.type === "undo") this.stepTouched = true;
       if (event.type === "undo" && this.undo.undoStack.length > HISTORY_CAP) this.undo.undoStack.shift();
       this.publishHistory();
+    });
+    this.undo.on("stack-item-updated", (event: { type: "undo" | "redo" }) => {
+      if (event.type === "undo") this.stepTouched = true;
     });
     this.undo.on("stack-item-popped", () => this.publishHistory());
     this.doc.on("update", (update: Uint8Array, origin: unknown) => {
@@ -204,7 +210,7 @@ export class DraftSession {
       this.undo.stopCapturing();
     }
     if (gesture?.track !== false) this.lastKey = gesture?.coalesceKey ?? null;
-    const label = tracked ? describeChange(before.pipeline, tab.pipeline) : null;
+    this.stepTouched = false;
     this.doc.transact(() => {
       if (before.pipeline !== tab.pipeline) {
         applyObject(this.pipelineMap, toDraftPipeline(before.pipeline), toDraftPipeline(tab.pipeline));
@@ -212,7 +218,17 @@ export class DraftSession {
       if (before.prompts !== tab.prompts) applyPrompts(this.promptMap, before.prompts, tab.prompts);
     }, tracked ? MINE : MINE_UNTRACKED);
     const top = this.undo.undoStack[this.undo.undoStack.length - 1];
-    if (label && top) top.meta.set("label", label);
+    // Only a step this change wrote to: a change that made no edit to the
+    // copy must not rename an older step, which peers' edits have moved on from.
+    if (tracked && top && this.stepTouched) {
+      // A change made within the capture window folds into the step before it
+      // (a drawn edge, then its anchors): the label names the whole step, from
+      // what it started on, the way Undo reverts it.
+      if (!top.meta.has("from")) top.meta.set("from", before.pipeline);
+      const from = top.meta.get("from") as EditorPipelineDef;
+      const label = describeChange(from, tab.pipeline) ?? describeChange(before.pipeline, tab.pipeline);
+      if (label) top.meta.set("label", label);
+    }
     this.publishHistory();
   }
 

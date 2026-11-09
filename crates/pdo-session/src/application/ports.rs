@@ -53,6 +53,14 @@ pub trait Tmux: Send + Sync {
     /// Whether the session exists.
     fn session_exists(&self, name: &str) -> bool;
 
+    /// When tmux closed the session, if it did on this server's watch: the
+    /// session-death verdict of the liveness sweep comes up to one tick late,
+    /// and this is the moment it actually died (FP of CORE-227). `None` for a
+    /// live session, an unknown one, or a server that exited with it.
+    fn session_closed_at(&self, _name: &str) -> Option<std::time::SystemTime> {
+        None
+    }
+
     /// Whether the socket's server is alive at all (#234): `None` when the probe
     /// itself could not run, so absence is never read as a real "server gone".
     fn server_alive(&self) -> Option<bool>;

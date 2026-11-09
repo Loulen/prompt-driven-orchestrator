@@ -247,13 +247,20 @@ pub(super) async fn re_evaluate_after_command_inner(state: &Runs, run_id: &str) 
         }
     }
 
+    let fresh_frontmatter_by_node =
+        resolve_completed_frontmatter(&pipeline, &fresh_run_state, &artifacts_dir);
     for region in pipeline
         .loops
         .iter()
         .filter(|r| r.kind == pipeline::LoopKind::Collection)
     {
-        let collection_actions =
-            scheduler::evaluate_collection_barrier(&pipeline, &fresh_run_state, region);
+        let collection_actions = scheduler::evaluate_collection_barrier(
+            &pipeline,
+            &fresh_run_state,
+            region,
+            &fresh_frontmatter_by_node,
+            &fresh_resolved_vars,
+        );
         // GuardSuperfluous on the reloaded snapshot; source_iter irrelevant, since
         // no SwitchRouted is emitted.
         for action in &collection_actions {

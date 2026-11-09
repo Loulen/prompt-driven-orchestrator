@@ -136,6 +136,45 @@ pub fn bounded_region_for_member<'a>(
         .find(|r| r.kind == LoopKind::Bounded && r.members.iter().any(|m| m == node_id))
 }
 
+/// Can the bounded `region` still start a lap, read off the projection alone
+/// (ADR-0082)? Its exit is undecided while it is not closed (`end_region`) and
+/// either a member is still at work — running, throttled, waiting for its user
+/// or interrupted, a human may resume it — or the region already started a lap
+/// its entry has not reached yet. Only the entry: a member that runs on some
+/// laps only (a fixer on FAIL) stays a lap behind for good once the loop exits.
+///
+/// What keeps a convergence fed by a guarded edge out of the loop from reading
+/// that edge as resolved on the FAIL of an intermediate lap: the edge did not
+/// fire, but a later lap can fire it. The readiness sweep holds no frontmatter,
+/// so this structural read is all it has; the scheduler adds the just-completed
+/// lap's own back-edge on top of it.
+pub fn bounded_region_in_flight(
+    pipeline: &PipelineDef,
+    region: &LoopRegion,
+    run_state: &crate::domain::state::RunState,
+) -> bool {
+    use crate::domain::state::NodeStatus;
+    let loop_state = run_state.loop_states.get(region.id.as_str());
+    if loop_state.is_some_and(|ls| ls.done) {
+        return false;
+    }
+    let entry = graph_resolver::region_entry(pipeline, &region.members)
+        .or_else(|| region.members.first().cloned());
+    let current_iter = loop_state.map(|ls| ls.current_iter);
+    region.members.iter().any(|member| {
+        run_state.nodes.get(member.as_str()).is_some_and(|n| {
+            let at_work = !n.status.is_settled_complete()
+                && !matches!(
+                    n.status,
+                    NodeStatus::Failed | NodeStatus::Stopped | NodeStatus::Stale
+                );
+            let lap_not_reached = entry.as_deref() == Some(member.as_str())
+                && current_iter.is_some_and(|lap| n.iter < lap);
+            at_work || lap_not_reached
+        })
+    })
+}
+
 /// The bounded region a `node_id` is an entry of, *and* the given edge re-enters
 /// (ADR-0011 / #148). Used by the scheduler to recognise that a fired edge into
 /// `target` is a region re-entry (back-edge) rather than a plain forward edge, so

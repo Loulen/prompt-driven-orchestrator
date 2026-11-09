@@ -128,8 +128,8 @@ Decisions: [ADR-0010](adr/0010-port-output-as-directory.md),
 
 ## Diff review
 
-The run's **Diff** tab shows everything the run changed since it forked. **Expand and comment**
-opens the review page: a diff between any two refs of the run (fork point, run tip, each node's
+The run's **Diff** tab shows everything the run changed since it forked. Its **Review page** button
+(the arrow icon at the top right) opens the review page: a diff between any two refs of the run (fork point, run tip, each node's
 before/after, the live working tree), side by side, with inline comments on any line. Tick
 **Viewed** on a file (or press `v`) to fold it once read: the mark stays in your browser, for that
 pair of refs.
@@ -168,11 +168,11 @@ Decisions: [ADR-0012](adr/0012-triggers-and-trust-earned-autonomy.md),
 
 ## Run stats by model
 
-The **Stats** page aggregates your own runs over a period: Overview (runs, errors, sessions), fires
-per pipeline, Sessions, **Cost** and **Performance**. Cost breaks down by harness, by node, and **by
+The **Stats** page aggregates your own runs over a period (30 days when it opens): **Runs** (runs,
+failures, failure rate), **Sessions**, **Triggers** (fires per pipeline), **Cost** and **Performance**. Cost breaks down by harness, by node, and **by
 model then effort**, with the model the execution actually ran on, read from the harness's own
-transcript. Performance shows duration, failure rate and steering messages per node or per model as
-box plots. Every summary is a median, never a mean.
+transcript. Performance shows peak context, duration (total, active or waiting on you) and steering
+messages per node or per model as box plots. Every summary is a median, never a mean.
 
 Cost is an estimate read from local transcripts: derived for `claude` (tokens × a price table fed
 from models.dev, overridable by hand), reported for harnesses that count it themselves. A harness

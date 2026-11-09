@@ -247,6 +247,12 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
             // #503: the sub-worktree's base commit. Absent for a node with no
             // sub-worktree (a non-isolated agent/script), which never merges back.
             "base_sha": spawn_base_sha,
+            // CORE-231: where the Run worktree stood as a non-isolated NodeRun
+            // starts: the `before` of its delivery, so a node that commits its own
+            // work still has a pair to review. `null` for an isolated one.
+            "run_head_sha": (!has_sub_worktree)
+                .then(|| pdo_workspace::adapters::git::revisions::rev_parse(&working_dir, "HEAD"))
+                .flatten(),
         })),
     };
 

@@ -7,6 +7,7 @@ import {
   type NodeKind,
 } from "../../../model/statsFilters";
 import { DECLARED_WAIT_COPY } from "../../../model/performance";
+import { plural } from "../../../../shared/lib/plural";
 
 const DURATION_MODE_LABEL: Record<DurationMode, string> = {
   total: "Total",
@@ -78,7 +79,9 @@ export function WaitCoverage({
   waited: number;
   executions: number;
 }) {
-  const copy = `${waited} executions of ${executions} declared at least one wait — for the others, Active = Total and Waiting = 0. ${DECLARED_WAIT_COPY}`;
+  const declaredWait =
+    DECLARED_WAIT_COPY.charAt(0).toUpperCase() + DECLARED_WAIT_COPY.slice(1);
+  const copy = `${plural(waited, "execution")} of ${executions} declared at least one wait — for the others, Active = Total and Waiting = 0. ${declaredWait}.`;
   return (
     <Tooltip content={copy} side="top">
       <span

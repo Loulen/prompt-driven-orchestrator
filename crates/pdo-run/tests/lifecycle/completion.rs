@@ -1737,6 +1737,88 @@ async fn a_node_that_left_nothing_takes_no_commit() {
     );
 }
 
+/// CORE-231: a non-isolated node that commits its own work and leaves nothing
+/// behind still delivers: its pair runs from the HEAD it started on
+/// (`run_head_sha`) to its own commit, so the Review shows what it did.
+#[tokio::test]
+async fn a_node_that_committed_its_own_work_delivers_from_its_start_head() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    init_git_repo_for_refusal_tests(repo);
+    let pipe = "self-commit";
+    let pipelines_dir = repo.join(".pdo").join("pipelines");
+    std::fs::create_dir_all(&pipelines_dir).unwrap();
+    std::fs::write(
+            pipelines_dir.join(format!("{pipe}.yaml")),
+            format!(
+                "name: {pipe}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\nedges: []\n"
+            ),
+        )
+        .unwrap();
+
+    let state = test_state_with_dir(repo).await;
+    let run_id = "self-commit-run";
+    let wt_dir = worktree_dir_for_run(repo, run_id);
+    let pipeline_branch = format!("pdo/run-{run_id}");
+    create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&wt_dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}: {out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let start_head = git(&["rev-parse", "HEAD"]);
+
+    for event in [
+        event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: pdo_kernel::clock::now_iso(),
+            kind: event_log::EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({
+                "pipeline_name": pipe,
+                "node_defs": [
+                    { "id": "worker", "node_type": "agent", "isolated_worktree": false, "inputs": [], "outputs": [] }
+                ],
+                "edges": [],
+            })),
+        },
+        event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: pdo_kernel::clock::now_iso(),
+            kind: event_log::EventKind::NodeStarted,
+            node_id: Some("worker".into()),
+            iter: Some(1),
+            payload: Some(serde_json::json!({ "run_head_sha": start_head })),
+        },
+    ] {
+        append_event(&state, &event).await.unwrap();
+    }
+    // The node commits its own work and leaves the tree clean.
+    std::fs::write(wt_dir.join("own.rs"), "pub fn own() {}\n").unwrap();
+    git(&["add", "own.rs"]);
+    git(&["commit", "-m", "the node's own commit"]);
+    let own_commit = git(&["rev-parse", "HEAD"]);
+
+    let (status, _, _) = done_triplet(&state, run_id, "worker", "{}").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let events = load_events(&state.db, run_id).await.unwrap();
+    let delivered = events
+        .iter()
+        .find(|e| e.kind == event_log::EventKind::NodeDelivered)
+        .expect("the node's own commit is a delivery");
+    let payload = delivered.payload.as_ref().unwrap();
+    assert_eq!(payload["before"], start_head.as_str(), "{payload}");
+    assert_eq!(payload["after"], own_commit.as_str(), "{payload}");
+}
+
 /// New coverage: no test reached the merge-conflict arm before #490 either. Two
 /// sub-worktrees touching the same file, merged in order — the second conflicts.
 #[tokio::test]

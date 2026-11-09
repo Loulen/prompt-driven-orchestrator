@@ -409,15 +409,17 @@ async fn stats_cost_returns_harness_coverage_and_nested_contribution_hierarchies
         .find(|metric| metric["harness"] == "claude")
         .unwrap();
     assert_eq!(claude["usd"], 10.0);
-    assert!(claude["average_usd"].is_null());
+    // CORE-231: no Run here started a manager or a resolver, so r1 and r2 carry
+    // no Infrastructure execution. r1's claude node is readable ($5); r3's
+    // legacy node and its ambiguous leftover are not; r2 has no claude at all.
     // #811: `median_usd` travels beside `average_usd` on the same readable
-    // population — no execution's cost is readable here, so both stay null
-    // rather than collapsing to $0.
-    assert!(claude["median_usd"].is_null());
+    // population, the unknown Run entering neither.
+    assert_eq!(claude["average_usd"], 5.0);
+    assert_eq!(claude["median_usd"], 5.0);
     assert_eq!(claude["estimated"], true);
-    assert_eq!(claude["executions"], 3);
-    assert_eq!(claude["readable"], 0);
-    assert_eq!(claude["unknown"], 3);
+    assert_eq!(claude["executions"], 2);
+    assert_eq!(claude["readable"], 1);
+    assert_eq!(claude["unknown"], 1);
     let future = body["total"]["harnesses"]
         .as_array()
         .unwrap()
@@ -478,8 +480,10 @@ async fn stats_cost_returns_harness_coverage_and_nested_contribution_hierarchies
         .iter()
         .find(|row| row["name"] == "Infrastructure")
         .unwrap();
-    assert_eq!(infrastructure["executions"], 3);
-    assert_eq!(infrastructure["unknown"], 3);
+    // Only r3's leftover transcript is an Infrastructure session (a manager
+    // that predates `manager_started`); r1 and r2 started none.
+    assert_eq!(infrastructure["executions"], 1);
+    assert_eq!(infrastructure["unknown"], 1);
     let unassigned = pipeline["nodes"]
         .as_array()
         .unwrap()

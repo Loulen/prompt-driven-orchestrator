@@ -101,8 +101,9 @@ The point of this layer is that the UI alone doesn't tell the full story — ver
   every node sub-worktree (`docs/reference/harnesses.md` § Prerequisites). A `copilot` pane parked on it means the
   prerequisite was never met.
 - **Filesystem** (read with `cat` / Read):
-  - Pipelines: `.pdo/pipelines/<name>.yaml` of the target repo, or the demo library
-    `/tmp/pdo-demo-<port>/home/.pdo/pipelines/`, with the sidecar `<name>.prompts/<node>.md`
+  - Pipelines: the daemon's library, never the target repo's `.pdo/pipelines/` (it is not read):
+    seed one with `pdo pipeline create <name>` then `pdo pipeline save <id> <file> --prompt <node>=<file>`,
+    or author it in the UI
   - Run artifacts: `.pdo/runs/<run_id>/worktree/.pdo/artifacts/...`
 - **Daemon state**: `curl http://127.0.0.1:<port>/runs/<run_id>` for the projected run state (incl.
   `sessions_spawned`, `started_at`/`completed_at`, `loc`), and `/runs/<run_id>/events` for the full

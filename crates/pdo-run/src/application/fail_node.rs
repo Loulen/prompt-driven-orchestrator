@@ -190,9 +190,7 @@ impl Runs {
                     iter: None,
                     payload: Some(projection::interrupt_payload(
                         "agent_fail_awaiting",
-                        format!(
-                        "agent_fail_awaiting: agent pdo fail (awaiting confirmation): {tail_reason}"
-                    ),
+                        awaiting_confirmation_reason(&tail_node, &tail_reason),
                     )),
                 }
             };
@@ -206,5 +204,27 @@ impl Runs {
             info!("Node {tail_node} failed in run {tail_run} (auto_fail={auto_fail_run})");
         });
         (StatusCode::OK, "ok").into_response()
+    }
+}
+
+/// The reason a deliberate `pdo fail` parks its Run with, waiting for a human
+/// to confirm. It names the node and never says « agent »: a `script` node's
+/// non-zero exit goes through the same `pdo fail` (CORE-231).
+fn awaiting_confirmation_reason(node_id: &str, reason: &str) -> String {
+    format!("agent_fail_awaiting: node {node_id} failed (awaiting your confirmation): {reason}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::awaiting_confirmation_reason;
+
+    #[test]
+    fn the_park_reason_names_the_node_and_not_an_agent() {
+        let text = awaiting_confirmation_reason("make", "script exited 1");
+        assert_eq!(
+            text,
+            "agent_fail_awaiting: node make failed (awaiting your confirmation): script exited 1"
+        );
+        assert!(!text.contains("agent pdo fail"), "{text}");
     }
 }

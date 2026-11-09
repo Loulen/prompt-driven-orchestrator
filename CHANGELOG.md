@@ -36,6 +36,23 @@ This is the first 2.x release published in this repository: it replaces PDO 1.x 
   Homebrew command is `brew update && brew upgrade Loulen/tap/pdo` (the `pdo` formula, no longer
   `pdo-v2`), and the script command re-runs that repository's installer.
 
+### Review and observation: fixes from the vanilla acceptance tour
+
+- Review: a node that runs in the Run's worktree (not isolated) and commits its own work now has a
+  before → after pair that holds those commits. Before, its delivery started where the node stopped,
+  so the pair read "No changes". `NodeStarted` of such a node carries `run_head_sha`, the Run
+  worktree's HEAD when it started; a node started before this version keeps the old pair.
+- Stats › Cost and Run info: a Run that started no Pipeline Manager and no merge resolver no longer
+  counts an "Infrastructure" execution of unknown cost. Before, every Run read "without computable
+  cost", the Cost headline median stayed "—", and a script-only Run counted a `claude` execution.
+- `pdo stats` reads 30 days when `--period` is not given, the period Stats opens on (it read 7).
+- `pdo review diff --from/--to` with a revision git does not know answers `unknown ref: <ref>` and
+  lists the Run ref spellings, instead of "run branch not found"; `--help` lists them too.
+- `pdo complete` refused for a frontmatter mismatch says the agent has one retry left (it said the
+  retry was spent). A Run parked by a node's `pdo fail` names the node ("node make failed (awaiting
+  your confirmation)") instead of saying "agent pdo fail", which read wrong for a script node.
+- Stats › Performance: the wait coverage reads "1 execution of 4" and capitalises its second
+  sentence.
 ### The interface takes the Marque of its binary: PDO, or Acogni Driver
 
 - The vanilla binary now calls itself **PDO** everywhere it names the product: the browser tab

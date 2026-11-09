@@ -11,6 +11,7 @@ import EffortPicker from "../../harness/components/EffortPicker";
 import { AnchoredPanel } from "../../shared/ui/kit/layer";
 import { Button } from "../../shared/ui/kit";
 import { combinationLabel, resolveAgentChoice } from "../model/agentProfiles";
+import { profileLabel } from "../model/profileNames";
 
 const EMPTY: AgentCombination = { harness: "claude", model: null, effort: null };
 
@@ -52,7 +53,7 @@ export default function AgentControl({
   );
   const broken = resolved.brokenId != null;
   const modeLabel =
-    broken ? resolved.brokenId
+    resolved.brokenId != null ? profileLabel(resolved.brokenId)
     : choice?.mode === "profile" ? resolved.profile?.name ?? "Profile"
     : choice?.mode === "custom" ? "Custom"
     : "Inherit";

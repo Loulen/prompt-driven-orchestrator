@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchAgentProfiles } from "../api/agentProfiles";
 import type { AgentProfile } from "../../shared/generated/AgentProfile";
+import { rememberProfileNames } from "../model/profileNames";
 
 export const AGENT_PROFILES_CHANGED = "pdo:agent-profiles-changed";
 
@@ -16,6 +17,7 @@ export function useAgentProfiles(enabled = true) {
     if (!enabled) return;
     try {
       const result = await fetchAgentProfiles();
+      rememberProfileNames(result.profiles);
       setProfiles(result.profiles);
       setError(null);
     } catch (cause) {
@@ -30,6 +32,7 @@ export function useAgentProfiles(enabled = true) {
       .then((result) => {
         if (!cancelled) {
           if (!Array.isArray(result.profiles)) throw new Error("Invalid agent profiles response");
+          rememberProfileNames(result.profiles);
           setProfiles(result.profiles);
           setError(null);
         }

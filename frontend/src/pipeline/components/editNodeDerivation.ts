@@ -10,6 +10,7 @@ import { deriveLoopRegions } from "./loopRegionDerivation";
 import { regionCostText } from "./loopRegionCost";
 import type { LoopBadge } from "./EditNode";
 import { nodeAgentLabel } from "../model/nodeAgent";
+import { profileLabel } from "../../settings/model/profileNames";
 import type { AgentProfile } from "../../shared/generated/AgentProfile";
 
 /**
@@ -127,7 +128,7 @@ export function deriveEditNodes(
         inRun: runState != null,
         // The card's meta grid: what runs the node, and in a Run its
         // iteration, its time and its cost.
-        agent: nodeAgentLabel(n, agentProfiles, nodeRun?.harness),
+        agent: nodeAgentLabel(n, agentProfiles, nodeRun?.harness, profileLabel),
         run: nodeRun
           ? {
               iter: nodeRun.iter,

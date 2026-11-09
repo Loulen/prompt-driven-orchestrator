@@ -23,7 +23,16 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - Deleting an agent profile something still names says "1 reference moves to the next tier", and
   "2 references move" from two on.
 - The Undo tooltip names a note or a loop added or deleted ("Undo add note", "Undo delete loop"),
-  as it already did for nodes and edges; "edit note" is left for a note whose text changed.
+  as it already did for nodes and edges; "edit note" is left for a note whose text changed. The
+  Redo tooltip names the change it replays the same way ("Redo delete note").
+- A "changed outside" or library-assistant line above the canvas goes away once you save the draft
+  it changed as a version: that version holds the change, and "See v2" no longer points at a
+  version older than the one you just saved. A line that arrives while the save is under way stays,
+  and so do the lines in the other participants' tabs.
+- A node whose agent profile was deleted names the profile as you knew it ("Agent profile Reviewer
+  fast no longer exists"), in the warning above the canvas, on the node card's tooltip and in the
+  inspector, wherever this browser listed the profile before; elsewhere it still shows the id.
+- The import window's second tab reads "Claude Code workflow".
 - `pdo skill export --skill` takes a skill's name as well as its id, as every other `pdo skill`
   command does.
 - `pdo settings agent-profile delete --help` says what the daemon does: it deletes a profile even

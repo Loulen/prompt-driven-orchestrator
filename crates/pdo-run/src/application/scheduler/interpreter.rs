@@ -582,7 +582,13 @@ loops:
 
         let state = project(&events).expect("projected");
         let region = &pipeline.loops[0];
-        let actions = scheduler::evaluate_collection_barrier(&pipeline, &state, region);
+        let actions = scheduler::evaluate_collection_barrier(
+            &pipeline,
+            &state,
+            region,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
         assert!(
             actions.contains(&SchedulerAction::CollectionDone {
                 region_id: "topics_fanout".into(),

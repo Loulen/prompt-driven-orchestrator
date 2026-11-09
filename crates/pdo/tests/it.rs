@@ -432,6 +432,9 @@ mod sandbox_tracer;
 #[path = "pruned_routing.rs"]
 mod pruned_routing;
 
+#[path = "convergence_dataflow.rs"]
+mod convergence_dataflow;
+
 #[path = "script_node.rs"]
 mod script_node;
 

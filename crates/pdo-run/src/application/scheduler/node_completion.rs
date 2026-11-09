@@ -182,13 +182,22 @@ pub(super) async fn settle_loops_collections_and_end(
         }
     }
 
+    // The barrier's exit may be a convergence: its other branches are read
+    // resolved off every completed producer's frontmatter (ADR-0082).
+    let fresh_frontmatter_by_node =
+        resolve_completed_frontmatter(pipeline, &fresh_run_state, artifacts_dir);
     for region in pipeline
         .loops
         .iter()
         .filter(|r| r.kind == pipeline::LoopKind::Collection)
     {
-        let collection_actions =
-            scheduler::evaluate_collection_barrier(pipeline, &fresh_run_state, region);
+        let collection_actions = scheduler::evaluate_collection_barrier(
+            pipeline,
+            &fresh_run_state,
+            region,
+            &fresh_frontmatter_by_node,
+            &fresh_resolved_vars,
+        );
         for action in &collection_actions {
             match scheduler_interpreter::interpret(
                 state,

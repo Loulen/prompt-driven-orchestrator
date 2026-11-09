@@ -13,11 +13,16 @@
 //!   holds `waiting`.
 
 mod collections;
+#[cfg(test)]
+mod convergence_tests;
 mod diagnostics;
 pub mod dispatcher;
 mod edges;
 mod end_wait;
+mod forward;
 mod liveness;
+#[cfg(test)]
+mod loop_exit_tests;
 mod loops;
 mod regions;
 
@@ -25,6 +30,7 @@ pub use collections::*;
 use diagnostics::*;
 pub use edges::*;
 pub use end_wait::*;
+use forward::*;
 pub use liveness::*;
 pub use loops::*;
 pub use regions::*;
@@ -3470,7 +3476,13 @@ mod tests {
             .insert("worker".into(), worker_with_completed_laps(&[1, 2, 3]));
 
         let region = &pipeline.loops[0];
-        let actions = evaluate_collection_barrier(&pipeline, &state, region);
+        let actions = evaluate_collection_barrier(
+            &pipeline,
+            &state,
+            region,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
 
         assert!(actions.contains(&SchedulerAction::CollectionDone {
             region_id: "fan".into(),
@@ -3500,7 +3512,13 @@ mod tests {
             .insert("worker".into(), worker_with_completed_laps(&[1, 3]));
 
         let region = &pipeline.loops[0];
-        let actions = evaluate_collection_barrier(&pipeline, &state, region);
+        let actions = evaluate_collection_barrier(
+            &pipeline,
+            &state,
+            region,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert!(actions.is_empty(), "lap 2 missing — barrier must wait");
     }
 
@@ -3523,7 +3541,13 @@ mod tests {
             .insert("worker".into(), worker_with_completed_laps(&[1, 2, 3]));
 
         let region = &pipeline.loops[0];
-        let actions = evaluate_collection_barrier(&pipeline, &state, region);
+        let actions = evaluate_collection_barrier(
+            &pipeline,
+            &state,
+            region,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert!(actions.is_empty(), "a fired barrier never re-fires");
     }
 
@@ -3550,7 +3574,13 @@ mod tests {
             .insert("worker".into(), worker_with_completed_laps(&[1, 2]));
 
         let region = &pipeline.loops[0];
-        let actions = evaluate_collection_barrier(&pipeline, &state, region);
+        let actions = evaluate_collection_barrier(
+            &pipeline,
+            &state,
+            region,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert!(actions.contains(&SchedulerAction::CollectionDone {
             region_id: "fan".into(),
         }));

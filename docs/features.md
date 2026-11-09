@@ -57,7 +57,8 @@ sibling edge matched. There is no LLM router: an LLM never decides which node ru
 Drag an edge back from `reviewer` to `implementer`, set `verdict = fail`, and PDO turns the cycle
 into a named, **bounded loop** (`↻ 1/8` on the canvas) with a `max_iter`, so a cycle can never run
 forever. A **collection loop** fans a node out over a list field of its input, with laps running in
-parallel.
+parallel. Each lap gets its own item: an agent reads it in its preamble, a `script` in `$PDO_ITEM`
+(and the number of laps in `$PDO_ITEM_TOTAL`).
 
 Each loop shows what it spent since it was entered, after its counter (`↻ 3/5 · ~$1.20`), with each
 member's share in the tooltip. A bounded loop also takes a cost cap, `max_cost_usd` (a dollar amount

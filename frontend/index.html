@@ -1,10 +1,15 @@
 <!doctype html>
-<html lang="en">
+<!-- The Marque of the binary (ADR draft « la Marque est déclarée par le binaire
+     à la compilation »): the page ships as PDO's; a daemon declaring another
+     rewrites the title and `data-brand` (`crates/pdo/src/brand.rs`), and serves
+     its logos under /shared/brand/, so no wrong name ever flashes. The front
+     reads `data-brand` (`src/shared/ui/brand/brand.ts`). -->
+<html lang="en" data-brand="pdo">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Acogni Driver</title>
-    <link rel="icon" type="image/svg+xml" href="/shared/favicon.svg" />
+    <title>PDO</title>
+    <link rel="icon" type="image/svg+xml" href="/shared/brand/favicon.svg" />
     <!-- The theme script (ADR-0093): stamps the Theme and the mode on <html>
          before the bundle loads, so the page never paints one look and flips
          to the other. The same file a page an extension serves outside the

@@ -73,9 +73,9 @@ Run `pdo service install` to start PDO at boot and keep it running after logout.
 | `pdo run list [--json]` | List the runs the daemon knows, one tab-separated line per run (`run_id`, status, pipeline, name); `--json` prints the daemon's `GET /runs` answer as is. Exit 1 with the daemon's reason when it refuses the call. |
 | `pdo run show <run-id> [--json]` | The Run in a line (id, status, pipeline, name), then one line per node: id, status, iteration. `--json` prints the daemon's detail of the Run. |
 | `pdo run cancel <run-id> [--json]` | Give up on a live Run: no node is launched any more, every node holding a session is stopped (never failed), and the Run ends `halted` with the reason `cancelled`. It can then be retried or reopened. A Run that is not live is refused, exit 1. |
-| `pdo run pause\|resume <run-id> [--json]` | Pause a running Run (nothing new is launched), or resume a paused, halted or failed one, as the Runs list does. |
+| `pdo run pause\|resume <run-id> [--json]` | Pause a running Run (nothing new is launched; a node already working still finishes, and what it would launch waits for the resume), or resume a paused, halted or failed one, as the Runs list does. |
 | `pdo run retry <run-id> [--json]` | Retry all, as the Runs list does: a finished Run is archived and a new Run starts with the same pipeline, input and repositories; prints `<run-id> retried as <new-id>`. A live Run is refused, exit 1. |
-| `pdo run reopen <run-id> [--json]` | Reopen a finished (or incident-parked) Run: what was done stays done, the rest runs again. An archived Run is refused, as in the run view. |
+| `pdo run reopen <run-id> [--json]` | Reopen a finished (or incident-parked) Run: what was done stays done, the rest runs again (an interrupted or stopped node included). An archived Run is refused, as in the run view. |
 | `pdo run archive <run-id> [--json]` | Archive a Run and its finished child Runs (the Runs list's Cleanup): their worktrees go, their history stays. Refused while a child Run is live. |
 | `pdo run forget <run-id> [--json]` | Forget an archived Run. |
 | `pdo run rename <run-id> <name> [--json]` | Rename a Run; an empty name clears it. |

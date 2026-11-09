@@ -344,7 +344,7 @@ describe("Settings › General › Version & update (#697)", () => {
     fetchUpdateStatusMock.mockResolvedValue(status());
     renderVersionSection();
 
-    expect(await screen.findByTestId("setting-version-installed")).toHaveTextContent("v1.58.1");
+    expect(await screen.findByTestId("setting-version-installed")).toHaveTextContent("PDO 1.58.1");
     const latest = screen.getByTestId("setting-version-latest");
     expect(latest).toHaveTextContent("v1.59.0");
     expect(within(latest).getByText("v1.59.0").className).toContain("text-st-await");
@@ -418,6 +418,8 @@ describe("Settings › General › Version & update (#697)", () => {
 
     const btn = await screen.findByTestId("setting-version-check-now");
     expect(btn).toHaveAccessibleName("Check now");
+    // Disabled until the status is read: a click before it is lost.
+    await waitFor(() => expect(btn).toBeEnabled());
     fireEvent.click(btn);
     expect(checkForUpdateNowMock).toHaveBeenCalledTimes(1);
     expect(btn).toHaveAccessibleName("Checking…");
@@ -444,7 +446,9 @@ describe("Settings › General › Version & update (#697)", () => {
     checkForUpdateNowMock.mockRejectedValue(new Error("release source unreachable: timed out"));
     renderVersionSection();
 
-    fireEvent.click(await screen.findByTestId("setting-version-check-now"));
+    const checkNow = await screen.findByTestId("setting-version-check-now");
+    await waitFor(() => expect(checkNow).toBeEnabled());
+    fireEvent.click(checkNow);
     const err = await screen.findByTestId("setting-version-check-error");
     expect(err).toHaveTextContent("Check failed");
     expect(err).toHaveTextContent("release source unreachable: timed out");
@@ -503,7 +507,7 @@ describe("Settings › General › Version & update (#697)", () => {
     fetchSettingsMock.mockRejectedValue(new Error("boom"));
     fetchUpdateStatusMock.mockResolvedValue(status());
     renderVersionSection();
-    expect(await screen.findByTestId("setting-version-installed")).toHaveTextContent("v1.58.1");
+    expect(await screen.findByTestId("setting-version-installed")).toHaveTextContent("PDO 1.58.1");
   });
   it("the badge's deep-link lands on the section only once GET /settings has answered (the sections above mount on it)", async () => {
     // Regression (#697 agentic finding): the section renders on its own, so it exists before

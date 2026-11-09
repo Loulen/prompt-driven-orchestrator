@@ -53,6 +53,38 @@ This is the first 2.x release published in this repository: it replaces PDO 1.x 
   your confirmation)") instead of saying "agent pdo fail", which read wrong for a script node.
 - Stats › Performance: the wait coverage reads "1 execution of 4" and capitalises its second
   sentence.
+### The interface takes the Marque of its binary: PDO, or Acogni Driver
+
+- The vanilla binary now calls itself **PDO** everywhere it names the product: the browser tab
+  (title and favicon, written into the page by the daemon so no other name flashes on load), the
+  mark at the left of the top bar, the welcome modal ("Welcome to PDO", the PDO lockup), the tours,
+  the import of a pipeline ("PDO pipeline"), the notifications, and Settings › Version & update,
+  whose Installed row reads `PDO 2.76.0` after the mark. A distribution that declares Acogni
+  Driver shows "Acogni Driver" and its logo instead, and `Acogni Driver 1.4.0 (core PDO 2.76.0)`.
+- New PDO logo: three steps of a Run (done, running in ruby, to come) joined by two edges. Acogni
+  Driver's mark is the A of Acogni, its hollow in ruby. Both keep their ruby under the Classic
+  Theme, in dark and light.
+- The gear of Acogni is the Settings icon now, in the top bar and in the Settings header; it no
+  longer stands for the product, so the top bar never shows two gears. It signs "by Acogni" under
+  the PDO lockup of the welcome modal and after the title of Settings › Version & update.
+- The Acogni wordmark of the Acogni Driver lockup is no longer clipped under its "g".
+- New seam for distributions: `Config::with_brand(pdo::Brand::AcogniDriver)`, next to
+  `with_release_channel`; without it a binary is PDO. Neither an environment variable, a setting
+  nor an extension changes it. The daemon serves the logos of its Marque under `/shared/brand/`
+  (`mark.svg`, `lockup.svg`, `favicon.svg`) for the pages an extension serves outside the
+  interface; `/shared/favicon.svg` now answers the Marque's favicon.
+### Runs: a pause keeps the work in flight, a reopen relaunches stopped nodes
+
+- A node that finishes while its Run is paused now completes. Before, its completion was refused
+  ("resume the run first"): a `script` node, which completes once as its bash exits, lost its work,
+  and after Resume it read "session died" and had to run again. What the finished node would launch
+  still waits for Resume.
+- Reopening a Run (the Play button, `pdo run reopen`) runs again the nodes that were stopped, as it
+  already did for interrupted ones. A cancelled Run (`pdo run cancel`) used to park "run_stalled …
+  blocked behind" its stopped nodes as soon as it was reopened. A stopped lap of a collection
+  fan-out stays stopped, with the laps already done, until its node is retried.
+- A `script` lap of a collection fan-out gets its item in `$PDO_ITEM` and the number of laps in
+  `$PDO_ITEM_TOTAL`, as an agent lap reads them in its preamble.
 
 ## 2.75.0
 

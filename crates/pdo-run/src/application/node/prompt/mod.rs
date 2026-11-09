@@ -682,6 +682,29 @@ mod tests {
     }
 
     #[test]
+    fn script_env_hands_a_collection_lap_its_item() {
+        // A `script` lap of a collection fan-out reads no preamble, so its item
+        // arrives as `PDO_ITEM` (and the lap count as `PDO_ITEM_TOTAL`), as an
+        // agent lap reads it under `## Collection Context`.
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        let env: HashMap<String, String> = build_script_env(&ctx).into_iter().collect();
+        assert!(!env.contains_key("PDO_ITEM"), "no item outside a fan-out");
+        assert!(!env.contains_key("PDO_ITEM_TOTAL"));
+
+        ctx.foreach_context = Some(ForEachContext {
+            current_item: "beta".into(),
+            current_iter: 2,
+            total: 3,
+        });
+        let env: HashMap<String, String> = build_script_env(&ctx).into_iter().collect();
+        assert_eq!(env.get("PDO_ITEM").map(String::as_str), Some("beta"));
+        assert_eq!(env.get("PDO_ITEM_TOTAL").map(String::as_str), Some("3"));
+    }
+
+    #[test]
     fn script_env_empties_an_input_whose_upstream_produced_nothing() {
         // ADR-0086: a script launched ahead of its producer (an on-demand node)
         // gets an empty `PDO_INPUT_<PORT>`, never the path of a file nothing

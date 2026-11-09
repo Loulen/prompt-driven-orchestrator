@@ -90,6 +90,9 @@ export default defineConfig({
       // CORE-5: `POST /authorize`, the question of authorization (hides the
       // loupe and the Projets a Run cannot be created in).
       '/authorize': daemonTarget,
+      // The Marque's logos (`mark.svg`, `lockup.svg`, `favicon.svg`): the daemon
+      // serves its binary's, ahead of the files of `public/shared/`.
+      '/shared/brand': daemonTarget,
     },
   },
   test: {

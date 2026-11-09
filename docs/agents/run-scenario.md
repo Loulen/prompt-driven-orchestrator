@@ -94,8 +94,9 @@ The point of this layer is that the UI alone doesn't tell the full story — ver
 - **tmux sessions**: `tmux -L pdo-<port> capture-pane -p -t pdo-<run_id>-<node_id>-iter-<n>`. The session-name
   pattern is fixed; confirm it shows the expected program (e.g. `claude` running, not a bare shell
   that exited). A first `claude` launch in a fresh worktree lands on the "Quick safety check" trust
-  dialog, its cursor on « No, exit » — trust the folder with `tmux -L pdo-<port> send-keys -t <session> Down Enter`
-  (a bare `Enter` exits `claude`). `copilot`'s equivalent is **not** a
+  dialog, its cursor on « No, exit »: pick « Yes, I trust this folder » with
+  `tmux -L pdo-<port> send-keys -t <session> Down`, then `… send-keys -t <session> Enter` (a bare
+  Enter exits `claude`, and the node turns « session died »). `copilot`'s equivalent is **not** a
   step to drive: approve the target repository's root once, outside the journey, and it cascades to
   every node sub-worktree (`docs/reference/harnesses.md` § Prerequisites). A `copilot` pane parked on it means the
   prerequisite was never met.

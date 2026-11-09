@@ -7,6 +7,7 @@
  */
 
 import { withTourIdentity } from "../tourMemory";
+import { brandName } from "../../shared/ui/brand/brand";
 
 /** The pipeline the tour's Run executes. A normal Library pipeline, kept after the tour. */
 export const TUTORIAL_OVERVIEW_PIPELINE_ID = "tutorial-overview";
@@ -23,8 +24,7 @@ export function overviewRunName(): string {
 }
 
 /** The Run's prompt — fixed, and what the Start step shows the reader. */
-export const OVERVIEW_PROMPT =
-  "Show me around Acogni Driver: implement a tiny change, then review it and hand back a verdict.";
+export const OVERVIEW_PROMPT = `Show me around ${brandName()}: implement a tiny change, then review it and hand back a verdict.`;
 
 /**
  * The base of the example Trigger's name, and the whole name of the Trigger the

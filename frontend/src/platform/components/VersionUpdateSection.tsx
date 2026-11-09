@@ -8,7 +8,9 @@ import {
   absoluteTime,
   announceUpdateStatus,
   canOfferUpdate,
-  installedVersionLabel,
+  channelLabel,
+  coreLabel,
+  installedProductLabel,
   newerAvailable,
   relativeTime,
   updateNotOfferedReason,
@@ -21,6 +23,9 @@ import type { SettingsSection } from "../../settings/model/settingsCategories";
 import { SwitchRow } from "../../settings/components/settingsSurface/fields";
 import Section, { SectionExtra } from "../../settings/components/settingsSurface/Section";
 import { useRefusals } from "../../shared/authorization/useRefusals";
+import { BrandMark } from "../../shared/ui/brand/BrandMark";
+import { BySignature } from "../../shared/ui/brand/BySignature";
+import { brandName } from "../../shared/ui/brand/brand";
 import type { OperationQuestion } from "../../shared/authorization/api";
 
 /** The Operations behind Update, Check now and the update check switch. */
@@ -44,6 +49,9 @@ const UPDATE_GESTURES: OperationQuestion[] = [
  *
  * A distribution (#24) shows its own name and version, then the core's; Update is
  * offered only when a newer release is known and the daemon would run it.
+ *
+ * The title is signed « by Acogni » (CORE-225), and Installed names the product
+ * with the mark of the Marque: `PDO 2.76.0`, `Acogni Driver 1.4.0 (core PDO 2.76.0)`.
  */
 export default function VersionUpdateSection({
   section,
@@ -179,9 +187,11 @@ export default function VersionUpdateSection({
     </>
   );
 
+  const signature = <BySignature className="set-sec__by" />;
+
   if (!status) {
     return (
-      <Section section={section} tools={tools}>
+      <Section section={section} tools={tools} badge={signature}>
         <SectionExtra testId="setting-version-update">
           <EmptyState icon={Loader2} spin layout="row">
             Loading
@@ -202,8 +212,12 @@ export default function VersionUpdateSection({
       ? "Install method not detected: no update from here; to update, run"
       : "The Update button runs exactly this, detached from the daemon";
 
+  const core = coreLabel(status);
+  // The mark is the Marque's: next to its own name, never next to a third party's channel.
+  const ownMark = channelLabel(status) === brandName();
+
   return (
-    <Section section={section} tools={tools}>
+    <Section section={section} tools={tools} badge={signature}>
       <SwitchRow
         label="Update check"
         help={toggleRefused ?? "At start, every 6 h and on demand; off, no request ever leaves the daemon"}
@@ -215,7 +229,13 @@ export default function VersionUpdateSection({
       />
       <SectionExtra testId="setting-version-update">
         <KeyValueRow label="Installed" testId="setting-version-installed">
-          <span className="set-mono set-ellipsis">{installedVersionLabel(status)}</span>
+          <span className="set-product" title={core ? `${installedProductLabel(status)} (${core})` : undefined}>
+            {ownMark && <BrandMark size={14} decorative />}
+            <span className="set-mono set-ellipsis" data-testid="setting-version-installed-product">
+              {installedProductLabel(status)}
+            </span>
+            {core && <span className="set-faint set-ellipsis">({core})</span>}
+          </span>
           {current && (
             <span className="d-chip set-ok" data-testid="setting-version-uptodate">
               up to date

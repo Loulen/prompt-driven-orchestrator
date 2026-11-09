@@ -6,6 +6,7 @@
 
 import { Library } from "lucide-react";
 import AgentControl from "../AgentControl";
+import { inheritedFloor } from "../../model/agentProfiles";
 import HarnessSelect from "../../../harness/components/HarnessSelect";
 import ModelPicker from "../../../harness/components/ModelPicker";
 import { findHarnessOption, type HarnessCatalog } from "../../../harness/model/catalog";
@@ -70,7 +71,7 @@ export default function AgentsSections({
               onChange={(choice) => setField("agentChoice", choice)}
               profiles={agentProfiles}
               catalog={catalog}
-              inherited={{ harness: "claude", model: null, effort: null }}
+              inherited={inheritedFloor(agentProfiles)}
               allowInherit={false}
               label="Agent — Instance settings"
               showLabel={false}

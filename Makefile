@@ -207,7 +207,8 @@ support-table:
 # branch's `pdo daemon` (or, TEST_EXT=1, the test extension's demo daemon) on
 # PORT, under a fresh HOME in /tmp/pdo-demo-<PORT>, with no PDO_* nor TMUX*
 # inherited. PORT is required: the 6172 of `make dev` is not a default here.
-# DEMO_ENV='NAME=value …' sets variables on the daemon explicitly. The stop
+# DEMO_ENV='NAME=value …' sets variables on the daemon explicitly; BIND=0.0.0.0 lets a
+# sandboxed Run's containers reach it (loopback by default). The stop
 # reaches the pid of the pidfile and the tmux socket pdo-<PORT>, never the
 # user's daemon or tmux server; KEEP=1 keeps /tmp/pdo-demo-<PORT> (logs).
 DEMO_DAEMON := node --disable-warning=ExperimentalWarning scripts/demo-daemon/demo-daemon.mjs
@@ -216,7 +217,7 @@ DEMO_PORT_HINT = $(if $(filter demo-daemon-stop,$@),the port of a running demo d
 DEMO_PORT = $(if $(filter command line environment,$(origin PORT)),$(PORT),$(error PORT=<port> is required, e.g. make $@ PORT=6491 ($(DEMO_PORT_HINT))))
 
 demo-daemon:
-	@$(DEMO_DAEMON) start $(DEMO_PORT) $(if $(filter 1,$(TEST_EXT)),--test-ext) $(if $(DEMO_ENV),--env '$(DEMO_ENV)')
+	@$(DEMO_DAEMON) start $(DEMO_PORT) $(if $(filter 1,$(TEST_EXT)),--test-ext) $(if $(DEMO_ENV),--env '$(DEMO_ENV)') $(if $(BIND),--bind '$(BIND)')
 
 demo-daemon-stop:
 	@$(DEMO_DAEMON) stop $(DEMO_PORT) $(if $(filter 1,$(KEEP)),--keep)

@@ -27,7 +27,7 @@ Two levels:
 | ID | Title | Covers | Status |
 |---|---|---|---|
 | [HP-01](HP-01-author-and-save.md) | Author & save a pipeline | pipeline authoring, library, unified canvas | active |
-| [HP-02](HP-02-run-to-completion.md) | Launch a run to completion | run lifecycle, dataflow, artifacts, stats, **diff review loop (comment → manager reply → resolve)**, **sandbox A/B (`full` vs `off`)**, **harness three-way pin (`claude` / `opencode` / `copilot`)** | active |
+| [HP-02](HP-02-run-to-completion.md) | Launch a run to completion | run lifecycle, dataflow, artifacts, stats, **diff review loop (comment → manager reply → resolve)**, **sandbox A/B (`full` vs `off`)**, **harness three-way pin (`claude` / `opencode` / `copilot`)**, **live session on two browsers (watch, take control, import, a declared wait a bare Enter never lifts)** | active |
 | [HP-03](HP-03-guided-onboarding.md) | A newcomer takes the full tour | tutorial mode, Projecteur, training repository, *Overview* on a script Run + example Trigger tidy-up, interactive node + completion guard, artifact | proposed (#825, #46) |
 
 **The 3rd slot went to onboarding (#825, spec #821), not to Triggers.** The full tour is the only

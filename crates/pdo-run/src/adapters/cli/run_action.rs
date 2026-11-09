@@ -71,7 +71,9 @@ pub enum RunAction {
         /// primary repo. From a node session, the Run stays in its parent's.
         #[arg(long)]
         project: Option<String>,
-        /// Secondary repos as a JSON list of `{repo, base_branch?, read_only?}`.
+        /// The Run's repositories as a JSON list of `{repo, base_branch?,
+        /// read_only?}`, the primary first (the same as `--target-repo`), then
+        /// the secondaries.
         #[arg(long)]
         target_repos: Option<String>,
         /// Branch the primary repo starts from (default: its local HEAD).

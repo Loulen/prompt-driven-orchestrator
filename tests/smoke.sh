@@ -117,7 +117,8 @@ CT=$(curl -fsS -o /dev/null -w '%{content_type}' "$URL/pipelines")
 # 3. GET / returns the SPA shell with the app title. (The wordmark is
 # rendered by React at runtime; the static index only carries the <title>.)
 INDEX=$(curl -fsS "$URL/")
-echo "$INDEX" | grep -q "<title>Acogni Driver</title>" || fail "index does not contain the app title"
+echo "$INDEX" | grep -q "<title>PDO</title>" || fail "index does not contain the app title (the vanilla binary is PDO)"
+echo "$INDEX" | grep -q 'data-brand="pdo"' || fail "index does not carry the vanilla Marque (data-brand=\"pdo\")"
 
 # 4. Asset JS referenced in index.html responds 200
 ASSET_PATH=$(echo "$INDEX" | grep -oE '/assets/[^"]+\.js' | head -n1)

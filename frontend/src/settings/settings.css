@@ -412,6 +412,17 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* Version & update › Installed: the mark of the Marque, the product and its
+     version, then the core of a distribution (CORE-225). */
+  .set-product {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+  }
+  .set-product > svg {
+    flex: none;
+  }
   .set-line {
     display: flex;
     align-items: center;

@@ -21,6 +21,7 @@
 import type { WsMessage } from "./liveStream";
 import { chimeForReason, type ChimeName } from "./chimes";
 import type { WaitingAlertPrefs } from "./alertScope";
+import { brandName } from "../../shared/ui/brand/brand";
 
 /** At most one sound per window, every reason and every tab together. */
 export const SOUND_THROTTLE_MS = 10_000;
@@ -233,7 +234,7 @@ export function buildNotificationSpec(transition: WaitingTransition, labels: Wai
 
 /** The notification « Test » shows. Its click only brings the tab back. */
 export const TEST_NOTIFICATION = {
-  title: "PDO · test notification",
-  body: "This is how PDO tells you a node is waiting for you.",
+  title: `${brandName()} · test notification`,
+  body: `This is how ${brandName()} tells you a node is waiting for you.`,
   tag: "pdo-waiting-alert-test",
 } as const;

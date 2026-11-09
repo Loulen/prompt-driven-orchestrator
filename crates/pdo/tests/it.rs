@@ -231,6 +231,8 @@ mod run_transcript_search;
 #[path = "run_transcript_search_bench.rs"]
 mod run_transcript_search_bench;
 
+#[path = "brand.rs"]
+mod brand;
 #[path = "release_channel.rs"]
 mod release_channel;
 #[path = "update_apply.rs"]

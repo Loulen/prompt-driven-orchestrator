@@ -361,30 +361,4 @@ mod tests {
             Vec::<String>::new()
         );
     }
-
-    /// The UI names no product but its brand: the excerpt « What's new » shows
-    /// says « PDO » only in identifiers (`PDO_TOKEN`, `pdo-extension-api`).
-    #[test]
-    fn the_shown_excerpt_does_not_name_the_old_product() {
-        let shown = embedded_excerpt(EMBEDDED_CHANGELOG, EMBEDDED_VERSIONS);
-        assert!(shown.starts_with("## "), "{shown}");
-        for (i, _) in shown.match_indices("PDO") {
-            let before = shown[..i].chars().next_back();
-            let after = shown[i + 3..].chars().next();
-            let identifier = |c: Option<char>| matches!(c, Some(c) if c == '_' || c == '-' || c.is_alphanumeric());
-            assert!(
-                identifier(before) || identifier(after),
-                "« PDO » shown in What's new: {}",
-                shown[..i]
-                    .chars()
-                    .rev()
-                    .take(40)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .chain(shown[i..].chars().take(40))
-                    .collect::<String>()
-            );
-        }
-    }
 }

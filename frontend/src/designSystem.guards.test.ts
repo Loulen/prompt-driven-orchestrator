@@ -7,8 +7,10 @@
  *  - The old token names are gone, everywhere: no alias.
  *  - No font size in pixels and no hex colour in the source.
  *  - No font is fetched from a third party: the binary serves them.
+ *  - The product is named in one place, the Marques' definition (CORE-225).
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -189,5 +191,44 @@ describe("fonts", () => {
     }
     expect(readFileSync(join(fonts, "Archivo-OFL.txt"), "utf8")).toContain("SIL Open Font License, Version 1.1");
     expect(readFileSync(join(fonts, "GeistMono-OFL.txt"), "utf8")).toContain("SIL Open Font License, Version 1.1");
+  });
+});
+
+/** The product named in the code: a Marque, or the core. */
+const PRODUCT_NAME = /(?<![\w-])(?:PDO|Acogni\s+Driver)(?![\w-])/g;
+/** The one file that names the product: the Marques' definition (CORE-225). */
+const BRAND_DEFINITION = join(SRC, "shared", "ui", "brand", "brand.ts");
+
+/** `source` without its comments: a block, a JSX one, or a line one (not the `//` of a URL). */
+function code(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(?<![:"'`\\])\/\/.*$/gm, "");
+}
+
+/** The product names hard-coded in `files`, outside their comments (a name wrapped over two lines too). */
+function productNames(files: string[]): string[] {
+  return files.flatMap((file) =>
+    [...code(readFileSync(file, "utf8")).matchAll(PRODUCT_NAME)].map(
+      (hit) => `${relative(SRC, file)}: ${hit[0].replace(/\s+/g, " ")}`,
+    ),
+  );
+}
+
+describe("the Marque (ADR draft « la Marque est déclarée par le binaire à la compilation »)", () => {
+  it("is the only name of the product in the source: everything else reads brandName()", () => {
+    expect(productNames(SOURCE.filter((file) => file !== BRAND_DEFINITION))).toEqual([]);
+  });
+
+  it("catches a name written in the code, and not one in a comment", () => {
+    const dir = mkdtempSync(join(tmpdir(), "brand-guard-"));
+    try {
+      const named = join(dir, "named.tsx");
+      writeFileSync(named, 'export const t = "Tour of Acogni Driver";\nconst u = `no PDO tab`;\nconst w = <p>Welcome to Acogni\n  Driver</p>;\n');
+      const commented = join(dir, "commented.tsx");
+      writeFileSync(commented, "/** The PDO top bar. */\n// Acogni Driver's logo\nconst h = { \"X-PDO-Actor\": 1, PDO_TOKEN: 2 };\n");
+      expect(productNames([named]).map((hit) => hit.split(": ")[1])).toEqual(["Acogni Driver", "PDO", "Acogni Driver"]);
+      expect(productNames([commented])).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

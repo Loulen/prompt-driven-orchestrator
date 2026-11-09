@@ -344,7 +344,7 @@ describe("Settings › General › Version & update (#697)", () => {
     fetchUpdateStatusMock.mockResolvedValue(status());
     renderVersionSection();
 
-    expect(await screen.findByTestId("setting-version-installed")).toHaveTextContent("v1.58.1");
+    expect(await screen.findByTestId("setting-version-installed")).toHaveTextContent("PDO 1.58.1");
     const latest = screen.getByTestId("setting-version-latest");
     expect(latest).toHaveTextContent("v1.59.0");
     expect(within(latest).getByText("v1.59.0").className).toContain("text-st-await");
@@ -503,7 +503,7 @@ describe("Settings › General › Version & update (#697)", () => {
     fetchSettingsMock.mockRejectedValue(new Error("boom"));
     fetchUpdateStatusMock.mockResolvedValue(status());
     renderVersionSection();
-    expect(await screen.findByTestId("setting-version-installed")).toHaveTextContent("v1.58.1");
+    expect(await screen.findByTestId("setting-version-installed")).toHaveTextContent("PDO 1.58.1");
   });
   it("the badge's deep-link lands on the section only once GET /settings has answered (the sections above mount on it)", async () => {
     // Regression (#697 agentic finding): the section renders on its own, so it exists before

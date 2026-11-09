@@ -151,6 +151,29 @@ describe("the top bar", () => {
   });
 });
 
+describe("the mark of the Marque (CORE-225)", () => {
+  afterEach(() => {
+    delete document.documentElement.dataset.brand;
+  });
+
+  it("is PDO's on the vanilla binary: an image, never a control, and a single gear in the bar", () => {
+    renderBar();
+    const mark = within(screen.getByTestId("topbar")).getByRole("img", { name: "PDO" });
+    expect(mark.closest("button, a")).toBeNull();
+    expect(mark).not.toHaveAttribute("tabindex");
+    // The gear of Acogni is Settings' icon, and only Settings'.
+    const gears = within(screen.getByTestId("topbar")).getAllByTestId("acogni-gear");
+    expect(gears).toHaveLength(1);
+    expect(screen.getByTestId("open-settings")).toContainElement(gears[0]);
+  });
+
+  it("is Acogni Driver's when the daemon declares it", () => {
+    document.documentElement.dataset.brand = "acogni-driver";
+    renderBar();
+    expect(within(screen.getByTestId("topbar")).getByRole("img", { name: "Acogni Driver" })).toBeInTheDocument();
+  });
+});
+
 describe("the command field", () => {
   it("opens the palette on a click, says when nothing matches, and Escape closes it", async () => {
     renderBar();

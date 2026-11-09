@@ -67,6 +67,11 @@ async fn a_refusal_answers_403_and_writes_nothing() {
     assert!(refused(
         w.review.send_comments(&actor, "r1", vec![draft()]).await
     ));
+    assert!(refused(
+        w.review
+            .resend_comments(&actor, "r1", vec!["rc-001".into()])
+            .await
+    ));
     let reply = ReplyCommand {
         text: "done".into(),
         resolved: true,
@@ -86,7 +91,7 @@ async fn a_refusal_answers_403_and_writes_nothing() {
             .await
     ));
     assert_eq!(w.runs.kinds("r1"), before);
-    assert!(w.runs.handed.lock().unwrap().is_empty());
+    assert!(w.runs.launched_with.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

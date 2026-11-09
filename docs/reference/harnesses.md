@@ -35,7 +35,7 @@ Custom descriptors in `~/.pdo/harnesses/descriptors.yaml` can launch, attach, re
 | Requirement | Setup |
 | --- | --- |
 | Authentication | Log in with each harness before using it through PDO |
-| An approved working directory | Trust the target repository root once; trust cascades to subdirectories |
+| An approved working directory | Trust the target repository root once; trust cascades to subdirectories. Until then, a session on the host opens on its harness's folder-trust prompt (`claude`'s « Quick safety check »): a node waits in its terminal, and the Pipeline Manager a review « Send to manager » starts holds the comments and says so on their thread, with the way out (answer the prompt in the Run's Manager tab). PDO never answers that prompt for you and never writes the trust into your home; a sandboxed Run trusts its root in the sandbox's own staged home |
 | An installed version | Compare your installed harness with the last validated version in the support table |
 | A model catalogue for `pi` | Keep pi's model catalogue reachable from its home (`~/.pi/agent`): pi prices each message from it, and a message it cannot price makes the node's cost read "—" rather than `$0` |
 | `pi` in the sandbox image | PDO does not provide the sandbox image. For a sandboxed `pi` node your image must contain the `pi` binary: PDO checks it with a `which` at spawn, and a node whose binary is missing goes `Interrupted` with that reason (ADR-0063) |

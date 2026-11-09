@@ -270,3 +270,14 @@ pub fn build_manager_prompt(
     let preamble = build_manager_preamble(run_id, daemon_url, name_hint);
     format!("{preamble}{role_prompt}")
 }
+
+/// The manager's launch prompt carrying the message it was started for
+/// (CORE-239): a manager the Review's « Send to manager » starts reads the
+/// batch with its instructions, instead of having it typed into a harness that
+/// may not be reading its input yet (or shows a prompt of its own).
+pub fn with_first_message(prompt: &str, first_message: &str) -> String {
+    format!(
+        "{prompt}\n\n---\n\nYou were started to handle this message first:\n\n{}\n",
+        pdo_harness::steering::runtime_message(first_message.trim_end())
+    )
+}

@@ -7,6 +7,7 @@
 
 mod actors;
 mod comments;
+mod delivery;
 mod diff;
 mod fakes;
 mod gestures;

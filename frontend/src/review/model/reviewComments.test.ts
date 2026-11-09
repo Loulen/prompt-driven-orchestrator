@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { authorKind, authorLabel, commentState, firstWords, footerStatus, sortForSidebar, stateCounts, stateCountsByPath, pendingCount, relativeTime, sendDisabledReason, pendingTone, reviewQuickAccessTitle } from "./commentStatus";
+import { authorKind, authorLabel, commentState, firstWords, footerStatus, lostCommentIds, sortForSidebar, stateCounts, stateCountsByPath, pendingCount, relativeTime, sendDisabledReason, pendingTone, reviewQuickAccessTitle } from "./commentStatus";
 import { addDraft, anchorLabel, draftsForPair, readDrafts, removeDrafts, toSendInputs, updateDraft, wipKey, writeDrafts } from "./drafts";
 import { countsByPath, entryAt, mergeEntries, homeIds, mappingsOf, outdatedCountByPath, parseExcerpt, remapSummary, sentEntriesForPair } from "./entries";
 import { allSeen, markSeen, readSeen, unreadCommentCount, unreadReplies, writeSeen } from "./seen";
@@ -178,6 +178,24 @@ describe("reviewComments — the conversation (#751)", () => {
         }),
       ).kind,
     ).toBe("replied");
+  });
+
+  it("CORE-239: a held comment says why — a prompt, an exited manager, or no manager running", () => {
+    const blocked = sent({ delivery: { state: "blocked", reason: "trust prompt", at: "t" } });
+    expect(footerStatus(blocked)).toEqual({ kind: "blocked", reason: "trust prompt" });
+    expect(footerStatus(sent({ delivery: { state: "exited", at: "t" } }))).toEqual({ kind: "exited", reason: undefined });
+    // No manager runs: an unanswered comment is lost even without the daemon's word.
+    expect(footerStatus(sent(), false)).toEqual({ kind: "exited" });
+    expect(footerStatus(sent(), true)).toEqual({ kind: "awaiting" });
+    expect(footerStatus(sent(), undefined)).toEqual({ kind: "awaiting" });
+    // An answer is an answer, manager or not.
+    expect(footerStatus(replied(), false).kind).toBe("replied");
+    expect(footerStatus(resolved(), false).kind).toBe("resolved");
+    expect(lostCommentIds([sent(), replied(), resolved()], false)).toEqual([sent().id]);
+    expect(lostCommentIds([blocked], true)).toEqual([]);
+    // Held by a prompt, then the manager is gone: Send again, not « held » for ever.
+    expect(footerStatus(blocked, false)).toEqual({ kind: "exited" });
+    expect(lostCommentIds(undefined, false)).toEqual([]);
   });
 
   it("tracks unread replies per browser and counts the Diff tab badge", () => {

@@ -209,6 +209,15 @@ pub enum EventKind {
     /// A resolved comment reopened by the human (#751). Payload: `id`. Wire form:
     /// `"review_comment_reopened"`.
     ReviewCommentReopened,
+    /// Where a batch of sent comments stands on its way to the Pipeline
+    /// Manager (CORE-239): `awaiting` (handed over, or handed over again by
+    /// « Send again »), `blocked` (the manager's agent shows a prompt only a
+    /// person can answer, such as its folder-trust check: nothing is typed into
+    /// it) or `exited` (the manager's session ended before answering). Payload:
+    /// `ids`, `state`, `reason` (why, and the way out), `actor` on a resend.
+    /// Folded onto each comment's `delivery`; a reply clears it. Wire form:
+    /// `"review_comment_delivery"`.
+    ReviewCommentDelivery,
     CommandIssued,
 }
 

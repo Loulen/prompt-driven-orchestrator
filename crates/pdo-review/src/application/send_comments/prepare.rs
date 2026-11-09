@@ -128,6 +128,7 @@ impl Review {
                 reopened_at: None,
                 reopened_by_actor: None,
                 proposal_declined: false,
+                delivery: None,
             });
         }
         Ok(prepared)

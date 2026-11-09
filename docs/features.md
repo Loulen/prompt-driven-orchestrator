@@ -137,7 +137,11 @@ pair of refs.
 **Send to manager** hands your comments to the run's manager agent in one message. It answers each
 one with `pdo review reply`, the answer lands in the thread in real time, and the manager can route
 the fix back into the pipeline (restart a node, inject an artifact). By default you resolve a
-comment; the agent only proposes the resolution.
+comment; the agent only proposes the resolution. A manager the send starts reads your comments in its
+launch prompt. If its agent first asks whether to trust the folder, the thread says the comments
+are held and how to go on (answer it in the run's Manager tab); if the manager exits before
+answering, the thread says so and **Send again** hands the unanswered comments to a new manager,
+as written.
 
 Each comment, reply, resolution and reopening keeps who made it: with an extension that names
 people, the thread shows their names, and an extension can complete what you type in the comment

@@ -5,6 +5,7 @@
 use pdo_kernel::Actor;
 use pdo_run::application::complete_node::CompleteNode;
 use pdo_run::application::ports::InstanceDefaults;
+use pdo_run::application::release_completion::ReleaseCompletion;
 use pdo_run::application::scheduler::advance::advance_run;
 use pdo_run::domain::event::EventKind;
 use pdo_skill::domain::selection::SkillRef;
@@ -92,4 +93,60 @@ async fn an_unreleased_interactive_completion_declares_the_wait_for_the_agent() 
         vec![("r1".to_string(), "worker".to_string(), 1)]
     );
     assert!(!kinds(&w, "r1").contains(&EventKind::NodeCompleted));
+}
+
+/// The agent asked to complete before the release and was told to wait: once
+/// released, nothing would wake it. The release tells it to complete now —
+/// and only it: an agent that never asked is still working, nobody nudges it.
+#[tokio::test]
+async fn the_release_tells_an_agent_refused_before_it_to_complete_now() {
+    for refused_first in [true, false] {
+        let w = world();
+        let interactive = RELAY.replacen(
+            "    name: Worker\n    type: agent\n",
+            "    name: Worker\n    type: agent\n    interactive: true\n",
+            1,
+        );
+        seed_run_of(&w, "r1", &interactive).await;
+        advance_run(&w.runs, "r1").await;
+        if refused_first {
+            // What the session context appends for the refused `pdo complete`.
+            let mut awaiting = event("r1", EventKind::NodeAwaitingUser, Some("worker"));
+            awaiting.payload = Some(serde_json::json!({
+                "cause": "completion_not_released",
+                "message": "waiting for the release",
+            }));
+            w.runs.append_event().execute(&awaiting).await.unwrap();
+        }
+
+        let answer = w
+            .runs
+            .release_completion(
+                &Actor::LocalOperator,
+                ReleaseCompletion {
+                    run_id: "r1".into(),
+                    node_id: "worker".into(),
+                    iter: 1,
+                },
+            )
+            .await;
+
+        assert_eq!(answer.status(), 200);
+        let told: Vec<String> = w
+            .tmux
+            .typed
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(session, _)| session.contains("worker"))
+            .map(|(_, text)| text.clone())
+            .collect();
+        if refused_first {
+            assert_eq!(told.len(), 1, "{told:?}");
+            assert!(told[0].starts_with("[pdo-runtime]"), "{told:?}");
+            assert!(told[0].contains("run `pdo complete` again"), "{told:?}");
+        } else {
+            assert!(told.is_empty(), "{told:?}");
+        }
+    }
 }

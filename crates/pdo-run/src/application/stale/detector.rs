@@ -835,7 +835,8 @@ SwapFree:         204800 kB
             reason.starts_with("session_died: tmux session "),
             "{reason}"
         );
-        assert!(reason.contains("ended 4 s after it started"), "{reason}");
+        // Closed in its 4th second: under 5 s, never « 4 s » for a 4.9 s life.
+        assert!(reason.contains("ended within 5 s of its start"), "{reason}");
         assert!(reason.contains("logged in"), "{reason}");
     }
 
@@ -847,7 +848,7 @@ SwapFree:         204800 kB
             Duration::from_secs(45),
             Some(Duration::from_secs(4)),
         ));
-        assert!(reason.contains("ended 4 s after it started"), "{reason}");
+        assert!(reason.contains("ended within 5 s of its start"), "{reason}");
     }
 
     /// A death within the second of the start reads its closing time, rounded
@@ -882,7 +883,8 @@ SwapFree:         204800 kB
             pdo_harness::registry::OPENCODE,
         );
         let reason = reason_of(&a);
-        assert!(reason.contains("ended 0 s after it started"), "{reason}");
+        // Never « 0 s »: the session lived, for under a second.
+        assert!(reason.contains("ended within 1 s of its start"), "{reason}");
     }
 
     /// No closing time (the tmux server exited with the session): the sweep's

@@ -143,6 +143,24 @@ fn run_accepts_lifecycle(status: &RunStatus) -> bool {
     matches!(status, RunStatus::Running | RunStatus::AwaitingUser)
 }
 
+/// The no-op reason when `(node_id, iter)` already holds a settled completion,
+/// whatever the Run's status: `Completed`, or `Skipped`, which is a settled
+/// completion too. A duplicate completion landing on it is a no-op, never a
+/// reject.
+///
+/// Public because the completion command arms ask it *before* embedding a
+/// re-open (ADR-0049): a duplicate on a terminal Run must leave the Run as it
+/// was, not re-open it and then ignore the completion.
+pub fn duplicate_completion(state: &RunState, node_id: &str, iter: i64) -> Option<String> {
+    matches!(
+        iteration_status(state, node_id, iter),
+        Some(NodeStatus::Completed) | Some(NodeStatus::Skipped)
+    )
+    .then(|| {
+        format!("node {node_id} iter {iter} is already completed: duplicate completion ignored")
+    })
+}
+
 fn iteration_status(state: &RunState, node_id: &str, iter: i64) -> Option<NodeStatus> {
     state
         .nodes

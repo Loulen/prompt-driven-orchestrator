@@ -126,11 +126,16 @@ impl Lifetime {
         }
     }
 
+    /// Always a bound, in whole seconds rounded up, so it is never « 0 s » for
+    /// a session that lived. A closing time is rounded down to its second
+    /// ([`CLOSED_AT_GRAIN`]): the session closed before the next one.
     fn told(self) -> String {
-        match self {
-            Self::Measured(d) => format!("it ended {} s after it started", d.as_secs()),
-            Self::AtMost(d) => format!("it ended within {} s of its start", d.as_secs()),
-        }
+        let bound = match self {
+            Self::Measured(d) => d + CLOSED_AT_GRAIN,
+            Self::AtMost(d) => d,
+        };
+        let secs = bound.as_secs() + u64::from(bound.subsec_nanos() > 0);
+        format!("it ended within {secs} s of its start")
     }
 }
 

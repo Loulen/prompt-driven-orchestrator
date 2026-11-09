@@ -178,6 +178,8 @@ export const DELETE_CONFIRM = '[data-testid="confirm-delete-modal"]';
 /** Validate, next to Save, and the modal it opens (CONTEXT.md « Pipeline validé »). */
 export const VALIDATE_BUTTON = '[data-testid="validate-button"]';
 export const VALIDATE_MODAL = '[data-testid="validate-pipeline-modal"]';
+/** The window Save… opens: a new version, kept apart, or replacing the last (ADR-0088). */
+export const SAVE_MODAL = '[data-testid="save-version-modal"]';
 /** The tab bar's indicator once the pipeline is offered to somebody. */
 export const VALIDATED_FOR_ALL =
   '[data-testid="toolbar-validation-indicator"][data-validation="all"]';

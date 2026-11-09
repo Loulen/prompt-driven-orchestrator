@@ -78,7 +78,8 @@ Features validated while crossing the editing screens:
 5. **Author a conditional edge**: click an edge → the **edge detail panel** opens; in **Conditions**,
    « Add condition », pick the output, a field, an operator and a value → the condition pill appears
    at the edge's midpoint, always visible. Tick another output in the **Outputs** section → the edge
-   carries both.
+   carries both: the panel's header reads `<source> .out+notes → <target>` and its route line, just
+   under, `<source>.out+notes → <target>.out+notes`; on the canvas each output gets its own label.
 6. **Materialize a loop region**: draw a back-edge that closes a cycle over two nodes or more → a
    translucent bounded region appears, its corner reading `max 5` with a loop icon. Click the corner
    → the **region inspector** opens; change `max_iter` in its **Bound** section → the corner follows.

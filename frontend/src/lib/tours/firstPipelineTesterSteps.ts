@@ -15,6 +15,7 @@ import {
   VALIDATED_FOR_ALL,
   VALIDATED_FOR_PROJECTS,
   VALIDATE_BUTTON,
+  SAVE_MODAL,
   VALIDATE_MODAL,
   agent,
   agents,
@@ -256,8 +257,13 @@ export const TESTER_STEPS: TourStep[] = [
     body: (o) =>
       saved(o)
         ? "Saved: the pipeline is in your Library. Until you save, changes live only in this browser tab."
-        : "Click Save. Until you do, all of this lives only in this browser tab.",
-    target: () => ['[data-testid="save-button"]'],
+        : o.present(SAVE_MODAL)
+          ? "Click Save in the window. Each save numbers a new version of the pipeline; the earlier ones stay under Versions."
+          : "Click Save. Until you do, all of this lives only in this browser tab.",
+    // Two beats, as Validate: the button, then the window it opens, lit rather
+    // than left unlit over the dimmer (FP of CORE-227).
+    target: (o) => (o.present(SAVE_MODAL) ? [SAVE_MODAL] : ['[data-testid="save-button"]']),
+    soft: (o) => o.present(SAVE_MODAL),
     waitingFor: "the Save button",
     // Not skippable: everything after this reads the saved file.
     done: saved,

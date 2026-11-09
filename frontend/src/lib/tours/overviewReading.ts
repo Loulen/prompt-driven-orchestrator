@@ -41,6 +41,8 @@ export const INSPECTOR_TAB_CONFIG = testId("inspector-tab-config");
 export const TERMINAL = testId("tmux-terminal");
 /** A finished node's terminal opens folded to this bar, to leave room for its outputs. */
 export const TERMINAL_RESTORE = testId("term-restore");
+/** The node's terminal lifted over the whole app (#44). */
+export const ENLARGED_TERMINAL = testId("terminal-fullsize");
 /** The Runs tab, and it is the one showing. */
 export const RUNS_TAB_OPEN = `${RUNS_TAB}[aria-selected="true"]`;
 export const CODE_ROW = `${testId("port-row")}[data-kind="output"][data-port="code"]`;

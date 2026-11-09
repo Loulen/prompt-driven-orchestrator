@@ -66,7 +66,8 @@ of the PDO UI.
      declared the wait for you (the banner says you are done and wait for
      their go). Tell the user to choose **« Auto-approve when ready »** in the
      **Approve** menu, or to click **« Approve »** to take the artifacts as
-     they are. When they say they did, run `pdo complete` again.
+     they are. Once they release the node, PDO types a `[pdo-runtime]` line in
+     your terminal: then run `pdo complete` again (or sooner, if they tell you).
 3. **Do NOT run `pdo fail`** after an exit 3: nothing failed, the node is still
    yours.
 

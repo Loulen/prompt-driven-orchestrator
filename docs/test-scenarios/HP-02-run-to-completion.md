@@ -92,8 +92,8 @@ Features validated while crossing the run screens:
 3. The canvas shows the **Start node** (▶, tooltip « Run start ») and the **End node** (■,
    tooltip « Run end ») with the dataflow between them; within a couple of seconds the first work node animates to
    **running**. Select Start → its inspector shows the prompt and the image.
-4. Select the running node → the right panel shows a **live terminal** (« attached · live », a real
-   `claude` session, wrapping without horizontal scroll) and, in its **I/O** tab, the folded
+4. Select the running node → the right panel shows a **live terminal** (its bar names the node's
+   session, a real `claude` session, wrapping without horizontal scroll) and, in its **I/O** tab, the folded
    « Prompt » section holding the prompt preamble (`## Inputs` / `## Outputs`). Approve ▾ is inert
    until the node has written its outputs. The terminal's bar reads **« You pilot »**: the first
    browser to attach drives the session, and the Run's log keeps that as one `node_taken_over`
@@ -294,7 +294,7 @@ Harness four-way choice, read-only probes:
 - Nothing in the journey names the product or shows its logo: the brand shown in the window is out
   of scope here.
 - **A session that dies within seconds of its start** says so: its « Session died » banner reads
-  « … it ended N s after it started: check that its harness is logged in and knows the node's
+  « … it ended within N s of its start: check that its harness is logged in and knows the node's
   model ». On `opencode` that is the unmet login precondition, not a product finding.
 - **Seed pipelines in the instance library** (`<demo HOME>/.pdo/pipelines/`). Pipelines belong to
   the instance, not to a repository: a YAML in the target repo's `.pdo/pipelines/` is not listed

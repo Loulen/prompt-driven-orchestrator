@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
+import { useState } from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import OutputSchemaEditor from "./OutputSchemaEditor";
+import type { FrontmatterFieldDecl } from "../../shared/generated/FrontmatterFieldDecl";
 
 describe("OutputSchemaEditor", () => {
   it("renders empty state with add button", () => {
@@ -255,5 +257,28 @@ describe("OutputSchemaEditor", () => {
         field_2: { type: "string" },
       }),
     );
+  });
+  /**
+   * FP of CORE-227 (HP-03): the new field's name came prefilled `field` with the
+   * caret after it, so typing `verdict` gave `fieldverdict`. The placeholder name
+   * is selected, so typing replaces it.
+   */
+  it("selects a new field's placeholder name so typing replaces it", async () => {
+    let latest: Record<string, FrontmatterFieldDecl> | undefined;
+    function Host() {
+      const [schema, setSchema] = useState<Record<string, FrontmatterFieldDecl> | undefined>({
+        title: { type: "string" },
+      });
+      latest = schema;
+      return <OutputSchemaEditor schema={schema} onChange={setSchema} />;
+    }
+    render(<Host />);
+    await userEvent.click(screen.getByTestId("add-schema-field"));
+    const names = screen.getAllByTestId("schema-field-name");
+    expect(names[1]).toHaveFocus();
+    await userEvent.keyboard("verdict");
+    expect(latest).toEqual({ title: { type: "string" }, verdict: { type: "string" } });
+    // An existing field is left alone: only the one just added is selected.
+    expect(names[0]).toHaveValue("title");
   });
 });

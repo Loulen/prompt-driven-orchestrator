@@ -636,6 +636,10 @@
     gap: var(--g-2);
     min-width: 0;
   }
+  /* An unknown type gets room to be read (`banan…` in 64 px, FP of CORE-227). */
+  .ei-field:has(.ei-select[aria-invalid="true"]) {
+    grid-template-columns: minmax(0, 1fr) minmax(64px, 128px) auto;
+  }
   .ei-field__enum {
     grid-column: 1 / -1;
     display: flex;

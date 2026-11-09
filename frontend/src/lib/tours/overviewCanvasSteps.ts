@@ -15,6 +15,7 @@ import {
   CODE_ROW,
   CODE_VIEWER,
   EDGE_CONDITION,
+  ENLARGED_TERMINAL,
   INSPECTOR_EXPLORE,
   INSPECTOR_TAB_CONFIG,
   INSPECTOR_TAB_RUN,
@@ -187,7 +188,9 @@ export const CANVAS_STEPS: TourStep[] = [
     advanceHint: "advances when the terminal opens",
     confirm: (o) => o.present(TERMINAL),
     done: (o) => o.present(TERMINAL),
-    readOnly: () => [RIGHT_PANEL],
+    // An enlarged terminal covers the window: the right panel's box under it
+    // would draw a dashed outline across the terminal (FP of CORE-227).
+    readOnly: (o) => (o.present(ENLARGED_TERMINAL) ? [] : [RIGHT_PANEL]),
     explore: INSPECTOR_EXPLORE,
   },
   {

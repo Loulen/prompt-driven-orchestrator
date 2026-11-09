@@ -96,7 +96,7 @@ Features validated while crossing the tour:
    Run row you clicked, the arrows belong to the Run list, not to the tour: click the card's body
    first.) **On *Its terminal*, hover `‹ Previous`** → it is greyed out, and its tooltip says
    « This step's screen is gone: it can't be replayed »: the viewer *Close the output* asked to
-   close is gone.
+   close is gone. Enlarge the terminal there → it stays lit, with no dashed outline drawn across it.
 4. The **intermediate card** recaps *Overview* and offers **Continue** (next: *First run*). **Continue** → the
    example Trigger is gone from the Triggers tab, and the *First run* tour opens on its card, which
    names what it is about to do and shows a line per **preparation** (training repository, training
@@ -129,7 +129,10 @@ Features validated while crossing the tour:
 10. Open the menu of **Approve ▾** and choose **Auto-approve when ready** → the tour advances on the released guard, not on the click.
 11. The **wait** step lights the whole inspector as a soft zone — the terminal stays readable and
    usable — shows a two-item checklist (released / finished) and says it has **no time limit**. It
-   ends by itself when the node's status becomes terminal. **Enlarge the terminal** while you wait
+   ends by itself when the node's status becomes terminal. If the agent ran `pdo complete` before
+   the release, it was refused and went idle: the release types a `[pdo-runtime]` line into its
+   terminal (« The user released this node: run `pdo complete` again now. ») and the node then
+   completes with nobody typing. **Enlarge the terminal** while you wait
    (its expand button): the zone follows the enlarged terminal, with no dashed outline drawn across
    it.
 12. **Open the output.** With the terminal still enlarged, the card first asks to put it back: it
@@ -139,9 +142,13 @@ Features validated while crossing the tour:
     it. Read it, then `Next`. Every target lit on the way is reachable with the mouse; Skip is never
     the only way on.
 13. The **intermediate card** says how far along the full tour is, recaps what was actually observed,
-    and offers *Finish here* or **Continue** (next: *First pipeline*).
+    and offers *Finish here* or **Continue** (next: *First pipeline*). The Run's name shows whole,
+    wrapped if it is long.
 14. **Continue** → the artifact modal closes and the *First pipeline* tour starts on a clear screen.
     Carry it to its end card and `Finish`; the name to paste is `tutorial-implement-test-<id>`.
+    **Save…** opens the Save window, lit as a soft zone, and the card asks to click Save in it.
+    Adding the tester's `verdict`
+    field selects its placeholder name `field`, so typing `verdict` replaces it.
     Right after **Save**, the card asks to **Validate the
     pipeline**: Validate (next to Save) opens the modal; tick **All projects (current and future)**
     and **Save validation** → the modal closes, the tab bar's indicator turns to the globe « All »,

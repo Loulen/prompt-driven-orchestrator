@@ -989,6 +989,30 @@ describe("the Validate step", () => {
 });
 
 /**
+ * FP of CORE-227 (First pipeline 35/35): the Save window opened over the dimmer,
+ * unlit, while the card still pointed at the Save… button behind it.
+ */
+describe("the Save step", () => {
+  const step = STEPS.find((s) => s.id === "save")!;
+  const MODAL = '[data-testid="save-version-modal"]';
+
+  it("lights Save…, then the window it opens", () => {
+    const fake = new FakeApp();
+    expect(step.target(fake.obs())).toEqual(['[data-testid="save-button"]']);
+
+    fake.show(MODAL);
+    expect(step.target(fake.obs())).toEqual([MODAL]);
+    const soft = step.soft as (o: TourObservation) => boolean;
+    expect(soft(fake.obs())).toBe(true);
+    expect(stepBody(step, fake.obs())).toMatch(/^Click Save in the window\./);
+
+    fake.hide(MODAL);
+    expect(step.target(fake.obs())).toEqual(['[data-testid="save-button"]']);
+    expect(soft(fake.obs())).toBe(false);
+  });
+});
+
+/**
  * Two people build *First pipeline* on one instance. Each pastes a name suffixed
  * with their own Identité de tour, so neither Create is refused, and the last
  * step only ever touches the pipeline this browser built.

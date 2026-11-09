@@ -493,14 +493,15 @@
     grid-template-columns: 88px minmax(0, 1fr);
     gap: var(--g-4);
   }
+  /* The label wraps rather than clips: the recap is where the reader learns
+     the name of the Run they launched (FP of CORE-227). */
   .tr-recap dt {
     min-width: 0;
-    overflow: hidden;
-    white-space: nowrap;
     color: var(--text);
     font-family: var(--font-code);
     font-size: var(--fs-xs);
-    text-overflow: ellipsis;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
   }
   .tr-recap dd {
     margin: 0;

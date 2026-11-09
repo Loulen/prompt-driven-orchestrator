@@ -1034,6 +1034,84 @@ async fn mark_node_done_on_completed_iter_is_noop_without_downstream_spawn() {
     );
 }
 
+/// A duplicate completion on a **Completed** Run is a no-op that leaves the Run
+/// as it was: the embedded re-open (ADR-0049) is for a completion that changes
+/// something, so it must not fire before the duplicate is recognised. It used
+/// to: the Run was re-opened, then the completion was ignored, and the Run sat
+/// `running` with every node done.
+#[tokio::test]
+async fn a_duplicate_completion_on_a_completed_run_does_not_reopen_it() {
+    for kind in ["mark_node_done", "skip_node"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_name = "dup-on-completed";
+        write_pipeline_with_consumer(tmp.path(), pipe_name);
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "dup-on-completed-1";
+        for (kind, node) in [
+            (event_log::EventKind::RunStarted, None),
+            (event_log::EventKind::NodeStarted, Some("worker")),
+            (event_log::EventKind::NodeCompleted, Some("worker")),
+            (event_log::EventKind::NodeStarted, Some("consumer")),
+            (event_log::EventKind::NodeCompleted, Some("consumer")),
+            (event_log::EventKind::RunCompleted, None),
+        ] {
+            append_event(
+                &state,
+                &event_log::Event {
+                    id: None,
+                    run_id: run_id.into(),
+                    ts: pdo_kernel::clock::now_iso(),
+                    kind: kind.clone(),
+                    node_id: node.map(Into::into),
+                    iter: node.map(|_| 1),
+                    payload: (kind == event_log::EventKind::RunStarted)
+                        .then(|| serde_json::json!({ "pipeline_name": pipe_name })),
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"kind": "{kind}", "node_id": "worker", "iter": 1}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{kind}");
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["noop"], true, "{kind}: a duplicate is a no-op");
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::CommandIssued
+                    && e.payload.as_ref().and_then(|p| p.get("command"))
+                        == Some(&serde_json::json!("reopen_run"))),
+            "{kind}: a duplicate must not re-open the Run"
+        );
+        assert_eq!(
+            event_log::project(&events).unwrap().status,
+            event_log::RunStatus::Completed,
+            "{kind}: the Run stays Completed"
+        );
+    }
+}
+
 #[tokio::test]
 async fn mark_node_done_on_never_started_iter_is_rejected() {
     let tmp = tempfile::tempdir().unwrap();

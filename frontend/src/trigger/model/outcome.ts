@@ -56,7 +56,8 @@ export function fireRefusalOf(t: Pick<Trigger, "enabled">, rightsRefusal: string
 export const NOT_SCHEDULED_HINT = "Run now or disable and enable it to resume";
 
 /**
- * The status icon's tooltip: the last tick's result in words, then the last fire.
+ * The status icon's tooltip: the last outcome in words, then the last fire. « Outcome »,
+ * not « tick »: a manual fire (Run now, `pdo trigger fire`) writes it too.
  * `last_fired_at` is the last *fire*, not the last tick: a later skip keeps it, so
  * the two are said apart, never as « result X at T ».
  */
@@ -64,7 +65,7 @@ export function lastOutcomeTooltip(t: Pick<Trigger, "last_outcome" | "last_fired
   const fired = formatFireTs(t.last_fired_at);
   const lastFire = fired ? `Last fired ${fired}` : "Never fired";
   if (!t.last_outcome) return lastFire;
-  return `Last tick: ${outcomeWord(t.last_outcome)}\n${lastFire}`;
+  return `Last outcome: ${outcomeWord(t.last_outcome)}\n${lastFire}`;
 }
 
 /**

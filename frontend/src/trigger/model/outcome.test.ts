@@ -20,12 +20,12 @@ describe("trigger outcome model", () => {
     expect(lastOutcomeTooltip({ last_outcome: undefined } as Trigger)).toBe("Never fired");
   });
 
-  it("names the last tick's result in words, and the last fire apart: a skip is not a fire (CORE-232)", () => {
-    expect(lastOutcomeTooltip({ last_outcome: "fired", last_fired_at: "2026-11-09T10:25:20.241Z" })).toBe("Last tick: Fired\nLast fired Nov 9, 10:25 UTC");
+  it("names the last outcome in words (a tick or a manual fire), and the last fire apart: a skip is not a fire (CORE-232)", () => {
+    expect(lastOutcomeTooltip({ last_outcome: "fired", last_fired_at: "2026-11-09T10:25:20.241Z" })).toBe("Last outcome: Fired\nLast fired Nov 9, 10:25 UTC");
     // The skip happened later than the last fire: the instant is the fire's, said as such.
-    expect(lastOutcomeTooltip({ last_outcome: "skipped-overlap", last_fired_at: "2026-11-09T10:25:20.241Z" })).toBe("Last tick: Skipped, overlap\nLast fired Nov 9, 10:25 UTC");
+    expect(lastOutcomeTooltip({ last_outcome: "skipped-overlap", last_fired_at: "2026-11-09T10:25:20.241Z" })).toBe("Last outcome: Skipped, overlap\nLast fired Nov 9, 10:25 UTC");
     expect(lastOutcomeTooltip({ last_outcome: "guard-exit-nonzero", last_fired_at: undefined })).toBe(
-      "Last tick: Guard skip\nNever fired",
+      "Last outcome: Guard skip\nNever fired",
     );
   });
 

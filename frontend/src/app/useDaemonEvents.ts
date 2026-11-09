@@ -133,9 +133,11 @@ export function useDaemonEvents({
         return;
       }
       // The instance settings written elsewhere (CORE-232): an open Settings page
-      // shows the new values of the fields it is not editing, New Run its offers.
+      // shows the new values of the fields it is not editing, New Run its offers,
+      // the status bar its session cap.
       if (msg.type === "instance_settings_changed") {
         announceSettingsWritten();
+        sessions();
         return;
       }
       // #552: a Projet mutation (name/harness/members) — refresh the Projet list

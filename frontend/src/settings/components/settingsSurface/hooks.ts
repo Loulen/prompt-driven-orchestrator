@@ -1,10 +1,15 @@
 /** The Settings surface's hooks: what a search finds, the Save shortcut, a close asked from outside. */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { SEARCH_HIT } from "./search";
+
+/** What a search counts: the setting rows, and the other rows it finds (a tour). */
+const HITS = `.set-row, [${SEARCH_HIT}]`;
 
 /**
- * Under a search: how many setting rows show, and how many sections. A section with no
- * row found and whose name is not found hides; read from the page after each change.
+ * Under a search: how many rows show (setting rows, and the rows marked {@link SEARCH_HIT}),
+ * and how many sections. A section with no row found and whose name is not found hides;
+ * read from the page after each change.
  */
 export function useFound(pagesRef: RefObject<HTMLDivElement | null>, active: boolean) {
   const [found, setFound] = useState({ rows: 0, sections: 1 });
@@ -13,11 +18,11 @@ export function useFound(pagesRef: RefObject<HTMLDivElement | null>, active: boo
     if (!pages) return;
     let sections = 0;
     for (const section of pages.querySelectorAll<HTMLElement>(".set-sec")) {
-      const show = !active || !!section.dataset.labelMatch || !!section.querySelector(".set-row");
+      const show = !active || !!section.dataset.labelMatch || !!section.querySelector(HITS);
       section.hidden = !show;
       if (show) sections += 1;
     }
-    const rows = pages.querySelectorAll(".set-row").length;
+    const rows = pages.querySelectorAll(HITS).length;
     setFound((current) =>
       current.rows === rows && current.sections === sections ? current : { rows, sections },
     );

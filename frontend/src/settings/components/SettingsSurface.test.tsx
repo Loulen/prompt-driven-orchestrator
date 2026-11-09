@@ -170,6 +170,7 @@ import { resetCompactNodes } from "../../hooks/useCompactNodes";
 import type { InstanceSettings } from "../model/settings";
 import type { SandboxProfile } from "../../sandbox/model/sandbox";
 import { SETTINGS_WRITTEN } from "../store/useSettings";
+import { TOUR_CATALOG } from "../../lib/tours";
 
 function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
   return {
@@ -2371,6 +2372,42 @@ describe("SettingsSurface — search line, Save bar (CORE-117)", () => {
     expect(screen.getByTestId("settings-search")).toHaveValue("");
     expect(screen.getByTestId("setting-row-session-cap")).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("names the block of an Appearance switch its search found: two « Cost » read apart (CORE-232)", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "cost" } });
+    const name = (id: string) => screen.getByTestId(id).querySelector(".set-row__name")?.textContent;
+    await screen.findByTestId("setting-row-runs.list.cost");
+    expect(name("setting-row-runs.list.cost")).toBe("Runs list · Cost");
+    expect(name("setting-row-run.canvas.cost")).toBe("Run canvas · Cost");
+    // Under its block's header, the row needs no prefix.
+    fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "" } });
+    fireEvent.click(screen.getByTestId("settings-category-appearance"));
+    await screen.findByTestId("setting-row-runs.list.cost");
+    expect(name("setting-row-runs.list.cost")).toBe("Cost");
+  });
+
+  it("finds a tour by its name and counts the tours it shows (CORE-232)", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "full tour" } });
+    expect(await screen.findByTestId("tutorials-full")).toBeVisible();
+    expect(screen.queryByTestId("tutorials-row-overview")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("settings-search-count").textContent).toBe("1"));
+    // The section found by its own name: every tour shows, and each counts once.
+    fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "tutorials" } });
+    expect(await screen.findByTestId("tutorials-row-overview")).toBeVisible();
+    const tours = screen.getAllByTestId(/^tutorials-(full|row-[a-z-]+)$/).length;
+    expect(tours).toBe(TOUR_CATALOG.length + 1);
+    await waitFor(() => expect(screen.getByTestId("settings-search-count").textContent).toBe(String(tours)));
+    // A tour's blurb is not its name: « canvas » finds no tour.
+    fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "canvas" } });
+    expect(screen.queryByTestId("tutorials-row-overview")).not.toBeInTheDocument();
+    // A search that finds no tour leaves the table out.
+    fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "ttl" } });
+    expect(screen.queryByTestId("settings-tutorials")).not.toBeInTheDocument();
   });
 
   it("finds a row by its help, and keeps a panel mounted while it hides it", async () => {

@@ -6,7 +6,9 @@ export type StatsTriggersCreatedRuns = {
  */
 fired: number, 
 /**
- * Distinct triggers that fired at least once in the window.
+ * Triggers enabled now that fired at least once in the window: the
+ * numerator of « X of `enabled_triggers` » (a trigger disabled since, or
+ * deleted, is left out — CORE-232).
  */
 distinct_triggers: number, 
 /**

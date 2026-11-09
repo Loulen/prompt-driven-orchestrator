@@ -4,7 +4,7 @@ import { ELEMENT_DEFAULTS, isChanged, isVisible, withElement } from "../../../li
 import type { RowElement } from "../../../lib/appearance";
 import { Switch } from "../../../shared/ui/kit";
 import { SettingRow } from "./fields";
-import { searching, SearchContext, SectionMatchContext } from "./search";
+import { HeadlessBlockContext, searching, SearchContext, SectionMatchContext } from "./search";
 
 /** A group's caps title in a block, left out under a search that did not find the section (its rows filter themselves). */
 export function Group({ label, note }: { label: string; note?: string }) {
@@ -23,7 +23,8 @@ export function Group({ label, note }: { label: string; note?: string }) {
  * One Élément masquable's switch: hovering or focusing it points its element out in
  * the preview. A choice that differs from the default says « changed », the default
  * in its tooltip. `disabled` greys it (« Compact nodes » on): it keeps its value and
- * points nothing out.
+ * points nothing out. Under a search that left its block's header out, its name says the
+ * block: « Runs list · Cost ».
  */
 export function ElementSwitch({
   element,
@@ -43,6 +44,8 @@ export function ElementSwitch({
 }) {
   const appearance = useAppearance();
   const { id, label } = element;
+  const block = useContext(HeadlessBlockContext);
+  const name = block ? `${block} · ${label}` : label;
   const shownByDefault = ELEMENT_DEFAULTS[id] ?? true;
   const point = (on: boolean) => onPoint(on && !disabled ? id : null);
   return (
@@ -56,14 +59,14 @@ export function ElementSwitch({
       onBlur={() => point(false)}
     >
       <SettingRow
-        label={label}
+        label={name}
         help={`Show ${label} ${where}`}
         keywords={keywords}
         changed={isChanged(appearance, id) ? { default: shownByDefault ? "Shown" : "Hidden" } : undefined}
         testId={`setting-row-${id}`}
       >
         <Switch
-          label={label}
+          label={name}
           checked={isVisible(appearance, id)}
           disabled={disabled}
           onChange={(on) => updateAppearance((current) => withElement(current, id, on))}

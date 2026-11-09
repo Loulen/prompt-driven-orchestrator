@@ -86,9 +86,11 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   history go. A refused delete or enable/disable says why in a toast instead of doing nothing.
 - A Trigger a missing pipeline or repository put to sleep resumes its schedule when Run now
   fires it once they are back; its row and panel say "Not scheduled" and what wakes it.
-- The status icon's tooltip names the last tick's result in words and the last fire apart
-  ("Last tick: Skipped, overlap · Last fired Nov 9, 10:25 UTC"), instead of pairing a skip
-  with the time of an older fire. "Next fire in now" reads "Next fire now".
+- The status icon's tooltip names the last outcome in words, a tick's or a manual fire's, and
+  the last fire apart ("Last outcome: Skipped, overlap · Last fired Nov 9, 10:25 UTC"), instead
+  of pairing a skip with the time of an older fire. "Next fire in now" reads "Next fire now".
+- Stats › Triggers counts in "X of Y enabled triggers fired" only the Triggers still enabled: a
+  Trigger disabled since it fired no longer makes "2 of 2" while an enabled one never fired.
 - The "Last fired" switch of Settings › Appearance shows the element at every panel width.
 - A raw cron reads in mono in the Trigger panel (`* * * * *`, not `*****`), and Run info names
   the Trigger that fired the Run instead of its id.
@@ -102,8 +104,11 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   `pause|resume`; `pdo trigger fire` exits 1 on an error outcome. `pdo audit` prints what a
   short change changed to (`{"paused":true}`).
 - Settings: a search finds the switches of Settings › Appearance ("iteration", "cost"…), not
-  only their section title. A page left open follows a change made elsewhere (`pdo settings
-  set`, another browser, the harness warm-up) on the fields it is not editing.
+  only their section title, and names their block ("Runs list · Cost", "Run canvas · Cost"). It
+  finds a tour of Settings › Tutorials by its name ("Full tour", "Overview") and counts the tours
+  it shows. A page left open follows a change made elsewhere (`pdo settings set`, another
+  browser, the harness warm-up) on the fields it is not editing, and the status bar's session
+  gauge follows a session cap set from the CLI.
 - Settings › Notifications drops its sentences of explanation; the rows' tooltips carry them.
 - The default model row reads "Default model · claude": its models are claude's.
 - The skill bank says "built in" for a seeded skill and counts the tiers that select a skill
@@ -124,6 +129,9 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   Auto" as the box reads, and tells you to say to an agent waiting for the release that it can
   finish. Settings › Tutorials ticks the full tour once its three tours are done.
 - An edge into End reads "fired" once its End port fired, instead of "not fired" always.
+- A `script` node keeps its terminal once it ends: its shell exits as soon as `pdo complete` or
+  `pdo fail` answers, and the pane was often gone before it was frozen, so the Overview tour's
+  "frozen on the lines the script printed" showed "Session no longer available".
 - The training repository of the tours is reused only when it belongs to you: one another user
   left under `/tmp` is refused by name.
 - The node inspector no longer says "NodeRun" in its tooltips.

@@ -443,10 +443,7 @@ async fn folder_crud_nests_renames_and_deleting_moves_content_to_the_parent() {
 
     // Deleting `acme` sends the skill to the root.
     let resp = client
-        .delete(format!(
-            "{}/settings/skill-folders/{acme_id}",
-            daemon.url()
-        ))
+        .delete(format!("{}/settings/skill-folders/{acme_id}", daemon.url()))
         .send()
         .await
         .unwrap();
@@ -458,10 +455,7 @@ async fn folder_crud_nests_renames_and_deleting_moves_content_to_the_parent() {
         .unwrap();
     assert!(row["folder_id"].is_null());
     let resp = client
-        .delete(format!(
-            "{}/settings/skill-folders/{acme_id}",
-            daemon.url()
-        ))
+        .delete(format!("{}/settings/skill-folders/{acme_id}", daemon.url()))
         .send()
         .await
         .unwrap();

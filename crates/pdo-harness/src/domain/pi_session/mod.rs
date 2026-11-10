@@ -584,10 +584,7 @@ mod tests {
             )),
             "--tmp-pdo-b4kko9SV-repo-.pdo-runs-20260905-150733-7a89837-nodes-piagent-iter-1--"
         );
-        assert_eq!(
-            session_dir_name(Path::new("/home/user")),
-            "--home-user--"
-        );
+        assert_eq!(session_dir_name(Path::new("/home/user")), "--home-user--");
         // Only ONE leading slash is dropped, `:` is encoded too, `.` is kept.
         assert_eq!(session_dir_name(Path::new("//a:b/.c")), "---a-b-.c--");
     }

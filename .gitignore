@@ -35,6 +35,11 @@ frontend/test-results/
 frontend/playwright-report/
 frontend/playwright/.cache/
 .playwright-mcp/
+.playwright-cli/
+# Agentic test (FP / HP) screenshots and Playwright run state at the repo root:
+# throwaway evidence, never published (kept out of the public history too).
+/fp-shots/
+/test-results/
 
 # Local design prompt scratchpad — not shared
 design-prompts/
@@ -53,8 +58,8 @@ frontend/design/*
 
 # Personal agent context — not shared with the team
 CLAUDE.local.md
+docs/agents/overnight-status.md
 
 # Env files at any path
 .env
 .env.local
-.playwright-cli/

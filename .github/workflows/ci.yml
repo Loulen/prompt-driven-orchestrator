@@ -11,7 +11,7 @@ env:
 jobs:
   rust:
     name: Rust
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # ubuntu-latest (26.04): the sandbox tests time out on its runner
     steps:
       - uses: actions/checkout@v4
 

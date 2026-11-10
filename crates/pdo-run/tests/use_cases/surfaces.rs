@@ -165,6 +165,88 @@ async fn a_created_run_starts_in_its_repository_with_its_directory_watched() {
     );
 }
 
+/// The `relay` pipeline of the world's repository, its Start edge replaced by
+/// `replacement`.
+fn relay_without_its_start_edge(w: &World, replacement: &str) {
+    let start_edge =
+        "  - source: { node: start, port: user_prompt }\n    target: { node: worker, port: task }\n";
+    assert!(
+        RELAY.contains(start_edge),
+        "precondition: relay wires Start"
+    );
+    let yaml = RELAY.replace(start_edge, replacement);
+    std::fs::write(w.repo.path().join(".pdo/pipelines/relay.yaml"), yaml).unwrap();
+}
+
+async fn created(w: &World) -> String {
+    let (status, answer) = body(
+        w.runs
+            .create_run(&Actor::LocalOperator, create_request(w), Vec::new(), None)
+            .await,
+    )
+    .await;
+    assert_eq!(status, 201, "{answer}");
+    answer["run_id"].as_str().unwrap().to_string()
+}
+
+/// CORE-241: a pipeline nothing starts (Start wired to no node, every work
+/// node fed by another) used to leave its Run `running` for good, one
+/// `RunStarted` in its log. It now fails at once, with a reason that says
+/// Start leads nowhere, and spawns nothing.
+#[tokio::test]
+async fn a_run_nothing_starts_fails_at_once_and_says_why() {
+    let w = world();
+    relay_repository(&w);
+    // worker ⇄ second: neither is a root, and Start feeds neither.
+    relay_without_its_start_edge(
+        &w,
+        "  - source: { node: second, port: out }\n    target: { node: worker, port: task }\n",
+    );
+
+    let run_id = created(&w).await;
+
+    assert_eq!(
+        kinds(&w, &run_id),
+        vec![EventKind::RunStarted, EventKind::RunFailed],
+        "failed at once, nothing spawned"
+    );
+    let failed = w
+        .store
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|e| e.run_id == run_id && e.kind == EventKind::RunFailed)
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        failed.payload.unwrap()["reason"],
+        pdo_pipeline::domain::pipeline::START_LEADS_NOWHERE,
+        "the reason names Start without a successor"
+    );
+    assert!(
+        w.tmux.opened.lock().unwrap().is_empty(),
+        "no session opened"
+    );
+}
+
+/// A work node with no incoming edge is a root: the scheduler starts it with
+/// no Start edge, so such a Run is no Run that starts nothing.
+#[tokio::test]
+async fn a_root_starts_a_run_whose_start_is_wired_to_nothing() {
+    let w = world();
+    relay_repository(&w);
+    relay_without_its_start_edge(&w, "");
+
+    let run_id = created(&w).await;
+
+    eventually(&w, &run_id, "worker started as a root", |k| {
+        k.contains(&EventKind::NodeStarted)
+    })
+    .await;
+    assert!(!kinds(&w, &run_id).contains(&EventKind::RunFailed));
+}
+
 /// The `relay` pipeline as the registry holds it, mirrored into the world's
 /// shared pipelines.
 fn share_relay(w: &World) {

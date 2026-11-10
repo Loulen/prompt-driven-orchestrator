@@ -935,7 +935,7 @@ describe("editStore.save", () => {
   });
 });
 
-describe("editStore.save refreshes a stale lint (CORE-88)", () => {
+describe("editStore.save re-reads the lint (CORE-88, CORE-241)", () => {
   const mockFetchPipeline = vi.mocked(fetchPipeline);
   const mockFetchRunPipeline = vi.mocked(fetchRunPipeline);
   const detail = (diagnostics: string[]) => ({
@@ -972,12 +972,18 @@ describe("editStore.save refreshes a stale lint (CORE-88)", () => {
     expect(useEditStore.getState().openTabs[0].diagnostics).toEqual([]);
   });
 
-  it("costs no read when there was no lint to clear", async () => {
+  it("shows the lint a save brings, on a tab that had none (CORE-241)", async () => {
+    // The Start edge deleted, then Save: the banner must say the Run would
+    // start nothing, without a reload.
     seedTab("p1", true);
+    const startLeadsNowhere =
+      "Start is connected to no node, and no node starts on its own, so a Run of this pipeline would start nothing: draw an edge from Start to the node that should run first";
+    mockFetchPipeline.mockResolvedValueOnce(detail([startLeadsNowhere]) as never);
 
     await useEditStore.getState().save("p1");
 
-    expect(mockFetchPipeline).not.toHaveBeenCalled();
+    expect(mockFetchPipeline).toHaveBeenCalledWith("p1", "repo");
+    expect(useEditStore.getState().openTabs[0].diagnostics).toEqual([startLeadsNowhere]);
   });
 
   it("keeps the lint when the re-read fails", async () => {

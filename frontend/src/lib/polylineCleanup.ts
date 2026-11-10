@@ -212,3 +212,33 @@ export function clipOutside(points: Point[], rect: AnchorRect, margin: number): 
 export function storableWaypoints(enforced: Point[]): Point[] {
   return enforced.length <= 4 ? [] : enforced.slice(2, -2).map((p) => ({ ...p }));
 }
+
+/** `a → b → c` on one line, `c` back between `a` and `b`: a spur on the leg
+ *  `a → b`. A `c` past `a` runs back through the card, which is
+ *  {@link aroundSource}'s to re-lay. */
+function spursBack(a: Point, b: Point, c: Point): boolean {
+  const within = (lo: number, hi: number, v: number) => v > Math.min(lo, hi) && v < Math.max(lo, hi);
+  if (a.y === b.y && b.y === c.y) return within(a.x, b.x, c.x);
+  if (a.x === b.x && b.x === c.x) return within(a.y, b.y, c.y);
+  return false;
+}
+
+/**
+ * Folds the spur a bend closer to its card than one leg leaves on that leg: the
+ * wire ran out to the approach point and came back to the bend before it turned
+ * (`308 → 338 → 319` out of a right anchor, FP of CORE-227). The run after the
+ * spur slides onto the approach point instead, so the leg keeps its length and
+ * the wire turns where it ends. The fold leaves nothing to fold again, so
+ * enforcement stays a fixed point.
+ */
+export function withoutSourceLegSpur(points: Point[]): Point[] {
+  let out = points;
+  // The run after the spur is perpendicular to the leg: it slides along it.
+  const onto = (p: Point, approach: Point, legHorizontal: boolean): Point =>
+    legHorizontal ? { x: approach.x, y: p.y } : { x: p.x, y: approach.y };
+  if (out.length >= 5 && spursBack(out[0], out[1], out[2])) {
+    const approach = out[1];
+    out = [out[0], approach, onto(out[3], approach, approach.y === out[0].y), ...out.slice(4)];
+  }
+  return out;
+}

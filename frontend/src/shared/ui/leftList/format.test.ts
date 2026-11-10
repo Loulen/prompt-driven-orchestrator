@@ -11,6 +11,13 @@ describe("the figures of a row", () => {
     expect(fmtSpan(3 * 86_400_000)).toBe("3d");
   });
 
+  // FP of CORE-227 (C2): 29.6 s read « 30s » in the list and « 29s » in the
+  // Info tab. Both truncate, like a clock.
+  it("truncates seconds as the Info tab's duration does", () => {
+    expect(fmtSpan(29_600)).toBe("29s");
+    expect(fmtSpan(59_900)).toBe("59s");
+  });
+
   it("measure a span to its end, or to now while it runs", () => {
     expect(spanOf("2026-10-28T11:00:00Z", "2026-10-28T11:30:00Z", NOW)).toBe(30 * 60_000);
     expect(spanOf("2026-10-28T11:00:00Z", null, NOW)).toBe(60 * 60_000);

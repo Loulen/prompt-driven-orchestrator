@@ -11,7 +11,8 @@ use super::tmux;
 /// `new-session -d -s <name> -c <working_dir> exec bash <file>`, where the file
 /// holds `script` ([`LaunchFile`]): the values the script exports never reach
 /// an argv. Then mouse mode on so that wheel events are forwarded as
-/// mouse-report escape sequences instead of being silently dropped. `what`
+/// mouse-report escape sequences instead of being silently dropped, and the
+/// status line off. `what`
 /// names the session kind in the error. The file is gone when this returns.
 pub(super) fn new_session(
     socket: &str,
@@ -47,6 +48,11 @@ pub(super) fn new_session(
 
     let _ = tmux(socket)
         .args(["set-option", "-t", name, "mouse", "on"])
+        .output();
+    // The PDO terminal shows the pane alone: without a `~/.tmux.conf`, tmux's
+    // status line took its last row and named a session nobody chose.
+    let _ = tmux(socket)
+        .args(["set-option", "-t", name, "status", "off"])
         .output();
     record_closings(socket);
     Ok(())

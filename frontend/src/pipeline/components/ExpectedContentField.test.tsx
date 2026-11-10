@@ -16,10 +16,33 @@ function open() {
 }
 
 describe("ExpectedContentField", () => {
-  it("folds on a press outside it", () => {
+  it("folds on a click outside it", () => {
+    open();
+    const elsewhere = screen.getByTestId("elsewhere");
+    fireEvent.mouseDown(elsewhere);
+    fireEvent.mouseUp(elsewhere);
+    fireEvent.click(elsewhere);
+    expect(screen.queryByRole("textbox", { name: "Expected content" })).not.toBeInTheDocument();
+  });
+
+  /**
+   * FP of CORE-227 (M3): folding on the press moved « + field », just below,
+   * up before the release, and the click missed it. The field stays open
+   * until the click outside is over.
+   */
+  it("folds on a click outside whose propagation is stopped", () => {
+    open();
+    const elsewhere = screen.getByTestId("elsewhere");
+    elsewhere.addEventListener("click", (e) => e.stopPropagation());
+    fireEvent.mouseDown(elsewhere);
+    fireEvent.click(elsewhere);
+    expect(screen.queryByRole("textbox", { name: "Expected content" })).not.toBeInTheDocument();
+  });
+
+  it("stays open until the click outside is released", () => {
     open();
     fireEvent.mouseDown(screen.getByTestId("elsewhere"));
-    expect(screen.queryByRole("textbox", { name: "Expected content" })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Expected content" })).toBeInTheDocument();
   });
 
   /**
@@ -33,6 +56,8 @@ describe("ExpectedContentField", () => {
     const elsewhere = screen.getByTestId("elsewhere");
     elsewhere.addEventListener("mousedown", (e) => e.preventDefault());
     fireEvent.mouseDown(elsewhere);
+    fireEvent.mouseUp(elsewhere);
+    fireEvent.click(elsewhere);
     expect(screen.getByRole("textbox", { name: "Expected content" })).toBeInTheDocument();
   });
 });

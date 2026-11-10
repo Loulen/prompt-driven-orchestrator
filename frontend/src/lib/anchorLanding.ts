@@ -14,6 +14,7 @@ import {
   dropSpurs,
   onPolyline,
   squareUp,
+  withoutSourceLegSpur,
 } from "./polylineCleanup";
 
 /**
@@ -193,7 +194,7 @@ export function enforcePerpendicularEnds(
   // given, so merging the middle alone keeps both legs intact by construction.
   const mid = dedupeCollinear([sA, ...interior, tA]);
   // `squareUp` only inserts, so the four pinned points survive.
-  const squared = squareUp([src, ...mid, tgt]);
+  const unfolded = squareUp([src, ...mid, tgt]);
   // …and then merge the middle once more, because a bend `squareUp` inserted can
   // land on a straight run it has just completed. Leaving it in would be
   // harmless on screen and poisonous in the file: the redundant point is
@@ -205,11 +206,14 @@ export function enforcePerpendicularEnds(
   // an endpoint and its own approach point (that segment is already square), so
   // the two approach points are still at index 1 and len-2. Merging strictly
   // between the endpoints therefore keeps both legs whole.
-  const enforced = [
-    squared[0],
-    ...dedupeCollinear(squared.slice(1, -1)),
-    squared[squared.length - 1],
-  ];
+  const merge = (pts: Point[]) => [pts[0], ...dedupeCollinear(pts.slice(1, -1)), pts[pts.length - 1]];
+  // A spur on the source leg is folded on the MERGED route, where the run after
+  // it is one segment: folded before, a bend `squareUp` inserted on that run
+  // stayed behind and left a diagonal.
+  const merged = merge(unfolded);
+  const folded = withoutSourceLegSpur(merged);
+  const squared = folded === merged ? unfolded : folded;
+  const enforced = folded === merged ? merged : merge(folded);
   const landed = !targetRect
     ? enforced
     : manual

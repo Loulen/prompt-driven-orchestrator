@@ -109,9 +109,26 @@ Runs and nodes:
 - A "Session died" banner gives its reason whole, under its line, so the early-death hint is no
   longer cut. The Run's Stats strip wraps instead of cutting the cost by harness.
 - An output field's type select is as wide as its widest option: `string` no longer reads `strin`.
+- An open Expected content field folds when the click outside it is released, not when it is
+  pressed: the "+ field" button under it no longer moves away before the release, so the first
+  click adds the field.
+- `+` › Node numbers its card's name when a card of the canvas already wears it (`implementer-2`).
+- A wire drawn with its first bend closer to the card than one leg no longer runs out to the leg's
+  end and back before it turns: the bend moves out to the leg's end.
 - Marking done or skipping a node that is already completed on a finished Run leaves the Run
   Completed. It used to reopen the Run, ignore the duplicate, and leave it running with every node
   done.
+- A restart or a recovery refused on a finished Run (the node's iteration is already completed)
+  leaves the Run as it was. The refusal used to come after the Run was reopened, which left it
+  running with no node live and its duration running on.
+- `pdo node kill` on a node that is already finished prints `<node> not killed: <the daemon's
+  reason>`: the daemon's answer says it killed nothing.
+- A Run's duration reads the same in the Runs list and in its Info tab: both drop the part of a
+  second, where the list used to round it up.
+- The Info tab gives a failed or interrupted Run's reason whole, under its banner's line, instead
+  of cutting it with an ellipsis.
+- A node's terminal no longer shows tmux's status line, which took its last row when the home
+  directory had no `.tmux.conf`.
 
 New Run, Settings and the folder explorer:
 
@@ -122,6 +139,8 @@ New Run, Settings and the folder explorer:
   longer selects the row instead.
 - The editor tells the assistant which pipeline is open once per change, not on every view switch.
 - Closing a dialog no longer leaves the opening button's tooltip on screen.
+- Scrolled to the bottom of a Settings page, the section column lights the section that fills the
+  view, not a short last one under it.
 
 Tours:
 

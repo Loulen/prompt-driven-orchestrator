@@ -293,7 +293,8 @@ export function InfoTab({
           <Banner
             tone={run.status === "halted" ? "blocked" : run.status === "skipped" ? "skipped" : "failed"}
             title={run.status === "halted" ? "Halted" : run.status === "skipped" ? "Skipped" : "Failed"}
-            text={run.failure_reason}
+            detail={run.failure_reason}
+            detailTestId="run-failure-reason-text"
           />
         </div>
       )}
@@ -303,10 +304,13 @@ export function InfoTab({
         <div data-testid="run-awaiting-reason">
           {/* #588: only an incident carries a machine slug; a declared wait is
               the agent's question (or an awaiting child), not an interruption. */}
+          {/* The reason under the line, whole: on it, an ellipsis cut it (FP
+              of CORE-227). */}
           <Banner
             tone="awaiting"
             title={run.awaiting_reason_code ? "Interrupted · awaiting you" : "Awaiting you"}
-            text={run.awaiting_reason}
+            detail={run.awaiting_reason}
+            detailTestId="run-awaiting-reason-text"
           />
         </div>
       )}

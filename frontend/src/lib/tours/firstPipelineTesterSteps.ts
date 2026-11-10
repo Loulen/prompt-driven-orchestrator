@@ -73,7 +73,7 @@ export const TESTER_STEPS: TourStep[] = [
   {
     id: "select-tester",
     title: "Select the second node",
-    body: "Click the new card so the inspector follows it. Both cards look alike until you name them.",
+    body: "Click the new card so the inspector follows it. It reads implementer-2 until you name it.",
     target: (o) => nodeSel(agent(o.app, 1)),
     waitingFor: "the second node on the canvas",
     done: (o) => selected(o.app, agent(o.app, 1)),

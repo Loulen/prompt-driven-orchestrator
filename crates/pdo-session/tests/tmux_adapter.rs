@@ -67,6 +67,31 @@ fn a_session_lives_is_listed_captured_and_killed_on_its_own_socket() {
     tmux.kill("pdo-it-one");
 }
 
+/// FP of CORE-227 (C7): without a `~/.tmux.conf`, tmux's green status line
+/// took the last row of the PDO terminal. The PDO terminal shows one pane: its
+/// sessions carry no status line, whatever the user's configuration says.
+#[test]
+fn a_session_carries_no_status_line() {
+    let server = Server::new("status");
+    let tmux = &server.0;
+    let dir = tempfile::tempdir().unwrap();
+    tmux.new_session("pdo-it-status", dir.path(), "sleep 30", None)
+        .unwrap();
+    let out = std::process::Command::new("tmux")
+        .args([
+            "-L",
+            tmux.socket(),
+            "show-options",
+            "-t",
+            "pdo-it-status",
+            "-v",
+            "status",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "off");
+}
+
 #[test]
 fn keystrokes_and_a_paste_reach_the_pane() {
     let server = Server::new("text");

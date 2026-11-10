@@ -175,6 +175,31 @@ pub(super) async fn recover_node(
     let Some(run_state) = projection::project(&events) else {
         return (StatusCode::NOT_FOUND, "run not found").into_response();
     };
+    // Both mechanisms start the iteration again, so the guard a start meets is
+    // asked first, against a preview of the embedded re-open: a recovery it
+    // refuses (an iteration already completed) leaves the Run as it was, with
+    // neither the re-open nor the audit below written.
+    let started_again = event::Event {
+        id: None,
+        run_id: run_id.clone(),
+        ts: pdo_kernel::clock::now_iso(),
+        kind: event::EventKind::NodeStarted,
+        node_id: Some(node_id.clone()),
+        iter: Some(iter),
+        payload: None,
+    };
+    let preview = crate::application::reopen::preview_reopen(&events, run_state.clone());
+    if let transition_guard::Verdict::Reject { reason } =
+        transition_guard::validate_transition(Some(&preview), &started_again)
+    {
+        let message = reason.to_string();
+        warn!("recover_node refused for {node_id} iter {iter} in {run_id}: {message}");
+        return recover_conflict(
+            crate::domain::recovery::RecoveryMechanism::Reattach,
+            "recover_refused",
+            &message,
+        );
+    }
     // A name that WAS frozen but no longer resolves REFUSES — never a silent
     // `claude` relaunch in this node's worktree. A row with NO frozen harness
     // keeps the `claude` floor, which `can_resume`.

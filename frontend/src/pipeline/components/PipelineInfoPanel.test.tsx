@@ -793,6 +793,19 @@ describe("PipelineInfoPanel — Repositories tab and Info header (#752)", () => 
     expect(screen.queryByTestId("run-awaiting-reason")).toBeNull();
   });
 
+  // FP of CORE-227 (C5): the banner's one line cut the reason with an
+  // ellipsis. The reason is given whole, under the banner's line.
+  it("Info gives the reason of a failed or parked run whole, under the banner", () => {
+    const reason = "session_died: it ended within 18 s of its start; check that its harness is logged in and knows the node's model";
+    const { unmount } = renderPanel(
+      makeRun({ status: "awaiting_user", awaiting_reason: reason, awaiting_reason_code: "session_died" } as Partial<RunState>),
+    );
+    expect(screen.getByTestId("run-awaiting-reason-text")).toHaveTextContent(reason);
+    unmount();
+    renderPanel(makeRun({ status: "failed", failure_reason: reason }));
+    expect(screen.getByTestId("run-failure-reason-text")).toHaveTextContent(reason);
+  });
+
   it("Info states why an incident-parked run awaits the user, not an interactive wait (#598)", () => {
     const { unmount } = renderPanel(
       makeRun({ status: "awaiting_user", awaiting_reason: "session_died: tmux session … no longer exists", awaiting_reason_code: "session_died" } as Partial<RunState>),

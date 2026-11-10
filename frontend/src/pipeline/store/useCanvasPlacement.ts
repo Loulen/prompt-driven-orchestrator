@@ -11,6 +11,7 @@ import type { NodeType } from "../../shared/generated/NodeType";
 import { generateNodeId } from "../../lib/nanoid";
 import { CARD_HEIGHT, CARD_WIDTH, fallbackNodeSpot, freeDropSpot } from "../../lib/nodePlacement";
 import { deriveLoopRegions } from "../components/loopRegionDerivation";
+import { newNodeName } from "../model/newNodeName";
 // #723 — orchestrator pastilles on the run-view node card.
 import type { EditorNodeDef } from "../model/pipeline";
 const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
@@ -96,7 +97,10 @@ export function useCanvasPlacement({
 
   const handleAddNode = (type: NodeType) => {
     const id = generateNodeId();
-    const name = DEFAULT_NODE_NAMES[type] ?? "node";
+    const name = newNodeName(
+      DEFAULT_NODE_NAMES[type] ?? "node",
+      (pipeline?.nodes ?? []).flatMap((n) => (n.name ? [n.name] : [])),
+    );
 
     const view = computeDropPosition();
     let newNode: EditorNodeDef;

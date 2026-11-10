@@ -441,7 +441,12 @@ async fn the_extension_routes_answer_under_ext_and_hide_no_core_route() {
     // The trace of the events is readable through its route.
     let (status, _) = post_json(&daemon, "/projects", json!({ "name": "P" })).await;
     assert_eq!(status, 201);
-    wait_events(&control, |events| !events.is_empty()).await;
+    // Wait for the creation's own event: the first one to arrive may be another
+    // (an `instance_settings_changed` of the boot, seen on a CI runner).
+    wait_events(&control, |events| {
+        events.iter().any(|e| e["type"] == "operation_applied")
+    })
+    .await;
     let trace = daemon.get_json("/ext/test/events").await;
     assert!(
         trace

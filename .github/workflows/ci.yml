@@ -7,6 +7,12 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # The runner's account has no name, so git refuses to commit ("empty ident
+  # name"): the daemon's delivery commits, and so `pdo complete`, fail without it.
+  GIT_AUTHOR_NAME: PDO CI
+  GIT_AUTHOR_EMAIL: ci@pdo.invalid
+  GIT_COMMITTER_NAME: PDO CI
+  GIT_COMMITTER_EMAIL: ci@pdo.invalid
 
 jobs:
   rust:

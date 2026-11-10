@@ -9,8 +9,8 @@
  * re-aim — and the preparations: idempotent (the Run reused or relaunched, the
  * Trigger picked up by its name), refused on a Run that did not complete.
  *
- * Two identités de tour share the instance (#986): this browser is `aaaa`, a
- * neighbour is `bbbb`. The tour must only reuse and tidy up the `aaaa` objects.
+ * Two Identités de tour share the instance: this browser is `aaaa`, a neighbour
+ * is `bbbb`. The tour must only reuse and tidy up the `aaaa` objects.
  */
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -31,53 +31,82 @@ import {
   stepBody,
   stepReadOnly,
   stepSoft,
-  type TourAppState,
-  type TourObservation,
   type TourRun,
-  type TourRunSummary,
 } from "../tour";
-import type { PipelineDef, RunListEntry, RunState, Trigger } from "../../types";
+import type { TourAppState, TourObservation, TourRunSummary } from "../tourDef";
+import type { EditorPipelineDef } from "../../pipeline/model/pipeline";
+import type { RunListEntry } from "../../shared/generated/RunListEntry";
+import type { RunState } from "../../shared/generated/RunState";
+import type { TriggerListEntry as Trigger } from "../../shared/generated/TriggerListEntry";
+import { OVERVIEW_TOUR } from "./overview";
+import { probeReplay, type ReplayOutcome } from "../../test/tourReplay";
 import {
   EXAMPLE_TRIGGER_NAME,
   IMPLEMENTER_SCRIPT,
   OVERVIEW_PIPELINE_YAML,
   OVERVIEW_PROMPT,
   OVERVIEW_RUN_NAME,
-  OVERVIEW_TOUR,
   REVIEWER_SCRIPT,
-  RUN_POLL_MS,
   TUTORIAL_OVERVIEW_PIPELINE_ID,
+} from "./overviewPipeline";
+import {
+  RUN_POLL_MS,
   exampleTriggerId,
   overviewRunId,
   prepareCompletedRun,
   prepareExampleTrigger,
   removeExampleTrigger,
-} from "./overview";
-import { TUTORIAL_REPO_PATH } from "./firstRun";
-import { probeReplay, type ReplayOutcome } from "../../test/tourReplay";
-import { useEditStore } from "../../stores/editStore";
+} from "./overviewPreparation";
+import { TUTORIAL_REPO_PATH } from "./firstRunPreparation";
+import { useEditStore } from "../../pipeline/store/editStore";
+import { createRepo } from "../../workspace/api/repos";
+import { createPipeline, fetchPipelines, savePipeline } from "../../pipeline/api/pipelines";
+import { createRun } from "../../run/api/createRun";
+import { fetchRun, fetchRuns } from "../../run/api/runs";
+import { createTrigger, deleteTrigger, fetchTriggers, updateTrigger } from "../../trigger/api/triggers";
 
-vi.mock("../../api", async () => {
-  const actual = await vi.importActual<typeof import("../../api")>("../../api");
-  return {
-    ...actual,
-    createRepo: vi.fn(async () => ({ path: "/tmp/pdo-tutorial", created: true })),
-    fetchPipelines: vi.fn(async () => [] as unknown[]),
-    createPipeline: vi.fn(async () => ({ id: "tutorial-overview", scope: "instance", path: "p" })),
-    savePipeline: vi.fn(async () => ({ ok: true })),
-    fetchRuns: vi.fn(async () => [] as unknown[]),
-    fetchRun: vi.fn(),
-    createRun: vi.fn(async () => ({ run_id: "run-new" })),
-    fetchTriggers: vi.fn(async () => [] as unknown[]),
-    createTrigger: vi.fn(async () => ({ id: "trg-new" })),
-    updateTrigger: vi.fn(async () => ({})),
-    deleteTrigger: vi.fn(async () => undefined),
-  };
-});
+vi.mock("../../workspace/api/repos", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../workspace/api/repos")>()),
+  createRepo: vi.fn(async () => ({ path: "/tmp/pdo-tutorial", created: true })),
+}));
+vi.mock("../../pipeline/api/pipelines", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../pipeline/api/pipelines")>()),
+  fetchPipelines: vi.fn(async () => [] as unknown[]),
+  createPipeline: vi.fn(async () => ({ id: "tutorial-overview", scope: "instance", path: "p" })),
+  savePipeline: vi.fn(async () => ({ ok: true })),
+}));
+vi.mock("../../run/api/createRun", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../run/api/createRun")>()),
+  createRun: vi.fn(async () => ({ run_id: "run-new" })),
+}));
+vi.mock("../../run/api/runs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../run/api/runs")>()),
+  fetchRuns: vi.fn(async () => [] as unknown[]),
+  fetchRun: vi.fn(),
+}));
+vi.mock("../../trigger/api/triggers", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../trigger/api/triggers")>()),
+  fetchTriggers: vi.fn(async () => [] as unknown[]),
+  createTrigger: vi.fn(async () => ({ id: "trg-new" })),
+  updateTrigger: vi.fn(async () => ({})),
+  deleteTrigger: vi.fn(async () => undefined),
+}));
 
-const api = await import("../../api");
+const api = {
+  createRepo,
+  fetchPipelines,
+  createPipeline,
+  savePipeline,
+  createRun,
+  fetchRun,
+  fetchRuns,
+  createTrigger,
+  deleteTrigger,
+  fetchTriggers,
+  updateTrigger,
+};
 
-/** This browser's identité de tour, and a neighbour's on the same instance. */
+/** This browser's Identité de tour, and a neighbour's on the same instance. */
 const ME = "aaaa";
 const OTHER = "bbbb";
 const MY_RUN = `${OVERVIEW_RUN_NAME}-${ME}`;
@@ -92,8 +121,10 @@ const TRIGGER_ID = "trg-tour";
 
 const t = (id: string) => `[data-testid="${id}"]`;
 const RUN_ROW = `[data-run-row="${RUN_ID}"]`;
-/** The status-dot step's target: the row's leading slot, which keeps its box on hover. */
+/** The status-icon step's target: the row's leading slot, which keeps its box on hover. */
 const RUN_SELECT = `${RUN_ROW} ${t("run-select-control")}`;
+/** The same slot under the reader's pointer: what ends the status-icon step. */
+const RUN_SELECT_HOVERED = `${RUN_SELECT}:hover`;
 const TRIGGER_ROW = `[data-trigger-row="${TRIGGER_ID}"]`;
 const CANVAS = "[data-panel]#center";
 const LEFT = "[data-panel]#left";
@@ -120,10 +151,11 @@ const START_INPUT = `${START_INSPECTOR} ${t("start-input-text")}`;
 const EDGE_PANEL = t("edge-detail-panel");
 const EDGE_CONDITION = `${EDGE_PANEL} ${t("condition-row")}`;
 const CLEANUP_MODAL = t("cleanup-confirm-modal");
+const CLEANUP_ITEM = `${t("run-menu-cleanup")}[data-run-id="${RUN_ID}"]`;
 const node = (id: string) => `.react-flow__node[data-id="${id}"]`;
 
 /** The canvas document of the Run: the pipeline the preparation wrote. */
-const RUN_PIPELINE: PipelineDef = {
+const RUN_PIPELINE: EditorPipelineDef = {
   name: TUTORIAL_OVERVIEW_PIPELINE_ID,
   nodes: [
     { id: "start", type: "start", outputs: [] },
@@ -137,7 +169,7 @@ const RUN_PIPELINE: PipelineDef = {
     { source: { node: "reviewer", port: "review" }, target: { node: "implementer", port: "task" } },
     { source: { node: "reviewer", port: "review" }, target: { node: "end", port: "result" } },
   ],
-} as unknown as PipelineDef;
+} as unknown as EditorPipelineDef;
 /** reviewer → End is the 4th edge of the document: the canvas keys it `e-3`. */
 const END_EDGE = `.react-flow__edge[data-id="e-3"]`;
 const END_PILL = t("edge-condition-label-e-3");
@@ -199,8 +231,6 @@ class FakeApp {
     ...EMPTY_APP,
     runCount: 2,
     runs: [summary({ id: "run-other", name: "other", pipeline: "mine", status: "running" }), summary()],
-    launchedRunId: "run-other",
-    myRun: { id: "run-other", name: "other", nodes: [] },
   };
   readonly baseline: TourAppState = { ...this.app };
   private dom = new Set<string>([CANVAS, LEFT, RIGHT, RUNS_TAB, RUNS_TAB_OPEN, TRIGGERS_TAB, PIPELINES_TAB, NEW_RUN, RUN_ROW, RUN_SELECT, t("open-settings"), t("open-stats")]);
@@ -269,7 +299,17 @@ class FakeApp {
     this.hide(EDGE_PANEL);
     this.show(START_INSPECTOR);
   }
+  hoverStatusIcon() {
+    this.show(RUN_SELECT_HOVERED);
+  }
+  leaveStatusIcon() {
+    this.hide(RUN_SELECT_HOVERED);
+  }
+  openRunMenu() {
+    this.show(CLEANUP_ITEM);
+  }
   archive() {
+    this.hide(CLEANUP_ITEM);
     this.show(CLEANUP_MODAL);
   }
   confirmArchive() {
@@ -305,7 +345,7 @@ function gestures(fake: FakeApp): Record<string, () => void> {
     "open-end-edge": () => fake.clickEndEdge(),
     "open-start": () => fake.clickStart(),
     "runs-tab": read,
-    "status-dots": read,
+    "status-icon": () => fake.hoverStatusIcon(),
     worktree: read,
     "archive-run": () => {
       fake.archive();
@@ -322,7 +362,7 @@ function gestures(fake: FakeApp): Record<string, () => void> {
  *  let the machine observe and press Next when the card asks for it. */
 function walk(
   fake: FakeApp,
-  /** Called on entering each step, before its gesture (PDO-10's replay probe). */
+  /** Called on entering each step, before its gesture (the replay probe). */
   onStep?: (run: TourRun, now: number) => void,
 ): { run: TourRun; visited: string[] } {
   const script = gestures(fake);
@@ -377,7 +417,7 @@ describe("walking the whole tour", () => {
       "open-end-edge",
       "open-start",
       "runs-tab",
-      "status-dots",
+      "status-icon",
       "worktree",
       "archive-run",
       "triggers-tab",
@@ -387,7 +427,7 @@ describe("walking the whole tour", () => {
     ]);
   });
 
-  it("is eighteen steps: nine gestures, and two that ask for a click only when their subject is hidden", () => {
+  it("is eighteen steps: twelve gestures, two of them asking for a click only when their subject is hidden", () => {
     expect(STEPS).toHaveLength(18);
     const gestures = STEPS.filter((s) => s.done).map((s) => s.id);
     expect(gestures).toEqual([
@@ -399,6 +439,7 @@ describe("walking the whole tour", () => {
       "open-end-edge",
       "open-start",
       "runs-tab",
+      "status-icon",
       "archive-run",
       "triggers-tab",
       "pipelines-tab",
@@ -460,12 +501,12 @@ describe("gestures advance only on the observed state", () => {
     fake.openRun();
     const run = at("open-end-edge", fake);
     expect(stepById("open-end-edge").target(fake.obs())).toEqual([END_EDGE, END_PILL]);
-    fake.select("edge", null, 2); // reviewer → implementer, verdict eq fail
+    fake.select("edge", null, 2); // reviewer → implementer, verdict = fail
     fake.show(EDGE_PANEL);
     expect(observeTour(TOUR, run, fake.obs(), 100).index).toBe(run.index);
     fake.clickEndEdge();
     expectStopsForNext(run, fake, 200);
-    expect(stepBody(stepById("open-end-edge"), fake.obs())).toContain("verdict eq pass");
+    expect(stepBody(stepById("open-end-edge"), fake.obs())).toContain("verdict = pass");
   });
 
   it("lights the edge alone while its condition pill is not rendered", () => {
@@ -572,7 +613,7 @@ describe("gestures advance only on the observed state", () => {
     const step = stepById("terminal");
     const run = at("terminal", fake);
     expect(step.target(fake.obs())).toEqual([TERMINAL_RESTORE]);
-    expect(stepBody(step, fake.obs())).toMatch(/^Click Terminal/);
+    expect(stepBody(step, fake.obs())).toMatch(/^Click the ended session bar/);
     expect(needsConfirm(TOUR, run, fake.obs()), "no Next before the click").toBe(false);
     expect(observeTour(TOUR, run, fake.obs(), 100).index).toBe(run.index);
     fake.unfoldTerminal();
@@ -611,19 +652,26 @@ describe("gestures advance only on the observed state", () => {
     expect(needsConfirm(TOUR, entered, fake.obs())).toBe(true);
   });
 
-  it("re-aims the archive step onto the confirmation, then waits for Next on the grey dot", () => {
+  it("re-aims the archive step onto the confirmation, then waits for Next on the archive icon", () => {
     const fake = new FakeApp();
     const step = stepById("archive-run");
     const run = at("archive-run", fake);
     expect(step.target(fake.obs())).toEqual([RUN_ROW]);
+    fake.show(`${t("run-menu-cleanup")}[data-run-id="another-run"]`);
+    expect(step.target(fake.obs()), "another Run's menu is not the tour's").toEqual([RUN_ROW]);
+    fake.openRunMenu();
+    expect(step.target(fake.obs()), "the menu is a portal: its Cleanup entry is lit").toEqual([CLEANUP_ITEM]);
+    expect(stepSoft(step, fake.obs()), "the whole menu stays clickable").toBe(true);
     fake.archive();
     expect(step.target(fake.obs())).toEqual([CLEANUP_MODAL]);
+    expect(stepSoft(step, fake.obs())).toBe(false);
     expect(observeTour(TOUR, run, fake.obs(), 100).index).toBe(run.index);
     fake.confirmArchive();
     const after = observeTour(TOUR, run, fake.obs(), 200);
     expect(after.index, "stops on the archived Run").toBe(run.index);
     expect(needsConfirm(TOUR, after, fake.obs())).toBe(true);
-    expect(stepBody(step, fake.obs())).toMatch(/grey/);
+    expect(stepBody(step, fake.obs())).toMatch(/archive icon/);
+    expect(stepBody(step, fake.obs())).not.toMatch(/grey|dot/);
   });
 
   it("lets the archive be skipped, leaving the Run as it is", () => {
@@ -641,7 +689,7 @@ describe("gestures advance only on the observed state", () => {
     expect(step.target(fake.obs())).toEqual([TRIGGERS_TAB]);
     fake.openTriggers();
     expect(step.target(fake.obs())).toEqual([TRIGGER_ROW]);
-    expect(stepBody(step, fake.obs())).toContain(MY_TRIGGER);
+    expect(stepBody(step, fake.obs())).toContain(`This is \`${MY_TRIGGER}\`, set up for the tour`);
   });
 
   it("re-aims the Pipelines step onto tutorial-overview, with one sentence for First pipeline", () => {
@@ -653,8 +701,8 @@ describe("gestures advance only on the observed state", () => {
     expect(stepBody(step, fake.obs())).toContain("First pipeline");
   });
 
-  it("aims the status-dot step at the row's leading slot, never at the dot hover hides", () => {
-    const step = stepById("status-dots");
+  it("aims the status-icon step at the row's leading slot, never at the icon hover hides", () => {
+    const step = stepById("status-icon");
     const targets = step.target(new FakeApp().obs());
     expect(targets).toEqual([RUN_SELECT]);
     // The resting dot is `display: none` while the row is hovered: a hole on it
@@ -662,24 +710,48 @@ describe("gestures advance only on the observed state", () => {
     for (const target of targets) expect(target).not.toContain("run-status-dot");
   });
 
-  it("teaches the Status icon by its shapes, no longer by its colours (PDO-22, #1000)", () => {
-    const step = stepById("status-dots");
-    const obs = new FakeApp().obs();
+  it("explains the Status icon by its shape, never by its colour", () => {
+    const step = stepById("status-icon");
     expect(step.title).toBe("The status icon");
-    expect(stepBody(step, obs)).toBe(
+    const body = stepBody(step, new FakeApp().obs());
+    expect(body).toBe(
       "Its shape tells you where the Run is: a check means finished, a turning circle means running, a question mark means it waits for you. Hover it for details.",
     );
-    expect(stepBody(step, obs)).not.toMatch(/green|orange|blue/i);
+    expect(body).not.toMatch(/green|orange|blue|red|colou?r|dot/i);
+    expect(step.waitingFor).toBe("the status icon of your Run");
   });
 
-  it("draws the four status glyphs with their meaning inside the status-icon card", () => {
-    const illustration = stepById("status-dots").illustration!;
+  it("advances once the reader hovers their Run's status icon, and says so in its footer", () => {
+    const step = stepById("status-icon");
+    // The mockup's footer: Skip on the left, the gesture on the right, no Next.
+    expect(step.skippable).toBe(true);
+    expect(step.advanceHint).toBe("Hover the status icon of your Run");
+    expect(step.confirm).toBeUndefined();
+
+    const fake = new FakeApp();
+    fake.openRunsTab();
+    const run = at("status-icon", fake);
+    expect(observeTour(TOUR, run, fake.obs(), 100).index, "waits while nothing is hovered").toBe(run.index);
+    fake.hoverStatusIcon();
+    expect(observeTour(TOUR, run, fake.obs(), 200).index).toBe(run.index + 1);
+  });
+
+  it("does not take another row's status icon for the reader's", () => {
+    const fake = new FakeApp();
+    fake.openRunsTab();
+    fake.show(`[data-run-row="run-other"] ${t("run-select-control")}:hover`);
+    const run = at("status-icon", fake);
+    expect(observeTour(TOUR, run, fake.obs(), 100).index).toBe(run.index);
+  });
+
+  it("draws four Status icons inside the card, each named by its shape", () => {
+    const illustration = stepById("status-icon").illustration!;
     expect(illustration.kind).toBe("rows");
     expect(illustration.rows.map((r) => [r.status, r.label])).toEqual([
-      ["completed", "finished"],
-      ["running", "running"],
-      ["awaiting_user", "waits for you"],
-      ["failed", "failed"],
+      ["completed", "a check: finished"],
+      ["running", "a turning circle: running"],
+      ["awaiting_user", "a question mark: waits for you"],
+      ["failed", "a cross: failed"],
     ]);
   });
 
@@ -691,8 +763,13 @@ describe("gestures advance only on the observed state", () => {
     expect(stepReadOnly(stepById("open-implementer"), fake.obs())).toEqual([RIGHT]);
     expect(stepReadOnly(stepById("outputs"), fake.obs())).toEqual([RIGHT]);
     expect(stepReadOnly(stepById("terminal"), fake.obs())).toEqual([RIGHT]);
+    // FP of CORE-227 (Overview 8): an enlarged terminal covers the window; the
+    // right panel's box under it would draw a dashed outline across it.
+    fake.show(t("terminal-fullsize"));
+    expect(stepReadOnly(stepById("terminal"), fake.obs())).toEqual([]);
+    fake.hide(t("terminal-fullsize"));
     // The inspector's tabs stay clickable inside the read-only panel.
-    // ADR-0080: on a Run followed in « pilotage » the second tab is Config, not Edit.
+    // ADR-0085: on a Run followed in « pilotage » the second tab is Config, not Edit.
     expect(stepById("open-implementer").explore).toContain(TAB_CONFIG);
     expect(stepById("open-implementer").explore).not.toContain(t("inspector-tab-edit"));
     // With the viewer up its backdrop covers the panel: nothing else is lit.
@@ -720,7 +797,7 @@ describe("gestures advance only on the observed state", () => {
     fake.clickEndEdge();
     const [condition] = stepAsides(stepById("open-end-edge"), fake.obs());
     expect(condition.target).toBe(EDGE_CONDITION);
-    expect(condition.text).toContain("verdict eq pass");
+    expect(condition.text).toContain("verdict = pass");
     fake.clickStart();
     const [prompt] = stepAsides(stepById("open-start"), fake.obs());
     expect(prompt.target).toBe(START_INPUT);
@@ -734,6 +811,12 @@ describe("gestures advance only on the observed state", () => {
     }
     expect(stepById("settings-button").target(new FakeApp().obs())).toEqual([t("open-settings")]);
     expect(stepById("stats-button").target(new FakeApp().obs())).toEqual([t("open-stats")]);
+  });
+
+  // PDO-v2 #43: the right pane folds away when it has nothing to show.
+  it("says what the right pane shows with nothing selected: Pipeline info", () => {
+    expect(stepBody(stepById("right-panel"), new FakeApp().obs())).toContain("Pipeline info");
+    expect(stepById("right-panel").target(new FakeApp().obs())).toEqual([RIGHT]);
   });
 
   it("draws the canvas as a zone to roam in", () => {
@@ -762,21 +845,16 @@ describe("the copy", () => {
 
   it("recaps what happened to the Run", () => {
     const fake = new FakeApp();
-    expect(recapOf(TOUR, fake.app).find((b) => b.label === MY_RUN)?.text).toMatch(/still in your list/);
+    expect(recapOf(TOUR, fake.app).find((b) => b.label === "Run")?.text).toMatch(/still in your list/);
     fake.confirmArchive();
-    expect(recapOf(TOUR, fake.app).find((b) => b.label === MY_RUN)?.text).toMatch(/archived/);
-  });
-
-  it("names this browser's Run and Trigger, with their real names, in the recap", () => {
-    const labels = recapOf(TOUR, new FakeApp().app).map((b) => b.label);
-    expect(labels).toContain(MY_RUN);
-    expect(labels).toContain(MY_TRIGGER);
+    expect(recapOf(TOUR, fake.app).find((b) => b.label === "Run")?.text).toMatch(/archived/);
   });
 
   it("names this browser's Run in the open-run step", () => {
     const fake = new FakeApp();
-    const body = stepBody(stepById("open-run"), fake.obs());
-    expect(body).toContain(`Click ${MY_RUN} in the list.`);
+    expect(stepBody(stepById("open-run"), fake.obs())).toContain(`Click \`${MY_RUN}\` in the list.`);
+    fake.openRun();
+    expect(stepBody(stepById("open-run"), fake.obs())).toContain(`\`${MY_RUN}\` is open.`);
   });
 });
 
@@ -804,7 +882,7 @@ describe("the tutorial-overview pipeline", () => {
     expect(OVERVIEW_PIPELINE_YAML).not.toContain("pin_harness");
   });
 
-  it("routes reviewer → End on verdict eq pass and back on verdict eq fail", () => {
+  it("routes reviewer → End on verdict = pass and back on verdict = fail", () => {
     const edges = OVERVIEW_PIPELINE_YAML.split("edges:")[1];
     expect(edges).toMatch(/node: reviewer, port: review \}\n\s+target: \{ node: end[\s\S]*?verdict: \{ eq: pass \}/);
     expect(edges).toMatch(/node: reviewer, port: review \}\n\s+target: \{ node: implementer[\s\S]*?verdict: \{ eq: fail \}/);
@@ -864,7 +942,7 @@ describe("the Run the preparation waits for", () => {
     vi.useRealTimers();
   });
 
-  it("reuses the newest completed, unarchived Run of this identité de tour", async () => {
+  it("reuses the newest completed, unarchived Run of this Identité de tour", async () => {
     vi.mocked(api.fetchRuns).mockResolvedValueOnce([
       listEntry({ run_id: "run-archived", status: "archived" }),
       listEntry({ run_id: "run-mine", pipeline_name: "mine" }),
@@ -879,7 +957,7 @@ describe("the Run the preparation waits for", () => {
     expect(overviewRunId()).toBe("run-done");
   });
 
-  it("ignores a newer Run of another identité de tour and the unsuffixed Run of before", async () => {
+  it("ignores a newer Run of another Identité de tour and the unsuffixed Run of before", async () => {
     vi.mocked(api.fetchRuns).mockResolvedValueOnce([
       listEntry({ run_id: "run-neighbour", name: OTHER_RUN }),
       listEntry({ run_id: "run-legacy", name: OVERVIEW_RUN_NAME }),
@@ -1060,10 +1138,7 @@ describe("the example Trigger", () => {
   });
 
   it("is removed for each identity by its own teardown only", async () => {
-    const triggers = [
-      { id: "a", name: MY_TRIGGER } as Trigger,
-      { id: "b", name: OTHER_TRIGGER } as Trigger,
-    ];
+    const triggers = [{ id: "a", name: MY_TRIGGER } as Trigger, { id: "b", name: OTHER_TRIGGER } as Trigger];
     vi.mocked(api.fetchTriggers).mockResolvedValueOnce(triggers);
     await removeExampleTrigger();
     expect(vi.mocked(api.deleteTrigger).mock.calls.map((c) => c[0])).toEqual(["a"]);
@@ -1072,6 +1147,10 @@ describe("the example Trigger", () => {
     vi.mocked(api.fetchTriggers).mockResolvedValueOnce([triggers[1]]);
     await removeExampleTrigger();
     expect(vi.mocked(api.deleteTrigger).mock.calls.map((c) => c[0])).toEqual(["a", "b"]);
+  });
+
+  it("names this browser's Trigger when its removal fails", () => {
+    expect(TOUR.teardown?.[0].failureTitle).toBe(`The example Trigger ${MY_TRIGGER} could not be removed`);
   });
 
   it("is the tour's only teardown: the pipeline and the Run stay", () => {
@@ -1089,27 +1168,24 @@ describe("the intro card", () => {
     }
   });
 
-  it("suffixes only the Trigger and the Run, the objects of this identité de tour", () => {
+  it("suffixes only the Trigger and the Run, the objects of this Identité de tour", () => {
     const ready = Object.fromEntries(TOUR.intro!.prepare.map((p) => [p.id, p.ready]));
     expect(ready.trigger).toBe(`Example Trigger ${MY_TRIGGER} active (it never fires a Run)`);
     expect(ready.run).toBe(`Run ${MY_RUN} completed`);
     expect(ready.repo).toBe(`Training repository ${TUTORIAL_REPO_PATH} ready`);
     expect(ready.pipeline).toBe(`Pipeline ${TUTORIAL_OVERVIEW_PIPELINE_ID} in the Library`);
-    expect(TOUR.intro!.footnote).toBe(
-      "Nothing here touches your own repositories. The example Trigger is removed when the tour ends; the pipeline and the Run stay yours.",
-    );
   });
 });
 
-// ---- PDO-10 (#1030) — replaying a step with Previous -----------------------
+// ---- Rejeu d'étape: replaying a step with Previous -------------------------
 
 /**
- * The replay review of #1030, as a property of the walk: from every step a
- * reader can press Previous on, the step before is replayed — held, then left
- * with Next, or live on its own target — and the tour never stops on a failure
- * card for it (CONTEXT.md « Rejeu d'étape »).
+ * As a property of the walk: from every step a reader can press Previous on,
+ * the step before is replayed (held, then left with Next, or live on its own
+ * target) and the tour never stops on a failure card for it (CONTEXT.md §
+ * « Rejeu d'étape »).
  */
-describe("replaying a step with Previous (PDO-10, #1030)", () => {
+describe("replaying a step with Previous", () => {
   function replays() {
     const fake = new FakeApp();
     const outcomes: Array<ReplayOutcome & { from: string }> = [];
@@ -1123,11 +1199,25 @@ describe("replaying a step with Previous (PDO-10, #1030)", () => {
     const { run, outcomes } = replays();
     expect(run.phase).toBe("finished");
     expect(outcomes.flatMap((o) => (o.problem ? [o.problem] : []))).toEqual([]);
-    // Offered from every step but the first, which has nothing before it.
-    expect(outcomes.filter((o) => !o.offered).map((o) => o.from)).toEqual([STEPS[0].id]);
   });
 
-  /** Play the walk's gestures for every step before \`stepId\`, and enter it. */
+  it("offers Previous from every step but the first, and those after a screen that is gone", () => {
+    const { outcomes } = replays();
+    expect(outcomes.filter((o) => !o.offered).map((o) => o.from)).toMatchInlineSnapshot(`
+      [
+        "open-run",
+        "terminal",
+      ]
+    `);
+  });
+
+  /** Each one read and judged: its card still makes sense without its screen. */
+  it("replays off screen only the steps that say what was done", () => {
+    const { outcomes } = replays();
+    expect(outcomes.filter((o) => o.offScreen).map((o) => o.from)).toMatchInlineSnapshot(`[]`);
+  });
+
+  /** Play the walk's gestures for every step before `stepId`, and enter it. */
   function at(fake: FakeApp, stepId: string): TourRun {
     const script = gestures(fake);
     const index = STEPS.findIndex((s) => s.id === stepId);
@@ -1135,18 +1225,27 @@ describe("replaying a step with Previous (PDO-10, #1030)", () => {
     return { ...beginSteps(TOUR, startTour(TOUR, fake.obs()), fake.obs()), index };
   }
 
-  /** The viewer is closed, which is the step done: replayed, it is held
-   *  centred for Next rather than counted down on a viewer that is gone. */
-  it("replays Close the output once it is closed, held for Next", () => {
+  /** The viewer is closed, which is the step done; but « close it » needs the
+   *  viewer: Previous from the terminal step is greyed out. */
+  it("does not replay Close the output once the viewer is closed", () => {
     const fake = new FakeApp();
-    let run = at(fake, "terminal");
-    run = goBack(TOUR, run, fake.obs());
-    expect(currentStep(TOUR, run)?.id).toBe("output-viewer");
+    const run = at(fake, "terminal");
     expect(fake.obs().present(CODE_VIEWER)).toBe(false);
+    expect(stepById("output-viewer").done!(fake.obs())).toBe(true);
+    expect(canGoBack(TOUR, run, fake.obs())).toBe(false);
+    expect(goBack(TOUR, run, fake.obs())).toBe(run);
+  });
+
+  /** From the viewer, the step that opened it comes back held for Next. */
+  it("replays Open its output while the viewer is up, held for Next", () => {
+    const fake = new FakeApp();
+    let run = at(fake, "output-viewer");
+    run = goBack(TOUR, run, fake.obs());
+    expect(currentStep(TOUR, run)?.id).toBe("outputs");
     for (let now = 0; now <= 30_000; now += 1_000) run = observeTour(TOUR, run, fake.obs(), now);
     expect(run.phase).toBe("running");
     expect(needsConfirm(TOUR, run, fake.obs())).toBe(true);
-    expect(currentStep(TOUR, confirmStep(TOUR, run, fake.obs()))?.id).toBe("terminal");
+    expect(currentStep(TOUR, confirmStep(TOUR, run, fake.obs()))?.id).toBe("output-viewer");
   });
 
   /** Once Start is selected the edge no longer is: the edge step comes back

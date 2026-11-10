@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import * as os from "node:os";
 import { fileURLToPath } from "node:url";
 import { expectNonZeroBBox } from "./assertions";
 import { openRunNodeDetails, cleanupRuns, runMultipart } from "./helpers";
@@ -20,7 +21,9 @@ import { openRunNodeDetails, cleanupRuns, runMultipart } from "./helpers";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-cold-start-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
@@ -92,7 +95,7 @@ test("cold-start full flow: run → node → modal, no console errors", async ({
 
   // 1. Navigate and wait for daemon connection
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -146,7 +149,8 @@ test("cold-start full flow: run → node → modal, no console errors", async ({
     .locator('.port-row:has([data-testid="port-row-open"])')
     .filter({ hasText: /^result/ });
   await expect(portCard).toBeVisible({ timeout: 5_000 });
-  await portCard.click();
+  // Anywhere but its controls: a frontmatter value copies instead.
+  await portCard.locator(".ri-port__where").click();
 
   // 7. Modal should appear with content
   const modal = page.locator(".artifact-markdown");

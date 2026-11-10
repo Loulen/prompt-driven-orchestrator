@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { computeSyncState } from "./useLibrary";
-import type { LibraryEntry } from "../api";
-import type { NodeDef } from "../types";
+import type { LibraryEntry } from "../pipeline/model/library";
+import type { EditorNodeDef } from "../pipeline/model/pipeline";
 
-function makeNode(overrides: Partial<NodeDef> = {}): NodeDef {
+function makeNode(overrides: Partial<EditorNodeDef> = {}): EditorNodeDef {
   return {
     id: "n1",
     name: "Reviewer",
@@ -106,6 +106,22 @@ describe("computeSyncState", () => {
     const node = makeNode({ effort: null });
     const entries = [makeEntry()];
     expect(computeSyncState(node, "You review code.", entries)).toBe("synced");
+  });
+
+  it("returns diverged when only the live artifacts differ (ADR-0089)", () => {
+    const node = makeNode({ live_artifacts: [{ name: "progress" }] });
+    expect(computeSyncState(node, "You review code.", [makeEntry()])).toBe("diverged");
+    // The daemon spells out the defaults: still the same content.
+    const starred = makeEntry({
+      live_artifacts: [{ name: "progress", port_type: "markdown", instructions: null, frontmatter: null }],
+    });
+    expect(computeSyncState(node, "You review code.", [starred])).toBe("synced");
+
+    const free = makeNode({ free_live_artifacts: true });
+    expect(computeSyncState(free, "You review code.", [makeEntry()])).toBe("diverged");
+    expect(
+      computeSyncState(free, "You review code.", [makeEntry({ free_live_artifacts: true })]),
+    ).toBe("synced");
   });
 
   it("returns diverged when the workspace differs (#655)", () => {

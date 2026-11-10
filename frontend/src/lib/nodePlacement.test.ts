@@ -138,6 +138,28 @@ describe("dropping a node on the canvas", () => {
     expect(overlaps(spot, base)).toBe(false);
   });
 
+  /**
+   * The right pane open, the canvas 737 px wide at zoom 1.2 (measured on a
+   * fresh pipeline, 1680 × 1050): 614 canvas units across. The grid anchored on
+   * the drop point fits one column only (one step either side overshoots the
+   * edge by a few units), Start, End and the two cards already added fill it,
+   * and the third `+` › Node card walked blind off the right edge, under the
+   * pane. There was room left of Start all along.
+   */
+  it("finds the room between the grid and the edge before walking off screen", () => {
+    const visible: Rect = { x: -77, y: -230, width: 614, height: 761 };
+    const base: Point = { x: 126, y: 110 };
+    const placed: Point[] = [fallbackNodeSpot(0), fallbackNodeSpot(1), { x: 126, y: 350 }, { x: 126, y: -130 }];
+
+    const spot = freeDropSpot(base, placed, visible);
+
+    expect(spot.x).toBeGreaterThanOrEqual(visible.x);
+    expect(spot.x + CARD_WIDTH).toBeLessThanOrEqual(visible.x + visible.width);
+    expect(spot.y).toBeGreaterThanOrEqual(visible.y);
+    expect(spot.y + CARD_HEIGHT).toBeLessThanOrEqual(visible.y + visible.height);
+    for (const other of placed) expect(overlaps(spot, other)).toBe(false);
+  });
+
   /** A viewport too small to hold a card at all is not a viewport: the search
    *  falls back to walking blind rather than answering nothing. */
   it("falls back to the blind walk when nothing fits on screen", () => {
@@ -148,6 +170,20 @@ describe("dropping a node on the canvas", () => {
 
   /** A canvas with no free spot left still gets an answer: searching forever is
    *  not an option, and landing somewhere plausible beats not landing. */
+  // FP of CORE-227: a `+` › Node card landed on a loop region's corner, its
+  // « max 7 » counter drawn over the card, and inside a region it is no member of.
+  it("keeps a new card out of a loop region's box", () => {
+    const region: Rect = { x: 380, y: 270, width: 500, height: 140 };
+    const spot = freeDropSpot(BASE, [], null, [region]);
+    const intersects =
+      spot.x < region.x + region.width &&
+      spot.x + CARD_WIDTH > region.x &&
+      spot.y < region.y + region.height &&
+      spot.y + CARD_HEIGHT > region.y;
+    expect(intersects).toBe(false);
+    expect(freeDropSpot(BASE, [], null, [{ x: 4_000, y: 4_000, width: 10, height: 10 }])).toEqual(BASE);
+  });
+
   it("gives up gracefully on a canvas packed with cards", () => {
     const packed: Point[] = [];
     for (let row = 0; row < 8; row++) {

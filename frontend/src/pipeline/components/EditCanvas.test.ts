@@ -1,0 +1,857 @@
+import { describe, it, expect } from "vitest";
+import { buildNoteNodes, deriveEditNodes, markerReached, statusForNode } from "./editNodeDerivation";
+import { buildLoopRegionNodes, deriveLoopRegions } from "./loopRegionDerivation";
+import { deriveEditEdges, EDGE_LABELS_ABOVE_NODES, formatWhenPill } from "./editEdgeDerivation";
+import type { NodeStatus } from "../../shared/generated/NodeStatus";
+import type { NodeType } from "../../shared/generated/NodeType";
+import type { PortSide } from "../../shared/generated/PortSide";
+import type { RunState } from "../../shared/generated/RunState";
+import type { RunStatus } from "../../shared/generated/RunStatus";
+import type { EditorPipelineDef } from "../model/pipeline";
+
+function makePipeline(): EditorPipelineDef {
+  return {
+    name: "p",
+    version: null,
+    variables: {},
+    nodes: [
+      {
+        id: "impl",
+        name: "implementer",
+        type: "agent",
+        inputs: [{ name: "in" }],
+        outputs: [{ name: "out" }],
+        interactive: false,
+        view: { x: 100, y: 100 },
+      },
+      {
+        id: "sw1",
+        name: "gate",
+        type: "agent",
+        inputs: [{ name: "in" }],
+        outputs: [
+          { name: "branch" },
+          { name: "out" },
+        ],
+        interactive: false,
+        view: { x: 200, y: 100 },
+      },
+      {
+        id: "fe1",
+        name: "fixer",
+        type: "agent",
+        inputs: [{ name: "in" }],
+        outputs: [{ name: "fix" }],
+        interactive: false,
+        view: { x: 400, y: 100 },
+      },
+      {
+        id: "m1",
+        name: "gather",
+        type: "agent",
+        inputs: [{ name: "branches" }],
+        outputs: [{ name: "merged" }],
+        interactive: false,
+        view: { x: 500, y: 100 },
+      },
+    ],
+    edges: [],
+  };
+}
+
+function makeRunState(
+  statuses: Record<string, NodeStatus>,
+  runId = "run-1",
+): RunState {
+  return {
+    loop_states: {},
+    foreach_states: {},
+    collection_states: {},
+    switch_states: {},
+    sandbox: "off",
+    sessions_spawned: 0,
+    run_id: runId,
+    pipeline_name: "p",
+    status: "running",
+    input: null,
+    started_at: null,
+    completed_at: null,
+    nodes: Object.fromEntries(
+      Object.entries(statuses).map(([id, status]) => [
+        id,
+        {
+          node_id: id,
+          status,
+          iter: 1,
+          started_at: null,
+          completed_at: null,
+          failure_reason: null,
+          iterations: [],
+          frontmatter_retries: 0,
+        },
+      ]),
+    ),
+    edges: [],
+    node_defs: [],
+    start_node: undefined,
+    end_node: undefined,
+  };
+}
+
+describe("statusForNode", () => {
+  it("returns the node's live status when present", () => {
+    const run = makeRunState({ impl: "running" });
+    expect(statusForNode("impl", run)).toBe("running");
+  });
+
+  it("defaults to 'pending' when no run state is given", () => {
+    expect(statusForNode("impl", null)).toBe("pending");
+    expect(statusForNode("impl", undefined)).toBe("pending");
+  });
+
+  it("defaults to 'pending' when the node is absent from run.nodes (e.g. a newly added node)", () => {
+    const run = makeRunState({ other: "running" });
+    expect(statusForNode("impl", run)).toBe("pending");
+  });
+});
+
+describe("deriveEditNodes — live status wiring (regression: node-card borders ignore run state)", () => {
+  it("forwards live status into every node's data", () => {
+    const pipeline = makePipeline();
+    const run = makeRunState({
+      impl: "running",
+      sw1: "completed",
+      fe1: "failed",
+      m1: "completed",
+    });
+    const nodes = deriveEditNodes(pipeline, run);
+    const byId = Object.fromEntries(nodes.map((n) => [n.id, n.data]));
+
+    expect((byId.impl as { status: NodeStatus }).status).toBe("running");
+    expect((byId.sw1 as { status: NodeStatus }).status).toBe("completed");
+    expect((byId.fe1 as { status: NodeStatus }).status).toBe("failed");
+    expect((byId.m1 as { status: NodeStatus }).status).toBe("completed");
+  });
+
+  it("defaults every node to 'pending' when no run state is given (template editing)", () => {
+    const nodes = deriveEditNodes(makePipeline(), null);
+    for (const n of nodes) {
+      expect((n.data as { status: NodeStatus }).status).toBe("pending");
+    }
+  });
+
+  it("uses 'pending' for nodes that exist in the pipeline but not in run.nodes (newly added)", () => {
+    const pipeline = makePipeline();
+    const run = makeRunState({ impl: "running" }); // sw1/fe1/m1 absent
+    const nodes = deriveEditNodes(pipeline, run);
+    const byId = Object.fromEntries(nodes.map((n) => [n.id, n.data]));
+    expect((byId.impl as { status: NodeStatus }).status).toBe("running");
+    expect((byId.sw1 as { status: NodeStatus }).status).toBe("pending");
+    expect((byId.fe1 as { status: NodeStatus }).status).toBe("pending");
+    expect((byId.m1 as { status: NodeStatus }).status).toBe("pending");
+  });
+});
+
+describe("markerReached", () => {
+  function runWith(status: RunStatus): RunState {
+    return { ...makeRunState({}), status };
+  }
+
+  it("is true for start/end markers only when the run completed", () => {
+    const run = runWith("completed");
+    expect(markerReached("start", run)).toBe(true);
+    expect(markerReached("end", run)).toBe(true);
+  });
+
+  it("is false for non-marker node types even on a completed run", () => {
+    const run = runWith("completed");
+    const others: NodeType[] = [
+      "agent",
+      "script",
+    ];
+    for (const t of others) expect(markerReached(t, run)).toBe(false);
+  });
+
+  it("is false for markers on live / non-success terminal statuses (end keeps non-completed styling)", () => {
+    const notReached: RunStatus[] = [
+      "running",
+      "awaiting_user",
+      "paused",
+      "failed",
+      "halted",
+      "archived",
+    ];
+    for (const status of notReached) {
+      expect(markerReached("start", runWith(status))).toBe(false);
+      expect(markerReached("end", runWith(status))).toBe(false);
+    }
+  });
+
+  it("is true for the markers of a running run that waits at End for its started nodes (ADR-0086)", () => {
+    const waiting = { ...runWith("running"), waiting_for_started_nodes: 1 };
+    expect(markerReached("start", waiting)).toBe(true);
+    expect(markerReached("end", waiting)).toBe(true);
+    expect(markerReached("agent", waiting)).toBe(false);
+  });
+
+  it("is false when there is no run state (library/template editing)", () => {
+    expect(markerReached("start", null)).toBe(false);
+    expect(markerReached("end", undefined)).toBe(false);
+  });
+});
+
+describe("deriveEditNodes — start/end green-on-complete flag (issue #105, inline run view)", () => {
+  function makeStartEndPipeline(): EditorPipelineDef {
+    return {
+      name: "p",
+      version: null,
+      variables: {},
+      nodes: [
+        {
+          id: "start",
+          name: "start",
+          type: "start",
+          inputs: [],
+          outputs: [{ name: "out" }],
+          interactive: false,
+          view: { x: 0, y: 0 },
+        },
+        {
+          id: "work",
+          name: "implementer",
+          type: "agent",
+          inputs: [{ name: "in" }],
+          outputs: [{ name: "out" }],
+          interactive: false,
+          view: { x: 200, y: 0 },
+        },
+        {
+          id: "end",
+          name: "end",
+          type: "end",
+          inputs: [{ name: "in" }],
+          outputs: [],
+          interactive: false,
+          view: { x: 400, y: 0 },
+        },
+      ],
+      edges: [],
+    };
+  }
+
+  function runWith(status: RunStatus): RunState {
+    return { ...makeRunState({}), status };
+  }
+
+  function reachedById(run: RunState | null) {
+    const nodes = deriveEditNodes(makeStartEndPipeline(), run);
+    return Object.fromEntries(
+      nodes.map((n) => [n.id, (n.data as { reached?: boolean }).reached]),
+    );
+  }
+
+  it("marks start and end reached on a completed run", () => {
+    const r = reachedById(runWith("completed"));
+    expect(r.start).toBe(true);
+    expect(r.end).toBe(true);
+  });
+
+  it("never marks a regular work node reached, even when the run completed", () => {
+    expect(reachedById(runWith("completed")).work).toBe(false);
+  });
+
+  it("leaves start and end not-reached while the run is still running", () => {
+    const r = reachedById(runWith("running"));
+    expect(r.start).toBe(false);
+    expect(r.end).toBe(false);
+  });
+
+  it("does not mark reached for failed or halted runs", () => {
+    for (const status of ["failed", "halted"] as RunStatus[]) {
+      const r = reachedById(runWith(status));
+      expect(r.start).toBe(false);
+      expect(r.end).toBe(false);
+    }
+  });
+
+  it("does not mark reached when editing a template (no run state)", () => {
+    const r = reachedById(null);
+    expect(r.start).toBe(false);
+    expect(r.end).toBe(false);
+  });
+
+  // The Start card of a Run's canvas carries no input images: they stay in the
+  // Start inspector (thumbnails and lightbox).
+  it("leaves the run's input images off the start node data", () => {
+    const run: RunState = {
+      ...makeRunState({}),
+      start_node: { input_files: [],
+        input_path: "_input/output.md",
+        started_at: "2026-01-01T00:00:00.000Z",
+        target_node_ids: ["work"],
+        input_images: ["ui-bug.png", "trace.png"],
+      },
+    };
+    const start = deriveEditNodes(makeStartEndPipeline(), run).find((n) => n.id === "start");
+    expect(start?.data).not.toHaveProperty("inputImages");
+    expect(JSON.stringify(start?.data)).not.toContain("ui-bug.png");
+  });
+
+});
+
+describe("formatWhenPill — condition pill text (ADR-0011)", () => {
+  it("renders a single field/op as 'field op value'", () => {
+    expect(formatWhenPill({ severity: { eq: "high" } })).toBe("severity = high");
+    expect(formatWhenPill({ security: { eq: true } })).toBe("security = true");
+    expect(formatWhenPill({ score: { gte: 8 } })).toBe("score >= 8");
+  });
+
+  it("renders 'in' / 'not_in' with a bracketed list", () => {
+    expect(formatWhenPill({ verdict: { in: ["PASS", "APPROVED"] } })).toBe(
+      "verdict in [PASS, APPROVED]",
+    );
+  });
+
+  it("shows a `when` that is not the grammar's map as written, never key by key", () => {
+    expect(formatWhenPill("iter >= max")).toBe("iter >= max");
+    expect(formatWhenPill(["a", "b"])).toBe('["a","b"]');
+  });
+
+  it("joins multiple predicates with 'and'", () => {
+    expect(
+      formatWhenPill({ verdict: { eq: "PASS" }, score: { gte: 8 } }),
+    ).toBe("verdict = PASS and score >= 8");
+  });
+});
+
+describe("deriveEditEdges — condition pills always visible at midpoint (issue #144)", () => {
+  function condPipeline(): EditorPipelineDef {
+    return {
+      name: "cond",
+      version: null,
+      variables: {},
+      nodes: [
+        {
+          id: "classifier",
+          name: "classifier",
+          type: "agent",
+          inputs: [{ name: "task" }],
+          outputs: [{ name: "triage" }],
+          interactive: false,
+          view: { x: 0, y: 0 },
+        },
+        {
+          id: "hotfix",
+          name: "hotfix",
+          type: "agent",
+          inputs: [{ name: "triage" }],
+          outputs: [{ name: "patch" }],
+          interactive: false,
+          view: { x: 200, y: 0 },
+        },
+        {
+          id: "backlog",
+          name: "backlog",
+          type: "agent",
+          inputs: [{ name: "triage" }],
+          outputs: [{ name: "note" }],
+          interactive: false,
+          view: { x: 200, y: 200 },
+        },
+      ],
+      edges: [
+        {
+          source: { node: "classifier", port: "triage" },
+          target: { node: "hotfix", port: "triage" },
+          when: { severity: { eq: "high" } },
+        },
+        {
+          source: { node: "classifier", port: "triage" },
+          target: { node: "backlog", port: "triage" },
+          else: true,
+        },
+      ],
+    };
+  }
+
+  it("labels a guarded edge with its when: pill", () => {
+    // The orthogonal edge (#154) renders its own condition pill from
+    // `data.label` (xyflow's built-in `label` is no longer used).
+    const edges = deriveEditEdges(condPipeline());
+    const guarded = edges[0];
+    expect(guarded.data?.label).toBe("severity = high");
+    expect(guarded.data?.isConditional).toBe(true);
+    expect(guarded.data?.isElse).toBe(false);
+  });
+
+  it("labels an edge whose `when` is a bare string with that string", () => {
+    const p = condPipeline();
+    (p.edges[0] as { when: unknown }).when = "iter >= max";
+    expect(deriveEditEdges(p)[0].data?.label).toBe("iter >= max");
+  });
+
+  it("labels an else edge with 'else'", () => {
+    const edges = deriveEditEdges(condPipeline());
+    const fallback = edges[1];
+    expect(fallback.data?.label).toBe("else");
+    expect(fallback.data?.isConditional).toBe(true);
+    expect(fallback.data?.isElse).toBe(true);
+  });
+
+  it("gives unconditional edges no pill", () => {
+    const pipeline: EditorPipelineDef = {
+      name: "plain",
+      version: null,
+      variables: {},
+      nodes: [
+        {
+          id: "a",
+          name: "a",
+          type: "agent",
+          inputs: [],
+          outputs: [{ name: "out" }],
+          interactive: false,
+          view: { x: 0, y: 0 },
+        },
+        {
+          id: "b",
+          name: "b",
+          type: "agent",
+          inputs: [{ name: "in" }],
+          outputs: [],
+          interactive: false,
+          view: { x: 200, y: 0 },
+        },
+      ],
+      edges: [
+        {
+          source: { node: "a", port: "out" },
+          target: { node: "b", port: "in" },
+        },
+      ],
+    };
+    const edges = deriveEditEdges(pipeline);
+    expect(edges[0].data?.label).toBeUndefined();
+    expect(edges[0].data?.isConditional).toBe(false);
+  });
+});
+
+describe("deriveEditEdges — incoming edge anchor side (issue #168)", () => {
+  function emergentPipeline(targetSide?: PortSide): EditorPipelineDef {
+    return {
+      name: "anchor",
+      version: null,
+      variables: {},
+      nodes: [
+        {
+          id: "src",
+          name: "src",
+          type: "agent",
+          inputs: [],
+          outputs: [{ name: "out" }],
+          interactive: false,
+          view: { x: 0, y: 0 },
+        },
+        {
+          id: "dst",
+          name: "dst",
+          // Emergent: no declared inputs, so the arrow lands on the body (#149).
+          type: "agent",
+          inputs: [],
+          outputs: [{ name: "out" }],
+          interactive: false,
+          view: { x: 200, y: 0 },
+        },
+      ],
+      edges: [
+        {
+          source: { node: "src", port: "out" },
+          target: { node: "dst", port: "out" },
+          target_side: targetSide,
+        },
+      ],
+    };
+  }
+
+  it("binds an emergent incoming edge to the chosen side's body handle", () => {
+    const edges = deriveEditEdges(emergentPipeline("right"));
+    expect(edges[0].targetHandle).toBe("__anchor:right");
+  });
+
+  it("defaults to the left body handle when no target_side is set (legacy anchoring)", () => {
+    const edges = deriveEditEdges(emergentPipeline(undefined));
+    expect(edges[0].targetHandle).toBe("__anchor:left");
+  });
+
+  it("forwards the chosen side to the edge so the route arrives from it (no forced left->right)", () => {
+    const edges = deriveEditEdges(emergentPipeline("top"));
+    expect(edges[0].data?.targetSide).toBe("top");
+  });
+});
+
+describe("deriveLoopRegions — bounded region rendering (ADR-0011 / #148)", () => {
+  function regionPipeline(maxIter: number | string | null = 3): EditorPipelineDef {
+    return {
+      name: "loop-region-review-loop",
+      version: "1.0",
+      variables: {},
+      nodes: [
+        {
+          id: "start",
+          name: "Start",
+          type: "start",
+          inputs: [],
+          outputs: [{ name: "user_prompt" }],
+          interactive: false,
+          view: { x: 0, y: 200 },
+        },
+        {
+          id: "impl",
+          name: "implementer",
+          type: "agent",
+          inputs: [],
+          outputs: [{ name: "code" }],
+          interactive: false,
+          view: { x: 280, y: 200 },
+        },
+        {
+          id: "rev",
+          name: "reviewer",
+          type: "agent",
+          inputs: [],
+          outputs: [{ name: "review" }],
+          interactive: false,
+          view: { x: 560, y: 200 },
+        },
+        {
+          id: "end",
+          name: "End",
+          type: "end",
+          inputs: [{ name: "result" }],
+          outputs: [],
+          interactive: false,
+          view: { x: 880, y: 200 },
+        },
+      ],
+      edges: [],
+      loops: [
+        { id: "review_loop", kind: "bounded", members: ["impl", "rev"], max_iter: maxIter },
+      ],
+    };
+  }
+
+  it("derives one box region enclosing both members with a `max N` counter (idle)", () => {
+    const regions = deriveLoopRegions(regionPipeline(3), null);
+    expect(regions).toHaveLength(1);
+    const r = regions[0];
+    expect(r.id).toBe("review_loop");
+    expect(r.kind).toBe("bounded");
+    expect(r.memberIds).toEqual(["impl", "rev"]);
+    expect(r.counterText).toBe("max 3");
+    expect(r.exhausted).toBe(false);
+    expect(r.badgeMemberId).toBeNull();
+    expect(r.box).not.toBeNull();
+    // Box brackets the member extent (impl at x=280, rev at x=560+card) with pad.
+    expect(r.box!.x).toBeLessThan(280);
+    expect(r.box!.y).toBeLessThan(200);
+    expect(r.box!.width).toBeGreaterThan(560 - 280);
+    expect(r.box!.height).toBeGreaterThan(0);
+  });
+
+  it("wraps the drawn cards when they are compact", () => {
+    const cards = { impl: { x: 300, y: 200, w: 168, h: 30 }, rev: { x: 580, y: 200, w: 168, h: 30 } };
+    const box = deriveLoopRegions(regionPipeline(3), null, cards)[0].box!;
+    expect(box).toEqual({ x: 280, y: 174, width: 488, height: 76 });
+  });
+
+  it("advances the counter to `i/N` on a live run, taking the max member iter", () => {
+    const run = makeRunState({ impl: "running", rev: "pending" });
+    run.nodes.impl.iter = 2;
+    run.nodes.rev.iter = 1;
+    const regions = deriveLoopRegions(regionPipeline(3), run);
+    expect(regions[0].counterText).toBe("2/3");
+    expect(regions[0].exhausted).toBe(false);
+  });
+
+  it("never marks the region exhausted during its last lap or after a normal exit", () => {
+    const run = makeRunState({ impl: "completed", rev: "running" });
+    run.nodes.impl.iter = 3;
+    run.nodes.rev.iter = 3;
+    expect(deriveLoopRegions(regionPipeline(3), run)[0].exhausted).toBe(false);
+    run.nodes.rev.status = "completed";
+    run.status = "completed";
+    const regions = deriveLoopRegions(regionPipeline(3), run);
+    expect(regions[0].counterText).toBe("3/3");
+    expect(regions[0].exhausted).toBe(false);
+  });
+
+  it("marks the region exhausted while the Run is parked region_exhausted on it", () => {
+    const run = makeRunState({ impl: "completed", rev: "completed" });
+    run.nodes.impl.iter = 3;
+    run.nodes.rev.iter = 3;
+    run.status = "awaiting_user";
+    run.awaiting_reason_code = "region_exhausted";
+    run.awaiting_region_id = "review_loop";
+    expect(deriveLoopRegions(regionPipeline(3), run)[0].exhausted).toBe(true);
+    run.awaiting_region_id = "other_loop";
+    expect(deriveLoopRegions(regionPipeline(3), run)[0].exhausted).toBe(false);
+    // A historical park names no region: the counter decides.
+    delete run.awaiting_region_id;
+    expect(deriveLoopRegions(regionPipeline(3), run)[0].exhausted).toBe(true);
+  });
+
+  it("marks the region budget reached, never exhausted, on a budget park", () => {
+    const run = makeRunState({ impl: "completed", rev: "completed" });
+    run.nodes.impl.iter = 2;
+    run.nodes.rev.iter = 2;
+    run.status = "awaiting_user";
+    run.awaiting_reason_code = "region_budget_exhausted";
+    run.awaiting_region_id = "review_loop";
+    run.loop_costs = {
+      review_loop: {
+        usd: 5.12, estimated: true, partial: false, executions: 4, readable_executions: 4,
+        members: [], cap_usd: 5,
+      },
+    };
+    const r = deriveLoopRegions(regionPipeline(3), run)[0];
+    expect(r.budgetReached).toBe(true);
+    expect(r.exhausted).toBe(false);
+    expect(r.costWarn).toBe(true);
+    expect(r.cost?.text).toBe("~$5.12");
+    expect(r.cap?.text).toBe("$5");
+  });
+
+  it("makes room under the cards for the block of a parked region, so it never covers a card", () => {
+    // The cards end at y = 200 + 66; the block (20 px high, 4 px off the box's
+    // bottom) gets a 28 px band under the bottom pad.
+    const cardsBottom = 266;
+    const bottom = (r: ReturnType<typeof deriveLoopRegions>[number]) => r.box!.y + r.box!.height;
+    const run = makeRunState({ impl: "completed", rev: "completed" });
+    run.nodes.impl.iter = 2;
+    run.nodes.rev.iter = 2;
+    expect(bottom(deriveLoopRegions(regionPipeline(3), run)[0]) - cardsBottom).toBe(20);
+    run.status = "awaiting_user";
+    run.awaiting_reason_code = "region_budget_exhausted";
+    run.awaiting_region_id = "review_loop";
+    expect(bottom(deriveLoopRegions(regionPipeline(3), run)[0]) - cardsBottom).toBe(20 + 28);
+    run.awaiting_reason_code = "region_exhausted";
+    expect(bottom(deriveLoopRegions(regionPipeline(3), run)[0]) - cardsBottom).toBe(20 + 28);
+  });
+
+  it("renders a single-member region as a badge, not a box", () => {
+    const p = regionPipeline(3);
+    p.loops = [{ id: "solo", kind: "bounded", members: ["impl"], max_iter: 3 }];
+    const regions = deriveLoopRegions(p, null);
+    expect(regions[0].box).toBeNull();
+    expect(regions[0].badgeMemberId).toBe("impl");
+  });
+
+  it("shows a $var max_iter verbatim", () => {
+    const regions = deriveLoopRegions(regionPipeline("$max_review"), null);
+    expect(regions[0].counterText).toBe("max $max_review");
+  });
+
+  it("drops a region whose members are all missing", () => {
+    const p = regionPipeline(3);
+    p.loops = [{ id: "ghost", kind: "bounded", members: ["nope1", "nope2"], max_iter: 3 }];
+    expect(deriveLoopRegions(p, null)).toHaveLength(0);
+  });
+
+  it("returns no regions when the pipeline has no loops block", () => {
+    const p = regionPipeline(3);
+    delete p.loops;
+    expect(deriveLoopRegions(p, null)).toHaveLength(0);
+  });
+});
+
+describe("buildLoopRegionNodes — box behind, chrome above (#167 / #455)", () => {
+  function regionPipeline(): EditorPipelineDef {
+    return {
+      name: "loop-region-review-loop",
+      version: "1.0",
+      variables: {},
+      nodes: [
+        {
+          id: "impl",
+          name: "implementer",
+          type: "agent",
+          inputs: [],
+          outputs: [{ name: "code" }],
+          interactive: false,
+          view: { x: 280, y: 200 },
+        },
+        {
+          id: "rev",
+          name: "reviewer",
+          type: "agent",
+          inputs: [],
+          outputs: [{ name: "review" }],
+          interactive: false,
+          view: { x: 560, y: 200 },
+        },
+      ],
+      edges: [],
+      loops: [{ id: "review_loop", kind: "bounded", members: ["impl", "rev"], max_iter: 3 }],
+    };
+  }
+
+  function layer(nodes: ReturnType<typeof buildLoopRegionNodes>, want: string) {
+    const found = nodes.filter((n) => (n.data as { layer?: string }).layer === want);
+    expect(found).toHaveLength(1);
+    return found[0];
+  }
+
+  it("renders the box region as a `loopRegion` node positioned at the box origin", () => {
+    const nodes = buildLoopRegionNodes(regionPipeline(), null);
+    const region = layer(nodes, "box");
+    expect(region.id).toBe("region-review_loop");
+    expect(region.type).toBe("loopRegion");
+    expect(region.position.x).toBeLessThan(280);
+    expect(region.position.y).toBeLessThan(200);
+  });
+
+  it("disables pointer events on the region node so edges underneath stay clickable", () => {
+    // Root cause (#167): xyflow gives the node wrapper `pointer-events: all`
+    // whenever the canvas registers node mouse handlers, so the box swallows
+    // clicks meant for the edges it overlaps. The node spec must override that
+    // back to `none`. xyflow spreads `node.style` after its own pointerEvents,
+    // so this is the override that wins.
+    const region = layer(buildLoopRegionNodes(regionPipeline(), null), "box");
+    expect((region.style as { pointerEvents?: string }).pointerEvents).toBe("none");
+  });
+
+  it("keeps the region non-selectable, non-draggable, and non-focusable (decorative only)", () => {
+    const region = layer(buildLoopRegionNodes(regionPipeline(), null), "box");
+    expect(region.selectable).toBe(false);
+    expect(region.draggable).toBe(false);
+    expect(region.focusable).toBe(false);
+  });
+
+  it("produces no region node for a single-member region (badge form, no box)", () => {
+    const p = regionPipeline();
+    p.loops = [{ id: "solo", kind: "bounded", members: ["impl"], max_iter: 3 }];
+    expect(buildLoopRegionNodes(p, null)).toHaveLength(0);
+  });
+
+  /**
+   * #455: the header (and the exhausted badge, which carries the #152 "route
+   * from manager" BUTTON) used to live INSIDE the box node. A positioned wrapper
+   * with `z-index: 0` is a stacking context, so no descendant of it can paint
+   * above a sibling card — a node overlapping the header band stole every click,
+   * and the RegionInspector became unreachable. The two requirements are
+   * genuinely opposed (fill behind the cards, chrome above them), so they need
+   * two stacking layers: two nodes.
+   */
+  describe("interactive chrome sits above the member cards (#455)", () => {
+    it("emits a chrome node per boxed region, geometrically on top of the box", () => {
+      const nodes = buildLoopRegionNodes(regionPipeline(), null);
+      expect(nodes).toHaveLength(2);
+      const box = layer(nodes, "box");
+      const chrome = layer(nodes, "chrome");
+      expect(chrome.id).toBe("region-chrome-review_loop");
+      expect(chrome.type).toBe("loopRegion");
+      expect(chrome.position).toEqual(box.position);
+      expect(chrome.data.width).toBe(box.data.width);
+      expect(chrome.data.height).toBe(box.data.height);
+    });
+
+    it("outranks even a SELECTED card", () => {
+      // Cards carry no explicit zIndex (→ 0), but xyflow's `elevateNodesOnSelect`
+      // adds SELECTED_NODE_Z = 1000 to whichever one is selected. Anything at or
+      // below 1000 leaves the header unreachable while a card is selected, which
+      // is exactly when a user is most likely to reach for the region.
+      const chrome = layer(buildLoopRegionNodes(regionPipeline(), null), "chrome");
+      expect(chrome.zIndex).toBeGreaterThan(1000);
+      expect((chrome.style as { zIndex?: number }).zIndex).toBeGreaterThan(1000);
+    });
+
+    it("clears the condition pills of edges above the cards while its block asks for a click", () => {
+      // An exit edge leaves the region where « budget reached │ raise cap │ end
+      // region » sits: its pill (EDGE_LABELS_ABOVE_NODES) took the buttons' clicks.
+      const run = makeRunState({ impl: "completed", rev: "completed" });
+      run.nodes.impl.iter = 2;
+      run.nodes.rev.iter = 2;
+      const chromeZ = () => layer(buildLoopRegionNodes(regionPipeline(), run), "chrome").zIndex!;
+      expect(chromeZ()).toBe(1001);
+      run.status = "awaiting_user";
+      run.awaiting_region_id = "review_loop";
+      for (const code of ["region_budget_exhausted", "region_exhausted"]) {
+        run.awaiting_reason_code = code;
+        const chrome = layer(buildLoopRegionNodes(regionPipeline(), run), "chrome");
+        expect(chrome.zIndex).toBeGreaterThan(EDGE_LABELS_ABOVE_NODES);
+        expect((chrome.style as { zIndex?: number }).zIndex).toBe(chrome.zIndex);
+      }
+    });
+
+    it("still lets clicks through everywhere except its own chips", () => {
+      // The chrome node spans the whole box, so its WRAPPER must stay
+      // pass-through or it would re-break #167 the other way round — and
+      // swallow every click on the member cards it now covers.
+      const chrome = layer(buildLoopRegionNodes(regionPipeline(), null), "chrome");
+      expect((chrome.style as { pointerEvents?: string }).pointerEvents).toBe("none");
+      expect(chrome.selectable).toBe(false);
+      expect(chrome.draggable).toBe(false);
+      expect(chrome.focusable).toBe(false);
+    });
+  });
+});
+
+describe("buildNoteNodes — inert canvas notes (#307 / ADR-0018)", () => {
+  function notePipeline(): EditorPipelineDef {
+    return {
+      name: "with-notes",
+      version: "1.0",
+      variables: {},
+      nodes: [],
+      edges: [],
+      notes: [
+        { id: "n1", content: "first note", view: { x: 120, y: 240 } },
+        { id: "n2", content: "second note", view: { x: 300, y: 80 } },
+      ],
+    };
+  }
+
+  it("renders one draggable/selectable `note` node per note at its view position", () => {
+    const nodes = buildNoteNodes(notePipeline());
+    expect(nodes).toHaveLength(2);
+    const [a, b] = nodes;
+    expect(a.id).toBe("n1");
+    expect(a.type).toBe("note");
+    expect(a.position).toEqual({ x: 120, y: 240 });
+    expect(a.draggable).toBe(true);
+    expect(a.selectable).toBe(true);
+    expect(b.id).toBe("n2");
+    expect(b.position).toEqual({ x: 300, y: 80 });
+  });
+
+  it("marks notes non-connectable so no edge can ever attach (inert)", () => {
+    for (const n of buildNoteNodes(notePipeline())) {
+      expect(n.connectable).toBe(false);
+    }
+  });
+
+  it("carries the content through to node data for canvas rendering", () => {
+    const n = buildNoteNodes(notePipeline())[0];
+    expect((n.data as { content: string }).content).toBe("first note");
+    expect((n.data as { noteId: string }).noteId).toBe("n1");
+  });
+
+  it("falls back to a default position when a note has no view", () => {
+    const p: EditorPipelineDef = {
+      name: "p",
+      version: "1.0",
+      variables: {},
+      nodes: [],
+      edges: [],
+      notes: [{ id: "n1", content: "no view" }],
+    };
+    const n = buildNoteNodes(p)[0];
+    expect(typeof n.position.x).toBe("number");
+    expect(typeof n.position.y).toBe("number");
+  });
+
+  it("produces no note nodes when the pipeline has none", () => {
+    const p: EditorPipelineDef = { name: "p", version: "1.0", variables: {}, nodes: [], edges: [] };
+    expect(buildNoteNodes(p)).toHaveLength(0);
+  });
+});

@@ -1,11 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   loadChildRunsExpanded,
+  loadCollapsedRunGroups,
   loadNodeDurationMode,
   loadTabsDisabled,
+  loadTranscriptOrder,
   saveChildRunsExpanded,
+  saveCollapsedRunGroups,
   saveNodeDurationMode,
   saveTabsDisabled,
+  saveTranscriptOrder,
 } from "./uiPrefs";
 
 beforeEach(() => {
@@ -81,12 +85,31 @@ describe("uiPrefs — childRunsExpanded (#783)", () => {
   });
 });
 
-describe("uiPrefs — nodeDurationMode (#980)", () => {
-  it("defaults to total when absent", () => {
+describe("uiPrefs — collapsedRunGroups", () => {
+  it("defaults to no folded group", () => {
+    expect(loadCollapsedRunGroups()).toEqual([]);
+  });
+
+  it("round-trips under the pdo.ui.collapsedRunGroups key", () => {
+    saveCollapsedRunGroups(["project:p1", "/code/api"]);
+    expect(localStorage.getItem("pdo.ui.collapsedRunGroups")).toBe('["project:p1","/code/api"]');
+    expect(loadCollapsedRunGroups()).toEqual(["project:p1", "/code/api"]);
+  });
+
+  it("drops garbage and what is not a key", () => {
+    localStorage.setItem("pdo.ui.collapsedRunGroups", "nope{");
+    expect(loadCollapsedRunGroups()).toEqual([]);
+    localStorage.setItem("pdo.ui.collapsedRunGroups", JSON.stringify(["project:p1", 3]));
+    expect(loadCollapsedRunGroups()).toEqual(["project:p1"]);
+  });
+});
+
+describe("uiPrefs — nodeDurationMode", () => {
+  it("defaults to total when the key is absent", () => {
     expect(loadNodeDurationMode()).toBe("total");
   });
 
-  it("round-trips under the pdo.ui.nodeDurationMode key", () => {
+  it("round-trips active/total under pdo.ui.nodeDurationMode", () => {
     saveNodeDurationMode("active");
     expect(localStorage.getItem("pdo.ui.nodeDurationMode")).toBe('"active"');
     expect(loadNodeDurationMode()).toBe("active");
@@ -94,14 +117,43 @@ describe("uiPrefs — nodeDurationMode (#980)", () => {
     expect(loadNodeDurationMode()).toBe("total");
   });
 
-  it("falls back to total for garbage, an unknown mode, or a throwing store", () => {
-    localStorage.setItem("pdo.ui.nodeDurationMode", "nope{");
+  it("falls back to total on garbage or an unknown mode", () => {
+    localStorage.setItem("pdo.ui.nodeDurationMode", "not-json{");
     expect(loadNodeDurationMode()).toBe("total");
     localStorage.setItem("pdo.ui.nodeDurationMode", JSON.stringify("waiting"));
     expect(loadNodeDurationMode()).toBe("total");
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+  });
+});
+
+describe("uiPrefs — transcript order", () => {
+  it("defaults to newest first", () => {
+    expect(loadTranscriptOrder()).toBe("newest-first");
+  });
+
+  it("round-trips the order under pdo.ui.transcriptOrder", () => {
+    saveTranscriptOrder("oldest-first");
+    expect(localStorage.getItem("pdo.ui.transcriptOrder")).toBe('"oldest-first"');
+    expect(loadTranscriptOrder()).toBe("oldest-first");
+    saveTranscriptOrder("newest-first");
+    expect(loadTranscriptOrder()).toBe("newest-first");
+  });
+
+  it("falls back to newest first on garbage or an unknown order", () => {
+    localStorage.setItem("pdo.ui.transcriptOrder", "not-json{");
+    expect(loadTranscriptOrder()).toBe("newest-first");
+    localStorage.setItem("pdo.ui.transcriptOrder", JSON.stringify("sideways"));
+    expect(loadTranscriptOrder()).toBe("newest-first");
+  });
+
+  it("degrades to the default when the storage is unavailable", () => {
+    localStorage.setItem("pdo.ui.transcriptOrder", JSON.stringify("oldest-first"));
+    vi.spyOn(localStorage, "getItem").mockImplementation(() => {
       throw new Error("SecurityError");
     });
-    expect(loadNodeDurationMode()).toBe("total");
+    vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+      throw new Error("QuotaExceededError");
+    });
+    expect(() => saveTranscriptOrder("oldest-first")).not.toThrow();
+    expect(loadTranscriptOrder()).toBe("newest-first");
   });
 });

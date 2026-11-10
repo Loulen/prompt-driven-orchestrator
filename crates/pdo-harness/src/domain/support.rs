@@ -1,0 +1,362 @@
+//! The published support matrix — capability × harness, **rendered from the code
+//! that declares it** (#617, ADR-0045/0051).
+//!
+//! Everything beyond launching a harness is a capability written harness by
+//! harness ([`crate::domain::probes`]). This module publishes that matrix.
+//!
+//! The table has **one source of truth**: every ✅/❌ is read from
+//! [`crate::domain::probes::probes_for`] at render time, so adding a harness or a
+//! capability moves the table with no second edit, and `make check` fails if the
+//! committed block has drifted ([`check`]). Don't hand-write a cell.
+//!
+//! The **last validated version** of each binary cannot be read off the dispatch
+//! table, so [`crate::domain::registry::validated_version`] declares it. This is a
+//! documented bound, not a guard: PDO launches on any installed version (out of
+//! scope, #612).
+//!
+//! The *mechanism* behind a present capability is not declared here either: each
+//! capability enum labels its own variants (`CostSource::label`, …), so the table
+//! can never name a mechanism the code no longer dispatches to.
+
+use crate::domain::probes::probes_for;
+use crate::domain::registry::{embedded_floor, validated_version};
+
+/// The repository file carrying the generated block (#855: moved out of the README,
+/// which no longer holds any generated content). Relative to the repository root.
+pub const DOCUMENT: &str = "docs/reference/harnesses.md";
+
+/// The HTML comment opening the generated block in [`DOCUMENT`]. Everything between
+/// this line and [`END_MARKER`] is owned by the generator.
+pub const BEGIN_MARKER: &str = "<!-- support-table:begin -->";
+pub const END_MARKER: &str = "<!-- support-table:end -->";
+
+/// One of the nine capabilities the support table publishes, in publication order.
+///
+/// A closed enum is right *here* (unlike the harness axis, ADR-0045): the nine are
+/// the trait's methods, so a tenth capability is a code change in
+/// [`crate::domain::probes`] anyway — and this `match` is then the compiler's
+/// reminder to publish it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Capability {
+    Cost,
+    Transcript,
+    TranscriptReading,
+    ObservedIdentity,
+    TurnEnd,
+    UsageLimit,
+    Staging,
+    ContextUsage,
+    Steering,
+}
+
+impl Capability {
+    /// The nine, in the order the table lists them.
+    pub const ALL: [Capability; 9] = [
+        Capability::Cost,
+        Capability::Transcript,
+        Capability::TranscriptReading,
+        Capability::ObservedIdentity,
+        Capability::TurnEnd,
+        Capability::UsageLimit,
+        Capability::Staging,
+        Capability::ContextUsage,
+        Capability::Steering,
+    ];
+
+    /// The capability's column name in the published table.
+    pub fn title(self) -> &'static str {
+        match self {
+            Capability::Cost => "Cost",
+            Capability::Transcript => "Transcript",
+            Capability::TranscriptReading => "Transcript tab",
+            Capability::ObservedIdentity => "Observed model & effort",
+            Capability::TurnEnd => "End of turn",
+            Capability::UsageLimit => "Usage-limit menu",
+            Capability::Staging => "Sandbox staging set",
+            Capability::ContextUsage => "Context usage",
+            Capability::Steering => "Steering",
+        }
+    }
+
+    /// What PDO does with the capability — one line, so a reader knows what an ❌
+    /// actually costs them.
+    pub fn blurb(self) -> &'static str {
+        match self {
+            Capability::Cost => "Show the Run cost",
+            Capability::Transcript => "Find the session transcript",
+            Capability::TranscriptReading => {
+                "Show the session's messages and folded tool calls in the node's Transcript tab"
+            }
+            Capability::ObservedIdentity => {
+                "Show the model and effort the execution actually ran on (Stats › Cost › By model)"
+            }
+            Capability::TurnEnd => "Complete a node when its turn ends",
+            Capability::UsageLimit => "Detect the harness usage-limit menu",
+            Capability::Staging => {
+                "Stage the harness home in a sandbox and disarm its blocking dialogs"
+            }
+            Capability::ContextUsage => "Show peak context-window usage",
+            Capability::Steering => {
+                "Count the steering messages a human typed per execution (Stats › Performance)"
+            }
+        }
+    }
+
+    /// The mechanism `harness` uses for this capability, or `None` when it is
+    /// absent. Read from the **dispatch table**, so a cell can never claim a
+    /// capability the code does not implement.
+    pub fn mechanism(self, harness: &str) -> Option<&'static str> {
+        let p = probes_for(harness)?;
+        match self {
+            Capability::Cost => p.cost_source().map(|c| c.label()),
+            Capability::Transcript => p.transcript_resolution().map(|t| t.label()),
+            Capability::TranscriptReading => p.transcript_reading().map(|t| t.label()),
+            Capability::ObservedIdentity => p
+                .observed_identity_source()
+                .map(crate::domain::probes::ObservedIdentitySource::label),
+            Capability::TurnEnd => p.turn_end_substrate().map(|t| t.label()),
+            Capability::UsageLimit => p.usage_limit_anchor().map(|u| u.label()),
+            Capability::Staging => p.staging_set().map(|s| s.label()),
+            Capability::ContextUsage => p.context_usage_source().map(|c| c.label()),
+            Capability::Steering => p.steering_source().map(|c| c.label()),
+        }
+    }
+}
+
+/// Render the support block — everything that goes between the two markers.
+///
+/// Pure: no IO, no clock. Harness axis = [`embedded_floor`] in declaration order,
+/// capability axis = [`Capability::ALL`], every cell read from the dispatch table.
+pub fn render() -> String {
+    let harnesses: Vec<String> = embedded_floor().into_iter().map(|d| d.name).collect();
+
+    let mut out = String::new();
+    out.push_str(BEGIN_MARKER);
+    out.push_str(
+        "\n<!-- Generated from crates/pdo-harness/src/domain/probes/. Do not edit by hand: \
+         run `make support-table`. `make check` fails if this block has drifted. -->\n\n",
+    );
+    out.push_str(
+        "PDO can launch, attach, resume, and complete nodes with every built-in harness.\n\n",
+    );
+
+    out.push_str("| Capability | What PDO does with it |");
+    for h in &harnesses {
+        out.push_str(&format!(" `{h}` {} |", validated_version(h).unwrap_or("—")));
+    }
+    out.push_str("\n| --- | --- |");
+    for _ in &harnesses {
+        out.push_str(" --- |");
+    }
+    out.push('\n');
+
+    for cap in Capability::ALL {
+        out.push_str(&format!("| **{}** | {} |", cap.title(), cap.blurb()));
+        for h in &harnesses {
+            match cap.mechanism(h) {
+                Some(mechanism) => {
+                    let concise = mechanism.replace(" — ", ": ");
+                    out.push_str(&format!(" ✅ {concise} |"));
+                }
+                None => out.push_str(" ❌ |"),
+            }
+        }
+        out.push('\n');
+    }
+
+    out.push_str(
+        "\nEach header shows the last validated harness version; PDO does not enforce it. \
+         The sandbox image is not provided by PDO: it is the profile's image, and the harness \
+         binary must already be in it (ADR-0063).\n",
+    );
+
+    out.push_str(
+        "\nCustom descriptors in `~/.pdo/harnesses/descriptors.yaml` can launch, attach, resume, and \
+         complete nodes through `pdo complete`.\n\n",
+    );
+    out.push_str(END_MARKER);
+    out.push('\n');
+    out
+}
+
+/// Splice a freshly rendered block into `document`, replacing whatever currently
+/// sits between the markers. PURE — the caller does the IO.
+///
+/// `Err` when the markers are missing or inverted: a document PDO cannot locate the
+/// block in is never rewritten wholesale.
+pub fn splice(document: &str, block: &str) -> Result<String, String> {
+    let (start, end) = locate(document)?;
+    let mut out = String::with_capacity(document.len() + block.len());
+    out.push_str(&document[..start]);
+    out.push_str(block.trim_end());
+    out.push_str(&document[end..]);
+    Ok(out)
+}
+
+/// Whether the block committed in `document` still matches what [`render`] emits.
+///
+/// `Err(message)` **names the drift**: a diff that only says "differs" sends the
+/// reader back to guessing.
+pub fn check(document: &str) -> Result<(), String> {
+    let block = render();
+    let (start, end) = locate(document)?;
+    let committed = document[start..end].trim_end();
+    let expected = block.trim_end();
+    if committed == expected {
+        return Ok(());
+    }
+    Err(format!(
+        "the harness support table has drifted from the code that declares it.\n\n{}\n\n\
+         Regenerate it with `make support-table` (the table is generated from \
+         crates/pdo-harness/src/domain/probes/ — edit the capabilities, not {DOCUMENT}).",
+        first_difference(committed, expected)
+    ))
+}
+
+/// Byte offsets of the generated block inside `document`, markers included.
+fn locate(document: &str) -> Result<(usize, usize), String> {
+    let start = document.find(BEGIN_MARKER).ok_or_else(|| {
+        format!("the generated block is missing: no `{BEGIN_MARKER}` marker in the document")
+    })?;
+    let end_marker = document[start..].find(END_MARKER).ok_or_else(|| {
+        format!("the generated block is unterminated: no `{END_MARKER}` after `{BEGIN_MARKER}`")
+    })?;
+    Ok((start, start + end_marker + END_MARKER.len()))
+}
+
+/// The first line where the committed block and the rendered one disagree, shown
+/// side by side. Line-level rather than a full diff: the block is short, and the
+/// first divergence is always the one that explains the rest.
+fn first_difference(committed: &str, expected: &str) -> String {
+    let mut c = committed.lines();
+    let mut e = expected.lines();
+    let mut line = 0usize;
+    loop {
+        line += 1;
+        let (a, b) = (c.next(), e.next());
+        if a == b {
+            if a.is_none() {
+                return "(the blocks differ only in trailing whitespace)".to_string();
+            }
+            continue;
+        }
+        let end = "<end of block>";
+        return format!(
+            "first difference at line {line} of the block:\n  committed: {}\n  generated: {}",
+            a.unwrap_or(end),
+            b.unwrap_or(end),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::registry::{CLAUDE, COPILOT, OPENCODE, PI};
+
+    #[test]
+    fn the_matrix_reads_the_dispatch_table_not_a_hand_written_list() {
+        // Read through `mechanism`, so this pins the *wiring* rather than
+        // duplicating the capability declaration.
+        assert!(Capability::ALL
+            .iter()
+            .all(|c| c.mechanism(CLAUDE).is_some()));
+        assert!(Capability::Cost.mechanism(COPILOT).is_some());
+        assert!(Capability::TurnEnd.mechanism(COPILOT).is_some());
+        assert!(Capability::UsageLimit.mechanism(COPILOT).is_none());
+        assert!(Capability::Staging.mechanism(COPILOT).is_none());
+        assert!(Capability::ContextUsage.mechanism(COPILOT).is_some());
+        assert!(Capability::Steering.mechanism(COPILOT).is_some());
+        assert!(Capability::ALL
+            .iter()
+            .all(|c| c.mechanism(OPENCODE).is_none()));
+        // #707/#708: pi is instrumented — cost, transcript, end of turn, context and
+        // the staging set present, only the usage-limit menu explicitly absent.
+        assert!(Capability::Cost.mechanism(PI).is_some());
+        assert!(Capability::Transcript.mechanism(PI).is_some());
+        assert!(Capability::TurnEnd.mechanism(PI).is_some());
+        assert!(Capability::ContextUsage.mechanism(PI).is_some());
+        assert!(Capability::Steering.mechanism(PI).is_some());
+        assert!(Capability::UsageLimit.mechanism(PI).is_none());
+        assert!(Capability::Staging.mechanism(PI).is_some());
+        assert!(render().contains("`pi` 0.85.1"));
+        assert!(render().contains("`agent_settled` extension"));
+        assert!(Capability::ALL
+            .iter()
+            .all(|c| c.mechanism("my-custom-harness").is_none()));
+    }
+
+    #[test]
+    fn render_names_every_harness_its_version_and_the_nine_capabilities() {
+        let block = render();
+        for d in embedded_floor() {
+            assert!(
+                block.contains(&format!("`{}`", d.name)),
+                "{} missing",
+                d.name
+            );
+            let v = validated_version(&d.name).unwrap();
+            assert!(block.contains(v), "{} version {v} missing", d.name);
+        }
+        for cap in Capability::ALL {
+            assert!(block.contains(cap.title()), "{} missing", cap.title());
+        }
+        assert!(block.contains("✅ derived: per-message token usage × the price table"));
+        assert!(block.contains("❌"));
+        assert!(!block.contains("Why a capability is absent"));
+        assert!(block.starts_with(BEGIN_MARKER));
+        assert!(block.trim_end().ends_with(END_MARKER));
+    }
+
+    #[test]
+    fn check_passes_on_a_document_carrying_the_rendered_block() {
+        let doc = format!(
+            "# Title\n\n## Support\n\n{}\n\n## After\n",
+            render().trim_end()
+        );
+        assert_eq!(check(&doc), Ok(()));
+    }
+
+    #[test]
+    fn check_names_the_drift_when_the_committed_table_lies() {
+        let doc = format!("# Title\n\n{}\n", render().trim_end());
+        let lying = doc.replace("❌ |", "✅ everything |");
+        assert_ne!(lying, doc, "the fixture must actually differ");
+        let err = check(&lying).expect_err("a lying table must fail the check");
+        assert!(err.contains("drifted"), "{err}");
+        assert!(err.contains("first difference at line"), "{err}");
+        assert!(err.contains("make support-table"), "{err}");
+        assert!(err.contains("docs/reference/harnesses.md"), "{err}");
+    }
+
+    #[test]
+    fn splice_replaces_the_block_and_leaves_the_rest_untouched() {
+        let doc = format!(
+            "# Title\n\n## Support\n\n{}\n\n## Prerequisites\n\nkeep me\n",
+            "<!-- support-table:begin -->\nstale nonsense\n<!-- support-table:end -->"
+        );
+        let fixed = splice(&doc, &render()).expect("markers are present");
+        assert!(fixed.starts_with("# Title\n\n## Support\n\n"));
+        assert!(fixed.ends_with("\n\n## Prerequisites\n\nkeep me\n"));
+        assert!(!fixed.contains("stale nonsense"));
+        assert_eq!(check(&fixed), Ok(()));
+    }
+
+    #[test]
+    fn splice_and_check_refuse_a_document_with_no_markers() {
+        let err = splice("# no markers here\n", &render()).expect_err("must refuse");
+        assert!(err.contains("missing"), "{err}");
+        let err = check("# no markers here\n").expect_err("must refuse");
+        assert!(err.contains("missing"), "{err}");
+        let err = check("<!-- support-table:begin -->\nrows\n").expect_err("must refuse");
+        assert!(err.contains("unterminated"), "{err}");
+    }
+
+    #[test]
+    fn splice_is_idempotent() {
+        let doc = format!("# Title\n\n{}\n", render().trim_end());
+        let once = splice(&doc, &render()).unwrap();
+        let twice = splice(&once, &render()).unwrap();
+        assert_eq!(once, twice);
+    }
+}

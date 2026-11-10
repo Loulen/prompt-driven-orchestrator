@@ -1,0 +1,393 @@
+/**
+ * The shape of a tour (#823, spec #821, ADR-0071) — types only, plus one pure
+ * reading of a Run node. Every definition in `lib/tours/` is written against
+ * these, and every step predicate reads the {@link TourObservation} declared here;
+ * the machine that walks a {@link TourDef} lives in `lib/tour.ts`.
+ */
+
+import type { EditorPipelineDef } from "../pipeline/model/pipeline";
+import type { TourStepPanels, TourTidyUp } from "./tourPanels";
+
+/**
+ * One node of the Run a tour is following (#825), narrowed to the two facts the
+ * reading steps need: has its completion guard been released (ADR-0068), and has
+ * it stopped. Both come from the state the Run inspector already polls — the tour
+ * adds no request of its own (ADR-0071 §3).
+ */
+export interface TourRunNode {
+  id: string;
+  /** The name the Run's frozen pipeline gave it, else its id. */
+  name: string;
+  /** `agent`, `start`, `end`… — the reading steps only ever look for an agent. */
+  type: string;
+  /** `pending` | `running` | `awaiting_user` | `completed` | `failed` | … */
+  status: string;
+  /** The current iteration's completion guard is open (ADR-0068). */
+  released: boolean;
+}
+
+/** Statuses a node no longer moves out of. `completed` is the happy one; the
+ *  others still END the wait — a tour that kept spinning on a failed node would
+ *  be lying about what it is waiting for. */
+const TERMINAL_NODE_STATUSES = new Set(["completed", "failed", "skipped", "stopped"]);
+
+export function isNodeFinished(node: TourRunNode | null): boolean {
+  return node != null && TERMINAL_NODE_STATUSES.has(node.status);
+}
+
+/**
+ * One row of the Run list, narrowed to what a tour reads (#911): the *Overview*
+ * tour follows the Run its preparation made, which is not necessarily the newest
+ * one, and watches it turn `archived` under the user's own gesture.
+ */
+export interface TourRunSummary {
+  id: string;
+  name: string;
+  /** The pipeline's display name, as the list shows it. */
+  pipeline: string;
+  /** `running` | `completed` | `archived` | … — the list's own status. */
+  status: string;
+}
+
+/** The Run a tour is following — its list entry, plus the detail the inspector
+ *  loaded once the user selected it (`nodes` stays empty until then). */
+export interface TourRunView {
+  id: string;
+  name: string;
+  nodes: TourRunNode[];
+}
+
+/**
+ * The slice of app state a step's `done` predicate may read — all of it already
+ * loaded by the UI for its own sake (ADR-0071 §3: the tour observes, it never
+ * fetches). The hook fills this from the edit store and the run list.
+ */
+export interface TourAppState {
+  /** The active edit tab's id (the pipeline's YAML file stem), or null. */
+  pipelineId: string | null;
+  /** The active edit tab's pipeline document. */
+  pipeline: EditorPipelineDef | null;
+  /** Node prompts, which the edit store keeps beside the document. */
+  prompts: Record<string, string>;
+  selection: { kind: string; id: string | null; edgeIndex: number | null };
+  /** The active tab has unsaved changes. */
+  dirty: boolean;
+  /** Ids of the pipelines the Library currently lists. */
+  libraryPipelineIds: string[];
+  /** How many Runs this instance has (the welcome-modal rule reads it too). */
+  runCount: number;
+  /**
+   * The id the New Run form received from the daemon the last time THIS browser
+   * pressed Run, or `null` before any. On a shared instance the newest Run of the
+   * list may be a neighbour's, launched a second after yours: the id your own
+   * Launch got back is the one fact that says which Run is yours (CONTEXT.md
+   * § « Identité de tour »).
+   */
+  launchedRunId: string | null;
+  /**
+   * **Your Run**: the Run whose id {@link launchedRunId} holds, or `null` before
+   * this browser launched one. Never the head of the list: read as « the Run the
+   * tour just caused », a neighbour's Launch validated your step and took over
+   * your recap. Its name comes from the list once the list has caught up with the
+   * Launch, the id until then. The *First run* tour ends on a recap of it, and
+   * the modal that held its name is closed by then (ADR-0071 §3).
+   *
+   * `nodes` is empty until the user opens that Run: the detail is fetched by the
+   * inspector, for the inspector. That is not a gap the tour has to paper over —
+   * the step that asks the user to open the Run is precisely the one before the
+   * steps that read its nodes (#825).
+   */
+  myRun: TourRunView | null;
+  /** Every Run the list holds, newest first (#911) — the same list the left panel
+   *  renders, read rather than fetched (ADR-0071 §3). */
+  runs: TourRunSummary[];
+  /**
+   * The Run whose tab is open on the canvas, or `null` on a pipeline tab (#825).
+   * Read as « did the user open the Run we are talking about », which is one tab
+   * id comparison away but reads as a question rather than a string prefix.
+   */
+  activeRunId: string | null;
+}
+
+/**
+ * What a step is allowed to look at. `present` / `value` are the DOM, narrowed to
+ * two questions, so the predicates stay unit-testable with plain stubs.
+ */
+export interface TourObservation {
+  app: TourAppState;
+  /**
+   * The app state as it was the moment the tour started (#824). "Has something
+   * appeared *because of this tour*" is not answerable from the present alone: an
+   * instance with nine Runs already has `runCount > 0` before the user clicks
+   * anything, so *First run*'s last step compares against this instead.
+   */
+  baseline: TourAppState;
+  /** Does this CSS selector resolve right now? */
+  present: (selector: string) => boolean;
+  /**
+   * The live value of a form control, **uncommitted**. Several fields in the
+   * inspector only write to the store on blur (`NameInput`), so a step that waited
+   * for the committed value could never enable its own `Next` — the user would have
+   * to blur the field first, which is precisely the gesture `Next` is meant to be.
+   */
+  value: (selector: string) => string | null;
+  /**
+   * The rendered text of an element (#824). Read by a step that must quote the app
+   * back at the user — the daemon's refusal under a Launch button is prose the
+   * modal owns, and a tour that paraphrased it would be inventing a reason.
+   */
+  text: (selector: string) => string | null;
+}
+
+export interface TourStep extends TourStepPanels {
+  id: string;
+  /** Imperative — the one thing to do. */
+  title: string;
+  /**
+   * Two sentences max (CONTEXT.md § « Étape de tour »). A `\`name\`` between
+   * backticks is set in code: the names a tour prepared carry the Identité de
+   * tour, and the card shows them the way the list spells them.
+   *
+   * A function when what there is to say depends on what happened: the wait step
+   * of *First run* explains what to watch for while the node runs, and has
+   * nothing left to instruct once it ended in failure (#825). Returning an empty
+   * string renders no paragraph at all.
+   */
+  body: string | ((o: TourObservation) => string);
+  /**
+   * A second, quieter paragraph, under the body and the checklist. Two jobs, one
+   * slot: naming the look-alike control the step is NOT about ("Approve itself …
+   * not for now"), and saying what an observed accident means once the checklist
+   * has shown it (a node that failed rather than completed) — #825.
+   */
+  note?: string | ((o: TourObservation) => string | null);
+  /**
+   * What ends the step, in the footer, where a step that advances on its own
+   * would otherwise show an empty row: « advances once released », « advances on
+   * its own » (#825). Never shown next to a `Next` button — the button says it.
+   */
+  advanceHint?: string;
+  /**
+   * A spinner row under the body while the step is unsatisfied (#825): the one
+   * step with no time limit has to say so, or an unbounded wait reads as a freeze.
+   */
+  waitingNote?: string;
+  /**
+   * The step's target(s), resolved from the observation because most of them only
+   * exist once the user has created the node they point at. The Projecteur's hole
+   * is the union of their bounding boxes; an empty list means "missing", which is
+   * what eventually stops the tour.
+   *
+   * It reads the DOM too, not just the app state, so **one** step can re-aim as
+   * the user works: "choose `tutorial-interactive`" points at the menu's trigger
+   * while the menu is shut and at the option once it is open (#824). Two steps for
+   * that would spend a card on "now open this menu", and a tour is nine cards long
+   * because each one is an idea.
+   */
+  target: (o: TourObservation) => string[];
+  /** How the failure card names what the tour was waiting for. */
+  waitingFor: string;
+  /** One extra sentence on the failure card, in the user's terms. */
+  failureHint?: string;
+  /**
+   * A block to paste, rendered with a Copy button. Any free input gets one.
+   *
+   * A function when the block carries this browser's Identité de tour:
+   * `my-first-run-k3x9` is only known once the identity has been read, which a
+   * module constant cannot wait for. Resolve it with `copyBlockOf` (`lib/tour.ts`).
+   */
+  copyBlock?: string | (() => string);
+  /**
+   * Free input: the step shows `Next` (enabled once `done` holds) instead of
+   * advancing on its own, so the user owns the moment they move on (story 14).
+   *
+   * A predicate when only SOME outcomes are worth stopping on (#825): the wait
+   * step slides on by itself when the node completes, and asks for a click when
+   * it failed, because the sentence explaining the failure has to be read.
+   */
+  confirm?: boolean | ((o: TourObservation) => boolean);
+  /** Optional step — the popover offers `Skip` (story 15). */
+  skippable?: boolean;
+  /**
+   * `Skip` here ends the tour on its recap rather than moving to the next step
+   * (#825, design Q3). For the one step that is a *wait*: skipping it means "I
+   * have seen enough", and the steps after it are about a node that, by
+   * definition, has not finished — the next one would point at an output file
+   * nobody has written and stop the tour on a failure card.
+   */
+  skipEndsTour?: boolean;
+  /**
+   * How long the target may stay missing before the tour stops, in ms. `null`
+   * waits forever (the *First run* tour's "wait for the node to finish").
+   */
+  targetTimeoutMs?: number | null;
+  /**
+   * The lit area is a **zone to roam in**, not a thing to hit: drawn dashed
+   * instead of ringed, and — when the zone is the target itself — over a lighter
+   * dim. Two shapes of the same idea:
+   *
+   * - the target lives in an open menu (a portal): the zone is the menu, so every
+   *   option stays clickable. A tour points at the right one, it does not forbid
+   *   the others.
+   * - the target IS the zone (#825): the whole Run inspector, during a wait of
+   *   unknown length. Read the terminal, scroll it, answer a late question — the
+   *   one thing that step must not do is lock the reader out of the screen.
+   *
+   * A predicate when the target only *becomes* a zone: the last step of *First
+   * run* rings the `out` row to be clicked, and lights the artifact that opens
+   * as a page to read. Same step, two shapes, because « now read it » is not an
+   * idea worth a card of its own.
+   */
+  soft?: boolean | ((o: TourObservation) => boolean);
+  /**
+   * The observed condition that completes the step. **Absent means "acknowledge"**:
+   * there is nothing to observe, so the popover shows an always-enabled `Next`.
+   */
+  done?: (o: TourObservation) => boolean;
+  /**
+   * Replaying this step with `Previous` needs its target on screen, even when its
+   * condition still holds (CONTEXT.md § « Rejeu d'étape »). For a step whose
+   * instruction only makes sense on a screen that is gone: « Name the pipeline »
+   * holds for good once the pipeline exists, but replayed after the dialog closed
+   * it would ask to paste into a field nobody can see. Without the flag, a
+   * satisfied step is replayable on its condition alone: « Create it » comes back
+   * with `Next` live.
+   */
+  replayNeedsTarget?: boolean;
+  /**
+   * A live checklist under the body (#824), for the one step that asks for **two**
+   * gestures at once (tick both PDO skills). Splitting it in two steps would spend
+   * a whole card on "now tick the other one"; showing nothing would make the first
+   * tick look like it did nothing. This says what happened.
+   */
+  checklist?: (o: TourObservation) => TourChecklistItem[];
+  /**
+   * Open the filesystem explorer at this path while the step is current (#824),
+   * instead of at the field's own value. The tour cannot type for the user
+   * (ADR-0071 §2), so an explorer that had to be navigated to `/tmp` by hand would
+   * be four folder clicks of nothing.
+   */
+  explorerStart?: string;
+  /**
+   * The step is **refused** rather than merely unfinished: the app is showing a
+   * reason the user must read (a daemon that would not launch the Run). Returns
+   * that reason verbatim, or `null` while nothing is wrong.
+   *
+   * Checked before `done`, so a refusal cannot be raced past by a condition that
+   * happens to hold. A refused tour stops on its own card and is **not** marked
+   * done — the user's form is left exactly as they filled it.
+   */
+  refused?: (o: TourObservation) => string | null;
+  /** Headline of the refusal card, e.g. "The Run could not be launched". */
+  refusalTitle?: string;
+  /** One sentence under the quoted reason, in the user's terms. A function for
+   *  the same reason as {@link TourStep.copyBlock}: it may name a suffixed object. */
+  refusalHint?: string | (() => string);
+}
+
+export interface TourChecklistItem {
+  label: string;
+  done: boolean;
+  /**
+   * Why this item is still open, and what to do about it (#825). The engine has
+   * no « back » button, so the wait step's checklist is where a user who skipped
+   * the release learns the node is waiting for them — the button is inside the
+   * soft zone, so they can still press it.
+   */
+  note?: string;
+  /** A badge next to a *done* item, when done is not the same as well: the node
+   *  finished — `failed`. */
+  badge?: string;
+}
+
+/**
+ * One thing a tour needs to *exist* before its first step can point at anything
+ * (#824) — a training repository, a pipeline in the Library. Run while the intro
+ * card is on screen, in parallel, and every one of them must be **idempotent**:
+ * replaying the tour has to be free, and a user who edited what a previous run
+ * created keeps their edit.
+ *
+ * The daemon verbs behind these know nothing about tours (ADR-0071 §3); `run` is
+ * where a tour's content binds one to its own arguments.
+ */
+export interface TourPreparation {
+  id: string;
+  /** Shown while it is in flight, e.g. "Pipeline tutorial-interactive in the Library…". */
+  pending: string;
+  /** Shown once it has answered, e.g. "Training repository /tmp/pdo-tutorial ready". */
+  ready: string;
+  /** Headline when THIS one refuses, e.g. "The training repository could not be created". */
+  failureTitle: string;
+  /**
+   * Idempotent. Rejects with the daemon's own sentence, which is quoted verbatim.
+   *
+   * `signal` aborts when the card goes away (quit, a new start) — the one
+   * preparation that *waits* (a Run until `completed`, #911) must not go on
+   * polling for a tour nobody is looking at any more.
+   */
+  run: (signal?: AbortSignal) => Promise<void>;
+}
+
+/**
+ * The card a tour opens on, before any target is lit (#824). It is where a tour
+ * says what it is about to do, and — when it has preparations — where it waits
+ * for them: `Start` stays dead until every one has answered, because a tour that
+ * began half-prepared would fail on a step whose target was never created.
+ */
+export interface TourIntro {
+  /** Headline, e.g. "Launch your first Run". */
+  title: string;
+  /** What the tour will do, in the user's terms. */
+  body: string;
+  /** The reassurance under the checklist ("Nothing here touches your own repositories."). */
+  footnote: string;
+  prepare: TourPreparation[];
+}
+
+/** End-card bullets, possibly derived from what the tour ended up observing. */
+export type TourRecap =
+  | { label: string; text: string }[]
+  | ((app: TourAppState) => { label: string; text: string }[]);
+
+export interface TourDef {
+  id: string;
+  /** Name in the UI, e.g. "First pipeline". */
+  title: string;
+  /** One line, for the welcome modal and Settings › Tutorials. */
+  blurb: string;
+  /** Rough duration in minutes, shown next to Start. */
+  minutes: number;
+  steps: TourStep[];
+  /** The welcome card and its preparations. Absent → the tour starts on step 1. */
+  intro?: TourIntro;
+  /**
+   * What the tour puts away at any exit (#911): end, quit, clean stop. Absent or
+   * empty → nothing to tidy. The pipeline and the Run a tour leaves behind are
+   * the user's; only what exists purely to be shown belongs here.
+   */
+  teardown?: TourTidyUp[];
+  /** End card headline, e.g. "You built …". */
+  recapIntro: string | ((app: TourAppState) => string);
+  /** End card bullets: what the thing the user just built actually does. */
+  recap: TourRecap;
+  /**
+   * End-card wording, when "done — Finish" is not what the moment is. *First run*
+   * ends on something that is *starting*, and its primary just gets out of the way.
+   */
+  outro?: {
+    /** Replaces "<Tour> — done". */
+    title?: string;
+    /** Replaces "Finish", e.g. "Open the Run". */
+    primaryLabel?: string;
+    /** A closing sentence under the bullets, pointing at what comes next. */
+    closing?: string;
+  };
+  /**
+   * One sentence for the card of a tour that **stopped** while this one is the
+   * next leg of a Full tour (#825): what this tour needs, when the previous one
+   * failed for want of it. A refusal at Launch is a lesson about the machine, not
+   * a reason to lose the chain — and « the next tour does not need a running
+   * agent » is the fact that makes Continue worth pressing.
+   */
+  chainNote?: string;
+}

@@ -36,10 +36,12 @@ export interface ConditionRow {
   /**
    * Type hint for `value` coercion. `"bool"` forces the written value to a
    * canonical YAML boolean (`true`/`false`) rather than a string, resolving the
-   * true / 1 / True ambiguity (#147). Absent means "infer" (numeric → number,
-   * otherwise string).
+   * true / 1 / True ambiguity (#147). `"string"` keeps a value that reads as a
+   * number (`"42"`) a string. Absent means "infer" (numeric → number, otherwise
+   * string). `whenToRows` sets it from the clause, so re-committing a row the
+   * user did not touch writes back the type it was read with.
    */
-  valueType?: "bool";
+  valueType?: "bool" | "string";
 }
 
 /**
@@ -93,12 +95,14 @@ export function whenToRows(
     if (typeof predicate === "object" && predicate !== null && !Array.isArray(predicate)) {
       const { port, field } = splitFieldKey(key, ports);
       for (const [op, val] of Object.entries(predicate as Record<string, unknown>)) {
-        rows.push({
-          port,
-          field,
-          op: op as Operator,
-          value: Array.isArray(val) ? JSON.stringify(val) : String(val ?? ""),
-        });
+        const value = Array.isArray(val) ? JSON.stringify(val) : String(val ?? "");
+        const valueType = typeHintFor(val);
+        // No `valueType` key at all when inference already gives the type back.
+        rows.push(
+          valueType
+            ? { port, field, op: op as Operator, value, valueType }
+            : { port, field, op: op as Operator, value },
+        );
       }
     }
   }
@@ -120,6 +124,15 @@ export function rowsToWhen(
 }
 
 /**
+ * The grammar's map of field → predicate. A `when` the YAML holds as anything
+ * else (a bare string) is the author's: passed through as is, never walked
+ * key by key — a string would come back as `{"0": "i", "1": "t", …}`.
+ */
+function isClauseMap(when: unknown): when is Record<string, unknown> {
+  return when != null && typeof when === "object" && !Array.isArray(when);
+}
+
+/**
  * Re-encodes a clause for a new set of carried ports (#843). Called when the
  * Outputs section ticks or unticks a port, and when a port rename reaches the
  * edges: the qualification changes shape (bare ⇄ `port.field`), and a key
@@ -132,11 +145,13 @@ export function rowsToWhen(
  * doesn't render.
  */
 export function requalifyWhen(
-  when: Record<string, unknown> | null | undefined,
+  when: unknown,
   fromPorts: string[],
   toPorts: string[],
 ): Record<string, unknown> | null {
-  if (!when || Object.keys(when).length === 0) return null;
+  // Not a map: returned as the edge holds it (typed as the grammar's map, like `EdgeDef.when`).
+  if (!isClauseMap(when)) return (when ?? null) as Record<string, unknown> | null;
+  if (Object.keys(when).length === 0) return null;
   const fallback = defaultConditionPort(toPorts);
   const out: Record<string, unknown> = {};
   for (const [key, predicate] of Object.entries(when)) {
@@ -156,11 +171,13 @@ export function requalifyWhen(
  * Keys only, like `requalifyWhen` — the row model is lossy.
  */
 export function renameWhenPorts(
-  when: Record<string, unknown> | null | undefined,
+  when: unknown,
   ports: string[],
   rename: Map<string, string>,
 ): Record<string, unknown> | null {
-  if (!when || Object.keys(when).length === 0) return null;
+  // Not a map: returned as the edge holds it (typed as the grammar's map, like `EdgeDef.when`).
+  if (!isClauseMap(when)) return (when ?? null) as Record<string, unknown> | null;
+  if (Object.keys(when).length === 0) return null;
   if (rename.size === 0) return when;
   const renamed = ports.map((p) => rename.get(p) ?? p);
   const out: Record<string, unknown> = {};
@@ -170,6 +187,40 @@ export function renameWhenPorts(
     out[fieldKey({ port: nextPort, field, op: "eq", value: "" }, renamed)] = predicate;
   }
   return out;
+}
+
+/** What tells one row from another: no two rows share a port, a field and an operator. */
+export function conditionKey(row: ConditionRow): string {
+  return `${row.port}\u0000${row.field}\u0000${row.op}`;
+}
+
+/**
+ * The rows in the order the editor last showed them. A clause groups its rows
+ * by field (`{ verdict: { eq, neq } }`), so a condition added on a field
+ * already used would come back next to it, not last: `order` (the keys of the
+ * rows as shown) puts each where it was. A row `order` does not know (an undo,
+ * an outside write) comes after, in the clause's order.
+ */
+export function inShownOrder(rows: ConditionRow[], order: readonly string[]): ConditionRow[] {
+  const rank = new Map(order.map((key, i) => [key, i]));
+  const known = rows.filter((r) => rank.has(conditionKey(r)));
+  known.sort((a, b) => rank.get(conditionKey(a))! - rank.get(conditionKey(b))!);
+  return [...known, ...rows.filter((r) => !rank.has(conditionKey(r)))];
+}
+
+/**
+ * The type hint a clause value needs to come back unchanged through
+ * `parseValue`: a bool would be read back as a string, a string that reads as a
+ * number as a number. Numbers and lists infer back to themselves.
+ */
+function typeHintFor(val: unknown): ConditionRow["valueType"] {
+  if (typeof val === "boolean") return "bool";
+  if (typeof val === "string" && readsAsNumber(val)) return "string";
+  return undefined;
+}
+
+function readsAsNumber(value: string): boolean {
+  return value.trim() !== "" && !isNaN(Number(value));
 }
 
 function parseValue(row: ConditionRow): unknown {
@@ -186,7 +237,6 @@ function parseValue(row: ConditionRow): unknown {
     // Canonical boolean: the toggle only ever produces "true"/"false".
     return row.value === "true";
   }
-  const num = Number(row.value);
-  if (!isNaN(num) && row.value.trim() !== "") return num;
-  return row.value;
+  if (row.valueType === "string") return row.value;
+  return readsAsNumber(row.value) ? Number(row.value) : row.value;
 }

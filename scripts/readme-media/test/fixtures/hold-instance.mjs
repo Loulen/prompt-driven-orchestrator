@@ -6,12 +6,11 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { demoOptions, loadConfig } from "../../lib/config.mjs";
 import { DemoInstance } from "../../lib/demo-instance.mjs";
 
 const [tmpRoot, hostHome, mode] = process.argv.slice(2);
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
-const instance = new DemoInstance({ repoRoot, tmpRoot, hostHome, liveHarnesses: ["claude"], log: () => {} });
+const instance = new DemoInstance({ ...demoOptions(await loadConfig()), tmpRoot, hostHome, liveHarnesses: ["claude"], log: () => {} });
 await instance.start();
 // Stand-in for a live agent: a session on the demo tmux socket, with the demo
 // HOME as the daemon gives it to its sessions.

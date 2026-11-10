@@ -4,891 +4,64 @@
  * depth. It needs **no harness**: the Run it visits is a pipeline of `script`
  * nodes (ADR-0017), which finish in seconds and cost nothing.
  *
- * Eighteen steps, nine of them gestures that advance only on the observed state
- * (open the Run, click implementer, open its `code` output, close the viewer, the
- * reviewer → End edge, Start, archive, Triggers, Pipelines); the other nine are
- * read and acknowledged with Next. Two of those ask for a click first when what
- * they show is not on screen: the folded terminal of a finished node, and the
- * Runs tab a reader left.
+ * Eighteen steps, twelve of them gestures that advance only on the observed state
+ * (open the Run, click implementer, open its `code` output, close the viewer,
+ * unfold the terminal, the reviewer → End edge, Start, back to Runs, hover the
+ * status icon, archive, Triggers, Pipelines); the other six are read and
+ * acknowledged with Next. Two
+ * of the gestures ask for a click only when what they show is not on screen: the
+ * folded terminal of a finished node, and the Runs tab a reader left.
  *
- * The panel a gesture opens stays lit and explorable but **read-only** (#911,
- * after the human test): the reader may switch tabs, scroll and unfold, never
- * change a value. A few steps pin **side bubbles** on what that panel shows —
- * the implementer's input, the edge's condition, the Run's prompt in Start.
- *
- * Its intro card prepares four things through verbs that know nothing about tours
- * (ADR-0071 §3–4): the training repository, the `tutorial-overview` pipeline, an
- * example Trigger that is harmless by construction, and a completed Run. Its
- * teardown removes the Trigger at any exit; the pipeline and the Run stay the
- * user's, as after *First run*.
- *
- * The Run and the Trigger belong to this browser's **identité de tour** (#986,
- * ADR-0071 §5): both are named with its suffix, and the tour only reuses and tidies
- * up its own — two people playing *Overview* on one instance never share a Run nor
- * remove each other's Trigger. The repository and the pipeline stay common.
+ * Its intro card prepares four things (`overviewPreparation.ts`): the training
+ * repository, the `tutorial-overview` pipeline, an example Trigger that is
+ * harmless by construction, and a completed Run. Its teardown removes the
+ * Trigger at any exit; the pipeline and the Run stay the user's. The Run and the
+ * Trigger carry this browser's Identité de tour (ADR-0071 §5).
  *
  * Copy rules inherited from the other tours: title is an imperative, body is two
  * sentences at most, and the other tours are pointed to in one sentence, never a
  * button.
  */
 
+import type { TourDef, TourStep } from "../tourDef";
+import { TUTORIAL_REPO_PATH } from "./firstRunPreparation";
+import { CANVAS_STEPS } from "./overviewCanvasSteps";
+import { TUTORIAL_OVERVIEW_PIPELINE_ID, exampleTriggerName, overviewRunName } from "./overviewPipeline";
 import {
-  ApiError,
-  createPipeline,
-  createRun,
-  createTrigger,
-  deleteTrigger,
-  fetchPipelines,
-  fetchRun,
-  fetchRuns,
-  fetchTriggers,
-  savePipeline,
-  updateTrigger,
-} from "../../api";
-import { useEditStore } from "../../stores/editStore";
-import type { NodeDef } from "../../types";
-import { withTourIdentity } from "../tourMemory";
-import type {
-  TourAppState,
-  TourDef,
-  TourIllustration,
-  TourObservation,
-  TourRunSummary,
-  TourStep,
-} from "../tour";
-import { prepareRepo, TUTORIAL_REPO_PATH } from "./firstRun";
-
-/** The pipeline the tour's Run executes. A normal Library pipeline, kept after the tour. */
-export const TUTORIAL_OVERVIEW_PIPELINE_ID = "tutorial-overview";
-
-/**
- * The base of the name the tour gives its Run, so the list says what the row is.
- * The Run itself carries the identité de tour: {@link overviewRunName}.
- */
-export const OVERVIEW_RUN_NAME = "tour-overview";
-
-/** This browser's Run name, e.g. `tour-overview-k3x9` — the only Run the tour reuses. */
-export function overviewRunName(): string {
-  return withTourIdentity(OVERVIEW_RUN_NAME);
-}
-
-/** The Run's prompt — fixed, and what the Start step shows the reader. */
-export const OVERVIEW_PROMPT =
-  "Show me around PDO: implement a tiny change, then review it and hand back a verdict.";
-
-/**
- * The base of the example Trigger's name — and the whole name of the Trigger the
- * tour installed before it had an identity, which the teardown removes too.
- */
-export const EXAMPLE_TRIGGER_NAME = "tutorial-example-trigger";
-
-/**
- * This browser's example Trigger, e.g. `tutorial-example-trigger-k3x9`: installed
- * to be shown, removed on the way out — never someone else's.
- */
-export function exampleTriggerName(): string {
-  return withTourIdentity(EXAMPLE_TRIGGER_NAME);
-}
-
-/** Every 15 minutes — a schedule anyone can read at a glance. */
-const EXAMPLE_TRIGGER_CRON = "*/15 * * * *";
-
-/**
- * The guard that makes the Trigger harmless **by construction** (ADR-0071 §4):
- * `false` exits non-zero, so every fire is skipped and no Run is ever created —
- * even when a tab closed mid-tour left the Trigger behind.
- */
-const EXAMPLE_TRIGGER_GUARD = "false";
-
-const EXAMPLE_TRIGGER_INPUT =
-  "An example input. This Trigger's guard refuses every fire, so it never starts a Run.";
-
-// ---- the pipeline -----------------------------------------------------------
-
-/**
- * `implement-review`'s layout (the README media fixture: positions, anchors, edge
- * routes), with two `script` nodes in place of the agents. Scripts run in the
- * Run worktree and only ever write their outputs, so the worktree stays clean.
- * No `image_list` port: a script has nothing to take a screenshot of.
- *
- * Edge order matters to the tour: the canvas keys an edge by its index, and the
- * edge step points at reviewer → End (`verdict eq pass`), the one the Run takes.
- */
-export const OVERVIEW_PIPELINE_YAML = `name: ${TUTORIAL_OVERVIEW_PIPELINE_ID}
-version: "1.0"
-nodes:
-  - id: start
-    name: Start
-    type: start
-    outputs:
-      - { name: user_prompt }
-    view: { x: 199, y: 47 }
-  - id: end
-    name: End
-    type: end
-    inputs:
-      - { name: result }
-    view: { x: 204, y: 316 }
-  - id: implementer
-    name: implementer
-    type: script
-    isolated_worktree: false
-    inputs:
-      - { name: task }
-    outputs:
-      - name: code
-        instructions: "What was changed, in a few lines."
-    view: { x: 196, y: 135 }
-  - id: reviewer
-    name: reviewer
-    type: script
-    isolated_worktree: false
-    inputs:
-      - { name: code }
-    outputs:
-      - name: review
-        frontmatter:
-          verdict:
-            allowed: [pass, fail]
-            type: enum
-        instructions: "Your verdict, then a small Mermaid diagram of the flow you checked."
-    view: { x: 197, y: 208 }
-edges:
-  - source: { node: start, port: user_prompt }
-    target: { node: implementer, port: task }
-    mode: manual
-    waypoints:
-      - { x: 280, y: 95 }
-    target_side: top
-    source_anchor: { side: bottom, offset: 81 }
-    target_anchor: { side: top, offset: 84 }
-  - source: { node: implementer, port: code }
-    target: { node: reviewer, port: code }
-    mode: manual
-    waypoints:
-      - { x: 280, y: 168 }
-    target_side: top
-    source_anchor: { side: bottom, offset: 84 }
-    target_anchor: { side: top, offset: 83 }
-  - source: { node: reviewer, port: review }
-    target: { node: implementer, port: task }
-    when:
-      verdict: { eq: fail }
-    mode: manual
-    waypoints:
-      - { x: 397, y: 154 }
-      - { x: 396, y: 154 }
-    target_side: right
-    source_anchor: { side: right, offset: 26 }
-    target_anchor: { side: right, offset: 19 }
-    output_label_pos:
-      review: { x: 381, y: 225 }
-    condition_label_pos: { x: 395, y: 192 }
-  - source: { node: reviewer, port: review }
-    target: { node: end, port: result }
-    when:
-      verdict: { eq: pass }
-    mode: manual
-    waypoints:
-      - { x: 280, y: 276 }
-    target_side: top
-    source_anchor: { side: bottom, offset: 83 }
-    target_anchor: { side: top, offset: 76 }
-    output_label_pos:
-      review: { x: 253, y: 256 }
-    condition_label_pos: { x: 284, y: 284 }
-loops:
-  - id: loop-tutorial-overview
-    kind: bounded
-    members: [implementer, reviewer]
-    max_iter: 3
-`;
-
-/**
- * The implementer's bash body (ADR-0017: stored in the node's prompt slot, run as
- * `timeout 60s bash <body>`). It prints what the frozen terminal pane will show,
- * and writes its one output.
- *
- * It completes **itself**, from inside its session, and waits there to be reaped
- * (#911). The daemon snapshots a node's pane when it reaps the session, after a
- * completion; the wrapper's own `pdo complete` runs only once the script has
- * exited, and the session goes with it — so a script that simply ended would
- * leave the terminal step a « Session no longer available ». Should the reap be
- * slow, the wait gives up after 20 s, the wrapper completes again, and the
- * daemon answers it as a legal duplicate.
- */
-export const IMPLEMENTER_SCRIPT = `#!/usr/bin/env bash
-# tutorial-overview · implementer — a script node, so the tour needs no agent.
-set -euo pipefail
-
-echo "implementer: reading the task"
-echo "implementer: an agent would edit the repo;"
-echo "implementer: this script only writes output"
-sleep 1
-
-cat > "$PDO_OUTPUT_CODE" <<'OUT'
-# What the implementer did
-
-Nothing to the repository: this node is a script, so the tour costs nothing.
-An agent node would have made the change here and described it in this file.
-OUT
-
-echo "implementer: wrote code — done"
-# Hand the output over from inside the session, then wait to be reaped. The
-# daemon freezes a node's pane when it reaps the session; the wrapper's own
-# \`pdo complete\` only runs once this script has exited — and its session with
-# it — so the tour's terminal step would have nothing to show.
-pdo complete
-# Then leave as soon as the pane is gone — polled, not slept: the reap hangs up
-# the session's shell only, and a plain \`sleep\` would outlive it (20 s at most).
-for _ in $(seq 1 100); do
-  tmux display-message -p -t "\${TMUX_PANE:-}" "" >/dev/null 2>&1 || exit 0
-  sleep 0.2
-done
-`;
-
-/** The reviewer's body: `verdict: pass` in the frontmatter, and a mermaid diagram. */
-export const REVIEWER_SCRIPT = `#!/usr/bin/env bash
-# tutorial-overview · reviewer — a script node, so the tour needs no agent.
-set -euo pipefail
-
-echo "reviewer: reading the code output"
-echo "reviewer: verdict pass — the edge to End"
-echo "reviewer: fires, the Run ends"
-sleep 1
-
-cat > "$PDO_OUTPUT_REVIEW" <<'OUT'
----
-verdict: pass
----
-# Review
-
-The change holds up. The edge reviewer → End reads this verdict and ends the Run.
-
-\`\`\`mermaid
-flowchart LR
-  Start --> implementer --> reviewer
-  reviewer -- verdict eq pass --> End
-  reviewer -- verdict eq fail --> implementer
-\`\`\`
-OUT
-
-echo "reviewer: wrote review — done"
-# Hand the output over from inside the session, then wait to be reaped. The
-# daemon freezes a node's pane when it reaps the session; the wrapper's own
-# \`pdo complete\` only runs once this script has exited — and its session with
-# it — so the tour's terminal step would have nothing to show.
-pdo complete
-# Then leave as soon as the pane is gone — polled, not slept: the reap hangs up
-# the session's shell only, and a plain \`sleep\` would outlive it (20 s at most).
-for _ in $(seq 1 100); do
-  tmux display-message -p -t "\${TMUX_PANE:-}" "" >/dev/null 2>&1 || exit 0
-  sleep 0.2
-done
-`;
-
-// ---- preparation ------------------------------------------------------------
-
-/**
- * What this pass of the tour prepared: the Run it visits and the Trigger it shows.
- * Set by the preparations, read by the steps — the Run is not always the newest
- * one in the list (a replay reuses an older one), so « the tour's Run » has to be
- * remembered rather than guessed.
- */
-const prepared: { runId: string | null; triggerId: string | null } = { runId: null, triggerId: null };
-
-/** The Run this pass of the tour is visiting, once its preparation has answered. */
-export function overviewRunId(): string | null {
-  return prepared.runId;
-}
-
-/** The example Trigger this pass of the tour installed or picked up. */
-export function exampleTriggerId(): string | null {
-  return prepared.triggerId;
-}
-
-/**
- * Share one in-flight call between the preparations that need it. They run in
- * parallel (the engine starts them together), but the Trigger and the Run can only
- * be made once the repository and the pipeline exist: both await the same
- * promise instead of racing a second `POST /repos/create`.
- */
-function shared(fn: () => Promise<void>): () => Promise<void> {
-  let flight: Promise<void> | null = null;
-  return () => {
-    flight ??= fn().finally(() => {
-      flight = null;
-    });
-    return flight;
-  };
-}
-
-const repoReady = shared(prepareRepo);
-
-/**
- * Put `tutorial-overview` in the Library, or leave the one already there alone —
- * a user who edited it keeps their edit, the rule *First run* follows too.
- */
-const pipelineReady = shared(async () => {
-  const existing = await fetchPipelines();
-  if (existing.some((p) => p.id === TUTORIAL_OVERVIEW_PIPELINE_ID)) return;
-  try {
-    await createPipeline(TUTORIAL_OVERVIEW_PIPELINE_ID);
-  } catch (e) {
-    // Lost the race with another tab: the pipeline exists, which is all we promised.
-    if (!(e instanceof ApiError) || e.status !== 409) throw e;
-    return;
-  }
-  await savePipeline(TUTORIAL_OVERVIEW_PIPELINE_ID, OVERVIEW_PIPELINE_YAML, {
-    implementer: IMPLEMENTER_SCRIPT,
-    reviewer: REVIEWER_SCRIPT,
-  });
-});
-
-async function prepareRepoStep(): Promise<void> {
-  await repoReady();
-}
-
-/**
- * The Library list is loaded once, at mount, and the daemon announces no
- * creation — so a pipeline this preparation just saved would stay out of the
- * Pipelines tab until a reload, and step 15 would point at nothing (FP #911).
- * The store is asked to re-read it, the way the New/Import buttons do.
- */
-async function preparePipelineStep(): Promise<void> {
-  await pipelineReady();
-  await useEditStore.getState().loadPipelines();
-}
-
-/**
- * This browser's example Trigger, active, picked up by its name when a previous
- * pass left it behind (a tab closed mid-tour skips the teardown). A picked-up
- * Trigger is put back in the shape the tour shows — active, guard `false` — because
- * it is the tour's object, not the user's. Another identity's Trigger is not ours
- * to pick up: it is left alone, and this browser gets its own.
- */
-export async function prepareExampleTrigger(): Promise<void> {
-  await Promise.all([repoReady(), pipelineReady()]);
-  const name = exampleTriggerName();
-  const existing = (await fetchTriggers()).find((t) => t.name === name);
-  if (existing) {
-    if (!existing.enabled || (existing.guard_command ?? "").trim() !== EXAMPLE_TRIGGER_GUARD) {
-      await updateTrigger(existing.id, { enabled: true, guard_command: EXAMPLE_TRIGGER_GUARD });
-    }
-    prepared.triggerId = existing.id;
-    return;
-  }
-  const created = await createTrigger({
-    name,
-    pipeline_id: TUTORIAL_OVERVIEW_PIPELINE_ID,
-    cron: EXAMPLE_TRIGGER_CRON,
-    input_template: EXAMPLE_TRIGGER_INPUT,
-    target_repo: TUTORIAL_REPO_PATH,
-    guard_command: EXAMPLE_TRIGGER_GUARD,
-    overlap_policy: "skip",
-    auto_name: false,
-  });
-  prepared.triggerId = created.id;
-}
-
-/** How often the Run is re-read while the preparation waits for it. */
-export const RUN_POLL_MS = 1_000;
-/**
- * How long the preparation waits for the Run. Two scripts under the 60 s wrapper
- * timeout each: a Run still going after three minutes is stuck, and a card that
- * waited forever would be the infinite wait story 7 refuses.
- */
-export const RUN_WAIT_MS = 180_000;
-
-function abortError(): Error {
-  return new DOMException("The tour was closed.", "AbortError");
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(abortError());
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(abortError());
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
-/**
- * Read the Run until it is `completed`. Any other terminal or waiting state is a
- * refusal quoting the daemon's reason (spec #910): a tour that visited a failed
- * Run would be explaining outputs that were never written.
- */
-async function waitForCompleted(runId: string, signal?: AbortSignal): Promise<void> {
-  const deadline = Date.now() + RUN_WAIT_MS;
-  for (;;) {
-    if (signal?.aborted) throw abortError();
-    const run = await fetchRun(runId);
-    if (run.status === "completed") return;
-    if (run.status !== "running") {
-      const reason = run.failure_reason ?? run.awaiting_reason ?? null;
-      throw new Error(
-        `Run ${run.name?.trim() || runId} ended \`${run.status}\` instead of \`completed\`${reason ? `: ${reason}` : "."}`,
-      );
-    }
-    if (Date.now() >= deadline) {
-      throw new Error(
-        `Run ${run.name?.trim() || runId} was still running after ${RUN_WAIT_MS / 60_000} minutes.`,
-      );
-    }
-    await sleep(RUN_POLL_MS, signal);
-  }
-}
-
-/**
- * The Run the tour visits (spec #910, design Q8): the newest Run of this identité
- * de tour (`tour-overview-<id>`, #986) that is `completed` and not archived — so
- * replaying the tour does not stack identical Runs — else a fresh one, waited for
- * until `completed`.
- *
- * One still `running` (a previous pass closed before it finished) is waited for
- * rather than doubled. Another identity's Run, however recent, and a `tour-overview`
- * Run left from before identities are never taken: archiving it would end someone
- * else's tour, or find it already archived.
- */
-export async function prepareCompletedRun(signal?: AbortSignal): Promise<void> {
-  prepared.runId = null;
-  const name = overviewRunName();
-  const runs = await fetchRuns();
-  const ours = runs.filter(
-    (r) => r.pipeline_name === TUTORIAL_OVERVIEW_PIPELINE_ID && !r.triggered_by && r.name === name,
-  );
-  const reusable = ours.find((r) => r.status === "completed") ?? ours.find((r) => r.status === "running");
-  let runId = reusable?.run_id ?? null;
-  if (!runId) {
-    await Promise.all([repoReady(), pipelineReady()]);
-    if (signal?.aborted) throw abortError();
-    const created = await createRun({
-      pipeline: TUTORIAL_OVERVIEW_PIPELINE_ID,
-      pipeline_id: TUTORIAL_OVERVIEW_PIPELINE_ID,
-      input: OVERVIEW_PROMPT,
-      variables: {},
-      target_repo: TUTORIAL_REPO_PATH,
-      name,
-      auto_name: false,
-      // No sandbox: two bash scripts that echo and write their outputs need no
-      // container, and an instance without Docker must still play the tour.
-      sandbox: "off",
-    });
-    runId = created.run_id;
-  }
-  await waitForCompleted(runId, signal);
-  prepared.runId = runId;
-}
-
-// ---- teardown ---------------------------------------------------------------
-
-/**
- * Remove this browser's example Trigger — every one of its name, so a Trigger a
- * previous pass left behind goes too — and the unsuffixed one the tour installed
- * before identities existed, which belongs to nobody now. Another identity's
- * Trigger stays: its tour may still be showing it. A 404 is a success
- * (`deleteTrigger` says so).
- */
-export async function removeExampleTrigger(): Promise<void> {
-  const names = new Set([exampleTriggerName(), EXAMPLE_TRIGGER_NAME]);
-  const triggers = await fetchTriggers();
-  await Promise.all(triggers.filter((t) => names.has(t.name)).map((t) => deleteTrigger(t.id)));
-  prepared.triggerId = null;
-}
-
-// ---- reading the observation ------------------------------------------------
-
-const testId = (id: string) => `[data-testid="${id}"]`;
-
-/** Attribute selectors carry ids the daemon sanitised, but a quote in one would
- *  break the selector silently rather than fail loudly. */
-function cssEscape(value: string): string {
-  return value.replace(/["\\]/g, "\\$&");
-}
-
-/** The three resizable panes. The panel library stamps our `id` on each. */
-const CANVAS_PANEL = "[data-panel]#center";
-const LEFT_PANEL = "[data-panel]#left";
-const RIGHT_PANEL = "[data-panel]#right";
-
-const RUNS_TAB = testId("left-tab-runs");
-const TRIGGERS_TAB = testId("left-tab-triggers");
-const PIPELINES_TAB = testId("left-tab-library");
-const NEW_RUN_BUTTON = testId("new-run-button");
-const TRIGGERS_LIST = testId("triggers-list-panel");
-const NEW_PIPELINE_BUTTON = testId("new-pipeline-button");
-const PIPELINE_ROW = testId(`library-row-${TUTORIAL_OVERVIEW_PIPELINE_ID}`);
-const INSPECTOR_RUN = testId("inspector-pane-run");
-/** The pane behind the inspector's Config tab — a node's prompt and skills, read-only on a Run (ADR-0080). */
-const INSPECTOR_CONFIG = testId("inspector-pane-edit");
-/** The inspector's Run tab — where a node's outputs and terminal live. */
-const INSPECTOR_TAB_RUN = testId("inspector-tab-run");
-/** The inspector's Config tab: on a Run followed in « pilotage », the Edit tab is gone (ADR-0080). */
-const INSPECTOR_TAB_CONFIG = testId("inspector-tab-config");
-const TERMINAL = testId("tmux-terminal");
-/** A finished node's terminal opens folded to this bar, to leave room for its outputs. */
-const TERMINAL_RESTORE = testId("term-restore");
-/** The Runs tab, and it is the one showing. */
-const RUNS_TAB_OPEN = `${RUNS_TAB}[aria-selected="true"]`;
-const CODE_ROW = `${testId("port-row")}[data-kind="output"][data-port="code"]`;
-/** The viewer a click on the `code` row opens — the artifact modal, keyed by port. */
-const CODE_VIEWER = `${testId("artifact-modal")}[data-port="code"]`;
-/** implementer's input row, where Start's prompt arrived. */
-const TASK_ROW = `${testId("port-row")}[data-kind="input"][data-port="task"]`;
-const START_INSPECTOR = testId("start-inspector");
-/** The Run's input, as the Start inspector prints it. */
-const START_INPUT = `${START_INSPECTOR} ${testId("start-input-text")}`;
-const EDGE_PANEL = testId("edge-detail-panel");
-/** The first condition row of the edge panel — `verdict eq pass` on reviewer → End. */
-const EDGE_CONDITION = `${EDGE_PANEL} ${testId("condition-row")}`;
-/**
- * The row's leading slot, not the dot in it: on row hover the resting dot is
- * `display: none` (it turns into the select ring), so a hole drawn on it
- * collapsed under the reader's own pointer, the card jumped away, the row lost
- * its hover, the dot came back — a flicker loop (#911, human test). The slot
- * keeps its box in both states.
- */
-const RUN_SELECT = testId("run-select-control");
-const CLEANUP_MODAL = testId("cleanup-confirm-modal");
-const SETTINGS_BUTTON = testId("open-settings");
-
-/**
- * The inspector's navigation, which a read-only step still lets through (#911):
- * the Run / Config tabs, the I/O / Orchestration tabs, the « Initial Prompt » fold,
- * and the terminal's own unfold / expand / copy. Everything else in the panel
- * that is a control stays refused while the tour shows it.
- */
-const INSPECTOR_EXPLORE = [
-  testId("inspector-tab-run"),
-  INSPECTOR_TAB_CONFIG,
-  '[data-testid^="detail-tab-"]',
-  testId("prompt-toggle"),
-  TERMINAL_RESTORE,
-  testId("term-expand"),
-  testId("term-copy"),
-];
-
-/** The Status icon's legend (PDO-22, #1000): the four shapes the reader meets
- *  first, by their meaning — the shape carries the status, not the colour. */
-const STATUS_ICONS: TourIllustration = {
-  kind: "rows",
-  rows: [
-    { status: "completed", label: "finished" },
-    { status: "running", label: "running" },
-    { status: "awaiting_user", label: "waits for you" },
-    { status: "failed", label: "failed" },
-  ],
-};
-const STATS_BUTTON = testId("open-stats");
-
-function runRow(id: string): string {
-  return `[data-run-row="${cssEscape(id)}"]`;
-}
-
-function triggerRow(id: string): string {
-  return `[data-trigger-row="${cssEscape(id)}"]`;
-}
-
-/** The tour's Run, as the list shows it, or `null` before the preparation answered. */
-function tourRun(app: TourAppState): TourRunSummary | null {
-  const id = overviewRunId();
-  return id ? (app.runs.find((r) => r.id === id) ?? null) : null;
-}
-
-/** The canvas is showing the tour's Run — which is what clicking its row does. */
-function runIsOpen(app: TourAppState): boolean {
-  const id = overviewRunId();
-  return id != null && app.activeRunId === id;
-}
-
-/** The open Run's pipeline, and only while it is the tour's Run. */
-function runNodes(app: TourAppState): NodeDef[] {
-  return runIsOpen(app) ? (app.pipeline?.nodes ?? []) : [];
-}
-
-/** The two working nodes, by id when the pipeline is ours, else in document
- *  order — a user who edited `tutorial-overview` keeps a working tour. */
-function worker(app: TourAppState, id: "implementer" | "reviewer"): NodeDef | null {
-  const nodes = runNodes(app);
-  const byId = nodes.find((n) => n.id === id);
-  if (byId) return byId;
-  const workers = nodes.filter((n) => n.type !== "start" && n.type !== "end");
-  return workers[id === "implementer" ? 0 : 1] ?? null;
-}
-
-function marker(app: TourAppState, type: "start" | "end"): NodeDef | null {
-  return runNodes(app).find((n) => n.type === type) ?? null;
-}
-
-function nodeSel(node: NodeDef | null): string[] {
-  return node ? [`.react-flow__node[data-id="${cssEscape(node.id)}"]`] : [];
-}
-
-function selectedNode(app: TourAppState, node: NodeDef | null): boolean {
-  return node != null && app.selection.kind === "node" && app.selection.id === node.id;
-}
-
-/** reviewer → End — the edge the Run actually took. Its index is its canvas key. */
-function endEdgeIndex(app: TourAppState): number {
-  const reviewer = worker(app, "reviewer");
-  const end = marker(app, "end");
-  if (!reviewer || !end || !app.pipeline) return -1;
-  return app.pipeline.edges.findIndex((e) => e.source.node === reviewer.id && e.target.node === end.id);
-}
-
-/**
- * implementer is selected and its inspector is up — on either tab. The reader
- * may explore the Config tab from the read-only panel (#911); a condition that
- * only knew the Run tab would drop the step back to « Click implementer » and
- * dim the very panel they were looking at.
- */
-function implementerOpen(o: TourObservation): boolean {
-  return (
-    selectedNode(o.app, worker(o.app, "implementer")) && (o.present(INSPECTOR_RUN) || o.present(INSPECTOR_CONFIG))
-  );
-}
-
-/**
- * The reader left the inspector on its Config tab (#911): what the Run tab shows —
- * the outputs, the terminal — is not on screen, and the step points at the tab
- * instead of starving on a target that will not appear by itself.
- */
-function onConfigTab(o: TourObservation): boolean {
-  return !o.present(INSPECTOR_RUN) && o.present(INSPECTOR_TAB_RUN);
-}
-
-function endEdgeOpen(o: TourObservation): boolean {
-  const i = endEdgeIndex(o.app);
-  return i >= 0 && o.app.selection.kind === "edge" && o.app.selection.edgeIndex === i && o.present(EDGE_PANEL);
-}
-
-function startOpen(o: TourObservation): boolean {
-  return selectedNode(o.app, marker(o.app, "start")) && o.present(START_INSPECTOR);
-}
-
-function isArchived(app: TourAppState): boolean {
-  return tourRun(app)?.status === "archived";
-}
-
-/**
- * How long a step waits for its target. The first ones land right after a fetch
- * the click itself triggered — the Run's pipeline, the node's detail — and a
- * tour that gave up while the app was still loading would blame the reader for a
- * round trip.
- */
-const READING_TIMEOUT_MS = 15_000;
-
-/** A step that shows one thing and is acknowledged with Next. */
-function readStep(def: {
-  id: string;
-  title: string;
-  body: string;
-  target: (o: TourObservation) => string[];
-  waitingFor: string;
-  soft?: boolean;
-  failureHint?: string;
-}): TourStep {
-  return { ...def, targetTimeoutMs: READING_TIMEOUT_MS };
-}
-
-// ---- the steps ------------------------------------------------------------
-
-const STEPS: TourStep[] = [
-  {
-    id: "open-run",
-    title: "Open your Run",
-    body: (o) =>
-      runIsOpen(o.app)
-        ? `${overviewRunName()} is open. Every Run is a row in this list; clicking one opens it on the canvas.`
-        : `Click ${overviewRunName()} in the list. The tour just ran it for you: a real Run of the ${TUTORIAL_OVERVIEW_PIPELINE_ID} pipeline, already finished.`,
-    // The row only exists on the Runs tab: a reader who is elsewhere is sent there.
-    target: (o) => {
-      const id = overviewRunId();
-      if (!id) return [];
-      return o.present(runRow(id)) ? [runRow(id)] : [RUNS_TAB];
-    },
-    waitingFor: "your Run in the list on the left",
-    failureHint: "The list may be filtered — clear the filters above it.",
-    targetTimeoutMs: READING_TIMEOUT_MS,
-    advanceHint: "advances when the Run opens",
-    done: (o) => runIsOpen(o.app),
-  },
-  readStep({
-    id: "canvas",
-    title: "This is the canvas",
-    body: "A pipeline is a succession of nodes linked by edges, drawn here. This one hands a task from Start to implementer, then reviewer, then End.",
-    target: () => [CANVAS_PANEL],
-    soft: true,
-    waitingFor: "the canvas",
-  }),
-  readStep({
-    id: "left-panel",
-    title: "The left panel",
-    body: "Your Runs live here, newest first, next to the Triggers and the Pipelines tabs. Clicking a row opens it on the canvas.",
-    target: () => [LEFT_PANEL],
-    waitingFor: "the left panel",
-  }),
-  readStep({
-    id: "right-panel",
-    title: "The right panel",
-    body: "The details of whatever is selected: the Run, a node, an edge. It is where most of the work happens.",
-    target: () => [RIGHT_PANEL],
-    waitingFor: "the right panel",
-  }),
-  {
-    id: "open-implementer",
-    title: "Click implementer",
-    body: (o) =>
-      selectedNode(o.app, worker(o.app, "implementer"))
-        ? "A node is usually an agent running in a harness (Claude Code, Copilot, …); here it is a script, so the tour costs nothing. It takes an input and produces outputs. Its Config tab shows what it runs with — prompt and skills — read-only: following a Run never changes it."
-        : "Click the implementer card. A node is usually an agent running in a harness (Claude Code, Copilot, …); this one is a script, so the tour costs nothing.",
-    target: (o) => nodeSel(worker(o.app, "implementer")),
-    waitingFor: "the implementer node on the canvas",
-    failureHint: "It sits right under Start; scroll or zoom the canvas to bring it into view.",
-    targetTimeoutMs: READING_TIMEOUT_MS,
-    advanceHint: "advances when the inspector shows the node",
-    // Once clicked the card stops for a Next: the body just changed to say what
-    // a node is, and advancing at once would flash it past (FP #911).
-    confirm: (o) => implementerOpen(o),
-    done: (o) => implementerOpen(o),
-    // The inspector it opened stays bright, to look around in — not to edit.
-    readOnly: (o) => (implementerOpen(o) ? [RIGHT_PANEL] : []),
-    explore: INSPECTOR_EXPLORE,
-    asides: () => [
-      { target: TASK_ROW, text: "Its input, task: what the edge from Start delivered — the Run's prompt." },
-      {
-        target: INSPECTOR_TAB_CONFIG,
-        text: "Config: the node's prompt and skills, read-only. To change a Run, use the Edit pencil in the canvas toolbar.",
-      },
-    ],
-  },
-  {
-    id: "outputs",
-    title: "Open its output",
-    // A gesture now (#911, human test): the reader clicked `code` anyway, and a
-    // tour that did not notice walked on to the terminal behind an open viewer.
-    body: (o) => {
-      if (o.present(CODE_VIEWER)) {
-        return "This is code, the file implementer wrote — and exactly what reviewer received through their edge.";
-      }
-      return onConfigTab(o)
-        ? "Click the Run tab: a finished node's outputs are listed there."
-        : "A finished node's outputs are listed here: implementer wrote one, code. Click code to read it.";
-    },
-    // Re-aims onto the viewer the click opened, lit as a page to read — the way
-    // *First run*'s last step re-aims onto its `out` file.
-    target: (o) => {
-      if (o.present(CODE_VIEWER)) return [CODE_VIEWER];
-      return onConfigTab(o) ? [INSPECTOR_TAB_RUN] : [CODE_ROW];
-    },
-    soft: (o) => o.present(CODE_VIEWER),
-    waitingFor: "the outputs of implementer",
-    failureHint: "They are in the node's inspector on the right, under Outputs.",
-    targetTimeoutMs: READING_TIMEOUT_MS,
-    advanceHint: "advances when the output opens",
-    confirm: (o) => o.present(CODE_VIEWER),
-    done: (o) => o.present(CODE_VIEWER),
-    // Until then the inspector is lit to explore; once the viewer is up, its
-    // backdrop covers the panel and lighting it would only expose that.
-    readOnly: (o) => (o.present(CODE_VIEWER) ? [] : [RIGHT_PANEL]),
-    explore: INSPECTOR_EXPLORE,
-  },
-  {
-    id: "output-viewer",
-    title: "Close the output",
-    body: "Outputs open in this viewer, markdown rendered; a looped node's iterations page through here too. Close it with ✕ or Escape to go on.",
-    target: () => [CODE_VIEWER],
-    soft: true,
-    waitingFor: "the viewer of the code output",
-    failureHint: "It opens from the code row, under Outputs in the node's inspector.",
-    targetTimeoutMs: READING_TIMEOUT_MS,
-    advanceHint: "advances when the viewer closes",
-    // Closing the viewer destroys the target — the condition is read first, so
-    // that is the step done, not a missing target (`observeTour`).
-    done: (o) => !o.present(CODE_VIEWER),
-  },
-  {
-    id: "terminal",
-    title: "Its terminal",
-    // A finished node opens with its terminal folded to a bar (#346), so the
-    // step is a gesture until it is unfolded — then a card to read, with Next.
-    body: (o) => {
-      if (o.present(TERMINAL)) {
-        return "Every node runs in its own terminal; this one is frozen on the lines the script printed. While a node runs it is live and interactive — you talk to the harness there, and First run shows you how.";
-      }
-      return onConfigTab(o)
-        ? "Click the Run tab: every node runs in its own terminal, and it is shown there."
-        : "Click Terminal to unfold it. Every node runs in its own terminal; a finished node's is folded to leave room for its outputs.";
-    },
-    target: (o) => {
-      if (o.present(TERMINAL)) return [TERMINAL];
-      if (onConfigTab(o)) return [INSPECTOR_TAB_RUN];
-      return o.present(TERMINAL_RESTORE) ? [TERMINAL_RESTORE] : [TERMINAL];
-    },
-    waitingFor: "the node's terminal",
-    failureHint: "The terminal is in the Run tab of the node's inspector.",
-    targetTimeoutMs: READING_TIMEOUT_MS,
-    advanceHint: "advances when the terminal opens",
-    confirm: (o) => o.present(TERMINAL),
-    done: (o) => o.present(TERMINAL),
-    readOnly: () => [RIGHT_PANEL],
-    explore: INSPECTOR_EXPLORE,
-  },
-  {
-    id: "open-end-edge",
-    title: "Click the edge reviewer → End",
-    body: (o) =>
-      o.app.selection.kind === "edge" && o.app.selection.edgeIndex === endEdgeIndex(o.app)
-        ? "An edge carries conditions on its source's outputs and fires when the source finishes. This one reads verdict eq pass; the loop back to implementer reads verdict eq fail."
-        : "Click the edge from reviewer down to End. An edge carries conditions on its source's outputs, and fires when the source finishes.",
-    // The edge and its condition pill: a straight edge has a zero-wide box, and
-    // the pill — which selects the edge too — gives the hole something to hold.
-    target: (o) => {
-      const i = endEdgeIndex(o.app);
-      if (i < 0) return [];
-      const edge = `.react-flow__edge[data-id="e-${i}"]`;
-      const pill = testId(`edge-condition-label-e-${i}`);
-      return o.present(pill) ? [edge, pill] : [edge];
-    },
-    waitingFor: "the reviewer → End edge",
-    targetTimeoutMs: READING_TIMEOUT_MS,
-    advanceHint: "advances when the edge is selected",
-    confirm: (o) => endEdgeOpen(o),
-    done: (o) => endEdgeOpen(o),
-    readOnly: (o) => (endEdgeOpen(o) ? [RIGHT_PANEL] : []),
-    asides: () => [
-      { target: EDGE_CONDITION, text: "The condition: this edge fires only when reviewer's review says verdict eq pass." },
-    ],
-  },
-  {
-    id: "open-start",
-    title: "Click Start",
-    // The why before the click (#911, human test): the reader clicked Start
-    // without knowing what for, then could not find the prompt it opened.
-    body: (o) =>
-      selectedNode(o.app, marker(o.app, "start"))
-        ? "Start and End are special nodes: Start holds the prompt this Run was started with, shown on the right, and End is where a Run stops."
-        : "Click Start at the top to see the prompt this Run was started with. Start and End are special nodes: Start carries the Run's input, End is where a Run stops.",
-    target: (o) => nodeSel(marker(o.app, "start")),
-    waitingFor: "the Start node on the canvas",
-    targetTimeoutMs: READING_TIMEOUT_MS,
-    advanceHint: "advances when Start is selected",
-    confirm: (o) => startOpen(o),
-    done: (o) => startOpen(o),
-    readOnly: (o) => (startOpen(o) ? [RIGHT_PANEL] : []),
-    asides: () => [
-      {
-        target: START_INPUT,
-        text: "The input this Run was started with — the prompt typed in New Run. Start hands it to implementer through their edge.",
-      },
-    ],
-  },
+  exampleTriggerId,
+  overviewRunId,
+  prepareCompletedRun,
+  prepareExampleTrigger,
+  preparePipelineStep,
+  prepareRepoStep,
+  removeExampleTrigger,
+} from "./overviewPreparation";
+import {
+  CLEANUP_MODAL,
+  NEW_PIPELINE_BUTTON,
+  NEW_RUN_BUTTON,
+  PIPELINES_TAB,
+  PIPELINE_ROW,
+  READING_TIMEOUT_MS,
+  RUNS_TAB,
+  RUNS_TAB_OPEN,
+  SETTINGS_BUTTON,
+  STATS_BUTTON,
+  STATUS_ICONS,
+  TRIGGERS_LIST,
+  TRIGGERS_TAB,
+  cleanupItem,
+  hovered,
+  isArchived,
+  readStep,
+  runRow,
+  runSelect,
+  triggerRow,
+} from "./overviewReading";
+import { brandName } from "../../shared/ui/brand/brand";
+
+/** The second half: the left panel's tabs, the Run's status and archive, then the top bar. */
+const APP_STEPS: TourStep[] = [
   {
     id: "runs-tab",
     title: "The Runs tab",
@@ -909,18 +82,27 @@ const STEPS: TourStep[] = [
     done: (o) => o.present(RUNS_TAB_OPEN),
   },
   {
-    ...readStep({
-      id: "status-dots",
-      title: "The status icon",
-      body: "Its shape tells you where the Run is: a check means finished, a turning circle means running, a question mark means it waits for you. Hover it for details.",
-      target: () => {
-        const id = overviewRunId();
-        return id ? [`${runRow(id)} ${RUN_SELECT}`] : [];
-      },
-      waitingFor: "the status icon of your Run",
-      failureHint: "It is on your Run's row, in the Runs tab.",
-    }),
+    id: "status-icon",
+    title: "The status icon",
+    body: "Its shape tells you where the Run is: a check means finished, a turning circle means running, a question mark means it waits for you. Hover it for details.",
+    target: () => {
+      const id = overviewRunId();
+      return id ? [runSelect(id)] : [];
+    },
     illustration: STATUS_ICONS,
+    waitingFor: "the status icon of your Run",
+    failureHint: "It is on your Run's row, in the Runs tab.",
+    targetTimeoutMs: READING_TIMEOUT_MS,
+    skippable: true,
+    // The gesture the body asks for, named in the footer the way the other
+    // gestures are. Hover is the whole of it: there is nothing to click, and the
+    // details it shows are the row's own tooltip. Only this browser's Run counts
+    // (ADR-0071 §5): another player's row is not « your Run ».
+    advanceHint: "Hover the status icon of your Run",
+    done: (o) => {
+      const id = overviewRunId();
+      return id != null && o.present(hovered(runSelect(id)));
+    },
   },
   readStep({
     id: "worktree",
@@ -937,25 +119,35 @@ const STEPS: TourStep[] = [
     title: "Archive this Run",
     body: (o) => {
       if (isArchived(o.app)) {
-        return "Archived: the worktree is gone and the dot turned grey. The outputs are still there to read.";
+        return "Archived: the worktree is gone and the row shows the archive icon. The outputs are still there to read.";
       }
-      return o.present(CLEANUP_MODAL)
-        ? "Cleanup removes the Run's worktree and keeps its history and outputs. Skip leaves the Run as it is."
-        : "Hover your Run's row and click its trash icon, then confirm. Archiving removes the worktree; the Run and its outputs stay.";
+      if (o.present(CLEANUP_MODAL)) {
+        return "Cleanup removes the Run's worktree and keeps its history and outputs. Skip leaves the Run as it is.";
+      }
+      const id = overviewRunId();
+      return id && o.present(cleanupItem(id))
+        ? "Choose Cleanup, then confirm."
+        : "Open the ⋯ menu of your Run's row, choose Cleanup, then confirm. The worktree goes; the Run and its outputs stay.";
     },
-    // Two beats, one card: the row, then the confirmation it opens — re-aimed so
-    // the dialog's buttons are inside the hole rather than under the blocker.
+    // Three beats, one card: the row, the menu its ⋯ opens (a portal, lit as a
+    // zone so it is not under the blocker), then the confirmation.
     target: (o) => {
       if (o.present(CLEANUP_MODAL)) return [CLEANUP_MODAL];
       const id = overviewRunId();
-      return id ? [runRow(id)] : [];
+      if (!id) return [];
+      // Only this Run's menu: another row's Cleanup would archive the wrong Run.
+      return o.present(cleanupItem(id)) ? [cleanupItem(id)] : [runRow(id)];
+    },
+    soft: (o) => {
+      const id = overviewRunId();
+      return !o.present(CLEANUP_MODAL) && id != null && o.present(cleanupItem(id));
     },
     waitingFor: "your Run in the list",
     failureHint: "An archived Run moves to the Archived section at the bottom of the list.",
     targetTimeoutMs: READING_TIMEOUT_MS,
     skippable: true,
     advanceHint: "advances once the Run is archived",
-    // Once archived the card stops for a Next: the grey dot is the thing to see.
+    // Once archived the card stops for a Next: the archive icon is the thing to see.
     confirm: (o) => isArchived(o.app),
     done: (o) => isArchived(o.app),
   },
@@ -964,7 +156,7 @@ const STEPS: TourStep[] = [
     title: "Open the Triggers tab",
     body: (o) =>
       o.present(TRIGGERS_LIST)
-        ? `This is ${exampleTriggerName()}, set up for the tour: every 15 minutes it would launch ${TUTORIAL_OVERVIEW_PIPELINE_ID}, but its guard always says no. A Trigger launches a pipeline on a schedule, when its guard agrees.`
+        ? `This is \`${exampleTriggerName()}\`, set up for the tour: every 15 minutes it would launch ${TUTORIAL_OVERVIEW_PIPELINE_ID}, but its guard always says no. A Trigger launches a pipeline on a schedule, when its guard agrees.`
         : "Click Triggers. A Trigger launches a pipeline on a schedule, when a condition holds.",
     // Re-aims onto the example row once the list is up, the way `open-output`
     // re-aims onto the file it opened.
@@ -1015,11 +207,11 @@ const STEPS: TourStep[] = [
 export const OVERVIEW_TOUR: TourDef = {
   id: "overview",
   title: "Overview",
-  blurb: "A walk around the screen on a real finished Run: canvas, panels, nodes, edges, Triggers. No agent needed.",
+  blurb: "Canvas, panels, nodes, edges, Triggers. No agent needed.",
   minutes: 4,
-  steps: STEPS,
+  steps: [...CANVAS_STEPS, ...APP_STEPS],
   intro: {
-    title: "Tour of PDO",
+    title: `Tour of ${brandName()}`,
     body: "A walk around the screen on a real Run: the canvas, the panels, a node and its output, an edge, the Runs, Triggers and Pipelines tabs. The tour prepares everything first; nothing needs an agent.",
     footnote:
       "Nothing here touches your own repositories. The example Trigger is removed when the tour ends; the pipeline and the Run stay yours.",
@@ -1038,7 +230,7 @@ export const OVERVIEW_TOUR: TourDef = {
         failureTitle: "The tour's pipeline could not be created",
         run: preparePipelineStep,
       },
-      // Getters: the names carry the identité de tour, read when the card shows
+      // Getters: the names carry the Identité de tour, read when the card shows
       // them rather than when this module loads.
       {
         id: "trigger",
@@ -1073,21 +265,14 @@ export const OVERVIEW_TOUR: TourDef = {
       run: removeExampleTrigger,
     },
   ],
-  recapIntro: `You toured PDO on a real Run of ${TUTORIAL_OVERVIEW_PIPELINE_ID}:`,
+  recapIntro: `You toured ${brandName()} on a real Run of ${TUTORIAL_OVERVIEW_PIPELINE_ID}:`,
   recap: (app) => [
-    { label: "Canvas", text: "a pipeline is nodes linked by edges; the panels around it list and detail" },
-    { label: "Nodes", text: "an input in, outputs out, a terminal of their own; usually agents, scripts here" },
-    { label: "Edges", text: "conditions on the source's outputs, like `verdict eq pass`" },
-    {
-      label: overviewRunName(),
-      text: isArchived(app)
-        ? "archived: its worktree is gone, its outputs stay"
-        : "still in your list, with its worktree — archive it when you are done",
-    },
-    { label: exampleTriggerName(), text: "removed now that the tour is over" },
+    { label: "Canvas", text: "nodes linked by edges, listed and detailed around it" },
+    { label: "Edges", text: "conditions on outputs, like `verdict = pass`" },
+    { label: "Run", text: isArchived(app) ? "archived, its outputs stay" : "still in your list, with its worktree" },
+    { label: "Trigger", text: "the example one is gone" },
   ],
   outro: {
-    closing:
-      "The pipeline and the Run stay yours. First run launches a Run with a real agent; First pipeline builds a pipeline with you.",
+    closing: "The pipeline and the Run stay yours.",
   },
 };

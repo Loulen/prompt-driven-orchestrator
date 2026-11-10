@@ -1,7 +1,15 @@
 import "@testing-library/jest-dom/vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { configure } from "@testing-library/react";
 import { afterEach } from "vitest";
 import { useSelectionStore } from "../stores/selectionStore";
+
+// `waitFor` / `findBy*` give up after 1 s by default. On a loaded machine (load
+// ~37, parallel workers) a first render with lazy imports takes longer:
+// ReviewPage's "loads fork → tip by default" failed `make test` at 2.5 s. 5 s,
+// under the 20 s `testTimeout`; a wait that succeeds still returns at once.
+configure({ asyncUtilTimeout: 5_000 });
 
 // Node ≥ 22 ships its own `localStorage` / `sessionStorage` on `globalThis`
 // (the experimental Web Storage, backed by `--localstorage-file`). Without that
@@ -50,9 +58,13 @@ afterEach(() => {
   useSelectionStore.getState().clearAll();
 });
 
-// Same reason as the `testTimeout` bump in vite.config.ts: on a loaded machine
-// (parallel workers, other builds) a jsdom render routinely takes longer than
-// Testing Library's 1 s default for `waitFor` / `findBy*`, and the failure moves
-// between unrelated tests run to run (ReviewPage's #751 card count, last seen).
-// A longer ceiling only slows a test that is failing anyway.
-configure({ asyncUtilTimeout: 5_000 });
+// The tokens read resolved by the surfaces painted out of CSS (`lib/cssColor`):
+// the terminal's palette and the harnesses' series colours. jsdom loads no
+// stylesheet, so their first block is declared on <html>, as the browser does.
+for (const sheet of ["../session/terminal.css", "../harness/harness.css"]) {
+  const css = readFileSync(join(import.meta.dirname, sheet), "utf8");
+  const block = css.slice(css.indexOf("{") + 1, css.indexOf("}"));
+  for (const [, name, value] of block.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
+    document.documentElement.style.setProperty(name, value.trim());
+  }
+}

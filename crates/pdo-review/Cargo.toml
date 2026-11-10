@@ -1,0 +1,58 @@
+[package]
+# The `review` bounded context (ADR-0079): the diff of a Run (raw and
+# structured), the review comments a human anchors on it, their thread of
+# replies, their resolution, and the one message a batch hands the Pipeline
+# Manager. It reads a Run through the run context and git through the
+# workspace's adapter. Hexagonal inside: `domain/`, `application/` (ports + one
+# use case per file), `adapters/`.
+name = "pdo-review"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "PDO's review context: a Run's diff, structured, and the review comments anchored on it"
+publish = false
+autotests = false
+
+[lib]
+name = "pdo_review"
+path = "src/lib.rs"
+
+[dependencies]
+pdo-kernel.workspace = true
+pdo-platform.workspace = true
+pdo-run.workspace = true
+pdo-session.workspace = true
+pdo-workspace.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+clap.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+ts-rs.workspace = true
+uuid.workspace = true
+
+[[test]]
+name = "use_cases"
+path = "tests/use_cases/main.rs"
+
+[[test]]
+name = "lifecycle"
+path = "tests/lifecycle/main.rs"
+
+[dev-dependencies]
+pdo-extension-api.workspace = true
+pdo-harness.workspace = true
+pdo-pipeline.workspace = true
+pdo-sandbox.workspace = true
+pdo-skill.workspace = true
+pretty_assertions.workspace = true
+sqlx.workspace = true
+tempfile.workspace = true
+# Paused time: the delivery's watch over the manager (CORE-239), minutes in a blink.
+tokio = { workspace = true, features = ["test-util"] }
+tower = { version = "0.5", features = ["util"] }

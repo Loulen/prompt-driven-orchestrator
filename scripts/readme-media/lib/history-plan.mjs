@@ -4,7 +4,7 @@
 // plan directly.
 //
 // The recipe is the one of the Stats-by-model tests
-// (crates/pdo-daemon/tests/stats_cost_by_model.rs): a `node_started` freezes the
+// (crates/pdo/tests/stats_cost_by_model.rs): a `node_started` freezes the
 // harness, model, effort and session id; the cost is read back from a transcript
 // found by that identity under the (redirected) home — claude derived from
 // tokens × the price table, copilot reported in nano-AIU, pi reported in USD.

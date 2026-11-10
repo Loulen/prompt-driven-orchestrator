@@ -154,14 +154,14 @@ test("import brings a retouch back under the demo name, prompts included", () =>
   const libraryDir = tmp("library-");
   exportTargets({ libraryDir, targetsDir });
   const file = path.join(libraryDir, "readme-implement-review.yaml");
-  fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace("view: { x: 197, y: 208 }", "view: { x: 197, y: 220 }"));
+  fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace("view: { x: 196, y: 236 }", "view: { x: 196, y: 248 }"));
   fs.writeFileSync(path.join(libraryDir, "readme-implement-review.prompts", "reviewer.md"), "Review it.\n");
   fs.writeFileSync(path.join(libraryDir, "readme-pipelines.prompts", "implementer.md"), "Another prompt.\n");
   const { updated, warnings } = importTargets({ libraryDir, targetsDir });
   assert.deepEqual(updated, ["implement-review"]);
   const yaml = fs.readFileSync(path.join(targetsDir, "implement-review.yaml"), "utf8");
   assert.match(yaml, /^name: implement-review$/m);
-  assert.match(yaml, /view: \{ x: 197, y: 220 \}/);
+  assert.match(yaml, /view: \{ x: 196, y: 248 \}/);
   assert.equal(fs.readFileSync(path.join(targetsDir, "implement-review.prompts", "reviewer.md"), "utf8"), "Review it.\n");
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /readme-pipelines: the prompt of `implementer`/);

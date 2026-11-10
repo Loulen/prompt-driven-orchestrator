@@ -1,16 +1,13 @@
 import { describe, it, expect } from "vitest";
-import type {
-  PipelineDef,
-  NodeDef,
-  PortDef,
-  EdgeDef,
-  LoopRegion,
-  NoteDef,
-  FrontmatterFieldDecl,
-  VariableDef,
-  EdgeWaypoint,
-} from "../types";
+import type { PortDef } from "../shared/generated/PortDef";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { LoopRegion } from "../shared/generated/LoopRegion";
+import type { NoteDef } from "../shared/generated/NoteDef";
+import type { FrontmatterFieldDecl } from "../shared/generated/FrontmatterFieldDecl";
+import type { VariableDef } from "../shared/generated/VariableDef";
+import type { EdgeWaypoint } from "../shared/generated/EdgeWaypoint";
 import { pipelineToYamlObject } from "./serializePipeline";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 import {
   SEMANTIC_FIELDS,
   LAYOUT_FIELDS,
@@ -37,6 +34,7 @@ const INPUT: Complete<PortDef> = {
   when: { verdict: "PASS" },
   description: "d",
   instructions: "i",
+  required: true,
 };
 const OUTPUT: Complete<PortDef> = {
   name: "out",
@@ -45,8 +43,9 @@ const OUTPUT: Complete<PortDef> = {
   when: { verdict: "PASS" },
   description: "d",
   instructions: "i",
+  required: true,
 };
-const NODE: Complete<NodeDef> = {
+const NODE: Complete<EditorNodeDef> = {
   id: "n1",
   name: "Node One",
   type: "agent",
@@ -57,15 +56,15 @@ const NODE: Complete<NodeDef> = {
   max_iter: 5,
   over: "items",
   model: "opus",
-  // #424. Filling this in is what `Complete<NodeDef>` forces (and `tsc` gates it
+  // #424. Filling this in is what `Complete<EditorNodeDef>` forces (and `tsc` gates it
   // in CI) — but naming the field here proves NOTHING about emission: the
   // set-equality below only compares "emitted" against "classified", so a field
   // that is neither would leave the two sets equal and the suite green. That is
-  // exactly how `EdgeDef.repeated` once slipped through. The real proof lives in
+  // exactly how `EdgeDef.repeated` slipped through. The real proof lives in
   // `serializePipeline.test.ts` (the key lands in the YAML object) and in
   // `editStore.test.ts` (edit → spread → serializer → save payload).
   effort: "low",
-  // #550/ADR-0046: `Complete<NodeDef>` forces these two; same caveat as above —
+  // #550/ADR-0046: `Complete<EditorNodeDef>` forces these two; same caveat as above —
   // naming them proves nothing about emission (the serializer tests do that).
   pin_harness: "claude",
   harnesses: { claude: { model: "opus", effort: "low" } },
@@ -76,10 +75,17 @@ const NODE: Complete<NodeDef> = {
   // #653/ADR-0060: same caveat again — the emission proof is in
   // `serializePipeline.test.ts` ("an agent always writes its isolation line").
   isolated_worktree: false,
-  // #723/ADR-0064: same caveat once more — `Complete<NodeDef>` forces the
+  // #723/ADR-0064: same caveat once more — `Complete<EditorNodeDef>` forces the
   // field; the emission proof lives in `serializePipeline.test.ts` ("the
   // orchestrator toggle lands in the YAML object").
   orchestrator: true,
+  // ADR-0086: same caveat — the emission proof is in `serializePipeline.test.ts`.
+  on_demand: true,
+  // ADR-0089: same caveat — the emission proof is in `serializePipeline.test.ts`.
+  free_live_artifacts: true,
+  live_artifacts: [{ name: "progress", port_type: "markdown", instructions: "i", frontmatter: FRONTMATTER }],
+  // #915: the generated type revealed it; the serializer now emits it.
+  auto_fail: true,
 };
 const EDGE: Complete<EdgeDef> = {
   source: { node: "n1", port: "out" },
@@ -108,7 +114,7 @@ const REGION: Complete<LoopRegion> = {
   kind: "bounded",
   members: ["n1"],
   max_iter: 4,
-  max_cost_usd: 2.5,
+  max_cost_usd: 5,
   over: "items",
 };
 const NOTE: Complete<NoteDef> = {
@@ -117,7 +123,7 @@ const NOTE: Complete<NoteDef> = {
   view: { x: 3, y: 4 },
 };
 
-const PIPELINE: Complete<PipelineDef> = {
+const PIPELINE: Complete<EditorPipelineDef> = {
   name: "Maximal",
   version: "1.2.3",
   variables: { flag: VARIABLE },
@@ -127,6 +133,7 @@ const PIPELINE: Complete<PipelineDef> = {
   notes: [NOTE],
   prompt_required: false, // must be exactly `false` to emit
   grid_size: "S", // emitted only when the pipeline chose a size (#877)
+  wait_for_started_nodes: true, // emitted only when on (ADR-0086)
 };
 
 const sortedKeys = (o: unknown) =>
@@ -161,7 +168,7 @@ describe("serializer field-partition exhaustiveness guard (#355)", () => {
   // maximal, so the set-equality above can't pass on an accidentally-thin fixture.
   it("fixture is maximal at edge/output-port scope", () => {
     expect(sortedKeys(edge)).toHaveLength(14);
-    expect(sortedKeys(output)).toHaveLength(5);
+    expect(sortedKeys(output)).toHaveLength(6);
   });
 });
 

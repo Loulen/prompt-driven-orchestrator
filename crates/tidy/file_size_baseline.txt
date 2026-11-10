@@ -1,0 +1,7 @@
+# Production files over the 400-line limit (crates/tidy/tests/file_size.rs), with
+# their size when the rule landed (#915). This list may only shrink: remove a
+# line once its file is back within the limit, and lower a size whenever you
+# shrink one. Never add a line or raise a size.
+#
+# Empty since the migration of spec #913 closed (#932): every production file is
+# within the limit. Keep it that way — split a file by responsibility instead.

@@ -1,0 +1,229 @@
+import { useState, useRef, useEffect } from "react";
+import { BookOpen, Plus, Search, Trash2, FilePlus } from "lucide-react";
+import { EmptyState, IconButton } from "../../shared/ui/kit";
+import type { LibraryEntry } from "../model/library";
+import { instantiateFromLibrary } from "../api/library";
+import { libraryPortToPortDef } from "../model/library";
+import { useEditStore } from "../store/editStore";
+import { generateNodeId } from "../../lib/nanoid";
+import { resolveIsolation, workspaceLabel } from "../../lib/nodeIsolation";
+import { NodeTypeIcon } from "./NodeTypeIcon";
+import type { NodeType } from "../../shared/generated/NodeType";
+import type { EditorNodeDef } from "../model/pipeline";
+
+
+export default function LibraryDropdown({
+  entries,
+  onDelete,
+  getDropPosition,
+  onAddNodeFromYaml,
+}: {
+  entries: LibraryEntry[];
+  onDelete: (name: string) => void;
+  getDropPosition?: () => { x: number; y: number };
+  // #345 (Slice 3): open the "Add node from YAML…" modal from the library too,
+  // covering the issue's "+ or the library" affordance. Optional so existing
+  // callers/tests that omit it still compile.
+  onAddNodeFromYaml?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+  const addNode = useEditStore((s) => s.addNode);
+  const updatePrompt = useEditStore((s) => s.updatePrompt);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  const filtered = entries.filter((e) =>
+    e.name.toLowerCase().includes(search.toLowerCase()),
+  );
+
+  async function handleAdd(name: string) {
+    try {
+      const result = await instantiateFromLibrary(name);
+      const newId = generateNodeId();
+      const view = getDropPosition?.() ?? { x: 200, y: 200 };
+      const node: EditorNodeDef = {
+        id: newId,
+        name: result.spec.name,
+        type: result.spec.type as NodeType,
+        inputs: result.spec.inputs.map((p) => libraryPortToPortDef(p)),
+        outputs: result.spec.outputs.map((p) => libraryPortToPortDef(p)),
+        interactive: result.spec.interactive,
+        // #296/#345: the library is now model-aware — restore the per-node model.
+        model: result.spec.model ?? null,
+        // #424: effort-aware too.
+        effort: result.spec.effort ?? null,
+        // #655/ADR-0060: and isolation-aware. Without this the dropped node
+        // falls back to its type's default, so an Agent starred in the Run's
+        // worktree would fork one of its own on every instantiation.
+        isolated_worktree: result.spec.isolated_worktree ?? null,
+        // ADR-0086: and on demand when the entry is.
+        on_demand: result.spec.on_demand ?? false,
+        // ADR-0089: and its live artifacts.
+        live_artifacts: result.spec.live_artifacts ?? [],
+        free_live_artifacts: result.spec.free_live_artifacts ?? false,
+        view,
+      };
+      addNode(node);
+      updatePrompt(newId, result.prompt);
+      setOpen(false);
+    } catch {
+      // ignore
+    }
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <IconButton
+        icon={BookOpen}
+        label="Library"
+        data-testid="toolbar-library"
+        pressed={open}
+        onClick={() => setOpen(!open)}
+      />
+
+      {open && (
+        <div
+          className="absolute left-0 top-full z-50 mt-1 flex w-[280px] flex-col overflow-hidden rounded border border-line bg-surface-2 shadow-lg"
+          style={{ maxHeight: "calc(60vh / var(--app-zoom, 1))" }}
+        >
+          <div className="flex h-8 items-center justify-between border-b border-line px-2">
+            <span className="d-caps">Library</span>
+            <span className="d-chip font-mono text-2xs">{entries.length}</span>
+          </div>
+
+          <div className="border-b border-line px-2 py-1">
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search nodes"
+              aria-label="Search nodes"
+              className="d-input w-full"
+              autoFocus
+            />
+          </div>
+
+          {/* #345 (Slice 3): create a node from a YAML definition, alongside the
+              saved library entries — the issue's "+ or the library" affordance. */}
+          {onAddNodeFromYaml && (
+            <button
+              data-testid="library-add-node-from-yaml"
+              onClick={() => {
+                setOpen(false);
+                onAddNodeFromYaml();
+              }}
+              className="flex h-6 w-full cursor-pointer items-center gap-1.5 border-b border-line px-2 text-left text-sm text-text-2 transition-colors hover:bg-hover hover:text-text"
+            >
+              <FilePlus size={14} strokeWidth={1.5} className="shrink-0 text-text-3" />
+              <span>Node from YAML…</span>
+            </button>
+          )}
+
+          <div className="flex-1 overflow-y-auto">
+            {filtered.length === 0 && entries.length === 0 && (
+              <EmptyState icon={BookOpen} layout="row">
+                No saved node
+              </EmptyState>
+            )}
+            {filtered.length === 0 && entries.length > 0 && (
+              <EmptyState icon={Search} layout="row">
+                No match
+              </EmptyState>
+            )}
+            {filtered.map((entry) => (
+              <LibraryRow
+                key={entry.name}
+                entry={entry}
+                onAdd={() => handleAdd(entry.name)}
+                onDelete={() => onDelete(entry.name)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LibraryRow({
+  entry,
+  onAdd,
+  onDelete,
+}: {
+  entry: LibraryEntry;
+  onAdd: () => void;
+  onDelete: () => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const preview = entry.prompt.slice(0, 60).replace(/\n/g, " ");
+  // #655/ADR-0060: the preview names the entry's workspace, so "which of my two
+  // Reviewers is the one that shares the Run's tree?" is answered before the
+  // drop rather than after it. `null` on the types that carry no isolation.
+  const isolation = resolveIsolation(entry.type, entry.isolated_worktree);
+
+  return (
+    <div
+      className="group flex h-10 items-center gap-2 px-2 transition-colors hover:bg-hover"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      {/* #655: the same glyph the canvas and the inspector use for the type.
+          The two-letter badge it replaces only knew `agent`, so a starred
+          `script` — or any other type — read `??` in its own library. */}
+      <span className="shrink-0 text-text-3">
+        <NodeTypeIcon type={entry.type as NodeType} size={12} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-1.5">
+          <span className="truncate text-md font-medium text-text" title={entry.name}>
+            {entry.name}
+          </span>
+          {isolation !== null && (
+            <span
+              data-testid={`library-workspace-${isolation ? "isolated" : "shared"}`}
+              className="shrink-0 font-mono text-2xs text-text-3"
+            >
+              {workspaceLabel(isolation)}
+            </span>
+          )}
+        </div>
+        <div className="truncate text-xs text-text-3">
+          {preview || "No prompt"}
+        </div>
+      </div>
+      {hovered && (
+        <div className="flex shrink-0 items-center gap-1">
+          <IconButton
+            icon={Plus}
+            size="sm"
+            label="Add to canvas"
+            onClick={(e) => {
+              e.stopPropagation();
+              onAdd();
+            }}
+          />
+          <IconButton
+            icon={Trash2}
+            size="sm"
+            tone="danger"
+            label="Remove from library"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}

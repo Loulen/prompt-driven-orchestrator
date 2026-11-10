@@ -1,0 +1,197 @@
+//! Stage 3 (ADR-0080): the tmux adapter against a real tmux server, on a
+//! private socket of its own.
+
+use std::path::Path;
+use std::time::{Duration, Instant};
+
+use pdo_session::adapters::tmux::TmuxCli;
+use pdo_session::application::ports::Tmux;
+
+/// A private socket, killed with its server when the test ends.
+struct Server(TmuxCli);
+
+impl Server {
+    fn new(tag: &str) -> Self {
+        Self(TmuxCli::on_socket(format!(
+            "pdo-session-it-{tag}-{}",
+            std::process::id()
+        )))
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("tmux")
+            .args(["-L", self.0.socket(), "kill-server"])
+            .output();
+    }
+}
+
+fn wait_until(mut f: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if f() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+#[test]
+fn a_session_lives_is_listed_captured_and_killed_on_its_own_socket() {
+    let server = Server::new("life");
+    let tmux = &server.0;
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(tmux.server_alive(), Some(false), "no server yet");
+    tmux.new_session("pdo-it-one", dir.path(), "sleep 30", None)
+        .unwrap();
+    assert!(tmux.session_exists("pdo-it-one"));
+    assert_eq!(tmux.server_alive(), Some(true));
+    assert!(tmux.list_pdo_sessions().contains("pdo-it-one"));
+    assert!(!tmux.is_attached("pdo-it-one"), "nobody attached");
+    assert!(tmux.capture("pdo-it-one").is_some());
+
+    let err = tmux
+        .new_session("pdo-it-one", dir.path(), "sleep 30", Some("shell"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.starts_with("tmux new-session (shell) failed:") && err.contains("duplicate session"),
+        "{err}"
+    );
+
+    tmux.kill("pdo-it-one");
+    assert!(!tmux.session_exists("pdo-it-one"));
+    assert_eq!(tmux.capture("pdo-it-one"), None);
+    tmux.kill("pdo-it-one");
+}
+
+/// FP of CORE-227 (C7): without a `~/.tmux.conf`, tmux's green status line
+/// took the last row of the PDO terminal. The PDO terminal shows one pane: its
+/// sessions carry no status line, whatever the user's configuration says.
+#[test]
+fn a_session_carries_no_status_line() {
+    let server = Server::new("status");
+    let tmux = &server.0;
+    let dir = tempfile::tempdir().unwrap();
+    tmux.new_session("pdo-it-status", dir.path(), "sleep 30", None)
+        .unwrap();
+    let out = std::process::Command::new("tmux")
+        .args([
+            "-L",
+            tmux.socket(),
+            "show-options",
+            "-t",
+            "pdo-it-status",
+            "-v",
+            "status",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "off");
+}
+
+#[test]
+fn keystrokes_and_a_paste_reach_the_pane() {
+    let server = Server::new("text");
+    let tmux = &server.0;
+    let dir = tempfile::tempdir().unwrap();
+    tmux.new_session("pdo-it-text", dir.path(), "cat", None)
+        .unwrap();
+    tmux.send_keys("pdo-it-text", "typed line");
+    tmux.paste("pdo-it-text", "pasted one\npasted two");
+    assert!(
+        wait_until(|| {
+            let pane = tmux.capture("pdo-it-text").unwrap_or_default();
+            pane.contains("typed line") && pane.contains("pasted two")
+        }),
+        "{:?}",
+        tmux.capture("pdo-it-text")
+    );
+}
+
+#[test]
+fn another_socket_sees_nothing_of_this_one() {
+    let a = Server::new("a");
+    let b = Server::new("b");
+    a.0.new_session("pdo-it-mine", Path::new("/"), "sleep 30", None)
+        .unwrap();
+    assert!(a.0.session_exists("pdo-it-mine"));
+    assert!(!b.0.session_exists("pdo-it-mine"));
+    assert!(b.0.list_pdo_sessions().is_empty());
+}
+
+#[test]
+fn a_client_that_is_not_attached_cannot_have_its_size_flag_flipped() {
+    let server = Server::new("clients");
+    let tmux = &server.0;
+    tmux.new_session("pdo-it-clients", Path::new("/"), "sleep 30", None)
+        .unwrap();
+    assert!(!tmux.set_client_ignore_size(u32::MAX, true));
+    assert_eq!(
+        tmux.attach_argv("pdo-it-clients", true),
+        [
+            "tmux",
+            "-L",
+            tmux.socket(),
+            "attach",
+            "-t",
+            "pdo-it-clients",
+            "-f",
+            "ignore-size"
+        ]
+    );
+}
+
+/// FP of CORE-227: a harness that dies four seconds after its start was told
+/// « ended 19 s after it started », the time the liveness sweep took to see it.
+/// The adapter keeps the moment tmux closed the session, so the sweep measures
+/// the session's real lifetime.
+#[test]
+fn a_closed_session_leaves_the_moment_it_closed() {
+    let server = Server::new("closed");
+    let tmux = &server.0;
+    let dir = tempfile::tempdir().unwrap();
+    // The server outlives the session that dies (it exits with its last one).
+    tmux.new_session("pdo-it-keep", dir.path(), "sleep 30", None)
+        .unwrap();
+    let before = std::time::SystemTime::now();
+    tmux.new_session("pdo-it brief;$(touch pwned)", dir.path(), "sleep 1", None)
+        .unwrap();
+    assert_eq!(
+        tmux.session_closed_at("pdo-it brief;$(touch pwned)"),
+        None,
+        "still alive"
+    );
+    assert!(wait_until(|| tmux
+        .session_closed_at("pdo-it brief;$(touch pwned)")
+        .is_some()));
+
+    // Read well after the close: the time is the close's, not the read's
+    // (whole seconds, so up to one second earlier than the close itself).
+    std::thread::sleep(Duration::from_secs(2));
+    let closed = tmux
+        .session_closed_at("pdo-it brief;$(touch pwned)")
+        .unwrap();
+    let read = std::time::SystemTime::now();
+    assert!(
+        closed + Duration::from_secs(1) >= before,
+        "{closed:?} vs {before:?}"
+    );
+    assert!(
+        read.duration_since(closed).unwrap() >= Duration::from_secs(2),
+        "{closed:?}"
+    );
+    assert!(closed.duration_since(before).unwrap_or_default() < Duration::from_secs(4));
+    assert_eq!(tmux.session_closed_at("pdo-it-keep"), None);
+    // The name reached the hook's shell as a name, never as a command.
+    assert!(!dir.path().join("pwned").exists());
+    assert!(!Path::new("pwned").exists());
+
+    // The same name again (a relaunched iteration): alive, so not closed.
+    tmux.new_session("pdo-it brief;$(touch pwned)", dir.path(), "sleep 30", None)
+        .unwrap();
+    assert_eq!(tmux.session_closed_at("pdo-it brief;$(touch pwned)"), None);
+    assert_eq!(tmux.session_closed_at("pdo-it-never"), None);
+}

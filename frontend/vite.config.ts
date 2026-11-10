@@ -8,6 +8,14 @@ const daemonTarget = `http://127.0.0.1:${daemonPort}`
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    // crates/pdo/build.rs sets PDO_FRONTEND_OUT_DIR to a folder under cargo's
+    // OUT_DIR, the one the daemon embeds (#21): a cargo build never writes
+    // `dist/` into the source tree. Vite only empties an outDir outside the
+    // project root when told to.
+    outDir: process.env.PDO_FRONTEND_OUT_DIR ?? 'dist',
+    emptyOutDir: true,
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -15,6 +23,10 @@ export default defineConfig({
   },
   server: {
     host: true,
+    // Every top-level path prefix the daemon serves needs its entry here: the
+    // router is assembled in `crates/pdo/src/contexts/mod.rs`, one `router()`
+    // per bounded context (ADR-0079). A prefix missing here answers 200 with the
+    // SPA shell in `make dev`, and any smoke test lies.
     proxy: {
       // #564: the daemon checks the WebSocket `Origin` on BOTH WS routes as a
       // DNS-rebinding / CSWSH guard. In `make dev` the browser's Origin is the
@@ -27,7 +39,8 @@ export default defineConfig({
       '/ws': { target: daemonTarget, ws: true, rewriteWsOrigin: true },
       '/sessions': { target: daemonTarget, ws: true, rewriteWsOrigin: true },
       '/runs': daemonTarget,
-      '/pipelines': daemonTarget,
+      // ADR-0088: `/pipelines/{id}/draft` is the shared draft's WebSocket.
+      '/pipelines': { target: daemonTarget, ws: true, rewriteWsOrigin: true },
       '/library': daemonTarget,
       // #345: POST /nodes/parse — a top-level route, so it needs its own proxy
       // entry (else dev GET/POST lie: SPA 200 / POST 404).
@@ -36,6 +49,10 @@ export default defineConfig({
       '/triggers': daemonTarget,
       '/stale': daemonTarget,
       '/settings': daemonTarget,
+      // ADR-0090: the telemetry export's status and test export.
+      '/telemetry': daemonTarget,
+      // ADR-0090: the Prometheus scrape.
+      '/metrics': daemonTarget,
       // #377: instance stats cockpit. New top-level `/stats` prefix, so it needs
       // its own proxy entry (else dev GET /stats/* lies with a SPA 200).
       '/stats': daemonTarget,
@@ -58,6 +75,24 @@ export default defineConfig({
       // prefix — same trap as the others: without it a dev GET /update answers 200
       // with the SPA and the section would render nothing, silently.
       '/update': daemonTarget,
+      // ADR-0081 (#931): the extensions. `GET /ext` lists them and their UI
+      // slots, `/ext/<id>/…` are each extension's own routes (its UI bundle
+      // included). Same trap as the others: without it a dev GET /ext answers
+      // 200 with the SPA and no extension ever shows up.
+      '/ext': daemonTarget,
+      // 0.8: who the UI is (`GET /actors/me`) and the Actors' display names
+      // (`POST /actors/display`). Same trap: without it the sign-in gate reads
+      // the SPA shell and never redirects.
+      '/actors': daemonTarget,
+      // CORE-3: `GET /resources`, the catalogue of the Ressources an extension
+      // of rights reads. Same trap: without it a dev GET answers the SPA.
+      '/resources': daemonTarget,
+      // CORE-5: `POST /authorize`, the question of authorization (hides the
+      // loupe and the Projets a Run cannot be created in).
+      '/authorize': daemonTarget,
+      // The Marque's logos (`mark.svg`, `lockup.svg`, `favicon.svg`): the daemon
+      // serves its binary's, ahead of the files of `public/shared/`.
+      '/shared/brand': daemonTarget,
     },
   },
   test: {

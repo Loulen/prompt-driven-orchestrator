@@ -59,3 +59,40 @@ export function reframeOnPaneResize(
     zoom,
   };
 }
+
+/**
+ * How long after the canvas mounts — or shows a tab for the first time — a width
+ * change still counts as part of its opening (#43, FP iteration 1). Opening a run with no tab open mounts the
+ * canvas in the same commit the run pane unfolds; React Flow's initial fit can
+ * land on the full-width canvas before the pane takes its width, and half a
+ * width of pan cannot shrink a graph fitted to a wider frame. Within the window
+ * the view is fitted again instead, from the very first measure: React Flow can
+ * measure (and fit) its nodes before its own width update in the same frame.
+ */
+export const MOUNT_FIT_WINDOW_MS = 1000;
+
+export interface PaneResize {
+  /** The canvas width at the previous measure, null on the first one. */
+  prevWidth: number | null;
+  width: number;
+  msSinceMount: number;
+  /** A fold or unfold of the right pane is waiting for its width change. */
+  paneToggled: boolean;
+  /** The view is still the last fit, unmoved by the reader. A graph fitted on
+   *  the full-width canvas does not fit beside the pane at the same zoom, so a
+   *  toggle fits it again rather than pan it (F3-4). */
+  viewFitted?: boolean;
+}
+
+/** What the canvas does on a width change: fit again, re-frame, or nothing. */
+export function paneResizeAction({ prevWidth, width, msSinceMount, paneToggled, viewFitted = false }: PaneResize): "fit" | "reframe" | null {
+  if (width <= 0) return null;
+  const opening = msSinceMount < MOUNT_FIT_WINDOW_MS;
+  // FP iteration 2: the pane may have unfolded before the observer started, so
+  // its first measure is the only one the opening produces — fit on it too.
+  if (prevWidth == null) return opening ? "fit" : null;
+  if (prevWidth <= 0 || width === prevWidth) return null;
+  if (opening) return "fit";
+  if (!paneToggled) return null;
+  return viewFitted ? "fit" : "reframe";
+}

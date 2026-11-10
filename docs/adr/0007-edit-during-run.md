@@ -1,10 +1,10 @@
 # Édition du graphe pendant qu'un Run tourne
 
-> Amendé par ADR-0080 : le pilotage d'un Run est en lecture seule, l'édition à chaud est un geste explicite (« Éditer pour ce Run ») et n'écrit que le snapshot du Run par défaut.
+> Amendé par ADR-0085 : le pilotage d'un Run est en lecture seule, l'édition à chaud est un geste explicite (« Éditer pour ce Run ») et n'écrit que le snapshot du Run par défaut.
 
-**Un Run en cours reste éditable à chaud, sans modèle draft/published : en mode « Éditer pour ce Run » (ADR-0080), le graphe du Run se modifie pendant qu'il tourne et le scheduler se réajuste au tick suivant.** *Deliberate over autonomous* suppose exactement le geste de rerouter à chaud ce qu'un output vient de révéler, et l'audit est déjà tenu par l'event log SQLite append-only. C'est sciemment hors-marché : aucun outil mainstream ne fait du hot-rerouting d'un graphe en cours d'exécution.
+**Un Run en cours reste éditable à chaud, sans modèle draft/published : en mode « Éditer pour ce Run » (ADR-0085), le graphe du Run se modifie pendant qu'il tourne et le scheduler se réajuste au tick suivant.** *Deliberate over autonomous* suppose exactement le geste de rerouter à chaud ce qu'un output vient de révéler, et l'audit est déjà tenu par l'event log SQLite append-only. C'est sciemment hors-marché : aucun outil mainstream ne fait du hot-rerouting d'un graphe en cours d'exécution.
 
-**Portée de l'édition.** Pendant un Run, l'édition modifie le snapshot run-scope, et lui seul. L'écriture vers le Pipeline partagé est un geste distinct et averti (ADR-0080). **Étanchéité** : chaque run a son propre snapshot, donc aucune édition n'impacte un autre run en cours.
+**Portée de l'édition.** Pendant un Run, l'édition modifie le snapshot run-scope, et lui seul. L'écriture vers le Pipeline partagé est un geste distinct et averti (ADR-0085). **Étanchéité** : chaque run a son propre snapshot, donc aucune édition n'impacte un autre run en cours.
 
 **Les seuls garde-fous sont des invariants de cohérence runtime, jamais de la validation prescriptive** (*Sharp tool*, ADR-0001). Ils existent parce qu'un rejet tardif serait un stall ou une session orpheline, pas parce que le design serait « mauvais » :
 

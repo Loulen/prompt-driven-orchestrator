@@ -74,17 +74,16 @@ describe("the keys", () => {
   });
 });
 
-describe("the identité de tour", () => {
+describe("the Identité de tour", () => {
   it("is drawn once, as four base36 characters, and kept by the browser", () => {
     const id = tourIdentity();
     expect(id).toMatch(/^[0-9a-z]{4}$/);
     expect(localStorage.getItem("pdo.tour.identity")).toBe(id);
-    // Stable: a later read (a reload reads the same store) gives the same identity.
-    expect(tourIdentity()).toBe(id);
+    // Stable: a reload reads the same store, so a later read gives the same identity.
     expect(tourIdentity()).toBe(id);
   });
 
-  it("is read back from the store — another browser's store gives another identity", () => {
+  it("is read back from the store: another browser's store gives another identity", () => {
     localStorage.setItem("pdo.tour.identity", "aaaa");
     expect(tourIdentity()).toBe("aaaa");
     localStorage.setItem("pdo.tour.identity", "bbbb");
@@ -114,7 +113,7 @@ describe("the identité de tour", () => {
   it("draws identities that differ from one browser to the next", () => {
     const drawn = new Set(Array.from({ length: 50 }, () => drawTourIdentity()));
     for (const id of drawn) expect(id).toMatch(TOUR_IDENTITY_FORMAT);
-    // 36^4 ≈ 1.7 M identities: fifty draws colliding into a handful would mean no randomness.
+    // 36^4 ≈ 1.7 M identities: fifty draws collapsing into a handful would mean no randomness.
     expect(drawn.size).toBeGreaterThan(45);
   });
 

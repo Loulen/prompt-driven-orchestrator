@@ -9,7 +9,7 @@ import * as path from "node:path";
 // Post canvas-refonte / slim card (#149) and border wiring (#844): a node's
 // INPUTS are emergent (an incoming arrow lands anywhere on the body, no input
 // pill), on every node — the `merge` node and its `branches` pill are gone
-// (ADR-0079), a convergence is an ordinary node. OUTPUTS are named on the EDGES that carry them,
+// (ADR-0082), a convergence is an ordinary node. OUTPUTS are named on the EDGES that carry them,
 // never on the card: there is no output dot and no output pill any more. A wire
 // starts from any point of the card's border, through the four rim source strips
 // (`rim-<side>`), and its preview grows on the wiring grid with no label chasing
@@ -45,11 +45,9 @@ nodes:
     isolated_worktree: false
     inputs:
       - name: task
-        side: left
         description: The task to plan
     outputs:
       - name: plan
-        side: right
         description: The generated plan
     view: { x: 250, y: 100 }
   - id: sw1
@@ -57,12 +55,9 @@ nodes:
     type: switch
     inputs:
       - name: in
-        side: left
     outputs:
       - name: pass
-        side: right
       - name: default
-        side: right
     view: { x: 500, y: 100 }
   - id: loop1
     name: review-loop
@@ -70,14 +65,10 @@ nodes:
     max_iter: 5
     inputs:
       - name: in
-        side: left
       - name: break
-        side: left
     outputs:
       - name: body
-        side: right
       - name: done
-        side: right
     view: { x: 500, y: 300 }
   - id: fe1
     name: per-item
@@ -85,14 +76,10 @@ nodes:
     isolated_worktree: false
     inputs:
       - name: in
-        side: left
       - name: break
-        side: left
     outputs:
       - name: body
-        side: right
       - name: done
-        side: right
     view: { x: 750, y: 100 }
   - id: gather1
     name: gather
@@ -100,7 +87,6 @@ nodes:
     isolated_worktree: true
     outputs:
       - name: summary
-        side: right
     view: { x: 750, y: 300 }
   - id: impl1
     name: implementer
@@ -108,17 +94,14 @@ nodes:
     isolated_worktree: true
     inputs:
       - name: in
-        side: left
     outputs:
       - name: out
-        side: right
     view: { x: 1000, y: 200 }
   - id: end
     name: End
     type: end
     inputs:
       - name: result
-        side: left
     outputs: []
     view: { x: 1200, y: 200 }
 edges:
@@ -145,11 +128,11 @@ test.afterAll(async () => {
   await fs.rm(PROMPTS_DIR, { recursive: true, force: true });
 });
 
-test("no output dot and no input pill is rendered (#844, ADR-0079)", async ({
+test("no output dot and no input pill is rendered (#844, ADR-0082)", async ({
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -166,7 +149,7 @@ test("no output dot and no input pill is rendered (#844, ADR-0079)", async ({
   ).toHaveCount(0);
 
   // Inputs are emergent (no input pill) on every node, the convergence node
-  // fed twice on `branches` included — no Merge pill survives (ADR-0079).
+  // fed twice on `branches` included — no Merge pill survives (ADR-0082).
   await expect(page.getByTestId("port-input-branches")).toHaveCount(0);
   await expect(page.locator('[data-testid^="port-input-"]')).toHaveCount(0);
   await expect(page.getByTestId("port-input-task")).toHaveCount(0);
@@ -175,7 +158,7 @@ test("no output dot and no input pill is rendered (#844, ADR-0079)", async ({
 
 test("the whole card border is the drag-source (#844)", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -201,7 +184,7 @@ test("dragging from the rim draws the grid-snapped preview, with no label (#844)
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 

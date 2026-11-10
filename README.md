@@ -1,8 +1,10 @@
-<h1 align="center">PDO</h1>
+<h1 align="center">
+  <picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/pdo-logo-dark.svg"><img src="docs/assets/readme/pdo-logo-light.svg" alt="PDO" height="64" /></picture>
+</h1>
 
 <p align="center">
   <a href="https://github.com/Loulen/prompt-driven-orchestrator/releases/latest"><img src="https://img.shields.io/github/v/release/Loulen/prompt-driven-orchestrator?style=flat&amp;label=release&amp;color=10b981" alt="Latest release" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-10b981?style=flat" alt="License: MIT" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-10b981?style=flat" alt="License: Apache 2.0" /></a>
   <img src="https://img.shields.io/badge/macOS%20%7C%20Linux-10b981?style=flat-square" alt="Supported platforms: macOS and Linux" />
 </p>
 
@@ -19,7 +21,7 @@
 
 <!-- Media slots: `make readme-media` publishes each scene to docs/assets/readme/<scene>.gif with its
      poster docs/assets/readme/<scene>.jpg (scenes: hero, pipelines, routing, outputs, review, triggers,
-     stats, interactive-orchestrator, profiles, skills). Until a scene is published, its slot shows docs/pdo-ui.png.
+     stats, interactive-orchestrator, profiles, skills).
      In each <picture>: the reduced-motion <source> takes the poster, the other <source> the GIF
      (type="image/gif"), the <img> the poster. README.md and docs/readme/README.fr.md share the media. -->
 <p align="center">
@@ -174,7 +176,7 @@ Import skills from a repo or write them by hand, then give them to any node from
 - **[Multi-repo runs](docs/features.md#multi-repo-runs)** — one run that works across several repositories.
 - **[Guided tours](docs/features.md#guided-tours)** — the app walks you through your first pipeline, one step at a time.
 - **[Page mounts](docs/features.md#page-mounts)** — agents serve prototypes and reports under `/pages/<name>/` for you to review.
-- **[Service &amp; in-app update](docs/features.md#service--in-app-update)** — `pdo service install` keeps it running; one click in the status bar updates it.
+- **[Service &amp; in-app update](docs/features.md#service--in-app-update)** — `pdo service install` keeps it running; the status bar flags a new release, and you update from its "What's new".
 - **And more** — the [changelog](CHANGELOG.md) is the real feature list.
 
 ---
@@ -207,10 +209,6 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Loulen/prompt-driven-or
 
 PDO needs `tmux`, `git` and at least one authenticated agent harness.
 
-### Install — Windows
-
-PDO doesn't run natively on Windows. [docs/recipes/windows-docker.md](docs/recipes/windows-docker.md) describes how to run it with an agent harness in a Docker container under Docker Desktop. PDO ships no Docker files: hand the recipe to a coding agent on your Windows machine, or follow it yourself. If you try it or adapt it, share your feedback or your variant in an issue or a pull request ([CONTRIBUTING.md](CONTRIBUTING.md)).
-
 ### Start
 
 ```bash
@@ -226,6 +224,30 @@ Updating, service options and every CLI command: [docs/reference/cli.md](docs/re
 
 Want to contribute or run PDO from source? See [CONTRIBUTING.md](CONTRIBUTING.md). Reference docs (CLI, reverse proxy, terminal, harness support) live in [docs/reference/](docs/reference/).
 
+### Building a binary that embeds PDO
+
+A binary with its own extensions depends on the core crates by git tag and calls `serve(config, extensions)` ([ADR-0081](docs/adr/0081-pdo-s-etend-par-une-api-d-extension-composee-a-la-compilation.md)). `pdo-daemon` embeds the web UI at compile time, and cargo's checkout of a git dependency has no `node_modules`, so give the build an already built UI of the **same tag** through `PDO_FRONTEND_DIST` (absolute path to a `dist/` folder holding `index.html`). Building that `dist/` takes Node.js 22+ and pnpm 10+, once:
+
+```bash
+git clone --depth 1 --branch v2.0.0 https://github.com/Loulen/prompt-driven-orchestrator pdo-core
+(cd pdo-core/frontend && pnpm install --frozen-lockfile && pnpm run build)
+PDO_FRONTEND_DIST="$PWD/pdo-core/frontend/dist" cargo build   # in your project
+```
+
+To avoid exporting it on every build, set it in your project's `.cargo/config.toml` (`relative = true` resolves the path from the directory holding `.cargo/`):
+
+```toml
+[env]
+PDO_FRONTEND_DIST = { value = "pdo-core/frontend/dist", relative = true }
+```
+
+`cargo build` then needs neither Node nor pnpm, and writes nothing into `~/.cargo/git/checkouts/`: the UI is copied under `target/`. Without `PDO_FRONTEND_DIST`, the build looks for `frontend/node_modules` inside the checkout and stops with a message naming both options when it is missing. Nothing checks yet that the `dist/` matches the tag.
+
+## Enterprise: Acogni Driver
+
+**Acogni Driver** is the enterprise edition of PDO, published by Acogni: the same open source core, built with private extensions.
+To talk about it, contact Acogni through [Loulen on GitHub](https://github.com/Loulen).
+
 ## License
 
-PDO is free and open source under the [MIT License](LICENSE): use it, modify it, embed it, host it, for any purpose.
+PDO is free and open source under the [Apache License 2.0](LICENSE): use it, modify it, embed it, host it, for any purpose. The license grants no right to the Acogni trademarks; see [NOTICE](NOTICE). Versions up to 1.132.0 were released under the MIT License; their history is in [docs/CHANGELOG-v1.md](docs/CHANGELOG-v1.md).

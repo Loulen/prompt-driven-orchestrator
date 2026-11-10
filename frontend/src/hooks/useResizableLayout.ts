@@ -53,13 +53,15 @@ function loadLayout(
   key: string,
   panelIds: string[],
   defaults: Layout,
+  restore?: (stored: Layout) => Layout,
 ): Layout {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return defaults;
     const parsed: unknown = JSON.parse(raw);
     if (!isValidLayout(parsed, panelIds)) return defaults;
-    return clampLayout(parsed, MIN_SIZE_PCT);
+    const stored = clampLayout(parsed, MIN_SIZE_PCT);
+    return restore ? restore(stored) : stored;
   } catch {
     return defaults;
   }
@@ -100,12 +102,14 @@ export function useResizableLayout(
   panelIds: string[],
   defaultSizes: Layout,
   collapsible?: CollapsiblePanel,
+  /** Adapts a stored layout to this window before it is used. */
+  restore?: (stored: Layout) => Layout,
 ) {
   const key = STORAGE_KEYS[mode];
 
   const defaultLayout = useMemo(
-    () => loadLayout(key, panelIds, defaultSizes),
-    [key, panelIds, defaultSizes],
+    () => loadLayout(key, panelIds, defaultSizes, restore),
+    [key, panelIds, defaultSizes, restore],
   );
 
   // The last persisted layout — the source of a collapsed panel's width.

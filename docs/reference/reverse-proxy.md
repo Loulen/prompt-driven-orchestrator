@@ -16,20 +16,27 @@ Set every public browser origin as an exact `scheme://host[:port]` value, for ex
 | WebSocket routes | `/ws` and `/sessions/<id>/pty` |
 | TLS proxy | The UI uses `wss://` automatically |
 
+Set the **Public URL** (Settings › General › Public URL, or `PDO_PUBLIC_URL`) to the address
+browsers use, for example `https://pdo.example.tld`. Agents receive it and print their links with
+it, and `pdo page mount` prints page addresses under it; without it, those links point at
+`http://localhost:<port>` and only work on the daemon's machine.
+
 Add `PDO_ALLOWED_WS_ORIGINS` to the service environment when the daemon runs as a service. Keep it
 in a `pdo.service.d/override.conf` drop-in, which survives unit rewrites including Update (see
 [`pdo service install`](cli.md#cli-commands)).
 
 ## WebSockets through a proxy
 
-The UI keeps two kinds of WebSocket open: `/ws` (live Run updates) and `/sessions/<id>/pty` (one
-per node terminal). The proxy must forward the HTTP upgrade and must not close a quiet socket.
+The UI keeps two kinds of WebSocket open: `/ws` (the live stream of Runs, Triggers, Projets and
+Pipelines) and `/sessions/<id>/pty` (one per node terminal). The proxy must forward the upgrade and
+must not close a quiet socket.
 
 | Requirement | Why |
 | --- | --- |
 | Forward `Upgrade` and `Connection: upgrade` over HTTP/1.1 | Without them the upgrade fails and the terminal stays `disconnected` |
-| Read timeout above 60 s (`proxy_read_timeout` in nginx) | The daemon sends a heartbeat on `/ws` every 5 s and beats each terminal socket every 10 s; a shorter timeout cuts a terminal whose agent is thinking |
-| No response buffering on these routes | Buffered frames reach the browser late, or in bursts |
+| Read timeout above 30 s (`proxy_read_timeout` in nginx; its 60 s default is enough) | The daemon beats `/ws` every 5 s and each terminal socket every 10 s, so a socket is never idle longer than that; a timeout under the beat cuts a terminal whose agent is thinking |
+| No response buffering on these routes (`proxy_buffering off`) | Buffered frames reach the browser late, or in bursts |
+| Body size at or above `max_attachments_mb` (`client_max_body_size`) | Attachments of a new Run and files imported into a node travel in one request each (see [Attachments through a proxy](#attachments-through-a-proxy)) |
 
 ```nginx
 map $http_upgrade $connection_upgrade {
@@ -49,20 +56,23 @@ server {
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
         proxy_buffering off;
-        client_max_body_size 64m;   # ≥ max_attachments_mb, see below
+        client_max_body_size 64m;   # ≥ max_attachments_mb
     }
 }
 ```
 
-When a socket drops anyway (network cut, proxy restart, laptop asleep), the UI recovers on its own:
+When a socket drops anyway (network cut, proxy restart, laptop asleep), the UI recovers without a
+reload:
 
-- the live stream reconnects with an increasing delay (1 s, 2 s, 4 s … up to 30 s), treats 15 s
-  without a heartbeat as a dead socket, and re-reads every Run after each reconnection and each
-  return to the tab;
-- a node terminal whose socket closed, or went 30 s without a beat, or whose browser went
-  offline, shows `Terminal connection closed` with a **Reconnect** button; it retries by itself
-  with the same increasing delay, and at once when the tab becomes visible or the network
-  comes back.
+- the UI opens a socket only after an HTTP request to the daemon succeeded; while it fails, that
+  request repeats, about 1 s, then twice as long each time up to about 30 s;
+- a socket silent for longer than its delay (15 s for `/ws`, 30 s for a terminal) is closed and
+  reopened that way, and so is a socket whose browser went offline;
+- after each reopening of `/ws`, each return to the tab and each return of the network, the UI
+  re-reads its whole state (Runs, the open Run, sessions, Triggers and their pause, Projets,
+  Pipelines); the daemon sends `resync` to a client that lost messages, with the same effect;
+- a node terminal whose connection fell shows `Terminal connection closed` with a **Reconnect**
+  button, and reattaches on its own (see [terminal.md](terminal.md)).
 
 ## Attachments through a proxy
 

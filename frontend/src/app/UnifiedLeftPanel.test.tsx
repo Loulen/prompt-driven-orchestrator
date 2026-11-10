@@ -1,0 +1,2755 @@
+import { useState } from "react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import UnifiedLeftPanel from "./UnifiedLeftPanel";
+import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
+import type { RunListEntry } from "../shared/generated/RunListEntry";
+import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
+import type { Project } from "../workspace/model/project";
+import type { ProjectsEntry } from "../workspace/model/projectsSettings";
+import type { DeletedProject } from "../shared/generated/DeletedProject";
+import type { ExtensionEntry } from "../shared/generated/ExtensionEntry";
+import type { UiContribution } from "../shared/generated/UiContribution";
+import { resetExtensions, setBundleLoader } from "../shared/extensions/store";
+import { hostReactMajor } from "../shared/extensions/shared";
+import type { LibraryPipelineEntry } from "../pipeline/api/libraryPipelines";
+import { ApiError } from "../shared/http/client";
+import { cleanupRun, pauseRun, renameRun, resumeRun, retryAll } from "../run/api/commands";
+import { createPipeline, deletePipeline, fetchPipelines, renamePipeline } from "../pipeline/api/pipelines";
+import { deleteLibraryPipeline, duplicateLibraryPipeline } from "../pipeline/api/libraryPipelines";
+import { importPipelineDocument } from "../pipeline/api/document";
+import { importWorkflow } from "../pipeline/api/library";
+import { openRunShell } from "../session/api/sessions";
+import { useEditStore } from "../pipeline/store/editStore";
+import { useSelectionStore } from "../stores/selectionStore";
+import { legacyScope } from "../test/legacy";
+import { resetActorsForTests, useActorsStore } from "../shared/actors/store";
+import { resetAppearance } from "../hooks/useAppearance";
+import { ELEMENTS_STORAGE_KEY } from "../lib/appearance";
+
+const mockRenameRun = vi.mocked(renameRun);
+const mockCreatePipeline = vi.mocked(createPipeline);
+const mockRenamePipeline = vi.mocked(renamePipeline);
+const mockDeletePipeline = vi.mocked(deletePipeline);
+const mockFetchPipelines = vi.mocked(fetchPipelines);
+const mockDuplicateLibraryPipeline = vi.mocked(duplicateLibraryPipeline);
+const mockDeleteLibraryPipeline = vi.mocked(deleteLibraryPipeline);
+const mockOpenRunShell = vi.mocked(openRunShell);
+const mockPauseRun = vi.mocked(pauseRun);
+const mockResumeRun = vi.mocked(resumeRun);
+const mockRetryAll = vi.mocked(retryAll);
+const mockCleanupRun = vi.mocked(cleanupRun);
+const mockImportWorkflow = vi.mocked(importWorkflow);
+const mockImportPipelineDocument = vi.mocked(importPipelineDocument);
+const originalOpenPipeline = useEditStore.getState().openPipeline;
+
+vi.mock("../skill/api/bank", () => ({
+  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
+}));
+
+vi.mock("../settings/api/settings", () => ({
+  // The real error class: the component narrows on `instanceof` to tell a name
+  // collision from anything else, so a stand-in `Error` would not be the test.
+  ApiError: class ApiError extends Error {
+    readonly status?: number;
+    constructor(message: string, opts: { status?: number } = {}) {
+      super(message);
+      this.name = "ApiError";
+      this.status = opts.status;
+    }
+  },
+  forgetRun: vi.fn().mockResolvedValue(undefined),
+  renamePipeline: vi.fn().mockResolvedValue({ ok: true }),
+  createPipeline: vi.fn().mockResolvedValue({ id: "new-pipe", scope: "repo", path: "/tmp" }),
+  duplicatePipeline: vi.fn().mockResolvedValue({ id: "copy", scope: "instance", path: "/tmp" }),
+  importPipelineDocument: vi
+    .fn()
+    .mockResolvedValue({ id: "imported", scope: "instance", path: "/tmp", warnings: [] }),
+  importWorkflow: vi.fn().mockResolvedValue({ id: "workflow", scope: "instance", warnings: [] }),
+  deleteLibraryPipeline: vi.fn().mockResolvedValue(undefined),
+  duplicateLibraryPipeline: vi
+    .fn()
+    .mockResolvedValue({ id: "x-copy", scope: "user", entry: null }),
+  deletePipeline: vi.fn().mockResolvedValue(undefined),
+  deleteTrigger: vi.fn().mockResolvedValue(undefined),
+  fetchPipelines: vi.fn().mockResolvedValue([]),
+  fetchPipeline: vi.fn().mockResolvedValue({
+    scope: "library",
+    pipeline: { name: "simple-bugfix", version: "1.0", variables: {}, nodes: [], edges: [] },
+    prompts: {},
+    diagnostics: [],
+  }),
+  fetchSettings: vi.fn().mockResolvedValue({}),
+  fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
+}));
+// The agentic profiles' API answers with the mock of `../settings/api/settings` too.
+vi.mock("../settings/api/agentProfiles", async () => await import("../settings/api/settings"));
+// The run context's API answers with the mock of `../settings/api/settings`.
+vi.mock("../run/api/runs", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../settings/api/settings")),
+}));
+vi.mock("../run/api/commands", () => ({
+  cleanupRun: vi.fn().mockResolvedValue(undefined),
+  pauseRun: vi.fn().mockResolvedValue(undefined),
+  resumeRun: vi.fn().mockResolvedValue(undefined),
+  retryAll: vi.fn().mockResolvedValue({ run_id: "offspring-1" }),
+  renameRun: vi.fn().mockResolvedValue(undefined),
+}));
+// The trigger context's API answers with the mock of `../settings/api/settings` above.
+vi.mock("../trigger/api/triggers", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../settings/api/settings")),
+}));
+// The pipeline context's API answers with the mock of `../settings/api/settings` above.
+vi.mock("../pipeline/api/pipelines", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../settings/api/settings")),
+}));
+vi.mock("../pipeline/api/document", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../settings/api/settings")),
+}));
+vi.mock("../pipeline/api/library", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../settings/api/settings")),
+}));
+vi.mock("../pipeline/api/libraryPipelines", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../settings/api/settings")),
+}));
+
+vi.mock("../workspace/api/projects", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/projects")>()),
+  fetchProjects: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("../session/api/sessions", () => ({
+  openRunShell: vi
+    .fn()
+    .mockResolvedValue({ session: "pdo-shell-run-term-1", created: true }),
+}));
+
+describe("portable pipeline import", () => {
+  it("opens in PDO mode with a paste surface by default", async () => {
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={() => {}}
+        onNewRun={() => {}}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await userEvent.click(screen.getByTestId("import-workflow-button"));
+
+    expect(screen.getByText("Import a pipeline")).toBeInTheDocument();
+    expect(screen.getByTestId("import-mode-pdo")).toHaveClass("font-medium");
+    expect(screen.getByTestId("import-mode-pdo")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("import-mode-claude")).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByTestId("pipeline-document-input")).toBeInTheDocument();
+  });
+
+  it("offers to switch modes for a partial Claude workflow header", async () => {
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={() => {}}
+        onNewRun={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await userEvent.click(screen.getByTestId("import-workflow-button"));
+    fireEvent.change(screen.getByTestId("pipeline-document-input"), {
+      target: { value: "export default {\n  meta: {\n    name: 'Review'" },
+    });
+
+    expect(screen.getByText(/looks like a Claude Code workflow/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Import" })).toBeDisabled();
+  });
+
+  it("opens a successful Claude import even when translation warnings remain", async () => {
+    const openPipeline = vi.fn().mockResolvedValue(undefined);
+    useEditStore.setState({ openPipeline });
+    mockImportWorkflow.mockResolvedValue({
+      id: "workflow-with-warnings",
+      scope: "instance",
+      warnings: ["parallel branch was flattened"],
+    });
+
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={() => {}}
+        onNewRun={() => {}}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await userEvent.click(screen.getByTestId("import-workflow-button"));
+    await userEvent.click(screen.getByTestId("import-mode-claude"));
+    fireEvent.change(screen.getByTestId("workflow-file-input"), {
+      target: {
+        files: [new File(["pipeline('Review')"], "review.js", { type: "text/javascript" })],
+      },
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Import" }));
+
+    await waitFor(() => expect(openPipeline).toHaveBeenCalledWith("workflow-with-warnings"));
+    expect(screen.getByText("parallel branch was flattened")).toBeInTheDocument();
+  });
+
+  // A PDO document carrying a prompt for a node it no longer defines is
+  // a leftover, not a corruption: the import goes through and says what it
+  // dropped, instead of the 400 that used to strand the user on the destination
+  // machine with an opaque node id and a YAML textarea.
+  it("opens a PDO import that dropped a stale prompt, and names what it dropped", async () => {
+    const openPipeline = vi.fn().mockResolvedValue(undefined);
+    useEditStore.setState({ openPipeline });
+    mockImportPipelineDocument.mockResolvedValue({
+      id: "document-with-warnings",
+      scope: "instance",
+      path: "/tmp/document-with-warnings.yaml",
+      warnings: ["prompts.FBKE6BhH: no such node in the document — prompt ignored"],
+    });
+
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={() => {}}
+        onNewRun={() => {}}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await userEvent.click(screen.getByTestId("import-workflow-button"));
+    fireEvent.change(screen.getByTestId("pipeline-document-input"), {
+      target: { value: "pdo_pipeline: 1\npipeline: {}\n" },
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Import" }));
+
+    await waitFor(() => expect(openPipeline).toHaveBeenCalledWith("document-with-warnings"));
+    expect(screen.getByTestId("import-workflow-warnings")).toHaveTextContent(
+      "prompts.FBKE6BhH",
+    );
+    expect(screen.getByText(/Imported with 1 warning:/)).toBeInTheDocument();
+  });
+
+  // #673 / ADR-0062: the skills sidecar picked beside the YAML travels as base64
+  // in the same import request, and the bank is told to refresh afterwards so
+  // the missing-skill warnings disappear (FP step 3).
+  it("sends the skills sidecar with the document and refreshes the bank", async () => {
+    const openPipeline = vi.fn().mockResolvedValue(undefined);
+    useEditStore.setState({ openPipeline });
+    mockImportPipelineDocument.mockResolvedValue({
+      id: "with-skills",
+      scope: "instance",
+      path: "/tmp/with-skills.yaml",
+      warnings: [],
+    });
+    const skillsChanged = vi.fn();
+    window.addEventListener("pdo:skills-changed", skillsChanged);
+
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={() => {}}
+        onNewRun={() => {}}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await userEvent.click(screen.getByTestId("import-workflow-button"));
+    expect(screen.getByText("no skills sidecar")).toBeInTheDocument();
+
+    const yaml = new File(["pdo_pipeline: 1\npipeline: {}\n"], "with-skills.pdo.yaml", {
+      type: "application/yaml",
+    });
+    const zip = new File([new Uint8Array([0x50, 0x4b, 0x05, 0x06])], "with-skills.skills.zip", {
+      type: "application/zip",
+    });
+    await userEvent.upload(screen.getByTestId("pipeline-document-files"), [yaml, zip]);
+
+    expect(await screen.findByTestId("skills-sidecar-chip")).toHaveTextContent(
+      "with-skills.skills.zip",
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("pipeline-document-input")).toHaveValue(
+        "pdo_pipeline: 1\npipeline: {}\n",
+      ),
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "Import" }));
+
+    await waitFor(() =>
+      expect(mockImportPipelineDocument).toHaveBeenCalledWith(
+        "pdo_pipeline: 1\npipeline: {}\n",
+        btoa(String.fromCharCode(0x50, 0x4b, 0x05, 0x06)),
+      ),
+    );
+    await waitFor(() => expect(openPipeline).toHaveBeenCalledWith("with-skills"));
+    expect(skillsChanged).toHaveBeenCalled();
+    window.removeEventListener("pdo:skills-changed", skillsChanged);
+  });
+
+  it("removes a picked sidecar and imports the document alone", async () => {
+    useEditStore.setState({ openPipeline: vi.fn().mockResolvedValue(undefined) });
+    mockImportPipelineDocument.mockResolvedValue({
+      id: "alone",
+      scope: "instance",
+      path: "/tmp/alone.yaml",
+      warnings: ["skills.1111: skill `tdd` is absent from the bank and from the sidecar"],
+    });
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={() => {}}
+        onNewRun={() => {}}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await userEvent.click(screen.getByTestId("import-workflow-button"));
+    const zip = new File([new Uint8Array([1, 2, 3])], "x.skills.zip", { type: "application/zip" });
+    await userEvent.upload(screen.getByTestId("pipeline-document-files"), [zip]);
+    await screen.findByTestId("skills-sidecar-chip");
+    await userEvent.click(screen.getByRole("button", { name: "Remove the skills sidecar" }));
+    expect(screen.getByText("no skills sidecar")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId("pipeline-document-input"), {
+      target: { value: "pdo_pipeline: 1\npipeline: {}\n" },
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Import" }));
+
+    await waitFor(() =>
+      expect(mockImportPipelineDocument).toHaveBeenCalledWith(
+        "pdo_pipeline: 1\npipeline: {}\n",
+        undefined,
+      ),
+    );
+    expect(await screen.findByTestId("import-workflow-warnings")).toHaveTextContent("absent");
+  });
+});
+
+// Stub the shell modal so a click that mounts it doesn't drag in xterm.js / a
+// real PTY WebSocket. It echoes the `session` prop for assertions (#316).
+vi.mock("../session/components/RunShellModal", () => ({
+  default: ({ session }: { session: string }) => (
+    <div data-testid="run-shell-modal" data-session={session} />
+  ),
+}));
+
+const noop = () => {};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  useEditStore.setState({
+    openTabs: [],
+    activeTabId: null,
+    pipelines: [],
+    openPipeline: originalOpenPipeline,
+  });
+});
+
+function renderPanel({
+  runs = [],
+  libraryPipelines = [],
+  selectedRunId = null,
+  triggers,
+  projects,
+  deletedProjects,
+  onOpenProjectSettings,
+}: {
+  runs?: RunListEntry[];
+  libraryPipelines?: LibraryPipelineEntry[];
+  selectedRunId?: string | null;
+  triggers?: TriggerListEntry[];
+  projects?: Project[];
+  deletedProjects?: DeletedProject[];
+  onOpenProjectSettings?: (entry?: ProjectsEntry) => void;
+} = {}) {
+  return render(
+    <UnifiedLeftPanel
+      runs={runs}
+      selectedRunId={selectedRunId}
+      onSelectRun={noop}
+      onNewRun={noop}
+      libraryPipelines={libraryPipelines}
+      onLibraryPipelinesChanged={noop}
+      triggers={triggers}
+      projects={projects}
+      deletedProjects={deletedProjects}
+      onOpenProjectSettings={onOpenProjectSettings}
+    />,
+  );
+}
+
+describe("UnifiedLeftPanel run display labels", () => {
+  it("shows display label when run has a name", () => {
+    const runs: RunListEntry[] = [
+      { stalled: false, effective_repo: "", run_id: "run-abc-123", pipeline_name: "review-loop", status: "running", started_at: null, name: "Fix auth bug" },
+    ];
+    renderPanel({ runs });
+
+    expect(screen.getByTestId("run-display-label").textContent).toBe("Fix auth bug");
+    expect(screen.getByTestId("run-pipeline-name").textContent).toBe("review-loop");
+  });
+
+  it("falls back to run-id when no name exists", () => {
+    const runs: RunListEntry[] = [
+      { stalled: false, effective_repo: "", run_id: "20260514-143000-abc1234", pipeline_name: "deploy-pipe", status: "completed", started_at: null },
+    ];
+    renderPanel({ runs });
+
+    expect(screen.getByTestId("run-display-label").textContent).toBe("20260514-143000-abc1");
+    expect(screen.getByTestId("run-pipeline-name").textContent).toBe("deploy-pipe");
+  });
+
+  it("falls back to run-id when name is null", () => {
+    const runs: RunListEntry[] = [
+      { run_id: "20260514-150000-def5678", pipeline_name: "my-pipe", status: "running", started_at: null, name: undefined, stalled: false, effective_repo: "" },
+    ];
+    renderPanel({ runs });
+
+    expect(screen.getByTestId("run-display-label").textContent).toBe("20260514-150000-def5");
+  });
+
+  it("shows two-line entries: label on top, pipeline name below", () => {
+    const runs: RunListEntry[] = [
+      { stalled: false, effective_repo: "", run_id: "run-1", pipeline_name: "review-loop", status: "running", started_at: null, name: "Feature X" },
+    ];
+    renderPanel({ runs });
+
+    const label = screen.getByTestId("run-display-label");
+    const pipelineName = screen.getByTestId("run-pipeline-name");
+    expect(label).toBeInTheDocument();
+    expect(pipelineName).toBeInTheDocument();
+    expect(label.textContent).toBe("Feature X");
+    expect(pipelineName.textContent).toBe("review-loop");
+  });
+
+  it("draws no person on a row, the creator included, without an extension (API 0.12)", () => {
+    resetActorsForTests();
+    const alice = { kind: "identified" as const, namespace: "test", id: "alice" };
+    useActorsStore.getState().remember([alice], [{ name: "Alice", avatar_url: null }]);
+    const runs = [
+      { stalled: false, effective_repo: "", run_id: "run-1", pipeline_name: "review-loop", status: "running", started_at: null, created_by: alice },
+    ] as RunListEntry[];
+    renderPanel({ runs });
+
+    expect(screen.queryByText("Alice")).toBeNull();
+    expect(screen.queryByTestId("actor-avatar")).toBeNull();
+    resetActorsForTests();
+  });
+
+  it("offers the rename in the row's menu, after its one hover action", () => {
+    const runs: RunListEntry[] = [
+      { stalled: false, effective_repo: "", run_id: "run-1", pipeline_name: "review-loop", status: "running", started_at: null, name: "My Run" },
+    ];
+    renderPanel({ runs });
+
+    const bar = screen.getByTestId("run-row-actions");
+    expect(within(bar).getByTestId("pause-run-button")).toBeInTheDocument();
+    expect(within(bar).getByTestId("run-row-menu")).toHaveAccessibleName("More actions for My Run");
+  });
+
+  it("shows empty state when no runs exist", () => {
+    renderPanel();
+    expect(screen.getByText("No runs")).toBeInTheDocument();
+    expect(within(screen.getByTestId("runs-empty")).getByRole("button", { name: "New run" })).toBeInTheDocument();
+  });
+
+  it("shows rename input when edit icon is clicked", () => {
+    const runs: RunListEntry[] = [
+      { stalled: false, effective_repo: "", run_id: "run-1", pipeline_name: "pipe", status: "running", started_at: null, name: "Old Name" },
+    ];
+    renderPanel({ runs });
+
+    fireEvent.keyDown(screen.getByTestId("run-display-label").closest("[data-run-row]")!, { key: "F2" });
+
+    const input = screen.getByTestId("rename-input") as HTMLInputElement;
+    expect(input).toBeInTheDocument();
+    expect(input.value).toBe("Old Name");
+  });
+
+  it("calls renameRun on Enter", () => {
+    const runs: RunListEntry[] = [
+      { stalled: false, effective_repo: "", run_id: "run-enter", pipeline_name: "pipe", status: "completed", started_at: null, name: "Before" },
+    ];
+    renderPanel({ runs });
+
+    fireEvent.keyDown(screen.getByTestId("run-display-label").closest("[data-run-row]")!, { key: "F2" });
+    const input = screen.getByTestId("rename-input");
+    fireEvent.change(input, { target: { value: "After" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(mockRenameRun).toHaveBeenCalledWith("run-enter", "After");
+  });
+
+  it("cancels rename on Escape without calling API", () => {
+    const runs: RunListEntry[] = [
+      { stalled: false, effective_repo: "", run_id: "run-esc", pipeline_name: "pipe", status: "running", started_at: null, name: "Keep" },
+    ];
+    renderPanel({ runs });
+
+    fireEvent.keyDown(screen.getByTestId("run-display-label").closest("[data-run-row]")!, { key: "F2" });
+    fireEvent.keyDown(screen.getByTestId("rename-input"), { key: "Escape" });
+
+    expect(mockRenameRun).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("rename-input")).not.toBeInTheDocument();
+    expect(screen.getByTestId("run-display-label").textContent).toBe("Keep");
+  });
+});
+
+// The run row's status dot. These assertions used to live on `RunsListPanel`,
+// a component nothing but its own test imported — so they guarded markup the
+// app never mounted. Deleted with it (#503); the live surface is this panel.
+describe("UnifiedLeftPanel empty Runs list (runs/empty)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetExtensions();
+  });
+
+  const serveExtension = (contributions: UiContribution[]) => {
+    const entry: ExtensionEntry = {
+      id: "demo",
+      name: "Extension demo",
+      version: "1.0.0",
+      ui: {
+        bundle_url: "/ext/demo/ui.js",
+        react_major: hostReactMajor(),
+        ui_module_major: null,
+        contributions,
+        commands: [],
+        locations: [],
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url === "/ext"
+          ? new Response(JSON.stringify([entry]), { status: 200, headers: { "Content-Type": "application/json" } })
+          : new Response("not found", { status: 404 }),
+      ),
+    );
+    setBundleLoader(async () => ({
+      WhyEmpty: () => <p data-testid="why-empty">No Project yet</p>,
+    }));
+  };
+
+  it("keeps the core's text alone without a contribution", async () => {
+    resetExtensions();
+    serveExtension([]);
+    renderPanel({ runs: [] });
+    await act(async () => {});
+    expect(screen.getByTestId("runs-empty")).toHaveTextContent(/^No runsNew run$/);
+    expect(screen.queryByTestId("extension-decorations-runs/empty")).toBeNull();
+  });
+
+  it("shows what an extension contributes under the core's text, only while the list is empty", async () => {
+    resetExtensions();
+    serveExtension([
+      { location: "runs/empty", id: "why", label: "Why", type: "decoration", component: "WhyEmpty" } as UiContribution,
+    ]);
+    const { rerender } = renderPanel({ runs: [] });
+    expect(await screen.findByTestId("why-empty")).toHaveTextContent("No Project yet");
+    expect(screen.getByTestId("runs-empty")).toHaveTextContent("No runs");
+    rerender(
+      <UnifiedLeftPanel
+        runs={[{ stalled: false, effective_repo: "", run_id: "r1", pipeline_name: "p", status: "running", started_at: null }]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={noop}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+    expect(screen.queryByTestId("why-empty")).toBeNull();
+  });
+});
+
+// CORE-110 — the extensions' list filters of the Runs (`runs/filter`) and of
+// their Projet (`projects/filter`) are rows of the funnel's menu.
+describe("UnifiedLeftPanel extension list filters in the funnel's menu", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetExtensions();
+  });
+
+  it("lists each contribution under its label, counts it on the funnel, and clears with the rest", async () => {
+    resetExtensions();
+    const entry: ExtensionEntry = {
+      id: "demo",
+      name: "Extension demo",
+      version: "1.0.0",
+      ui: {
+        bundle_url: "/ext/demo/ui.js",
+        react_major: hostReactMajor(),
+        ui_module_major: null,
+        contributions: [
+          { location: "runs/filter", id: "by", label: "Started by", type: "list_filter", component: "StartedBy" },
+          { location: "projects/filter", id: "team", label: "Team", type: "list_filter", component: "Team" },
+        ] as UiContribution[],
+        commands: [],
+        locations: [],
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url === "/ext"
+          ? new Response(JSON.stringify([entry]), { status: 200, headers: { "Content-Type": "application/json" } })
+          : new Response("not found", { status: 404 }),
+      ),
+    );
+    setBundleLoader(async () => ({
+      StartedBy: ({ filter, setFilter }: { filter: Record<string, string>; setFilter: (f: Record<string, string>) => void }) => (
+        <button type="button" onClick={() => setFilter({ ...filter, "demo/started_by": "alice" })}>
+          only alice
+        </button>
+      ),
+      Team: () => <span>any team</span>,
+    }));
+    const user = userEvent.setup();
+    renderPanel({
+      runs: [
+        { stalled: false, run_id: "a", pipeline_name: "p", status: "running", started_at: null, name: "By alice", effective_repo: "/r", attributes: { "demo/started_by": "alice" } },
+        { stalled: false, run_id: "b", pipeline_name: "p", status: "running", started_at: null, name: "By bob", effective_repo: "/r", attributes: { "demo/started_by": "bob" } },
+      ],
+    });
+    // Nothing under the header.
+    await act(async () => {});
+    expect(screen.queryByTestId("extension-filters-run")).toBeNull();
+
+    await user.click(screen.getByTestId("run-filter-funnel"));
+    const row = await screen.findByTestId("run-filter-ext-demo:by");
+    expect(row).toHaveAttribute("title", "Started by · Extension demo");
+    expect(screen.getByTestId("run-filter-ext-demo:team")).toHaveAttribute("title", "Team · Project · Extension demo");
+    await user.click(within(row).getByRole("button", { name: "only alice" }));
+    expect(screen.getAllByTestId("run-display-label").map((el) => el.textContent)).toEqual(["By alice"]);
+    expect(screen.getByTestId("run-filter-funnel")).toHaveAccessibleName("Filters · 1 active");
+
+    await user.click(screen.getByTestId("run-filter-clear-all"));
+    expect(screen.getAllByTestId("run-display-label")).toHaveLength(2);
+  });
+});
+
+describe("UnifiedLeftPanel run status dot", () => {
+  const run = (over: Partial<RunListEntry>): RunListEntry[] => [
+    { run_id: "run-1", pipeline_name: "p", status: "running", started_at: null, stalled: false, effective_repo: "", ...over },
+  ];
+
+  it("draws every status with its own icon", () => {
+    // `archived` excluded: its row lives in the folded Archived section (#136),
+    // covered there. Every other status renders inline.
+    const expected: Partial<Record<RunListEntry["status"], string>> = {
+      running: "Running",
+      awaiting_user: "Awaiting you",
+      completed: "Completed",
+      failed: "Failed",
+      skipped: "Skipped",
+      halted: "Halted",
+      paused: "Paused",
+    };
+    for (const [status, word] of Object.entries(expected)) {
+      const { unmount } = renderPanel({
+        runs: run({ status: status as RunListEntry["status"] }),
+      });
+      const mark = screen.getByTestId("run-status-dot");
+      expect(mark).toHaveAttribute("data-status", status);
+      expect(within(mark).getByRole("img")).toHaveAccessibleName(word);
+      unmount();
+    }
+  });
+
+  it("draws a stalled run with its own steady mark, not the running one (#180)", () => {
+    // A stalled run keeps status "running" but must not read as running.
+    // Per ADR-0032 the daemon no longer has a `Stale` producer, so `stalled` only
+    // ever comes back true for a historical Run — which is precisely why the
+    // surface stays in place. Do NOT "repair" this mark by rebranching a producer.
+    renderPanel({ runs: run({ status: "running", stalled: true }) });
+    const mark = screen.getByTestId("run-status-dot");
+    expect(mark).toHaveAttribute("data-status", "stalled");
+    expect(within(mark).getByRole("img")).toHaveAccessibleName("Stalled");
+    expect(mark.querySelector(".d-spin")).toBeNull();
+  });
+
+  it("spins the mark of a genuinely-running run", () => {
+    renderPanel({ runs: run({ status: "running", stalled: false }) });
+    expect(screen.getByTestId("run-status-dot").querySelector(".d-spin")).not.toBeNull();
+  });
+
+  // #503: the mark was the whole failure signal — a Run that had actually shipped
+  // read the same as one that had not, with no text anywhere behind it.
+  it("hangs the failure reason off the status mark", () => {
+    renderPanel({
+      runs: run({
+        pipeline_name: "shipped-but-filed-failed",
+        status: "failed",
+        failure_reason: "merge conflict on ship: 20 conflicting file(s)",
+      }),
+    });
+    expect(screen.getByTestId("run-select-control").getAttribute("title")).toContain(
+      "Failed: merge conflict on ship: 20 conflicting file(s)",
+    );
+    expect(within(screen.getByTestId("run-status-dot")).getByRole("img")).toHaveAccessibleName(
+      "merge conflict on ship: 20 conflicting file(s)",
+    );
+  });
+
+  // #588: an awaiting mark says why — the agent's question, or the awaiting child.
+  it("hangs the awaiting reason off the status mark", () => {
+    renderPanel({
+      runs: run({
+        status: "awaiting_user",
+        awaiting_reason: "child run grill-588 is awaiting you",
+      }),
+    });
+    expect(screen.getByTestId("run-select-control").getAttribute("title")).toContain(
+      "Awaiting you: child run grill-588 is awaiting you",
+    );
+  });
+
+  it("names only the status when there is nothing to explain", () => {
+    renderPanel({ runs: run({ status: "completed" }) });
+    expect(screen.getByTestId("run-select-control").getAttribute("title")).toMatch(/^Completed\n/);
+  });
+});
+
+describe("UnifiedLeftPanel three-tab strip", () => {
+  it("renders Runs, Triggers and Library tabs", () => {
+    renderPanel();
+    expect(screen.getByRole("tab", { name: "Runs" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Triggers" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Pipelines" })).toBeInTheDocument();
+  });
+
+  it("defaults to the Runs tab", () => {
+    renderPanel();
+    expect(screen.getByText("No runs")).toBeInTheDocument();
+    expect(within(screen.getByTestId("runs-empty")).getByRole("button", { name: "New run" })).toBeInTheDocument();
+  });
+
+  it("switches to the Triggers tab and shows its empty state", () => {
+    renderPanel();
+    fireEvent.click(screen.getByRole("tab", { name: "Triggers" }));
+    expect(screen.getByText("No triggers")).toBeInTheDocument();
+    expect(within(screen.getByTestId("triggers-empty")).getByRole("button", { name: "New trigger" })).toBeInTheDocument();
+    // An icon, two words, one button: no sentence of explanation.
+    expect(screen.queryByText(/on a schedule/i)).toBeNull();
+  });
+
+  it("shows a provenance badge on a triggered run row", () => {
+    const runs: RunListEntry[] = [
+      { stalled: false, effective_repo: "", run_id: "run-trig", pipeline_name: "auditor", status: "running", started_at: null, triggered_by: "trg-1" },
+    ];
+    renderPanel({ runs });
+    expect(screen.getByTestId("run-trigger-badge")).toBeInTheDocument();
+  });
+
+  it("does not show a provenance badge on a manual run row", () => {
+    const runs: RunListEntry[] = [
+      { stalled: false, effective_repo: "", run_id: "run-manual", pipeline_name: "auditor", status: "running", started_at: null },
+    ];
+    renderPanel({ runs });
+    expect(screen.queryByTestId("run-trigger-badge")).not.toBeInTheDocument();
+  });
+
+  it("renders trigger rows on the Triggers tab", () => {
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={noop}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={noop}
+        triggers={[
+          { effective_repo: "",
+            id: "trg-1",
+            name: "Nightly audit",
+            pipeline_id: "auditor",
+            pipeline_name: "Auditor",
+            input_template: "",
+            variables: {},
+            cron: "0 9 * * *",
+            overlap_policy: "skip",
+            auto_name: true,
+            enabled: true,
+          },
+        ]}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Triggers" }));
+    expect(screen.getByText("Nightly audit")).toBeInTheDocument();
+  });
+});
+
+// #258 — the Runs list groups by project (target repo), conditionally: only when
+// the on-screen runs span ≥ 2 distinct repos. Single-repo stays flat (no header,
+// no per-row repo badge). The Runs tab is the default tab, so runs render at once.
+describe("UnifiedLeftPanel runs grouped by repo (#258)", () => {
+  it("stays flat (no repo-group header) when all runs share one repo", () => {
+    const runs: RunListEntry[] = [
+      { stalled: false, run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/foo" },
+      { stalled: false, run_id: "r2", pipeline_name: "p", status: "completed", started_at: null, effective_repo: "/repos/foo" },
+    ];
+    renderPanel({ runs });
+    expect(screen.queryByTestId("run-repo-group")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("run-display-label")).toHaveLength(2);
+  });
+
+  it("has no « Project » button: the Projets are set up in Settings (CORE-110)", () => {
+    const runs: RunListEntry[] = [
+      { stalled: false, run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/foo" },
+    ];
+    renderPanel({ runs, onOpenProjectSettings: vi.fn() });
+    expect(screen.queryByRole("button", { name: "Configure project" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Project" })).toBeNull();
+  });
+
+  it("opens Settings › Projects on the Projet of a group header's pencil (CORE-96)", () => {
+    const runs: RunListEntry[] = [
+      { stalled: false, run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/foo", project_id: "p1" },
+      { stalled: false, run_id: "r2", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/bar" },
+    ];
+    const onOpenProjectSettings = vi.fn();
+    renderPanel({
+      runs,
+      projects: [{ id: "p1", name: "Checkout", members: ["/repos/foo"] }],
+      onOpenProjectSettings,
+    });
+
+    const groups = screen.getAllByTestId("run-repo-group");
+    // Ranked by label: « Checkout » before « bar ».
+    fireEvent.click(within(groups[0]).getByTestId("run-group-pencil"));
+    expect(onOpenProjectSettings).toHaveBeenLastCalledWith({ projectId: "p1" });
+    fireEvent.click(within(groups[1]).getByTestId("run-group-pencil"));
+    expect(onOpenProjectSettings).toHaveBeenLastCalledWith({ draft: { name: "bar", members: ["/repos/bar"] } });
+  });
+
+  it("ranks a Run under its deleted Projet, marked so (CORE-96)", () => {
+    const runs: RunListEntry[] = [
+      { stalled: false, run_id: "r1", pipeline_name: "p", status: "running", started_at: null, name: "Kept", effective_repo: "/repos/foo", project_id: "gone" },
+      { stalled: false, run_id: "r2", pipeline_name: "p", status: "running", started_at: null, name: "Hidden", effective_repo: "/repos/bar", project_id: "hidden" },
+    ];
+    renderPanel({ runs, deletedProjects: [{ id: "gone", name: "Mobile" }], onOpenProjectSettings: vi.fn() });
+
+    const label = screen.getByText("Mobile (deleted)");
+    expect(label).toHaveAttribute("data-deleted", "true");
+    const group = label.closest<HTMLElement>('[data-testid="run-repo-group"]')!;
+    expect(group).toHaveAttribute("data-project", "true");
+    expect(within(group).getByText("Kept")).toBeInTheDocument();
+    expect(within(group).queryByTestId("run-group-pencil")).not.toBeInTheDocument();
+    // A Projet the caller may not read is not called deleted: its Run falls back to its repository.
+    const hidden = screen.getByText("Hidden").closest<HTMLElement>('[data-testid="run-repo-group"]')!;
+    expect(hidden).toHaveAttribute("data-project", "false");
+  });
+
+  it("renders one repo-group header per distinct repo, alphabetical, when ≥ 2 repos", () => {
+    const runs: RunListEntry[] = [
+      { stalled: false, run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/zebra" },
+      { stalled: false, run_id: "r2", pipeline_name: "p", status: "completed", started_at: null, effective_repo: "/repos/alpha" },
+      { stalled: false, run_id: "r3", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/zebra" },
+    ];
+    renderPanel({ runs });
+    expect(screen.getAllByTestId("run-repo-group")).toHaveLength(2);
+    const labels = screen.getAllByTestId("run-repo-label").map((el) => el.textContent);
+    expect(labels).toEqual(["alpha", "zebra"]);
+    // The full path is available on the header for hover.
+    const alphaGroup = screen.getAllByTestId("run-repo-group")[0];
+    expect(within(alphaGroup).getByText("alpha").closest("div")).toHaveAttribute(
+      "title",
+      "/repos/alpha",
+    );
+  });
+
+  it("excludes archived rows from the repo-group threshold and lists them in the Archived section", () => {
+    const runs: RunListEntry[] = [
+      { stalled: false, run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/foo" },
+      { stalled: false, run_id: "r2", pipeline_name: "p", status: "archived", started_at: null, effective_repo: "/repos/bar" },
+    ];
+    renderPanel({ runs });
+    // Only one *active* repo ⇒ active list stays flat (no repo-group header).
+    expect(screen.queryByTestId("run-repo-group")).not.toBeInTheDocument();
+    // The archived run is pulled into the Archived section instead.
+    expect(screen.getByTestId("run-archived-section")).toBeInTheDocument();
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("1");
+  });
+
+  it("groups a null-target run (effective_repo resolved server-side) with no catch-all bucket", () => {
+    const runs: RunListEntry[] = [
+      { stalled: false, run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/alpha" },
+      { stalled: false, run_id: "r2", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/root" },
+    ];
+    renderPanel({ runs });
+    const labels = screen.getAllByTestId("run-repo-label").map((el) => el.textContent);
+    // Exactly two groups, both resolved paths — a phantom catch-all bucket would
+    // add a third label.
+    expect(labels).toEqual(["alpha", "root"]);
+    expect(screen.getAllByTestId("run-repo-group")).toHaveLength(2);
+  });
+});
+
+// #136 — archived runs are lifted out of the active list into their own flat,
+// collapsible "Archived" section below it. Collapsed by default; auto-opens when
+// the currently-selected run is (or becomes) archived, but stays collapsible.
+describe("UnifiedLeftPanel archived section (#136)", () => {
+  const active: RunListEntry = { stalled: false, effective_repo: "",
+    run_id: "run-active",
+    pipeline_name: "p",
+    status: "running",
+    started_at: null,
+    name: "Active One",
+  };
+  const archived: RunListEntry = { stalled: false, effective_repo: "",
+    run_id: "run-archived",
+    pipeline_name: "p",
+    status: "archived",
+    started_at: null,
+    name: "Archived One",
+  };
+
+  it("collapses the Archived section by default (toggle shown, body hidden)", () => {
+    renderPanel({ runs: [active, archived] });
+    // Toggle + count are always visible…
+    expect(screen.getByTestId("run-archived-chevron")).toBeInTheDocument();
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("1");
+    // …but the archived row's body stays folded: only the active row renders.
+    expect(screen.getAllByTestId("run-display-label")).toHaveLength(1);
+    expect(screen.queryByText("Archived One")).not.toBeInTheDocument();
+  });
+
+  it("expands and re-collapses when the toggle is clicked", () => {
+    renderPanel({ runs: [active, archived] });
+    fireEvent.click(screen.getByTestId("run-archived-chevron"));
+    expect(screen.getByText("Archived One")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("run-archived-chevron"));
+    expect(screen.queryByText("Archived One")).not.toBeInTheDocument();
+  });
+
+  it("auto-expands when the selected run is already archived on mount", () => {
+    renderPanel({ runs: [active, archived], selectedRunId: "run-archived" });
+    // Visible without any click — the mount-time initializer path.
+    expect(screen.getByText("Archived One")).toBeInTheDocument();
+  });
+
+  it("auto-expands when the selected run is archived mid-session", () => {
+    const props = {
+      selectedRunId: "run-active",
+      onSelectRun: noop,
+      onNewRun: noop,
+      libraryPipelines: [],
+      onLibraryPipelinesChanged: noop,
+    };
+    const { rerender } = render(
+      <UnifiedLeftPanel runs={[active, archived]} {...props} />,
+    );
+    // Section collapsed to start (selected run is active): old archived row hidden.
+    expect(screen.queryByText("Archived One")).not.toBeInTheDocument();
+
+    // The selected run flips to archived (its worktree got reaped mid-session).
+    const nowArchived: RunListEntry = { ...active, status: "archived" };
+    rerender(<UnifiedLeftPanel runs={[nowArchived, archived]} {...props} />);
+
+    // The transition force-opens the section — the previously-hidden row appears.
+    expect(screen.getByText("Archived One")).toBeInTheDocument();
+  });
+
+  it("stays collapsible while a selected archived run is present (anti-dead-lock, decision 4)", () => {
+    // Auto-open on mount because the selected run is archived…
+    renderPanel({ runs: [archived], selectedRunId: "run-archived" });
+    expect(screen.getByText("Archived One")).toBeInTheDocument();
+    // …then a single click must still collapse it. A naive
+    // `open = archivedOpen || some(selected)` gate would pin it open forever.
+    fireEvent.click(screen.getByTestId("run-archived-chevron"));
+    expect(screen.queryByText("Archived One")).not.toBeInTheDocument();
+  });
+
+  it("renders no Archived section when there are no archived runs", () => {
+    renderPanel({ runs: [active] });
+    expect(screen.queryByTestId("run-archived-section")).not.toBeInTheDocument();
+  });
+
+  it("does not show 'No runs' for an archived-only list", () => {
+    renderPanel({ runs: [archived] });
+    expect(screen.queryByText("No runs")).not.toBeInTheDocument();
+    expect(screen.getByTestId("run-archived-section")).toBeInTheDocument();
+  });
+
+  it("groups the active list by repo while excluding archived runs from the threshold", () => {
+    const runs: RunListEntry[] = [
+      { stalled: false, run_id: "a1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/alpha" },
+      { stalled: false, run_id: "a2", pipeline_name: "p", status: "completed", started_at: null, effective_repo: "/repos/zebra" },
+      { stalled: false, run_id: "a3", pipeline_name: "p", status: "archived", started_at: null, effective_repo: "/repos/gamma" },
+    ];
+    renderPanel({ runs });
+    // Two active repos ⇒ two groups; the archived third repo adds no phantom group.
+    expect(screen.getAllByTestId("run-repo-group")).toHaveLength(2);
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("1");
+  });
+});
+
+// #216 — A `scope: "library"` entry surfaced in the merged /pipelines list must
+// delete via the library store. The pre-fix code called removePipeline(id) with
+// no scope, which routed to DELETE /pipelines/{id} and destroyed the same-named
+// repo YAML + .prompts/ sidecar.
+/**
+ * #822: the three left-panel targets a guided tour aims at. They are the contract
+ * the tour tickets (#823-#825) build on — a rename must break a test here rather
+ * than a tour step nobody runs until the day it matters. Behaviour is unchanged:
+ * each assertion goes through the control and checks what it already did.
+ */
+describe("UnifiedLeftPanel — stable tour targets (#822)", () => {
+  it("names the New Run button, and it still opens a run", () => {
+    const onNewRun = vi.fn();
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={onNewRun}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("new-run-button"));
+    expect(onNewRun).toHaveBeenCalled();
+  });
+
+  it("names the new-pipeline button and the name field of the modal it opens", async () => {
+    renderPanel();
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+
+    fireEvent.click(screen.getByTestId("new-pipeline-button"));
+
+    const name = await screen.findByTestId("new-pipeline-name");
+    fireEvent.change(name, { target: { value: "tutorial-interactive" } });
+    expect(name).toHaveValue("tutorial-interactive");
+    // Unchanged behaviour: the name gates Create.
+    expect(screen.getByRole("button", { name: "Create" })).toBeEnabled();
+  });
+});
+
+/**
+ * #825 (FP iteration 2). A refused Create used to be swallowed whole: no message,
+ * no error state, the Create button simply doing nothing. The ordinary way to
+ * meet it is to replay the *First pipeline* tour on an instance where you kept
+ * the pipeline it builds — the tour hard-codes the name, and every click is a
+ * silent 409.
+ */
+describe("UnifiedLeftPanel — a refused pipeline creation", () => {
+  async function createNamed(name: string) {
+    renderPanel();
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    fireEvent.click(screen.getByTestId("new-pipeline-button"));
+    fireEvent.change(await screen.findByTestId("new-pipeline-name"), { target: { value: name } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  }
+
+  it("says the name is taken, and keeps the dialog open to fix it", async () => {
+    mockCreatePipeline.mockRejectedValueOnce(
+      new ApiError("pipeline already exists", { status: 409 }),
+    );
+
+    await createNamed("tutorial-implement-test");
+
+    const error = await screen.findByTestId("new-pipeline-error");
+    expect(error).toHaveTextContent(/tutorial-implement-test already exists/i);
+    expect(screen.getByTestId("new-pipeline-dialog")).toBeInTheDocument();
+  });
+
+  /** Anything else is quoted as the daemon phrased it, rather than paraphrased. */
+  it("quotes any other refusal verbatim", async () => {
+    mockCreatePipeline.mockRejectedValueOnce(
+      new ApiError("the pipelines directory is read-only", { status: 500 }),
+    );
+
+    await createNamed("whatever");
+
+    expect(await screen.findByTestId("new-pipeline-error")).toHaveTextContent(
+      "the pipelines directory is read-only",
+    );
+  });
+
+  /** Editing the name is the user answering the sentence, so it stops applying. */
+  it("clears the message as soon as the name changes", async () => {
+    mockCreatePipeline.mockRejectedValueOnce(
+      new ApiError("pipeline already exists", { status: 409 }),
+    );
+
+    await createNamed("tutorial-implement-test");
+    await screen.findByTestId("new-pipeline-error");
+
+    fireEvent.change(screen.getByTestId("new-pipeline-name"), { target: { value: "other-name" } });
+    expect(screen.queryByTestId("new-pipeline-error")).not.toBeInTheDocument();
+  });
+});
+
+describe("UnifiedLeftPanel pipeline delete", () => {
+  const libEntry: PipelineListEntry = {
+    id: "simple-bugfix",
+    name: "simple-bugfix",
+    scope: legacyScope("library"),
+    path: "/home/u/.pdo/library/pipelines/simple-bugfix.yaml",
+    node_count: 3,
+    modified: null,
+    variables: {}, prompt_required: true, validation: { kind: "all" },
+  };
+
+  it("deletes the selected instance pipeline by id", async () => {
+    mockFetchPipelines.mockResolvedValueOnce([libEntry]);
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+
+    // Row renders once loadPipelines() resolves.
+    await screen.findByText("simple-bugfix");
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete pipeline" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() =>
+      expect(mockDeletePipeline).toHaveBeenCalledWith("simple-bugfix", undefined),
+    );
+  });
+});
+
+// CONTEXT.md « Pipeline validé »: each row says who the launch forms offer it to.
+describe("UnifiedLeftPanel pipeline validation indicator", () => {
+  const row = (id: string, validation: PipelineListEntry["validation"]): PipelineListEntry => ({
+    id,
+    name: id,
+    scope: "instance",
+    path: `/home/u/.pdo/pipelines/${id}.yaml`,
+    node_count: 2,
+    modified: null,
+    variables: {},
+    prompt_required: true,
+    validation,
+  });
+
+  it("shows « All », the Projet count, or the flask of a test pipeline", async () => {
+    mockFetchPipelines.mockResolvedValueOnce([
+      row("common", { kind: "all" }),
+      row("team", { kind: "projects", project_ids: ["prj-a"] }),
+      row("draft", { kind: "none" }),
+    ]);
+
+    renderPanel({ projects: [{ id: "prj-a", name: "Alpha", members: [] }] });
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await screen.findByText("draft");
+
+    expect(screen.getByTestId("validation-indicator-common")).toHaveTextContent("All");
+    expect(screen.getByTestId("validation-indicator-team")).toHaveAccessibleName(
+      "Validated for: Alpha",
+    );
+    expect(screen.getByTestId("validation-indicator-draft")).toHaveAttribute(
+      "data-validation",
+      "none",
+    );
+  });
+});
+
+// #774 — a hover pencil on Pipelines-tab rows flips the name into an inline
+// input; Enter commits through the store's renamePipeline action.
+describe("UnifiedLeftPanel pipeline rename", () => {
+  const entry: PipelineListEntry = { prompt_required: true, validation: { kind: "all" },
+    id: "simple-bugfix",
+    name: "simple-bugfix",
+    scope: "instance",
+    path: "/home/u/.pdo/pipelines/simple-bugfix.yaml",
+    node_count: 3,
+    modified: null,
+    variables: {},
+  };
+
+  it("renders a rename pencil on a pipeline row", async () => {
+    mockFetchPipelines.mockResolvedValueOnce([entry]);
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await screen.findByText("simple-bugfix");
+
+    expect(screen.getByTestId("library-rename-button")).toBeInTheDocument();
+  });
+
+  it("commits the typed name through renamePipeline on Enter", async () => {
+    mockFetchPipelines.mockResolvedValueOnce([entry]);
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await screen.findByText("simple-bugfix");
+
+    fireEvent.click(screen.getByTestId("library-rename-button"));
+    const input = screen.getByTestId("library-rename-input");
+    expect(input).toHaveValue("simple-bugfix");
+
+    fireEvent.change(input, { target: { value: "Renamed Pipeline" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() =>
+      expect(mockRenamePipeline).toHaveBeenCalledWith("simple-bugfix", "Renamed Pipeline"),
+    );
+  });
+
+  it("swallows a refusal: the row stays under its current name", async () => {
+    mockFetchPipelines.mockResolvedValueOnce([entry]);
+    mockRenamePipeline.mockRejectedValueOnce(new Error("Cannot rename: collision"));
+
+    renderPanel();
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await screen.findByText("simple-bugfix");
+
+    fireEvent.click(screen.getByTestId("library-rename-button"));
+    const input = screen.getByTestId("library-rename-input");
+    fireEvent.change(input, { target: { value: "Renamed Pipeline" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(mockRenamePipeline).toHaveBeenCalled());
+    expect(screen.getByText("simple-bugfix")).toBeInTheDocument();
+  });
+});
+
+// #224 — a hover Copy icon on library-only rows duplicates the template into an
+// unlinked clone. It must NOT appear on starred block-1 rows (which carry a
+// working pipeline id, not a library id).
+describe.skip("UnifiedLeftPanel library duplicate (#224, superseded by instance duplication)", () => {
+  const libOnly: LibraryPipelineEntry = {
+    id: "fixture",
+    name: "fixture",
+    scope: "user",
+    node_count: 3,
+    modified: null,
+    yaml: "name: fixture\n",
+    pipeline: { name: "fixture", version: "1.0", variables: {}, nodes: [], edges: [] },
+    prompts: {},
+  };
+
+  function renderWithLib(onChanged: () => void = noop) {
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={noop}
+        libraryPipelines={[libOnly]}
+        onLibraryPipelinesChanged={onChanged}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+  }
+
+  it("renders the duplicate button on a library-only row", () => {
+    renderWithLib();
+    expect(screen.getByTestId("library-only-entry")).toBeInTheDocument();
+    expect(screen.getByTestId("library-duplicate-button")).toBeInTheDocument();
+  });
+
+  it("calls duplicateLibraryPipeline(id) and refreshes on click", async () => {
+    const onChanged = vi.fn();
+    renderWithLib(onChanged);
+
+    fireEvent.click(screen.getByTestId("library-duplicate-button"));
+
+    await waitFor(() =>
+      expect(mockDuplicateLibraryPipeline).toHaveBeenCalledWith("fixture"),
+    );
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  it("busy-guards a double-click so it fires once", async () => {
+    renderWithLib();
+    const btn = screen.getByTestId("library-duplicate-button");
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+
+    await waitFor(() =>
+      expect(mockDuplicateLibraryPipeline).toHaveBeenCalledTimes(1),
+    );
+  });
+
+  it("does not render a duplicate button on a starred block-1 working row", async () => {
+    // A working pipeline whose name matches a library entry renders in block 1
+    // (starred) and filters the library-only row out. It exposes Delete, never
+    // a duplicate affordance.
+    mockFetchPipelines.mockResolvedValueOnce([
+      {
+        id: "fixture",
+        name: "fixture",
+        scope: legacyScope("repo"),
+        path: "/repo/.pdo/pipelines/fixture.yaml",
+        node_count: 3,
+        modified: null,
+        variables: {}, prompt_required: true, validation: { kind: "all" },
+      },
+    ]);
+
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={noop}
+        libraryPipelines={[libOnly]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+
+    await screen.findByTestId("left-panel-star");
+    expect(screen.getByRole("button", { name: "Delete pipeline" })).toBeInTheDocument();
+    expect(screen.queryByTestId("library-duplicate-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("library-only-entry")).not.toBeInTheDocument();
+  });
+
+  // #273 — regression: once /pipelines began merging library-scope entries
+  // (#216), a user-scoped library pipeline appears in BOTH lists with the same
+  // name. The block-2 name-absence filter then drops it (its name matches a
+  // /pipelines row), so the only Copy button used to vanish. Block 1 must now
+  // carry its own Copy on scope:"library" rows.
+  it("keeps the Copy button reachable when a scope:'library' row also sits in /pipelines (#273)", async () => {
+    // The regression's exact condition: same NAME in BOTH lists.
+    mockFetchPipelines.mockResolvedValueOnce([
+      {
+        id: "fixture",
+        name: "fixture", // == libOnly.name
+        scope: legacyScope("library"), // the regression's scope
+        path: "/home/u/.pdo/library/pipelines/fixture.yaml",
+        node_count: 3,
+        modified: null,
+        variables: {}, prompt_required: true, validation: { kind: "all" },
+      } satisfies PipelineListEntry,
+    ]);
+    renderWithLib(); // libraryPipelines={[libOnly]}, opens Library tab
+    await screen.findByText("fixture"); // block-1 scope:library row mounts
+    // DOM-PRESENCE, not hover-visual: jsdom does not apply Tailwind group-hover.
+    // libOnly is filtered out of block 2 (name match) ⇒ exactly one button.
+    expect(screen.getByTestId("library-duplicate-button")).toBeInTheDocument();
+    expect(screen.queryByTestId("library-only-entry")).not.toBeInTheDocument();
+  });
+
+  it("the #273 block-1 Copy calls duplicateLibraryPipeline(id) and refreshes", async () => {
+    const onChanged = vi.fn();
+    mockFetchPipelines.mockResolvedValueOnce([
+      {
+        id: "fixture",
+        name: "fixture",
+        scope: legacyScope("library"),
+        path: "/home/u/.pdo/library/pipelines/fixture.yaml",
+        node_count: 3,
+        modified: null,
+        variables: {}, prompt_required: true, validation: { kind: "all" },
+      } satisfies PipelineListEntry,
+    ]);
+    renderWithLib(onChanged);
+    await screen.findByText("fixture");
+
+    fireEvent.click(screen.getByTestId("library-duplicate-button"));
+
+    // p.id is the HOME library file-stem — the same id the endpoint resolves.
+    await waitFor(() =>
+      expect(mockDuplicateLibraryPipeline).toHaveBeenCalledWith("fixture"),
+    );
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+});
+
+// #371 — after Duplicate, the new copy row must be immediately usable (proper
+// button, "library" badge, opens on click) WITHOUT a full page reload. The bug:
+// the duplicate handler refreshed only /library/pipelines, so the copy landed
+// there tagged with its raw storage scope "user" and — being absent from
+// /pipelines — fell through to the degraded block-2 <div> (wrong "user" badge,
+// no button role, dead click). A reload re-fetched /pipelines (where the daemon
+// tags the copy scope:"library"), which repaired all three symptoms. The fix
+// re-fetches /pipelines right after the duplicate, so the copy lands in the
+// block-1 button path at once. Both Copy affordances route through the same
+// handleDuplicate seam, so they can never drift apart again.
+describe.skip("UnifiedLeftPanel duplicate is usable without reload (#371, superseded by instance duplication)", () => {
+  const original: PipelineListEntry = {
+    id: "planner",
+    name: "planner",
+    scope: legacyScope("library"),
+    path: "/home/u/.pdo/library/pipelines/planner.yaml",
+    node_count: 3,
+    modified: null,
+    variables: {}, prompt_required: true, validation: { kind: "all" },
+  };
+  // /pipelines shape of the copy: the daemon scans the library dir and tags it
+  // scope:"library", so it belongs in block 1 (proper button, "library" badge).
+  const copyPipe: PipelineListEntry = {
+    ...original,
+    id: "planner-copy",
+    name: "planner (copy)",
+    path: "/home/u/.pdo/library/pipelines/planner-copy.yaml",
+  };
+  // /library/pipelines shape of the same copy: raw storage scope "user" — the
+  // value that rendered the degraded block-2 row before the fix.
+  const copyLib: LibraryPipelineEntry = {
+    id: "planner-copy",
+    name: "planner (copy)",
+    scope: "user",
+    node_count: 3,
+    modified: null,
+    yaml: "name: planner (copy)\n",
+    pipeline: { name: "planner (copy)", version: "1.0", variables: {}, nodes: [], edges: [] },
+    prompts: {},
+  };
+
+  it("moves the copy from the degraded block-2 <div> to a proper block-1 button (block-1 Copy)", async () => {
+    // /pipelines: only the original at mount; original + copy (both tagged
+    // scope:"library") on the post-duplicate re-fetch the fix now performs.
+    mockFetchPipelines.mockReset();
+    mockFetchPipelines
+      .mockResolvedValueOnce([original])
+      .mockResolvedValue([original, copyPipe]);
+    mockDuplicateLibraryPipeline.mockResolvedValueOnce({
+      id: "planner-copy",
+      scope: "user",
+      entry: null,
+    });
+
+    // A stateful parent that mirrors App: onLibraryPipelinesChanged adds the
+    // copy (raw "user" scope) to the /library/pipelines prop — exactly the
+    // refresh that, ALONE, produced the degraded row before the fix.
+    function Harness() {
+      const [lib, setLib] = useState<LibraryPipelineEntry[]>([]);
+      return (
+        <UnifiedLeftPanel
+          runs={[]}
+          selectedRunId={null}
+          onSelectRun={noop}
+          onNewRun={noop}
+          libraryPipelines={lib}
+          onLibraryPipelinesChanged={() => setLib([copyLib])}
+        />
+      );
+    }
+
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await screen.findByText("planner");
+    expect(screen.queryByText("planner (copy)")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("library-duplicate-button"));
+
+    // The copy is now a real <button> (role) named for the copy, carrying the
+    // "library" badge — not the degraded "user" <div>. Pre-fix this row stayed
+    // a library-only <div>, so findByRole would time out.
+    const copyRow = await screen.findByRole("button", { name: /planner \(copy\)/ });
+    expect(within(copyRow).getByText("library")).toBeInTheDocument();
+    // No degraded library-only row survives: once /pipelines carries the copy,
+    // the block-2 name-absence filter drops it.
+    expect(screen.queryByTestId("library-only-entry")).not.toBeInTheDocument();
+  });
+
+  it("surfaces the copy as a block-1 button when duplicating from a block-2 library-only row (block-2 Copy)", async () => {
+    const solo: PipelineListEntry = {
+      id: "solo",
+      name: "solo",
+      scope: legacyScope("library"),
+      path: "/home/u/.pdo/library/pipelines/solo.yaml",
+      node_count: 2,
+      modified: null,
+      variables: {}, prompt_required: true, validation: { kind: "all" },
+    };
+    const soloCopy: PipelineListEntry = {
+      ...solo,
+      id: "solo-copy",
+      name: "solo (copy)",
+      path: "/home/u/.pdo/library/pipelines/solo-copy.yaml",
+    };
+    const soloLibOnly: LibraryPipelineEntry = {
+      id: "solo",
+      name: "solo",
+      scope: "user",
+      node_count: 2,
+      modified: null,
+      yaml: "name: solo\n",
+      pipeline: { name: "solo", version: "1.0", variables: {}, nodes: [], edges: [] },
+      prompts: {},
+    };
+    // /pipelines empty at mount ⇒ `solo` renders as a block-2 library-only row;
+    // the fix's re-fetch then returns both entries tagged scope:"library".
+    mockFetchPipelines.mockReset();
+    mockFetchPipelines
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([solo, soloCopy]);
+    mockDuplicateLibraryPipeline.mockResolvedValueOnce({
+      id: "solo-copy",
+      scope: "user",
+      entry: null,
+    });
+
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={noop}
+        libraryPipelines={[soloLibOnly]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    // The block-2 library-only row carries the duplicate affordance.
+    await screen.findByTestId("library-only-entry");
+
+    fireEvent.click(screen.getByTestId("library-duplicate-button"));
+
+    // loadPipelines() (the block-2 handler now shares it) re-fetches /pipelines,
+    // landing the copy in the clickable, "library"-badged block-1 path.
+    const copyRow = await screen.findByRole("button", { name: /solo \(copy\)/ });
+    expect(within(copyRow).getByText("library")).toBeInTheDocument();
+  });
+});
+
+// #227 — Deleting a starred pipeline must be able to cascade-remove its durable
+// Library copy. The copy's id is an independently derived slug (it can diverge
+// from the working pipeline's id), so the twin is matched on NAME. The cascade
+// is opt-in (checkbox default OFF) and only offered on a unique same-name twin.
+describe.skip("UnifiedLeftPanel delete cascades to library copy (#227, scopes removed)", () => {
+  // A library twin whose id deliberately differs from the working pipeline's id
+  // — proves the cascade deletes by the twin's id, found via the name match.
+  const twin: LibraryPipelineEntry = {
+    id: "fixture-lib-slug",
+    name: "fixture",
+    scope: "user",
+    node_count: 3,
+    modified: null,
+    yaml: "name: fixture\n",
+    pipeline: { name: "fixture", version: "1.0", variables: {}, nodes: [], edges: [] },
+    prompts: {},
+  };
+
+  const workingRow: PipelineListEntry = {
+    id: "fixture-repo-id",
+    name: "fixture",
+    scope: legacyScope("repo"),
+    path: "/repo/.pdo/pipelines/fixture.yaml",
+    node_count: 3,
+    modified: null,
+    variables: {}, prompt_required: true, validation: { kind: "all" },
+  };
+
+  function renderStarredRow(libraryPipelines: LibraryPipelineEntry[]) {
+    // Make the working-pipeline list deterministic regardless of any leftover
+    // `mockResolvedValueOnce` from earlier tests (vitest's clearAllMocks does
+    // not drain the once-queue): set the base resolved value here.
+    mockFetchPipelines.mockResolvedValue([workingRow]);
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={noop}
+        libraryPipelines={libraryPipelines}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    // Wait on the row NAME (always rendered) — the star only shows when a twin
+    // exists, so the no-twin case must not block on it.
+    return screen.findByText(workingRow.name);
+  }
+
+  it("shows the cascade checkbox when the row has exactly one same-name copy", async () => {
+    await renderStarredRow([twin]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete pipeline" }));
+
+    const box = screen.getByTestId("delete-cascade-checkbox");
+    expect(box).toBeInTheDocument();
+    expect(screen.getByText("Also remove the Library copy")).toBeInTheDocument();
+  });
+
+  it("hides the cascade checkbox when no same-name copy exists", async () => {
+    await renderStarredRow([]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete pipeline" }));
+
+    expect(screen.getByTestId("confirm-delete-modal")).toBeInTheDocument();
+    expect(screen.queryByTestId("delete-cascade-checkbox")).not.toBeInTheDocument();
+  });
+
+  it("defaults the cascade checkbox to OFF", async () => {
+    await renderStarredRow([twin]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete pipeline" }));
+
+    const box = screen.getByTestId("delete-cascade-checkbox") as HTMLInputElement;
+    expect(box.checked).toBe(false);
+  });
+
+  it("resets the checkbox to OFF when reopened on a different target", async () => {
+    // Two starred working rows, each with a unique same-name twin.
+    const alpha: PipelineListEntry = { ...workingRow, id: "alpha-id", name: "alpha", path: "/repo/.pdo/pipelines/alpha.yaml" };
+    const beta: PipelineListEntry = { ...workingRow, id: "beta-id", name: "beta", path: "/repo/.pdo/pipelines/beta.yaml" };
+    mockFetchPipelines.mockResolvedValue([alpha, beta]);
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={noop}
+        libraryPipelines={[
+          { ...twin, id: "alpha-twin", name: "alpha" },
+          { ...twin, id: "beta-twin", name: "beta" },
+        ]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await screen.findByText("alpha");
+
+    const trashButtons = screen.getAllByRole("button", { name: "Delete pipeline" });
+    // Open on alpha (index 0), tick the box, then cancel.
+    fireEvent.click(trashButtons[0]);
+    fireEvent.click(screen.getByTestId("delete-cascade-checkbox"));
+    expect((screen.getByTestId("delete-cascade-checkbox") as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    // Reopen on beta (index 1) — the checkbox must be back to OFF.
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete pipeline" })[1]);
+    expect((screen.getByTestId("delete-cascade-checkbox") as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("cascades deleteLibraryPipeline(twin.id) when the box is ticked", async () => {
+    await renderStarredRow([twin]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete pipeline" }));
+    fireEvent.click(screen.getByTestId("delete-cascade-checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() =>
+      expect(mockDeletePipeline).toHaveBeenCalledWith("fixture-repo-id", "repo"),
+    );
+    await waitFor(() =>
+      // Deletes the twin by its (divergent) library id, found via the name match.
+      expect(mockDeleteLibraryPipeline).toHaveBeenCalledWith("fixture-lib-slug"),
+    );
+  });
+
+  it("does NOT cascade when the box is left unticked", async () => {
+    await renderStarredRow([twin]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete pipeline" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() =>
+      expect(mockDeletePipeline).toHaveBeenCalledWith("fixture-repo-id", "repo"),
+    );
+    expect(mockDeleteLibraryPipeline).not.toHaveBeenCalled();
+  });
+
+  it("suppresses the checkbox on an ambiguous double-star (2+ same-name copies)", async () => {
+    await renderStarredRow([
+      { ...twin, id: "fixture-repo-copy", scope: "repo" },
+      { ...twin, id: "fixture-user-copy", scope: "user" },
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete pipeline" }));
+
+    expect(screen.getByTestId("confirm-delete-modal")).toBeInTheDocument();
+    expect(screen.queryByTestId("delete-cascade-checkbox")).not.toBeInTheDocument();
+  });
+
+  it("leaves the block-2 library-only delete unaffected (direct, no modal)", async () => {
+    // No matching /pipelines entry ⇒ the twin renders as a library-only row,
+    // whose own trash deletes the copy directly with no confirm modal (#227 d).
+    mockFetchPipelines.mockResolvedValue([]);
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={noop}
+        libraryPipelines={[twin]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await screen.findByTestId("library-only-entry");
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove from library" }));
+
+    await waitFor(() =>
+      expect(mockDeleteLibraryPipeline).toHaveBeenCalledWith("fixture-lib-slug"),
+    );
+    expect(screen.queryByTestId("confirm-delete-modal")).not.toBeInTheDocument();
+    expect(mockDeletePipeline).not.toHaveBeenCalled();
+  });
+});
+
+describe("UnifiedLeftPanel — Open session (#316)", () => {
+  const TERMINAL_NON_ARCHIVED: RunListEntry["status"][] = [
+    "completed",
+    "failed",
+    "skipped",
+    "halted",
+  ];
+  const HIDDEN: RunListEntry["status"][] = [
+    "running",
+    "awaiting_user",
+    "paused",
+    "archived",
+  ];
+
+  /** The row's « ⋯ » menu, open: its entries' test ids. */
+  async function menuEntries(): Promise<string[]> {
+    fireEvent.click(screen.getByTestId("run-row-menu"));
+    const menu = await screen.findByTestId("run-row-menu-content");
+    return [...menu.querySelectorAll("[data-testid]")].map((el) => el.getAttribute("data-testid")!);
+  }
+
+  it.each(TERMINAL_NON_ARCHIVED)(
+    "offers the shell in the menu of a %s run",
+    async (status) => {
+      const runs: RunListEntry[] = [
+        { stalled: false, effective_repo: "", run_id: "run-term-1", pipeline_name: "p", status, started_at: null, name: "R" },
+      ];
+      renderPanel({ runs });
+      expect(await menuEntries()).toContain("run-menu-open-shell");
+    },
+  );
+
+  it.each(HIDDEN.filter((status) => status !== "archived"))(
+    "offers no shell in the menu of a %s run",
+    async (status) => {
+      const runs: RunListEntry[] = [
+        { stalled: false, effective_repo: "", run_id: "run-x", pipeline_name: "p", status, started_at: null, name: "R" },
+      ];
+      renderPanel({ runs });
+      expect(await menuEntries()).not.toContain("run-menu-open-shell");
+    },
+  );
+
+  it("clicking open-session calls openRunShell and mounts the shell modal", async () => {
+    mockOpenRunShell.mockResolvedValueOnce({ session: "pdo-shell-run-term-1", created: true });
+    const runs: RunListEntry[] = [
+      { stalled: false, effective_repo: "", run_id: "run-term-1", pipeline_name: "p", status: "failed", started_at: null, name: "R" },
+    ];
+    renderPanel({ runs });
+
+    expect(screen.queryByTestId("run-shell-modal")).not.toBeInTheDocument();
+    await menuEntries();
+    fireEvent.click(screen.getByTestId("run-menu-open-shell"));
+
+    await waitFor(() => expect(mockOpenRunShell).toHaveBeenCalledWith("run-term-1"));
+    const modal = await screen.findByTestId("run-shell-modal");
+    expect(modal.getAttribute("data-session")).toBe("pdo-shell-run-term-1");
+  });
+
+  it("does not mount the shell modal when openRunShell rejects (silent, like cleanup)", async () => {
+    mockOpenRunShell.mockRejectedValueOnce(new Error("409"));
+    const runs: RunListEntry[] = [
+      { stalled: false, effective_repo: "", run_id: "run-term-2", pipeline_name: "p", status: "completed", started_at: null, name: "R" },
+    ];
+    renderPanel({ runs });
+
+    await menuEntries();
+    fireEvent.click(screen.getByTestId("run-menu-open-shell"));
+    await waitFor(() => expect(mockOpenRunShell).toHaveBeenCalledWith("run-term-2"));
+    expect(screen.queryByTestId("run-shell-modal")).not.toBeInTheDocument();
+  });
+});
+
+// #110 — run rows expose status-gated lifecycle controls: Pause (live), Resume
+// (paused), Retry-all (terminal, non-archived → confirm → archive + fresh run).
+// Gating is on EXPLICIT statuses, never isLiveRun/isTerminalRun (which mis-include
+// paused/archived respectively). Archived rows sit in the collapsed Archived
+// section, so their row body is absent → queryByTestId is null (hidden), same as
+// the #316 archived assertion.
+describe("UnifiedLeftPanel — run-level controls (#110)", () => {
+  const runRow = (status: RunListEntry["status"]): RunListEntry => ({ stalled: false, effective_repo: "",
+    run_id: "run-1",
+    pipeline_name: "p",
+    status,
+    started_at: null,
+    name: "R",
+  });
+
+  describe("Pause", () => {
+    const VISIBLE: RunListEntry["status"][] = ["running", "awaiting_user"];
+    const HIDDEN: RunListEntry["status"][] = [
+      "paused",
+      "completed",
+      "failed",
+      "halted",
+      "skipped",
+      "archived",
+    ];
+
+    it.each(VISIBLE)("renders the pause button for a %s run", (status) => {
+      renderPanel({ runs: [runRow(status)] });
+      expect(screen.getByTestId("pause-run-button")).toBeInTheDocument();
+    });
+
+    it.each(HIDDEN)("hides the pause button for a %s run", (status) => {
+      renderPanel({ runs: [runRow(status)] });
+      expect(screen.queryByTestId("pause-run-button")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Resume", () => {
+    const VISIBLE: RunListEntry["status"][] = ["paused"];
+    const HIDDEN: RunListEntry["status"][] = [
+      "running",
+      "awaiting_user",
+      "completed",
+      "failed",
+      "halted",
+      "skipped",
+      "archived",
+    ];
+
+    it.each(VISIBLE)("renders the resume button for a %s run", (status) => {
+      renderPanel({ runs: [runRow(status)] });
+      expect(screen.getByTestId("resume-run-button")).toBeInTheDocument();
+    });
+
+    it.each(HIDDEN)("hides the resume button for a %s run", (status) => {
+      renderPanel({ runs: [runRow(status)] });
+      expect(screen.queryByTestId("resume-run-button")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Retry-all", () => {
+    const VISIBLE: RunListEntry["status"][] = [
+      "completed",
+      "failed",
+      "halted",
+      "skipped",
+    ];
+    // NOT archived — the daemon 409s a retry_all on an archived run, and the row
+    // is collapsed away anyway.
+    const HIDDEN: RunListEntry["status"][] = [
+      "running",
+      "awaiting_user",
+      "paused",
+      "archived",
+    ];
+
+    it.each(VISIBLE)("renders the retry-all button for a %s run", (status) => {
+      renderPanel({ runs: [runRow(status)] });
+      expect(screen.getByTestId("retry-all-button")).toBeInTheDocument();
+    });
+
+    it.each(HIDDEN)("hides the retry-all button for a %s run", (status) => {
+      renderPanel({ runs: [runRow(status)] });
+      expect(screen.queryByTestId("retry-all-button")).not.toBeInTheDocument();
+    });
+  });
+
+  it("clicking pause calls pauseRun with the run id", async () => {
+    renderPanel({ runs: [runRow("running")] });
+    fireEvent.click(screen.getByTestId("pause-run-button"));
+    await waitFor(() => expect(mockPauseRun).toHaveBeenCalledWith("run-1"));
+  });
+
+  it("clicking resume calls resumeRun with the run id", async () => {
+    renderPanel({ runs: [runRow("paused")] });
+    fireEvent.click(screen.getByTestId("resume-run-button"));
+    await waitFor(() => expect(mockResumeRun).toHaveBeenCalledWith("run-1"));
+  });
+
+  it("retry-all opens a confirm dialog without calling retryAll yet", () => {
+    renderPanel({ runs: [runRow("completed")] });
+    fireEvent.click(screen.getByTestId("retry-all-button"));
+
+    const dialog = screen.getByRole("dialog", { name: "Retry all nodes?" });
+    expect(within(dialog).getByRole("button", { name: "Retry all" })).toBeInTheDocument();
+    expect(mockRetryAll).not.toHaveBeenCalled();
+  });
+
+  it("confirming retry-all archives + creates a run and selects the offspring", async () => {
+    mockRetryAll.mockResolvedValueOnce({ run_id: "offspring-1" });
+    const onSelectRun = vi.fn();
+    render(
+      <UnifiedLeftPanel
+        runs={[runRow("failed")]}
+        selectedRunId={null}
+        onSelectRun={onSelectRun}
+        onNewRun={noop}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("retry-all-button"));
+    fireEvent.click(
+      within(screen.getByRole("dialog", { name: "Retry all nodes?" })).getByRole("button", { name: "Retry all" }),
+    );
+
+    await waitFor(() => expect(mockRetryAll).toHaveBeenCalledWith("run-1"));
+    await waitFor(() => expect(onSelectRun).toHaveBeenCalledWith("offspring-1"));
+    // The modal closes once the flow resolves.
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Retry all nodes?" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("cancelling retry-all never calls retryAll and closes the modal", () => {
+    renderPanel({ runs: [runRow("halted")] });
+    fireEvent.click(screen.getByTestId("retry-all-button"));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(mockRetryAll).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Retry all nodes?" })).not.toBeInTheDocument();
+  });
+});
+
+// #336 — client-side run filters (Project / Pipeline / Trigger) above the Runs
+// list. AND semantics, "All" default, session-only state. Options derive from
+// the runs themselves (deleted pipelines/triggers stay filterable); the filter
+// applies BEFORE the active/archived split so grouping and the Archived count
+// both reflect it.
+/** CORE-110 — open the funnel's menu when it is closed, then the select of `axis`. */
+async function openFilter(user: ReturnType<typeof userEvent.setup>, axis: "project" | "pipeline" | "trigger") {
+  if (!screen.queryByTestId("run-filter-menu")) await user.click(screen.getByTestId("run-filter-funnel"));
+  await user.click(within(screen.getByTestId(`run-filter-${axis}`)).getByRole("button"));
+}
+
+/** The choices of `axis`, its select left open. */
+async function filterOptions(user: ReturnType<typeof userEvent.setup>, axis: "project" | "pipeline" | "trigger") {
+  await openFilter(user, axis);
+  return (await screen.findAllByRole("option")).map((o) => o.textContent);
+}
+
+/** Pick `option` on `axis` from the funnel's menu. */
+async function pickFilter(
+  user: ReturnType<typeof userEvent.setup>,
+  axis: "project" | "pipeline" | "trigger",
+  option: string,
+) {
+  await openFilter(user, axis);
+  await user.click(await screen.findByRole("option", { name: option }));
+}
+
+describe("UnifiedLeftPanel run filters (#336)", () => {
+  const trig: TriggerListEntry = {
+    effective_repo: "",
+    id: "trg-1",
+    name: "Nightly audit",
+    pipeline_id: "auditor",
+    pipeline_name: "auditor",
+    input_template: "",
+    variables: {},
+    cron: "0 9 * * *",
+    overlap_policy: "skip",
+    auto_name: true,
+    enabled: true,
+  };
+
+  const runs: RunListEntry[] = [
+    { stalled: false, run_id: "r1", pipeline_name: "auditor", status: "running", started_at: null, name: "Alpha auditor", effective_repo: "/repos/alpha", triggered_by: "trg-1" },
+    { stalled: false, run_id: "r2", pipeline_name: "deploy", status: "completed", started_at: null, name: "Alpha deploy", effective_repo: "/repos/alpha" },
+    { stalled: false, run_id: "r3", pipeline_name: "auditor", status: "running", started_at: null, name: "Zebra auditor", effective_repo: "/repos/zebra", triggered_by: "trg-gone" },
+    { stalled: false, run_id: "r4", pipeline_name: "deploy", status: "archived", started_at: null, name: "Zebra archived", effective_repo: "/repos/zebra" },
+  ];
+
+  it("has no funnel when there are no runs", () => {
+    renderPanel({ runs: [] });
+    expect(screen.queryByTestId("run-filter-funnel")).not.toBeInTheDocument();
+  });
+
+  it("opens one row per filter from the funnel, each on All (CORE-110)", async () => {
+    const user = userEvent.setup();
+    renderPanel({ runs, triggers: [trig] });
+    // Nothing under the header: the filters live behind the funnel.
+    expect(screen.queryByTestId("run-filter-menu")).not.toBeInTheDocument();
+    const funnel = screen.getByTestId("run-filter-funnel");
+    expect(funnel).toHaveAccessibleName("Filter");
+    expect(funnel).not.toHaveAttribute("data-on");
+    await user.click(funnel);
+    for (const axis of ["project", "pipeline", "trigger"]) {
+      expect(within(screen.getByTestId(`run-filter-${axis}`)).getByRole("button")).toHaveTextContent("All");
+    }
+    expect(screen.getByTestId("run-filter-date")).toHaveTextContent("Any time");
+    expect(screen.getByTestId("run-filter-count")).toHaveTextContent("No filter");
+    expect(screen.getByTestId("run-filter-clear-all")).toBeDisabled();
+    // No clear control while everything is on "All".
+    expect(screen.queryByTestId("run-filter-clear")).not.toBeInTheDocument();
+  });
+
+  it("fills and counts the funnel while filters are in force; the menu stays open between choices", async () => {
+    const user = userEvent.setup();
+    renderPanel({ runs, triggers: [trig] });
+    await pickFilter(user, "project", "alpha");
+    await pickFilter(user, "pipeline", "auditor");
+    expect(screen.getByTestId("run-filter-menu")).toBeInTheDocument();
+    const funnel = screen.getByTestId("run-filter-funnel");
+    expect(funnel).toHaveAttribute("data-on");
+    expect(funnel).toHaveAccessibleName("Filters · 2 active");
+    expect(funnel).toHaveTextContent("2");
+    expect(screen.getByTestId("run-filter-count")).toHaveTextContent("2 active");
+    await user.click(screen.getByTestId("run-filter-clear-all"));
+    expect(screen.getAllByTestId("run-display-label")).toHaveLength(3);
+    expect(screen.getByTestId("run-filter-funnel")).not.toHaveAttribute("data-on");
+  });
+
+  it("filters by date from the menu: a preset, then a custom range", async () => {
+    const user = userEvent.setup();
+    const dated: RunListEntry[] = [
+      { stalled: false, run_id: "d1", pipeline_name: "p", status: "completed", started_at: "2026-10-12T10:00:00Z", name: "Old", effective_repo: "/repos/a" },
+      { stalled: false, run_id: "d2", pipeline_name: "p", status: "completed", started_at: new Date().toISOString(), name: "Fresh", effective_repo: "/repos/a" },
+    ];
+    renderPanel({ runs: dated });
+    await user.click(screen.getByTestId("run-filter-funnel"));
+    await user.click(within(screen.getByTestId("run-filter-date")).getByRole("radio", { name: "Started" }));
+    await user.click(within(screen.getByTestId("run-filter-date")).getByRole("button", { name: "Date" }));
+    await user.click(await screen.findByRole("option", { name: "Today" }));
+    expect(screen.getAllByTestId("run-display-label").map((el) => el.textContent)).toEqual(["Fresh"]);
+
+    await user.click(within(screen.getByTestId("run-filter-date")).getByRole("button", { name: "Date" }));
+    await user.click(await screen.findByRole("option", { name: "Custom range" }));
+    fireEvent.change(screen.getByTestId("run-filter-date-from"), { target: { value: "2026-10-12" } });
+    fireEvent.change(screen.getByTestId("run-filter-date-to"), { target: { value: "2026-10-12" } });
+    expect(screen.getAllByTestId("run-display-label").map((el) => el.textContent)).toEqual(["Old"]);
+    expect(screen.getByTestId("run-filter-funnel")).toHaveAccessibleName("Filters · 1 active");
+  });
+
+  it("filters by pipeline name", async () => {
+    const user = userEvent.setup();
+    renderPanel({ runs, triggers: [trig] });
+
+    await pickFilter(user, "pipeline", "deploy");
+
+    const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
+    expect(labels).toEqual(["Alpha deploy"]);
+    // Selected value shows on the dropdown trigger; clear control appears.
+    expect(screen.getByTestId("run-filter-pipeline")).toHaveTextContent("deploy");
+    expect(screen.getByTestId("run-filter-clear")).toBeInTheDocument();
+  });
+
+  it("filtering to a single repo flips the grouped list back to flat", async () => {
+    const user = userEvent.setup();
+    renderPanel({ runs, triggers: [trig] });
+    // Two active repos ⇒ grouped before filtering.
+    expect(screen.getAllByTestId("run-repo-group")).toHaveLength(2);
+
+    await pickFilter(user, "project", "alpha");
+
+    // One repo left ⇒ groupByRepo's ≥2 threshold fails ⇒ flat list.
+    expect(screen.queryByTestId("run-repo-group")).not.toBeInTheDocument();
+    const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
+    expect(labels).toEqual(["Alpha auditor", "Alpha deploy"]);
+  });
+
+  it("offers the recorded Projets by name, so a repo in two Projets never mixes them (ADR-0087)", async () => {
+    const user = userEvent.setup();
+    const shared: RunListEntry[] = [
+      { stalled: false, run_id: "s1", pipeline_name: "p", status: "running", started_at: null, name: "In Checkout", effective_repo: "/code/shop-api", project_id: "p1" },
+      { stalled: false, run_id: "s2", pipeline_name: "p", status: "running", started_at: null, name: "In Mobile", effective_repo: "/code/shop-api", project_id: "p2" },
+      { stalled: false, run_id: "s3", pipeline_name: "p", status: "running", started_at: null, name: "In none", effective_repo: "/code/shop-api" },
+    ];
+    const projects: Project[] = [
+      { id: "p1", name: "Checkout", members: ["/code/shop-api", "/code/shop-web"] },
+      { id: "p2", name: "Mobile", members: ["/code/shop-api"] },
+    ];
+    renderPanel({ runs: shared, projects });
+
+    expect(await filterOptions(user, "project")).toEqual(["All", "Checkout", "Mobile", "shop-api"]);
+
+    await user.click(screen.getByRole("option", { name: "Mobile" }));
+    const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
+    expect(labels).toEqual(["In Mobile"]);
+    expect(screen.getByTestId("run-filter-project")).toHaveTextContent("Mobile");
+  });
+
+  it("filters by trigger, labelling options by trigger name with raw-id fallback", async () => {
+    const user = userEvent.setup();
+    renderPanel({ runs, triggers: [trig] });
+
+    // Known trigger resolves to its name; deleted trigger falls back to the id.
+    expect(await filterOptions(user, "trigger")).toEqual(["All", "Manual", "Nightly audit", "trg-gone"]);
+
+    await user.click(screen.getByRole("option", { name: "Nightly audit" }));
+    const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
+    expect(labels).toEqual(["Alpha auditor"]);
+  });
+
+  it("offers a Manual option matching runs with no trigger", async () => {
+    const user = userEvent.setup();
+    renderPanel({ runs, triggers: [trig] });
+
+    await pickFilter(user, "trigger", "Manual");
+
+    // r2 (active manual) visible; r4 (archived manual) counted in Archived.
+    const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
+    expect(labels).toEqual(["Alpha deploy"]);
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("1");
+  });
+
+  it("combines the three axes with AND semantics", async () => {
+    const user = userEvent.setup();
+    renderPanel({ runs, triggers: [trig] });
+
+    await pickFilter(user, "project", "alpha");
+    await pickFilter(user, "pipeline", "auditor");
+
+    const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
+    expect(labels).toEqual(["Alpha auditor"]);
+
+    // A trigger choice contradicting the rest empties the list.
+    await pickFilter(user, "trigger", "trg-gone");
+    expect(screen.queryAllByTestId("run-display-label")).toHaveLength(0);
+    expect(screen.getByTestId("run-filter-empty")).toBeInTheDocument();
+  });
+
+  it("applies the filter to the Archived section and its count", async () => {
+    const user = userEvent.setup();
+    renderPanel({ runs, triggers: [trig] });
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("1");
+
+    // The archived run is a zebra deploy; filter to alpha ⇒ section disappears.
+    await pickFilter(user, "project", "alpha");
+    expect(screen.queryByTestId("run-archived-section")).not.toBeInTheDocument();
+
+    // Filter to zebra ⇒ the section is back with the filtered count.
+    await pickFilter(user, "project", "zebra");
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("1");
+  });
+
+  it("clears every axis via the clear control", async () => {
+    const user = userEvent.setup();
+    renderPanel({ runs, triggers: [trig] });
+
+    await pickFilter(user, "pipeline", "deploy");
+    expect(screen.getAllByTestId("run-display-label")).toHaveLength(1);
+
+    await user.click(screen.getByTestId("run-filter-clear"));
+    expect(screen.getAllByTestId("run-display-label")).toHaveLength(3);
+    expect(screen.queryByTestId("run-filter-clear")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("run-filter-funnel"));
+    expect(within(screen.getByTestId("run-filter-pipeline")).getByRole("button")).toHaveTextContent("All");
+  });
+
+  it("shows the empty state with a working Clear-filters control on zero matches", async () => {
+    const user = userEvent.setup();
+    // Single-pipeline list plus a second pipeline elsewhere so both options exist.
+    renderPanel({ runs, triggers: [trig] });
+
+    await pickFilter(user, "pipeline", "deploy");
+    await pickFilter(user, "trigger", "Nightly audit");
+
+    expect(screen.getByTestId("run-filter-empty")).toBeInTheDocument();
+    await user.click(within(screen.getByTestId("run-filter-empty")).getByRole("button", { name: "Clear filters" }));
+    expect(screen.queryByTestId("run-filter-empty")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("run-display-label")).toHaveLength(3);
+  });
+
+  it("buckets an empty pipeline_name without crashing", async () => {
+    const user = userEvent.setup();
+    const weird: RunListEntry[] = [
+      { stalled: false, run_id: "w1", pipeline_name: "", status: "running", started_at: null, name: "Nameless", effective_repo: "/repos/a" },
+      { stalled: false, run_id: "w2", pipeline_name: "real", status: "running", started_at: null, name: "Named", effective_repo: "/repos/a" },
+    ];
+    renderPanel({ runs: weird });
+
+    await pickFilter(user, "pipeline", "(unnamed)");
+    const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
+    expect(labels).toEqual(["Nameless"]);
+  });
+});
+
+// #577 — multi-select + bulk actions on the Runs list.
+// #783 — the Runs list is a TREE: a child run nests under its parent (chevron
+// under the status dot, 14px indent per level), the parent carries the
+// aggregated child counts, the filter strip's fourth control is expand /
+// collapse all, and Settings › Interface seeds the default. The tree logic is
+// unit-tested in `lib/runTree.test.ts`; this block checks the rendering seams.
+describe("UnifiedLeftPanel run tree (#783)", () => {
+  const trig: TriggerListEntry = {
+    effective_repo: "",
+    id: "trg-1",
+    name: "Nightly audit",
+    pipeline_id: "auditor",
+    pipeline_name: "auditor",
+    input_template: "",
+    variables: {},
+    cron: "0 9 * * *",
+    overlap_policy: "skip",
+    auto_name: true,
+    enabled: true,
+  };
+
+  const runs: RunListEntry[] = [
+    { stalled: false, run_id: "epic", pipeline_name: "orchestrate-epic", status: "running", started_at: null, name: "Refonte auth — orchestrateur", effective_repo: "/repos/a" },
+    { stalled: false, run_id: "kid", pipeline_name: "implement-loop", status: "running", started_at: null, name: "#731 login form", parent_run_id: "epic", effective_repo: "/repos/a" },
+    { stalled: false, run_id: "kid-trig", pipeline_name: "implement-loop", status: "failed", started_at: null, name: "#733 logout — nightly", parent_run_id: "epic", triggered_by: "trg-1", effective_repo: "/repos/b" },
+    { stalled: false, run_id: "grandkid", pipeline_name: "code-review", status: "completed", started_at: null, name: "review 731", parent_run_id: "kid", effective_repo: "/repos/a" },
+    { stalled: false, run_id: "orphan", pipeline_name: "implement-loop", status: "failed", started_at: null, name: "#700 spike", parent_run_id: "forgotten", effective_repo: "/repos/a" },
+    { stalled: false, run_id: "solo", pipeline_name: "triage", status: "completed", started_at: null, name: "triage nightly", effective_repo: "/repos/a" },
+  ];
+
+  beforeEach(() => {
+    localStorage.clear();
+    // The child pills and the parent link, hidden by default, shown here: what the tree draws.
+    localStorage.setItem(
+      ELEMENTS_STORAGE_KEY,
+      JSON.stringify({ "runs.list.child-pills": true, "runs.list.parent": true }),
+    );
+    resetAppearance();
+  });
+
+  const labels = () => screen.getAllByTestId("run-display-label").map((el) => el.textContent);
+  const row = (id: string) => document.querySelector(`[data-run-row="${id}"]`) as HTMLElement;
+
+  it("nests children under their parent, in list order, indented one step per level (expanded by default)", () => {
+    renderPanel({ runs });
+    expect(labels()).toEqual([
+      "Refonte auth — orchestrateur",
+      "#731 login form",
+      "review 731",
+      "#733 logout — nightly",
+      "#700 spike",
+      "triage nightly",
+    ]);
+    expect(row("epic")).toHaveAttribute("data-depth", "0");
+    expect(row("kid")).toHaveAttribute("data-depth", "1");
+    expect(row("grandkid")).toHaveAttribute("data-depth", "2");
+    expect(row("kid").style.getPropertyValue("--depth")).toBe("1");
+    expect(row("grandkid").style.getPropertyValue("--depth")).toBe("2");
+    // An orphan (parent forgotten) is a root.
+    expect(row("orphan")).toHaveAttribute("data-depth", "0");
+  });
+
+  it("a child follows its parent's Project group, whatever its own repo", () => {
+    const twoRepos: RunListEntry[] = [
+      ...runs,
+      { stalled: false, run_id: "other", pipeline_name: "deploy", status: "completed", started_at: null, name: "deploy preview", effective_repo: "/repos/b" },
+    ];
+    renderPanel({ runs: twoRepos });
+    const groups = screen.getAllByTestId("run-repo-group");
+    expect(groups).toHaveLength(2);
+    // kid-trig is on /repos/b but sits under its parent in the /repos/a group.
+    expect(within(groups[0]).getByText("#733 logout — nightly")).toBeInTheDocument();
+    expect(within(groups[1]).queryByText("#733 logout — nightly")).not.toBeInTheDocument();
+  });
+
+  it("puts a chevron under the dot of every row with children — and only there", () => {
+    renderPanel({ runs });
+    const chevrons = screen.getAllByTestId("run-tree-chevron");
+    expect(chevrons).toHaveLength(2); // epic + kid
+    expect(within(row("epic")).getByTestId("run-tree-chevron")).toHaveAttribute("aria-expanded", "true");
+    expect(within(row("kid")).getByTestId("run-tree-chevron")).toBeInTheDocument();
+    expect(within(row("grandkid")).queryByTestId("run-tree-chevron")).not.toBeInTheDocument();
+    expect(within(row("solo")).queryByTestId("run-tree-chevron")).not.toBeInTheDocument();
+  });
+
+  it("the orchestrated badge is gone; the trigger badge stays", () => {
+    renderPanel({ runs, triggers: [trig] });
+    expect(screen.queryByTestId("run-orchestrated-badge")).not.toBeInTheDocument();
+    expect(screen.getByTestId("run-trigger-badge")).toHaveAccessibleName("Trigger: Nightly audit");
+  });
+
+  it("aggregates the child counts over the whole subtree, zero pills hidden, none on a leaf", () => {
+    renderPanel({ runs });
+    const epicPills = within(row("epic")).getByTestId("run-child-pills");
+    // epic's descendants: kid (running), grandkid (finished), kid-trig (failed).
+    expect(within(epicPills).getByTestId("run-child-pills-finished")).toHaveTextContent("1");
+    expect(within(epicPills).getByTestId("run-child-pills-failed")).toHaveTextContent("1");
+    expect(within(epicPills).getByTestId("run-child-pills-running")).toHaveTextContent("1");
+    expect(within(epicPills).queryByTestId("run-child-pills-stale")).not.toBeInTheDocument();
+    // kid: one finished grandchild only.
+    const kidPills = within(row("kid")).getByTestId("run-child-pills");
+    expect(within(kidPills).getByTestId("run-child-pills-finished")).toHaveTextContent("1");
+    expect(within(kidPills).queryByTestId("run-child-pills-running")).not.toBeInTheDocument();
+    // Leaves and childless roots carry no pills at all.
+    expect(within(row("grandkid")).queryByTestId("run-child-pills")).not.toBeInTheDocument();
+    expect(within(row("solo")).queryByTestId("run-child-pills")).not.toBeInTheDocument();
+  });
+
+  it("counts a live stalled descendant as STALE (orange), disjoint from running", () => {
+    const stalled = runs.map((r) => (r.run_id === "kid" ? { ...r, stalled: true } : r));
+    renderPanel({ runs: stalled });
+    const pills = within(row("epic")).getByTestId("run-child-pills");
+    expect(within(pills).getByTestId("run-child-pills-stale")).toHaveTextContent("1");
+    expect(within(pills).queryByTestId("run-child-pills-running")).not.toBeInTheDocument();
+    expect(within(within(pills).getByTestId("run-child-pills-stale")).getByRole("img")).toHaveAttribute(
+      "stroke",
+      "var(--color-st-skipped)",
+    );
+  });
+
+  it("the chevron collapses / expands the subtree without selecting the run", () => {
+    const onSelectRun = vi.fn();
+    render(
+      <UnifiedLeftPanel runs={runs} selectedRunId={null} onSelectRun={onSelectRun} onNewRun={noop} libraryPipelines={[]} onLibraryPipelinesChanged={noop} />,
+    );
+    fireEvent.click(within(row("epic")).getByTestId("run-tree-chevron"));
+    expect(onSelectRun).not.toHaveBeenCalled();
+    expect(labels()).toEqual(["Refonte auth — orchestrateur", "#700 spike", "triage nightly"]);
+    expect(within(row("epic")).getByTestId("run-tree-chevron")).toHaveAttribute("aria-expanded", "false");
+    // The pills describe the real subtree even while collapsed…
+    expect(within(row("epic")).getByTestId("run-child-pills-failed")).toHaveTextContent("1");
+    fireEvent.click(within(row("epic")).getByTestId("run-tree-chevron"));
+    expect(labels()).toHaveLength(6);
+    expect(onSelectRun).not.toHaveBeenCalled();
+  });
+
+  it("clicking the pills of a collapsed parent expands it (decision 1)", () => {
+    const onSelectRun = vi.fn();
+    render(
+      <UnifiedLeftPanel runs={runs} selectedRunId={null} onSelectRun={onSelectRun} onNewRun={noop} libraryPipelines={[]} onLibraryPipelinesChanged={noop} />,
+    );
+    fireEvent.click(within(row("epic")).getByTestId("run-tree-chevron"));
+    const pills = within(row("epic")).getByTestId("run-child-pills");
+    expect(within(pills).getByTestId("run-child-pills-failed")).toHaveAttribute("title", "1 failed child run, click to expand");
+    fireEvent.click(pills);
+    expect(onSelectRun).not.toHaveBeenCalled();
+    expect(labels()).toHaveLength(6);
+    // Once expanded the pills are inert: the click reaches the row.
+    expect(within(row("epic")).getByTestId("run-child-pills-failed")).toHaveAttribute("title", "1 failed child run");
+    fireEvent.click(within(row("epic")).getByTestId("run-child-pills"));
+    expect(onSelectRun).toHaveBeenCalledWith("epic");
+  });
+
+  it("← collapses / climbs to the parent, → expands, on the focused row (decision 2)", () => {
+    renderPanel({ runs });
+    fireEvent.keyDown(row("epic"), { key: "ArrowLeft" });
+    expect(labels()).toHaveLength(3);
+    fireEvent.keyDown(row("epic"), { key: "ArrowRight" });
+    expect(labels()).toHaveLength(6);
+    // On a leaf, ← moves focus to the parent row.
+    row("grandkid").focus();
+    fireEvent.keyDown(row("grandkid"), { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(row("kid"));
+  });
+
+  it("the expand/collapse-all button replaces the GitFork chip: neutral, no clear ✕, absent without a parent", () => {
+    renderPanel({ runs: [runs[5]] });
+    expect(screen.queryByTestId("run-tree-toggle-all")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("run-filter-orchestrated")).not.toBeInTheDocument();
+    cleanup();
+
+    renderPanel({ runs });
+    const toggle = screen.getByTestId("run-tree-toggle-all");
+    expect(toggle).toHaveAttribute("data-state", "expanded");
+    expect(toggle).toHaveAttribute("aria-label", "Collapse all child runs");
+    expect(toggle.className).not.toContain("border-primary");
+
+    fireEvent.click(toggle);
+    expect(labels()).toEqual(["Refonte auth — orchestrateur", "#700 spike", "triage nightly"]);
+    expect(screen.getByTestId("run-tree-toggle-all")).toHaveAttribute("data-state", "collapsed");
+    expect(screen.getByTestId("run-tree-toggle-all")).toHaveAttribute("aria-label", "Expand all child runs");
+    // Not a filter: no clear ✕ appears.
+    expect(screen.queryByTestId("run-filter-clear")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("run-tree-toggle-all"));
+    expect(labels()).toHaveLength(6);
+    expect(screen.getByTestId("run-tree-toggle-all")).toHaveAttribute("data-state", "expanded");
+  });
+
+  it("one collapsed parent flips the global button to « expand »", () => {
+    renderPanel({ runs });
+    fireEvent.click(within(row("kid")).getByTestId("run-tree-chevron"));
+    expect(screen.getByTestId("run-tree-toggle-all")).toHaveAttribute("data-state", "collapsed");
+  });
+
+  it("honours the « collapsed by default » preference at load", () => {
+    localStorage.setItem("pdo.ui.childRunsExpanded", "false");
+    renderPanel({ runs });
+    expect(labels()).toEqual(["Refonte auth — orchestrateur", "#700 spike", "triage nightly"]);
+    expect(screen.getByTestId("run-tree-toggle-all")).toHaveAttribute("data-state", "collapsed");
+    // Per-row toggles are NOT persisted.
+    fireEvent.click(within(row("epic")).getByTestId("run-tree-chevron"));
+    expect(localStorage.getItem("pdo.ui.childRunsExpanded")).toBe("false");
+  });
+
+  it("a filter keeps a non-matching parent as the path to a matching child, opened, siblings hidden", async () => {
+    const user = userEvent.setup();
+    localStorage.setItem("pdo.ui.childRunsExpanded", "false");
+    renderPanel({ runs });
+    await pickFilter(user, "pipeline", "code-review");
+    // epic → kid → grandkid is the only path; kid-trig (implement-loop) and the
+    // roots that don't match are gone. The parents open on the match even
+    // though the default is collapsed.
+    expect(labels()).toEqual(["Refonte auth — orchestrateur", "#731 login form", "review 731"]);
+    // The pills still describe the REAL subtree, not the filtered view.
+    expect(within(row("epic")).getByTestId("run-child-pills-failed")).toHaveTextContent("1");
+    // The chevron stays active under the filter.
+    fireEvent.click(within(row("kid")).getByTestId("run-tree-chevron"));
+    expect(labels()).toEqual(["Refonte auth — orchestrateur", "#731 login form"]);
+    // Clearing the filter brings everything back (default collapsed ⇒ roots).
+    await user.click(screen.getByTestId("run-filter-clear"));
+    expect(labels()).toEqual(["Refonte auth — orchestrateur", "#700 spike", "triage nightly"]);
+  });
+
+  it("a filter matching only a root shows no chevron path for children", async () => {
+    const user = userEvent.setup();
+    renderPanel({ runs });
+    await pickFilter(user, "pipeline", "triage");
+    expect(labels()).toEqual(["triage nightly"]);
+  });
+
+  it("selecting a hidden run opens its ancestors and scrolls to it (#725 mechanism)", () => {
+    const scrollSpy = vi.fn();
+    Element.prototype.scrollIntoView = scrollSpy;
+    localStorage.setItem("pdo.ui.childRunsExpanded", "false");
+    const { rerender } = render(
+      <UnifiedLeftPanel runs={runs} selectedRunId={null} onSelectRun={noop} onNewRun={noop} libraryPipelines={[]} onLibraryPipelinesChanged={noop} />,
+    );
+    expect(labels()).toHaveLength(3);
+    rerender(
+      <UnifiedLeftPanel runs={runs} selectedRunId="grandkid" onSelectRun={noop} onNewRun={noop} libraryPipelines={[]} onLibraryPipelinesChanged={noop} />,
+    );
+    // Every ancestor of grandkid (epic, kid) opened — which also reveals epic's
+    // other child, kid-trig: a row is expanded or not, never partially.
+    expect(labels()).toEqual([
+      "Refonte auth — orchestrateur",
+      "#731 login form",
+      "review 731",
+      "#733 logout — nightly",
+      "#700 spike",
+      "triage nightly",
+    ]);
+    expect(scrollSpy).toHaveBeenCalled();
+  });
+
+  it("archiving only a parent leaves its children ACTIVE roots, each linked to the archived parent (ADR-0064)", () => {
+    const archivedParent = runs.map((r) => (r.run_id === "epic" ? { ...r, status: "archived" as const } : r));
+    renderPanel({ runs: archivedParent });
+    // Active list: the children climb back to depth 0 (the grandchild stays
+    // under its own live parent), alongside the orphan and solo. A child root
+    // is grouped by its OWN repo again (kid-trig lives in /repos/b).
+    expect(row("kid")).toHaveAttribute("data-depth", "0");
+    expect(row("kid-trig")).toHaveAttribute("data-depth", "0");
+    expect(row("grandkid")).toHaveAttribute("data-depth", "1");
+    expect(labels()).toEqual([
+      "#731 login form",
+      "review 731",
+      "#700 spike",
+      "triage nightly",
+      "#733 logout — nightly",
+    ]);
+    // A root whose parent sits in the other section links to it; a root whose
+    // parent is not listed, or a nested child, does not.
+    expect(within(row("kid")).getByTestId("run-parent-link")).toHaveTextContent(
+      "Refonte auth — orchestrateur",
+    );
+    expect(within(row("kid-trig")).getByTestId("run-parent-link")).toBeInTheDocument();
+    expect(within(row("grandkid")).queryByTestId("run-parent-link")).toBeNull();
+    expect(within(row("orphan")).queryByTestId("run-parent-link")).toBeNull();
+    expect(screen.getByTestId("run-archived-count")).toHaveTextContent("1");
+    fireEvent.click(screen.getByTestId("run-archived-chevron"));
+    // The archived parent holds no active child: no chevron, no pills.
+    expect(labels().slice(-1)).toEqual(["Refonte auth — orchestrateur"]);
+    expect(within(row("epic")).queryByTestId("run-tree-chevron")).toBeNull();
+    expect(within(row("epic")).queryByTestId("run-child-pills-failed")).toBeNull();
+  });
+
+  it("the archived section renders the tree: archived children fold under their archived parent", () => {
+    const allArchived = runs.map((r) =>
+      ["epic", "kid", "kid-trig", "grandkid"].includes(r.run_id)
+        ? { ...r, status: "archived" as const }
+        : r,
+    );
+    localStorage.setItem("pdo.ui.childRunsExpanded", "false");
+    renderPanel({ runs: allArchived });
+    expect(labels()).toEqual(["#700 spike", "triage nightly"]);
+    // The count is the number of archived runs, not of archived roots.
+    expect(screen.getByTestId("run-archived-count")).toHaveTextContent("4");
+    fireEvent.click(screen.getByTestId("run-archived-chevron"));
+    // Collapsed by default (the preference holds for both sections).
+    expect(labels().slice(2)).toEqual(["Refonte auth — orchestrateur"]);
+    expect(within(row("epic")).getByTestId("run-tree-chevron")).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(within(row("epic")).getByTestId("run-tree-chevron"));
+    expect(labels().slice(2)).toEqual([
+      "Refonte auth — orchestrateur",
+      "#731 login form",
+      "#733 logout — nightly",
+    ]);
+    expect(row("kid")).toHaveAttribute("data-depth", "1");
+    expect(within(row("kid")).queryByTestId("run-parent-link")).toBeNull();
+    // The global button opens every parent of both sections.
+    fireEvent.click(screen.getByTestId("run-tree-toggle-all"));
+    expect(labels().slice(2)).toEqual([
+      "Refonte auth — orchestrateur",
+      "#731 login form",
+      "review 731",
+      "#733 logout — nightly",
+    ]);
+  });
+
+  it("an archived child of a live parent is an archived root linked to it; the link selects the parent", () => {
+    const shelved = runs.map((r) => (r.run_id === "kid-trig" ? { ...r, status: "archived" as const } : r));
+    const onSelectRun = vi.fn();
+    render(
+      <UnifiedLeftPanel runs={shelved} selectedRunId={null} onSelectRun={onSelectRun} onNewRun={noop} libraryPipelines={[]} onLibraryPipelinesChanged={noop} />,
+    );
+    fireEvent.click(screen.getByTestId("run-archived-chevron"));
+    expect(row("kid-trig")).toHaveAttribute("data-depth", "0");
+    fireEvent.click(within(row("kid-trig")).getByTestId("run-parent-link"));
+    expect(onSelectRun).toHaveBeenCalledTimes(1);
+    expect(onSelectRun).toHaveBeenCalledWith("epic");
+  });
+
+  it("a parent the filters hide clears them, so its row can be revealed; the link answers the keyboard", async () => {
+    const user = userEvent.setup();
+    const archivedParent = runs.map((r) => (r.run_id === "epic" ? { ...r, status: "archived" as const } : r));
+    const Harness = () => {
+      const [sel, setSel] = useState<string | null>(null);
+      return (
+        <UnifiedLeftPanel runs={archivedParent} selectedRunId={sel} onSelectRun={setSel} onNewRun={noop} libraryPipelines={[]} onLibraryPipelinesChanged={noop} />
+      );
+    };
+    render(<Harness />);
+    // Keep only the implement-loop runs: the orchestrator is filtered out.
+    await pickFilter(user, "pipeline", "implement-loop");
+    expect(screen.getByTestId("run-filter-clear")).toBeInTheDocument();
+    const link = within(row("kid")).getByTestId("run-parent-link");
+    link.focus();
+    await user.keyboard("{Enter}");
+    expect(screen.queryByTestId("run-filter-clear")).toBeNull();
+    expect(row("epic")).not.toBeNull();
+  });
+
+  it("selecting an archived parent from an active child's link opens the archived section on it", () => {
+    const scrollSpy = vi.fn();
+    Element.prototype.scrollIntoView = scrollSpy;
+    const archivedParent = runs.map((r) => (r.run_id === "epic" ? { ...r, status: "archived" as const } : r));
+    const Harness = () => {
+      const [sel, setSel] = useState<string | null>(null);
+      return (
+        <UnifiedLeftPanel runs={archivedParent} selectedRunId={sel} onSelectRun={setSel} onNewRun={noop} libraryPipelines={[]} onLibraryPipelinesChanged={noop} />
+      );
+    };
+    render(<Harness />);
+    expect(row("epic")).toBeNull();
+    fireEvent.click(within(row("kid")).getByTestId("run-parent-link"));
+    expect(row("epic")).not.toBeNull();
+    expect(scrollSpy).toHaveBeenCalled();
+  });
+
+  it("an archived parent that is FORGOTTEN releases its children as roots", () => {
+    const forgotten = runs.filter((r) => r.run_id !== "epic");
+    renderPanel({ runs: forgotten });
+    expect(row("kid")).toHaveAttribute("data-depth", "0");
+    expect(row("kid-trig")).toHaveAttribute("data-depth", "0");
+    expect(row("grandkid")).toHaveAttribute("data-depth", "1");
+  });
+
+  it("shift-range spans only the VISIBLE rows (collapsed subtree skipped)", () => {
+    useSelectionStore.getState().clearAll();
+    renderPanel({ runs });
+    fireEvent.click(within(row("epic")).getByTestId("run-tree-chevron")); // collapse epic
+    const dotOf = (id: string) => within(row(id)).getByRole("checkbox");
+    fireEvent.click(dotOf("epic"));
+    fireEvent.click(dotOf("solo"), { shiftKey: true });
+    expect(useSelectionStore.getState().runs.sort()).toEqual(["epic", "orphan", "solo"]);
+    useSelectionStore.getState().clearAll();
+  });
+});
+
+describe("UnifiedLeftPanel run multi-select (#577)", () => {
+  const twoRuns: RunListEntry[] = [
+    { stalled: false, run_id: "r1", pipeline_name: "p", status: "completed", started_at: null, name: "Run One", effective_repo: "/repo/a" },
+    { stalled: false, run_id: "r2", pipeline_name: "p", status: "running", started_at: null, name: "Run Two", effective_repo: "/repo/a" },
+  ];
+
+  beforeEach(() => {
+    // clearAllMocks (outer beforeEach) resets calls but keeps implementations;
+    // reset the fire-and-forget bulk runners so each test starts fresh.
+    mockCleanupRun.mockReset();
+    mockCleanupRun.mockResolvedValue(undefined);
+    mockPauseRun.mockReset();
+    mockPauseRun.mockResolvedValue(undefined);
+    mockRetryAll.mockReset();
+    mockRetryAll.mockResolvedValue({ run_id: "offspring" });
+  });
+
+  it("reveals the floating bar and count when a run's select control is clicked", () => {
+    renderPanel({ runs: twoRuns });
+    expect(screen.queryByTestId("bulk-action-bar")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Run One" }));
+    expect(screen.getByTestId("bulk-action-bar")).toBeInTheDocument();
+    expect(screen.getByTestId("bulk-count")).toHaveTextContent("1 selected");
+  });
+
+  it("selects on the dot but still opens on the row body", () => {
+    const onSelectRun = vi.fn();
+    render(
+      <UnifiedLeftPanel
+        runs={twoRuns}
+        selectedRunId={null}
+        onSelectRun={onSelectRun}
+        onNewRun={noop}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Run One" }));
+    expect(onSelectRun).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("Run One"));
+    expect(onSelectRun).toHaveBeenCalledWith("r1");
+  });
+
+  it("warns that running runs will stop and cleans up every selected run on confirm", async () => {
+    renderPanel({ runs: twoRuns });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Run One" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Run Two" }));
+    expect(screen.getByTestId("bulk-count")).toHaveTextContent("2 selected");
+    expect(screen.getByTestId("bulk-note")).toHaveAccessibleName("1 running will stop");
+
+    fireEvent.click(screen.getByTestId("bulk-action-cleanup"));
+    expect(screen.getByText("Cleanup 2 runs?")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("bulk-confirm"));
+
+    await waitFor(() => expect(mockCleanupRun).toHaveBeenCalledTimes(2));
+    expect(mockCleanupRun).toHaveBeenCalledWith("r1");
+    expect(mockCleanupRun).toHaveBeenCalledWith("r2");
+    // full success ⇒ selection cleared, bar gone
+    await waitFor(() => expect(screen.queryByTestId("bulk-action-bar")).not.toBeInTheDocument());
+  });
+
+  it("disables Pause when no selected run is live", () => {
+    renderPanel({ runs: twoRuns });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Run One" })); // completed
+    expect(screen.getByTestId("bulk-action-pause")).toBeDisabled();
+    expect(screen.getByTestId("bulk-action-retry")).not.toBeDisabled();
+    expect(screen.getByTestId("bulk-action-cleanup")).not.toBeDisabled();
+  });
+
+  it("pauses only the live selection immediately (no confirm)", async () => {
+    renderPanel({ runs: twoRuns });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Run Two" })); // running
+    fireEvent.click(screen.getByTestId("bulk-action-pause"));
+    await waitFor(() => expect(mockPauseRun).toHaveBeenCalledWith("r2"));
+    expect(mockPauseRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps failed runs selected and surfaces the reason on a partial cleanup", async () => {
+    mockCleanupRun.mockImplementation(async (id: string) => {
+      if (id === "r2") throw new Error("worktree busy");
+    });
+    renderPanel({ runs: twoRuns });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Run One" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Run Two" }));
+    fireEvent.click(screen.getByTestId("bulk-action-cleanup"));
+    fireEvent.click(screen.getByTestId("bulk-confirm"));
+
+    const failures = await screen.findByTestId("bulk-failures");
+    expect(failures).toHaveTextContent("worktree busy");
+    fireEvent.click(screen.getByTestId("bulk-result-close"));
+    // r1 succeeded → deselected; r2 failed → stays selected
+    expect(screen.getByTestId("bulk-count")).toHaveTextContent("1 selected");
+  });
+
+  it("leaves a dot naming the count on the Runs tab after switching away", () => {
+    renderPanel({ runs: twoRuns, triggers: [] });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Run One" }));
+    // active tab shows no badge (the floating bar carries the count instead)
+    expect(screen.queryByTestId("tab-badge-runs")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    expect(screen.getByTestId("tab-badge-runs")).toHaveAccessibleName("1 selected");
+  });
+
+  it("Ctrl-A selects every visible run and Escape clears", () => {
+    renderPanel({ runs: twoRuns });
+    fireEvent.keyDown(screen.getByText("Run One"), { key: "a", ctrlKey: true });
+    expect(screen.getByTestId("bulk-count")).toHaveTextContent("2 selected");
+    fireEvent.keyDown(screen.getByText("Run One"), { key: "Escape" });
+    expect(screen.queryByTestId("bulk-action-bar")).not.toBeInTheDocument();
+  });
+
+  it("Delete opens the cleanup confirm for the current selection", () => {
+    renderPanel({ runs: twoRuns });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Run One" }));
+    fireEvent.keyDown(screen.getByText("Run One"), { key: "Delete" });
+    expect(screen.getByText("Cleanup 1 run?")).toBeInTheDocument();
+  });
+
+  it("the cleanup confirm counts the finished child runs the daemon archives with the parent (#815)", () => {
+    const family: RunListEntry[] = [
+      { stalled: false, run_id: "p1", pipeline_name: "p", status: "completed", started_at: null, name: "Parent", effective_repo: "/repo/a" },
+      { stalled: false, run_id: "c1", pipeline_name: "p", status: "completed", started_at: null, name: "Kid One", effective_repo: "/repo/a", parent_run_id: "p1" },
+      { stalled: false, run_id: "c2", pipeline_name: "p", status: "failed", started_at: null, name: "Kid Two", effective_repo: "/repo/a", parent_run_id: "p1" },
+      { stalled: false, run_id: "c3", pipeline_name: "p", status: "running", started_at: null, name: "Kid Live", effective_repo: "/repo/a", parent_run_id: "p1" },
+    ];
+    renderPanel({ runs: family });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Parent" }));
+    fireEvent.keyDown(screen.getByText("Parent"), { key: "Delete" });
+    expect(screen.getByText("Cleanup 1 run and 2 finished child runs?")).toBeInTheDocument();
+    expect(
+      screen.getByText(/1 child run is still live: the daemon will refuse/),
+    ).toBeInTheDocument();
+  });
+
+  it("group-header select-all toggles the whole repo group", () => {
+    const runs: RunListEntry[] = [
+      { stalled: false, run_id: "a1", pipeline_name: "p", status: "completed", started_at: null, name: "Alpha One", effective_repo: "/repo/alpha" },
+      { stalled: false, run_id: "a2", pipeline_name: "p", status: "completed", started_at: null, name: "Alpha Two", effective_repo: "/repo/alpha" },
+      { stalled: false, run_id: "b1", pipeline_name: "p", status: "completed", started_at: null, name: "Beta One", effective_repo: "/repo/beta" },
+    ];
+    renderPanel({ runs });
+    const groupControls = screen.getAllByTestId("run-group-select-all");
+    expect(groupControls).toHaveLength(2);
+    fireEvent.click(groupControls[0]); // alpha (alphabetical)
+    expect(screen.getByTestId("bulk-count")).toHaveTextContent("2 selected");
+  });
+});
+
+// #577 — multi-select + bulk actions on the Library list.
+describe.skip("UnifiedLeftPanel library multi-select (#577, scope fixtures superseded)", () => {
+  const repoPipe: PipelineListEntry = {
+    id: "pipe1",
+    name: "Pipe One",
+    scope: legacyScope("repo"),
+    path: "/x/pipe1.yaml",
+    node_count: 1,
+    modified: null,
+    variables: {}, prompt_required: true, validation: { kind: "all" },
+  };
+  const libOnly: LibraryPipelineEntry = {
+    id: "fixture",
+    name: "fixture",
+    scope: "user",
+    node_count: 2,
+    modified: null,
+    yaml: "name: fixture\n",
+    pipeline: { name: "fixture", version: "1.0", variables: {}, nodes: [], edges: [] },
+    prompts: {},
+  };
+
+  it("bulk-deletes a selected working pipeline through its scoped seam", async () => {
+    mockFetchPipelines.mockResolvedValueOnce([repoPipe]);
+    renderPanel();
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    await screen.findByText("Pipe One");
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Pipe One" }));
+    expect(screen.getByTestId("bulk-action-bar")).toBeInTheDocument();
+    // a repo pipeline is not duplicable
+    expect(screen.getByTestId("bulk-action-duplicate")).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId("bulk-action-delete"));
+    expect(screen.getByText("Delete 1 pipeline?")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("bulk-confirm"));
+    await waitFor(() => expect(mockDeletePipeline).toHaveBeenCalledWith("pipe1", "repo"));
+  });
+
+  it("bulk-duplicates selected library-only entries", async () => {
+    render(
+      <UnifiedLeftPanel
+        runs={[]}
+        selectedRunId={null}
+        onSelectRun={noop}
+        onNewRun={noop}
+        libraryPipelines={[libOnly]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select fixture" }));
+    fireEvent.click(screen.getByTestId("bulk-action-duplicate"));
+    await waitFor(() => expect(mockDuplicateLibraryPipeline).toHaveBeenCalledWith("fixture"));
+  });
+});

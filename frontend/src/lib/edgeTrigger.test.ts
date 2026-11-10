@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { deriveEdgeTrigger } from "./edgeTrigger";
-import type { EdgeDef, RunState, EdgeInfo } from "../types";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { RunState } from "../shared/generated/RunState";
+import type { EdgeInfo } from "../shared/generated/EdgeInfo";
 
 const edge: EdgeDef = {
   source: { node: "reviewer", port: "verdict" },
@@ -10,6 +12,12 @@ const edge: EdgeDef = {
 
 function runState(overrides: Partial<RunState> = {}): RunState {
   const base: RunState = {
+    loop_states: {},
+    foreach_states: {},
+    collection_states: {},
+    switch_states: {},
+    sandbox: "off",
+    sessions_spawned: 0,
     run_id: "r1",
     status: "running",
     pipeline_name: "p",
@@ -19,9 +27,8 @@ function runState(overrides: Partial<RunState> = {}): RunState {
     nodes: {},
     edges: [],
     node_defs: [],
-    start_node: null,
-    end_node: null,
-    merge_resolver: null,
+    start_node: undefined,
+    end_node: undefined,
   };
   return { ...base, ...overrides };
 }
@@ -79,6 +86,66 @@ describe("deriveEdgeTrigger", () => {
     const t = deriveEdgeTrigger(rs, edge)!;
     expect(t.last_value).toContain("verdict");
   });
+
+  it("an edge into End reads fired once its End port fired, not « not fired » (CORE-232)", () => {
+    const toEnd: EdgeDef = { source: { node: "reviewer", port: "verdict" }, target: { node: "end", port: "result" } };
+    const state = (fired_at: string | null, status = "completed") =>
+      runState({
+        status: status as RunState["status"],
+        nodes: { reviewer: nodeState("reviewer", "completed") },
+        end_node: { id: "end", ports: [{ port_name: "result", status: fired_at ? "fired" : "pending", reason: null, fired_at }] },
+      });
+    expect(deriveEdgeTrigger(state("2026-11-09T10:00:00Z"), toEnd)?.fired).toBe(true);
+    expect(deriveEdgeTrigger(state(null, "running"), toEnd)?.fired).toBe(false);
+    // A port the Run does not list: the Run's completion says it.
+    const unlisted: EdgeDef = { ...toEnd, target: { node: "end", port: "other" } };
+    expect(deriveEdgeTrigger(state("t"), unlisted)?.fired).toBe(true);
+  });
+});
+
+describe("deriveEdgeTrigger — an edge into End", () => {
+  const toEnd: EdgeDef = { source: { node: "reviewer", port: "out" }, target: { node: "end", port: "result" } };
+  const endNode = (status: string) => ({
+    id: "end",
+    ports: [{ port_name: "result", status, reason: null, fired_at: status === "received" ? "t" : null }],
+  });
+
+  it("reports fired once End received the port the edge lands on", () => {
+    const rs = runState({
+      status: "completed",
+      nodes: { reviewer: nodeState("reviewer", "completed", 1) },
+      end_node: endNode("received"),
+    });
+    expect(deriveEdgeTrigger(rs, toEnd)!.fired).toBe(true);
+  });
+
+  it("reports not fired while End has not received it", () => {
+    const rs = runState({
+      nodes: { reviewer: nodeState("reviewer", "completed", 1) },
+      end_node: endNode("pending"),
+    });
+    expect(deriveEdgeTrigger(rs, toEnd)!.fired).toBe(false);
+  });
+
+  it("reads the port the edge lands under, not End's first port", () => {
+    const rs = runState({
+      nodes: { reviewer: nodeState("reviewer", "completed", 1) },
+      end_node: {
+        id: "end",
+        ports: [{ port_name: "other", status: "received", reason: null, fired_at: "t" }],
+      },
+    });
+    expect(deriveEdgeTrigger(rs, toEnd)!.fired).toBe(false);
+  });
+
+  it("a multi-output edge lands under each port's own name", () => {
+    const multi: EdgeDef = { source: { node: "reviewer", port: "out", ports: ["out", "notes"] }, target: { node: "end", port: "result" } };
+    const rs = runState({
+      nodes: { reviewer: nodeState("reviewer", "completed", 1) },
+      end_node: { id: "end", ports: [{ port_name: "notes", status: "received", reason: null, fired_at: "t" }] },
+    });
+    expect(deriveEdgeTrigger(rs, multi)!.fired).toBe(true);
+  });
 });
 
 function nodeState(id: string, status: string, iter = 0) {
@@ -90,5 +157,6 @@ function nodeState(id: string, status: string, iter = 0) {
     completed_at: null,
     failure_reason: null,
     iterations: [],
+    frontmatter_retries: 0,
   };
 }

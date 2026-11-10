@@ -4,7 +4,7 @@ Sans cet ADR, un agent traiterait l'assistant de bibliothèque comme un Pipeline
 load-bearing, attaché à un Run et émetteur de commandes), et le câblerait avec un MCP custom ou une
 écriture à chaque édition.
 
-> Statut : **accepted** (#302).
+> Statut : **accepted** (#302). **Amendé par ADR-0088** : l'assistant écrit dans le brouillon partagé.
 >
 > **Amendé par ADR-0051 (#594).** Les décisions **1** (session keyée sur l'id de la pipeline), **3**
 > (create-on-open / reap-on-leave sur l'onglet) et **4** (jamais reapée par le sweep, sans TTL) ne

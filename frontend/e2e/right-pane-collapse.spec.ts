@@ -19,6 +19,7 @@ import { cleanupRuns, openPipelineForEdit, runMultipart } from "./helpers";
 //    pushed out past the canvas's left edge (FP iteration 2).
 
 const PIPELINE_NAME = `e2e-right-pane-${process.pid}-${Date.now()}`;
+// The instance pipelines the daemon watches.
 const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
@@ -105,7 +106,7 @@ async function storedRightPct(page: Page): Promise<number | undefined> {
 
 async function gotoConnected(page: Page): Promise<void> {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 }
 
 test.beforeAll(async () => {
@@ -180,7 +181,7 @@ test("collapses when empty and reopens at the last chosen width, across a reload
   await clickEmptyCanvas(page);
   await expectCollapsed(page);
   await page.reload();
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await openPipelineForEdit(page, PIPELINE_NAME);
   await expect(page.getByTestId("tab-list")).toBeVisible({ timeout: 10_000 });
   await clickEmptyCanvas(page);

@@ -107,8 +107,11 @@ function isolated(node) {
   return node.isolated_worktree ?? node.type === "agent";
 }
 
-/** A card's size when it was not measured (flow px). */
-const CARD = { width: 160, height: 35 };
+/** A card's size when it was not measured (flow px): an agent card's, or the
+ *  pill of `start` and `end`. */
+const CARD = { width: 208, height: 65 };
+const TERMINAL = { width: 60, height: 24 };
+const isMarker = (type) => type === "start" || type === "end";
 
 /** A point on a card's border: its anchor, or the middle of `side`. */
 function borderPoint(node, size, anchor, side) {
@@ -244,7 +247,8 @@ export function gestureDrift(saved, target, { tolerance = DRIFT_TOLERANCE, sizes
   // A saved node id → the target id of the node with its name.
   const idOf = new Map((saved.nodes ?? []).map((n) => [n.id, byName.get(n.name ?? n.id)?.id ?? n.id]));
   const measured = Object.fromEntries(Object.entries(sizes).map(([id, size]) => [idOf.get(id) ?? id, size]));
-  const sizeOf = (id) => measured[id] ?? CARD;
+  const types = new Map((target.nodes ?? []).map((n) => [n.id, n.type]));
+  const sizeOf = (id) => measured[id] ?? (isMarker(types.get(id)) ? TERMINAL : CARD);
   const savedAsTarget = { ...saved, nodes: (saved.nodes ?? []).map((n) => ({ ...n, id: idOf.get(n.id) })) };
   const as = (edge) => ({ ...edge, source: { ...edge.source, node: idOf.get(edge.source.node) ?? edge.source.node }, target: { ...edge.target, node: idOf.get(edge.target.node) ?? edge.target.node } });
 
@@ -312,4 +316,41 @@ export function gestureDrift(saved, target, { tolerance = DRIFT_TOLERANCE, sizes
 /** The manifest warnings for a drift: one per difference, named as such. */
 export function driftWarnings(drift) {
   return drift.map((line) => `drift from the target: ${line}`);
+}
+
+/** A work card is placed as `CARD.height` tall and drawn 49 + 16 px per
+ *  output (frontend/src/pipeline/model/grownCanvas.ts). */
+const drawnCardHeight = (outputs) => 49 + 16 * outputs;
+
+/**
+ * Where the edit canvas draws an ordinate stored at `y`, for `pipeline`: a
+ * card with several outputs is drawn taller than the 65 px it was placed for,
+ * and gives its extra height to everything below it (the front's
+ * lib/growLayout.ts: boxes whose placed extents overlap form a band, a band
+ * gives its largest growth from its bottom on). A gesture aimed at a stored
+ * position (a target's `view`, waypoint or label) aims at its drawn one.
+ */
+export function drawnY(pipeline) {
+  const rects = (pipeline.nodes ?? []).map((n) => {
+    const marker = isMarker(n.type);
+    const h = marker ? TERMINAL.height : CARD.height;
+    return { y: n.view?.y ?? 0, h, gain: marker ? 0 : Math.max(0, drawnCardHeight((n.outputs ?? []).length) - h) };
+  });
+  rects.sort((a, b) => a.y - b.y);
+  const bands = [];
+  for (const r of rects) {
+    const cur = bands.at(-1);
+    if (cur && r.y < cur.bottom) {
+      cur.bottom = Math.max(cur.bottom, r.y + r.h);
+      cur.gain = Math.max(cur.gain, r.gain);
+    } else bands.push({ bottom: r.y + r.h, gain: r.gain });
+  }
+  return (y) => {
+    let shift = 0;
+    for (const b of bands) {
+      if (y < b.bottom) break;
+      shift += b.gain;
+    }
+    return y + shift;
+  };
 }

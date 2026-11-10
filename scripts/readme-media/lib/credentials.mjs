@@ -4,7 +4,8 @@
 // built from the user's (e.g. the account block of `~/.claude.json`, never the
 // whole file, which carries the user's projects and MCP servers). Every file
 // either step writes is recorded BEFORE it is written, so the exit guard knows
-// what to wipe even after an interruption in the middle.
+// what to wipe even after an interruption in the middle. The demo daemon of
+// the agentic tests (scripts/demo-daemon) stages every harness of this table.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -45,6 +46,32 @@ export const HARNESS_AUTH = {
       fs.writeFileSync(settings, `${JSON.stringify({ skipDangerousModePermissionPrompt: true, statusLine: MODEL_STATUS_LINE }, null, 2)}\n`);
     },
   },
+  // copilot keeps its token in the system keyring, under the user named in
+  // `~/.copilot/config.json`; that file also lists the folders it trusts
+  // without asking. Only those two keys are carried over.
+  copilot: {
+    copy: [],
+    derive({ hostHome, demoHome, trustedDirs, record }) {
+      let host;
+      try {
+        // The file opens with `//` comment lines.
+        const text = fs.readFileSync(path.join(hostHome, ".copilot", "config.json"), "utf8");
+        host = JSON.parse(text.replace(/^\s*\/\/.*$/gm, ""));
+      } catch {
+        return;
+      }
+      const config = {
+        ...(host.lastLoggedInUser ? { lastLoggedInUser: host.lastLoggedInUser } : {}),
+        ...(host.loggedInUsers ? { loggedInUsers: host.loggedInUsers } : {}),
+        trustedFolders: trustedDirs,
+      };
+      const target = path.join(demoHome, ".copilot", "config.json");
+      record(target);
+      writePrivate(target, `${JSON.stringify(config, null, 2)}\n`);
+    },
+  },
+  pi: { copy: [".pi/agent/auth.json"] },
+  opencode: { copy: [".local/share/opencode/auth.json"] },
 };
 
 function writePrivate(target, content) {
@@ -54,9 +81,10 @@ function writePrivate(target, content) {
 
 /**
  * Stage the auth of `harnesses` from `hostHome` into `demoHome`. `onStaged` is
- * called with each path BEFORE its content is written.
+ * called with each path BEFORE its content is written. `derive: false` copies
+ * the token files only, and leaves the configs a running demo has written to.
  */
-export function stageCredentials({ harnesses, hostHome, demoHome, trustedDirs, onStaged }) {
+export function stageCredentials({ harnesses, hostHome, demoHome, trustedDirs, onStaged, derive = true }) {
   const staged = [];
   const record = (file) => {
     staged.push(file);
@@ -72,7 +100,7 @@ export function stageCredentials({ harnesses, hostHome, demoHome, trustedDirs, o
       record(to);
       writePrivate(to, fs.readFileSync(from));
     }
-    auth.derive?.({ hostHome, demoHome, trustedDirs, record });
+    if (derive) auth.derive?.({ hostHome, demoHome, trustedDirs, record });
   }
   return staged;
 }

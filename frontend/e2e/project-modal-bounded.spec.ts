@@ -11,6 +11,8 @@ import { execFileSync } from "node:child_process";
 //
 // The pencil lives on the Triggers list group headers too (#552); Triggers are
 // the lightest way to put several repos in a list (no node session spawned).
+// Since CORE-96 the pencil opens Settings › Projects on the group, and the modal
+// opens from there (« Agent & skills… »).
 
 const PREFIX = "e2e-bounded-";
 const PIPELINE_NAME = `${PREFIX}${process.pid}-${Date.now()}`;
@@ -106,12 +108,13 @@ test.afterEach(async ({ page, baseURL }) => {
 
 async function openTriggersTab(page: Page) {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await page.getByRole("tab", { name: "Triggers" }).click();
   await expect(page.getByText(`${PREFIX}t0`)).toBeVisible();
 }
 
-/** Hover a group header (the pencil only shows on hover) and click its pencil. */
+/** Hover a group header (the pencil only shows on hover) and click its pencil:
+ *  Settings › Projects opens on the group. */
 async function openPencil(page: Page, label: string) {
   const group = page
     .getByTestId("trigger-repo-group")
@@ -120,6 +123,7 @@ async function openPencil(page: Page, label: string) {
   await header.scrollIntoViewIfNeeded();
   await header.hover();
   await group.getByTestId("trigger-group-pencil").click();
+  await expect(page.getByTestId("projects-panel")).toBeVisible();
 }
 
 async function overflows(body: Locator): Promise<boolean> {
@@ -133,67 +137,114 @@ test("Edit project with provisioning open stays in the window; the body scrolls 
   const created = await page.request.post(`${baseURL}/projects`, { data: { name: PROJECT_NAME } });
   expect(created.status()).toBeLessThan(300);
   const project = (await created.json()) as { id: string };
-  const attach = await page.request.post(`${baseURL}/projects/${project.id}/members`, {
-    data: { path: repos[0] },
+  // Every repo is a member: the list is long enough to scroll.
+  for (const repo of repos) {
+    const attach = await page.request.post(`${baseURL}/projects/${project.id}/members`, {
+      data: { path: repo },
+    });
+    expect(attach.status()).toBeLessThan(300);
+  }
+  // ADR-0087 — a Trigger is listed under the Projet recorded on it, never the
+  // one its repo joined since: give the Projet a group of its own.
+  const inProject = await page.request.post(`${baseURL}/triggers`, {
+    data: {
+      name: `${PREFIX}in-project`,
+      pipeline_id: PIPELINE_NAME,
+      cron: "0 0 1 1 *",
+      target_repo: repos[0],
+      project_id: project.id,
+    },
   });
-  expect(attach.status()).toBeLessThan(300);
+  expect(inProject.status()).toBe(201);
 
   await openTriggersTab(page);
   await openPencil(page, PROJECT_NAME);
+  await expect(page.getByTestId("project-detail-name")).toHaveText(PROJECT_NAME);
+  await page.getByTestId("project-more-settings").click();
 
   const modal = page.getByTestId("project-edit-modal");
   await expect(modal).toBeVisible();
-  await expect(modal.getByText("Edit project", { exact: true })).toBeInViewport();
+  await expect(modal.getByRole("heading", { name: /^Edit project/ })).toBeInViewport();
   await expect(page.getByTestId("project-edit-save")).toBeInViewport();
 
-  await modal.getByRole("button", { name: "Configure worktree provisioning…" }).click();
-  await expect(modal.getByTestId("provisioning-project")).toBeVisible();
+  // The provisioning block renders collapsed; its header opens it.
+  await modal.getByTestId("provisioning-toggle").click();
+  await expect(modal.getByTestId("provisioning-body")).toBeVisible();
 
-  // The panel never leaves the window: bounded to 85vh (510px at 600px).
+  // The panel never leaves the window: the kit's modal, bounded to the window
+  // less 64px (536px at 600px).
   const box = (await modal.boundingBox())!;
   expect(box.y).toBeGreaterThanOrEqual(0);
   expect(box.y + box.height).toBeLessThanOrEqual(600);
-  expect(box.height).toBeLessThanOrEqual(0.85 * 600 + 1);
+  expect(box.height).toBeLessThanOrEqual(600 - 64 + 1);
 
-  // Only the body scrolls; title and Save stay put.
-  const body = page.getByTestId("project-edit-body");
+  // Only the frame's body scrolls; title and Save stay put.
+  const body = page.getByTestId("project-edit-body").locator("xpath=ancestor::div[contains(@class, 'd-frame__body')]");
   expect(await overflows(body)).toBe(true);
-  await expect(modal.getByText("Edit project", { exact: true })).toBeInViewport();
+  await expect(modal.getByRole("heading", { name: /^Edit project/ })).toBeInViewport();
   await expect(page.getByTestId("project-edit-save")).toBeInViewport();
 
   // The member list keeps its own bounded height, nested in the scrolling body.
   const members = page.getByTestId("project-members-list");
   expect((await members.boundingBox())!.height).toBeLessThanOrEqual(192 + 1);
 
-  // Scroll down to the last member repository, check a new one, save.
+  // Scroll down to the last member repository, uncheck it, save.
   const target = members.locator(`[data-testid="project-member-row"][data-path="${repos[REPO_COUNT - 1]}"]`);
   await target.scrollIntoViewIfNeeded();
   await expect(target).toBeInViewport();
   await expect(page.getByTestId("project-edit-save")).toBeInViewport();
-  await target.getByTestId("project-member-checkbox").check();
+  await target.getByTestId("project-member-checkbox").uncheck();
   await page.getByTestId("project-edit-save").click();
   await expect(modal).toHaveCount(0);
 
-  // The repo now sits under the Projet's group in the Triggers list.
+  // The repo left the Projet, in the page too; the Trigger recorded in the
+  // Projet stays in its group (ADR-0087).
+  const saved = (await (await page.request.get(`${baseURL}/projects`)).json()) as Array<{
+    id: string;
+    members: string[];
+  }>;
+  expect(saved.find((p) => p.id === project.id)?.members).not.toContain(repos[REPO_COUNT - 1]);
+  await expect(
+    page.locator(`[data-testid="project-repo-row"][data-path="${repos[REPO_COUNT - 1]}"]`),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Close settings" }).click();
   const group = page
     .getByTestId("trigger-repo-group")
     .filter({ has: page.getByTestId("trigger-repo-label").getByText(PROJECT_NAME, { exact: true }) });
-  await expect(group.getByText(`${PREFIX}t${REPO_COUNT - 1}`)).toBeVisible();
+  await expect(group.getByText(`${PREFIX}in-project`)).toBeVisible();
 });
 
-test("Name project with short content: no scrollbar, rendered as before", async ({ page }) => {
+test("the pencil of a group in no Projet names one for its repository; short content has no scrollbar", async ({
+  page,
+  baseURL,
+}) => {
   // "Short" is relative to the window: the member list alone (up to 192px) fills
   // 85vh at 600px, so give this one a window the content genuinely fits in.
   await page.setViewportSize({ width: 1280, height: 900 });
   await openTriggersTab(page);
   await openPencil(page, path.basename(repos[1]));
 
-  const modal = page.getByTestId("project-edit-modal");
-  await expect(modal.getByText("Name project", { exact: true })).toBeInViewport();
-  await expect(page.getByTestId("project-edit-save")).toBeInViewport();
-  expect(await overflows(page.getByTestId("project-edit-body"))).toBe(false);
+  // Settings › Projects starts a new Projet, named after the group, holding its repository.
+  await expect(page.getByTestId("projects-new-name")).toHaveValue(path.basename(repos[1]));
+  await page.getByTestId("projects-new-name").fill(`${PREFIX}named`);
+  await page.getByTestId("projects-new-create").click();
+  await expect(page.getByTestId("project-detail-name")).toHaveText(`${PREFIX}named`);
+  await expect(page.locator(`[data-testid="project-repo-row"][data-path="${repos[1]}"]`)).toBeVisible();
+  const saved = (await (await page.request.get(`${baseURL}/projects`)).json()) as Array<{
+    name: string;
+    members: string[];
+  }>;
+  expect(saved.find((p) => p.name === `${PREFIX}named`)?.members).toEqual([repos[1]]);
 
-  // Backdrop click behaviour is unchanged: it still closes the modal.
-  await page.getByTestId("project-edit-backdrop").click({ position: { x: 5, y: 5 } });
+  await page.getByTestId("project-more-settings").click();
+  const modal = page.getByTestId("project-edit-modal");
+  await expect(modal.getByRole("heading", { name: /^Edit project/ })).toBeInViewport();
+  await expect(page.getByTestId("project-edit-save")).toBeInViewport();
+  expect(
+    await overflows(page.getByTestId("project-edit-body").locator("xpath=ancestor::div[contains(@class, 'd-frame__body')]")),
+  ).toBe(false);
+
+  // A click on the backdrop still closes the modal.
+  await page.mouse.click(5, 5);
   await expect(modal).toHaveCount(0);
 });

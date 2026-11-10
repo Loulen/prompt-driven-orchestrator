@@ -1,0 +1,333 @@
+/*
+ * The tokens of the shared design system (ADR-0091), at a stable address:
+ * `/shared/tokens.css`. The front imports this very file (src/index.css), and a
+ * page an extension serves outside the interface links it, so both paint with
+ * the same palette, type and sizes.
+ *
+ * Two layers:
+ *  - the palette (`--color-*`): paper, ink, rules, the accent and the six
+ *    status colours, redefined by each Theme in each mode (ADR-0093);
+ *  - the roles (`--surface-*`, `--text*`, `--line*`, `--primary*`, `--hover`…),
+ *    which components paint with. They read the palette, and are declared again
+ *    on every `[data-theme]` and `[data-mode]` element, so a container can carry
+ *    the other mode.
+ *
+ * Two attributes select the palette: `data-theme` (`acogni`, the default, or
+ * `classic`) on `<html>`, and `data-mode` (`dark`, the default, or `light`) on
+ * `<html>` or on any container, which switches what is under it. A third,
+ * `data-status-palette="colour-blind"` on `<html>`, swaps four status colours
+ * for the Palette daltonienne, in each Theme and mode. The theme script
+ * `/shared/theme.js` stamps them before the first paint. Only the
+ * palette changes with them: type, sizes, corners stay. The fonts ship with
+ * the binary under `/shared/fonts/`, with their licence (SIL OFL 1.1).
+ */
+
+@font-face {
+  font-family: "Archivo";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/shared/fonts/archivo-latin-ext-wght-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Archivo";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/shared/fonts/archivo-latin-wght-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/shared/fonts/geist-mono-symbols2-wght-normal.woff2") format("woff2");
+  unicode-range: U+2000-2001, U+2004-2008, U+200A, U+23B8-23BD, U+2500-259F;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/shared/fonts/geist-mono-latin-ext-wght-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/shared/fonts/geist-mono-latin-wght-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* ------------------------------------------------------------ type and sizes */
+:root {
+  /* One UI sans, one mono for ids, hashes, paths, durations, costs and code. */
+  --font-ui: "Archivo", "Segoe UI", system-ui, sans-serif;
+  --font-code: "Geist Mono", ui-monospace, Menlo, monospace;
+
+  /* Type scale: 13 px base. */
+  --fs-2xs: 10px; /* badges, counters */
+  --fs-xs: 11px; /* meta, caps section headers, status bar */
+  --fs-sm: 12px; /* secondary text, controls */
+  --fs-md: 13px; /* default UI text, list titles */
+  --fs-lg: 14px; /* pane titles */
+  --fs-xl: 16px; /* dialog titles, the only "big" text */
+  --lh-ui: 1.35;
+  --w-regular: 400;
+  --w-medium: 500;
+  --w-strong: 600;
+  --tracking-caps-ui: 0.06em;
+
+  /* Heights, on a 4 px grid. */
+  --h-row: 24px; /* list row, tree row, menu item */
+  --h-row-2: 40px; /* two-line row */
+  --h-control: 24px; /* buttons, inputs, selects, tabs */
+  --h-control-sm: 20px; /* inline chips, mini buttons */
+  --h-bar: 32px; /* pane headers, tab bars, toolbars */
+  --h-topbar: 36px;
+  --h-statusbar: 22px;
+  --icon: 14px;
+  --icon-lg: 16px;
+  --pad-x: 8px; /* horizontal padding inside rows and controls */
+  --gap: 6px;
+  --g-1: 2px;
+  --g-2: 4px;
+  --g-3: 6px;
+  --g-4: 8px;
+  --g-5: 12px;
+  --g-6: 16px;
+  --g-7: 24px;
+
+  /* Corners: controls 2 px, panes and frames square. The floating row toolbar
+     alone takes the larger radius. */
+  --radius-ui: 2px;
+  --radius-pop: 6px;
+
+  /* The 8 hues of the avatars (oklch): a person's identity picks one. None is
+     a status hue (red, orange, amber, the done green) nor the accent; each
+     palette sets their lightness and chroma (`--av-fill-*`, `--av-solid-*`). */
+  --av-h0: 185;
+  --av-h1: 300;
+  --av-h2: 215;
+  --av-h3: 130;
+  --av-h4: 275;
+  --av-h5: 235;
+  --av-h6: 110;
+  --av-h7: 325;
+}
+
+/* ------------------------------------------------------------ Acogni, dark (the default) */
+:root,
+[data-mode="dark"] {
+  color-scheme: dark;
+  --color-paper: oklch(18.5% 0.004 265);
+  --color-paper-2: oklch(20.5% 0.005 265);
+  --color-paper-3: oklch(23% 0.006 265);
+  --color-rule: oklch(30% 0.007 265);
+  --color-rule-2: oklch(25.5% 0.006 265);
+  --color-rule-strong: oklch(46% 0.01 260);
+  --color-ink: oklch(87% 0.004 250);
+  --color-ink-2: oklch(76% 0.006 250);
+  --color-muted: oklch(64% 0.008 250);
+  --color-accent: oklch(64% 0.16 8);
+  --color-accent-hi: oklch(70% 0.14 8);
+  --color-accent-ink: oklch(18.5% 0.004 265);
+  --color-st-running: oklch(68% 0.12 255);
+  --color-st-await: oklch(74% 0.12 75);
+  --color-st-done: oklch(70% 0.11 160);
+  --color-st-blocked: oklch(71% 0.125 55);
+  --color-st-failed: oklch(66% 0.15 28);
+  --color-st-skipped: oklch(64% 0.018 255);
+  /* Light text on a dark ground reads heavier: medium and strong step down. */
+  /* The avatars: the tint behind the initials, and the person's marks. */
+  --av-fill-l: 40%;
+  --av-fill-c: 0.08;
+  --av-solid-l: 71%;
+  --av-solid-c: 0.11;
+  --w-medium: 470;
+  --w-strong: 560;
+  --shadow: oklch(0% 0 0 / 0.45);
+  --dim: oklch(0% 0 0 / 0.62);
+  --dim-soft: oklch(0% 0 0 / 0.48);
+}
+
+/* ------------------------------------------------------------ Acogni, light */
+[data-mode="light"] {
+  color-scheme: light;
+  --color-paper: oklch(99.4% 0.005 230);
+  --color-paper-2: oklch(96.8% 0.005 230);
+  --color-paper-3: oklch(94.4% 0.005 229);
+  --color-rule: oklch(86% 0.006 245);
+  --color-rule-2: oklch(91.5% 0.005 240);
+  --color-rule-strong: oklch(62% 0.012 260);
+  --color-ink: oklch(28.2% 0.019 272);
+  --color-ink-2: oklch(42% 0.017 270);
+  --color-muted: oklch(47.5% 0.014 265);
+  --color-accent: oklch(43.6% 0.155 5);
+  --color-accent-hi: oklch(38.5% 0.14 5);
+  --color-accent-ink: oklch(99.4% 0.005 230);
+  --color-st-running: oklch(48% 0.15 255);
+  --color-st-await: oklch(50% 0.11 70);
+  --color-st-done: oklch(47% 0.1 160);
+  --color-st-blocked: oklch(51% 0.14 50);
+  --color-st-failed: oklch(50% 0.175 30);
+  --color-st-skipped: oklch(50% 0.02 255);
+  /* The avatars: the tint behind the initials, and the person's marks. */
+  --av-fill-l: 88%;
+  --av-fill-c: 0.06;
+  --av-solid-l: 54%;
+  --av-solid-c: 0.12;
+  --w-medium: 500;
+  --w-strong: 600;
+  --shadow: oklch(28.2% 0.019 272 / 0.16);
+  --dim: oklch(28.2% 0.019 272 / 0.45);
+  --dim-soft: oklch(28.2% 0.019 272 / 0.32);
+}
+
+/* ------------------------------------------------------------ Classic, dark
+ * The colours of the interface before 2.65, laid on the palette tokens:
+ * three grounds, three rules, three inks, the emerald accent and the old
+ * status colours. The muted ink, the failed and the skipped colours are a shade
+ * lighter, so they hold 4.5:1 on every surface. */
+[data-theme="classic"],
+[data-theme="classic"] [data-mode="dark"] {
+  color-scheme: dark;
+  --color-paper: oklch(17.7% 0.009 264);
+  --color-paper-2: oklch(20.4% 0.013 264);
+  --color-paper-3: oklch(23.4% 0.015 262);
+  --color-rule: oklch(25.9% 0.017 260);
+  --color-rule-2: oklch(22.5% 0.013 258);
+  --color-rule-strong: oklch(31.1% 0.02 257);
+  --color-ink: oklch(93% 0.005 258);
+  --color-ink-2: oklch(75.9% 0.019 261);
+  --color-muted: oklch(62% 0.023 262);
+  --color-accent: oklch(69.6% 0.149 162);
+  --color-accent-hi: oklch(75.7% 0.161 163);
+  --color-accent-ink: oklch(17.4% 0.028 165);
+  --color-st-running: oklch(62.8% 0.188 260);
+  --color-st-await: oklch(76.9% 0.165 70);
+  --color-st-done: oklch(69.6% 0.149 162);
+  --color-st-blocked: oklch(70.5% 0.187 48);
+  --color-st-failed: oklch(64.8% 0.208 25);
+  --color-st-skipped: oklch(62% 0.041 257);
+  /* The avatars: the tint behind the initials, and the person's marks. */
+  --av-fill-l: 40%;
+  --av-fill-c: 0.08;
+  --av-solid-l: 71%;
+  --av-solid-c: 0.11;
+  --w-medium: 470;
+  --w-strong: 560;
+  --shadow: oklch(0% 0 0 / 0.45);
+  --dim: oklch(0% 0 0 / 0.62);
+  --dim-soft: oklch(0% 0 0 / 0.48);
+}
+
+/* ------------------------------------------------------------ Classic, light */
+[data-theme="classic"][data-mode="light"],
+[data-theme="classic"] [data-mode="light"] {
+  color-scheme: light;
+  --color-paper: oklch(97.6% 0.003 265);
+  --color-paper-2: oklch(100% 0 0);
+  --color-paper-3: oklch(95.5% 0.006 265);
+  --color-rule: oklch(91.5% 0.009 258);
+  --color-rule-2: oklch(94.8% 0.006 255);
+  --color-rule-strong: oklch(85.3% 0.014 258);
+  --color-ink: oklch(20.8% 0.015 262);
+  --color-ink-2: oklch(38.9% 0.026 262);
+  --color-muted: oklch(50.8% 0.024 262);
+  --color-accent: oklch(48.6% 0.103 164);
+  --color-accent-hi: oklch(60.5% 0.13 163);
+  --color-accent-ink: oklch(98% 0.011 168);
+  --color-st-running: oklch(48.8% 0.217 264);
+  --color-st-await: oklch(47.6% 0.119 52);
+  --color-st-done: oklch(48.6% 0.103 164);
+  --color-st-blocked: oklch(47% 0.143 37);
+  --color-st-failed: oklch(50.5% 0.19 28);
+  --color-st-skipped: oklch(44.6% 0.037 257);
+  /* The avatars: the tint behind the initials, and the person's marks. */
+  --av-fill-l: 88%;
+  --av-fill-c: 0.06;
+  --av-solid-l: 54%;
+  --av-solid-c: 0.12;
+  --w-medium: 500;
+  --w-strong: 600;
+  --shadow: oklch(20.8% 0.015 262 / 0.16);
+  --dim: oklch(20.8% 0.015 262 / 0.45);
+  --dim-soft: oklch(20.8% 0.015 262 / 0.32);
+}
+
+/* ------------------------------------------------------------ the Palette daltonienne
+ * « Colour-blind friendly status colours » (Settings › Appearance), stamped on
+ * <html>. Awaiting, done, failed and blocked move apart for red-green colour
+ * blindness (deutan, protan): yellow, teal, rose and beige. Running and skipped,
+ * blue and grey, already stay apart; the Status icon keeps its shape. One set
+ * per Theme and mode, each a step more specific than the one it overrides, so
+ * a container that carries the other mode gets its own. */
+[data-status-palette="colour-blind"],
+[data-status-palette="colour-blind"] [data-mode="dark"] {
+  --color-st-await: oklch(85% 0.15 95);
+  --color-st-done: oklch(82% 0.09 190);
+  --color-st-failed: oklch(70% 0.16 5);
+  --color-st-blocked: oklch(80% 0.045 75);
+}
+
+[data-status-palette="colour-blind"][data-mode="light"],
+[data-status-palette="colour-blind"] [data-mode="light"] {
+  --color-st-await: oklch(52% 0.13 55);
+  --color-st-done: oklch(47% 0.08 188);
+  --color-st-failed: oklch(41% 0.13 22);
+  --color-st-blocked: oklch(49% 0.06 55);
+}
+
+[data-status-palette="colour-blind"][data-theme="classic"],
+[data-status-palette="colour-blind"][data-theme="classic"] [data-mode="dark"] {
+  --color-st-await: oklch(86.5% 0.177 90);
+  --color-st-done: oklch(91% 0.09 180);
+  --color-st-failed: oklch(71% 0.19 13);
+  --color-st-blocked: oklch(82% 0.04 80);
+}
+
+[data-status-palette="colour-blind"][data-theme="classic"][data-mode="light"],
+[data-status-palette="colour-blind"][data-theme="classic"] [data-mode="light"] {
+  --color-st-await: oklch(49% 0.14 45);
+  --color-st-done: oklch(46% 0.08 185);
+  --color-st-failed: oklch(39% 0.13 25);
+  --color-st-blocked: oklch(46% 0.06 55);
+}
+
+/* ------------------------------------------------------------ roles */
+:root,
+[data-theme],
+[data-mode] {
+  --surface-0: var(--color-paper); /* editor, canvas, dialogs, inputs */
+  --surface-1: var(--color-paper-2); /* side bars, panels */
+  --surface-2: var(--color-paper-3); /* top bar, popovers, menus */
+  --hover: color-mix(in oklch, var(--color-ink) 6%, transparent);
+  --active: color-mix(in oklch, var(--color-ink) 10%, transparent);
+  --selected: color-mix(in oklch, var(--color-accent) 14%, transparent);
+  --selected-edge: var(--color-accent);
+  --line: var(--color-rule);
+  --line-soft: var(--color-rule-2);
+  --line-strong: var(--color-rule-strong);
+  --text: var(--color-ink);
+  --text-2: var(--color-ink-2);
+  --text-3: var(--color-muted);
+  /* The accent: the one primary action of a view, the selection and "on" states. */
+  --primary: var(--color-accent);
+  --primary-hi: var(--color-accent-hi);
+  --primary-ink: var(--color-accent-ink);
+  --focus-ring: color-mix(in oklch, var(--color-st-running) 70%, transparent);
+  --scrim: color-mix(in oklch, var(--color-paper) 55%, transparent);
+}

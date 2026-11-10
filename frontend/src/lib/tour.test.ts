@@ -21,13 +21,15 @@ import {
   stepAsides,
   stepReadOnly,
   stepSoft,
-  type TourAppState,
-  type TourDef,
-  type TourObservation,
   type TourRun,
-  type TourStep,
-  type TourTidyUp,
 } from "./tour";
+import type { TourTidyUp } from "./tourPanels";
+import type {
+  TourAppState,
+  TourDef,
+  TourObservation,
+  TourStep,
+} from "./tourDef";
 
 const EMPTY_APP: TourAppState = {
   pipelineId: null,
@@ -424,13 +426,13 @@ describe("read-only areas and side bubbles", () => {
   });
 });
 
-describe("replaying the previous step (PDO-10, #1029)", () => {
+describe("replaying the previous step (Rejeu d'étape)", () => {
   /** Run a tour up to step `index`, as if the user had walked it. */
   function at(tour: TourDef, index: number, o: TourObservation): TourRun {
     return { ...startTour(tour, o), index, phase: "running" };
   }
 
-  it("refuses on step 1 — there is nothing before it", () => {
+  it("refuses on step 1: there is nothing before it", () => {
     const tour = tourOf(opensNext("a", "#opened"), step("b"));
     const o = obs(["#a", "#opened"]);
     const run = startTour(tour, o);
@@ -448,7 +450,7 @@ describe("replaying the previous step (PDO-10, #1029)", () => {
     }
   });
 
-  it("replays a satisfied step: shown again, waits for Next, never fails — even with its target gone", () => {
+  it("replays a satisfied step: shown again, waits for Next, never fails, even with its target gone", () => {
     // « Create it » after the dialog closed: the condition holds, the target is gone.
     const tour = tourOf(step("create", { done: (o) => o.present("#editor") }), step("b"));
     const o = obs(["#editor", "#b"]);
@@ -489,8 +491,8 @@ describe("replaying the previous step (PDO-10, #1029)", () => {
   });
 
   it("a step flagged replayNeedsTarget is replayable only with its target on screen, condition or not", () => {
-    // « Name the pipeline »: its condition holds forever once the pipeline exists,
-    // but its field left with the dialog.
+    // « Name the pipeline »: its condition holds for good once the pipeline
+    // exists, but its field left with the dialog.
     const tour = tourOf(
       step("name", { target: () => ["#field"], done: (o) => o.present("#editor"), replayNeedsTarget: true }),
       step("b"),
@@ -514,7 +516,7 @@ describe("replaying the previous step (PDO-10, #1029)", () => {
     expect(canGoBack(tour, at(tour, 1, obs(["#x", "#y"])), obs(["#x", "#y"]))).toBe(true);
   });
 
-  it("refuses a step the app is refusing right now — Previous never lands on a stop card", () => {
+  it("refuses a step the app is refusing right now: Previous never lands on a stop card", () => {
     const tour = tourOf(
       step("launch", { refused: (o) => o.text("#error"), done: (o) => o.present("#run") }),
       step("b"),
@@ -534,7 +536,7 @@ describe("replaying the previous step (PDO-10, #1029)", () => {
     expect(currentStep(tour, run)?.id).toBe("optional");
   });
 
-  it("Previous then Next comes back to the starting step", () => {
+  it("Previous then Next comes back to the starting step, which plays by its normal rules", () => {
     const tour = tourOf(
       step("name", { done: (o) => o.present("#named") }),
       step("add", { done: (o) => o.present("#node") }),
@@ -547,7 +549,6 @@ describe("replaying the previous step (PDO-10, #1029)", () => {
     run = confirmStep(tour, run, o);
     expect(run.index).toBe(1);
     expect(currentStep(tour, run)?.id).toBe("add");
-    // Back on a live step: its own gesture moves the tour on, by the normal rules.
     expect(needsConfirm(tour, run, o)).toBe(false);
     run = observeTour(tour, run, obs(["#named", "#add", "#node"]), 100);
     expect(run.index).toBe(2);

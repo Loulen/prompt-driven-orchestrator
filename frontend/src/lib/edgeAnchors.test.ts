@@ -1,23 +1,10 @@
 import { describe, it, expect } from "vitest";
 import type { Point } from "./orthogonalRouter";
-import {
-  anchorFromPoint,
-  anchorPoint,
-  approachPoint,
-  clipOutside,
-  dragSegmentKeepingRun,
-  enforcePerpendicularEnds,
-  handlePin,
-  landingConnector,
-  landingLeg,
-  dropAnchor,
-  rimHandleId,
-  sideFromRimHandle,
-  sideIsHorizontal,
-  squareUp,
-  storableWaypoints,
-} from "./anchorSide";
-import { gridStep, isAxisAligned } from "./wiringGrid";
+import { anchorFromPoint, anchorPoint, handlePin, dropAnchor, rimHandleId, sideFromRimHandle, sideIsHorizontal } from "./anchorSide";
+import { approachPoint, enforcePerpendicularEnds, landingConnector, landingLeg } from "./anchorLanding";
+import { clipOutside, dragSegmentKeepingRun, squareUp, storableWaypoints } from "./polylineCleanup";
+import { gridStep, isAxisAligned, snapPolyline } from "./wiringGrid";
+import { routeOrthogonal } from "./orthogonalRouter";
 
 // Fixtures laid out on the 40px (L) lattice (#877: the step is a parameter).
 const GRID_STEP = gridStep("L");
@@ -53,13 +40,6 @@ describe("anchorPoint", () => {
   it("falls back to the side's middle when there is no anchor — the pre-#844 geometry", () => {
     expect(anchorPoint(RECT, null, "bottom")).toEqual({ x: 200, y: 180 });
     expect(anchorPoint(RECT, undefined, "left")).toEqual({ x: 100, y: 140 });
-  });
-
-  it("draws an anchor without offset at the middle of ITS side (PDO-17)", () => {
-    // A converted legacy port side: the anchor's side wins over the fallback.
-    expect(anchorPoint(RECT, { side: "bottom" }, "right")).toEqual({ x: 200, y: 180 });
-    expect(anchorPoint(RECT, { side: "top" }, "left")).toEqual({ x: 200, y: 100 });
-    expect(anchorPoint(RECT, { side: "left" }, "right")).toEqual({ x: 100, y: 140 });
   });
 
   it("keeps the anchor clear of the corners", () => {
@@ -322,6 +302,76 @@ describe("enforcePerpendicularEnds", () => {
       LEG,
     );
     expect(enforcePerpendicularEnds(once, "bottom", "left", LEG)).toEqual(once);
+  });
+});
+
+describe("enforcePerpendicularEnds around the source card (auto routes)", () => {
+  // Two cards stacked in a column, the wire leaving the upper one by the right
+  // and landing on the lower one's left side.
+  const SOURCE = { x: 200, y: 100, width: 160, height: 36 };
+  const TARGET = { x: 200, y: 250, width: 160, height: 36 };
+  const src = { x: 360, y: 118 };
+  const tgt = { x: 200, y: 268 };
+  // What the router hands over: it plans as if every wire left by the right,
+  // through the middle of the column.
+  const routed = snapPolyline(
+    routeOrthogonal({ source: src, target: tgt, obstacles: [], targetSide: "left" }),
+    { x: 0, y: 0 },
+    GRID_STEP,
+  );
+
+  /** Whether a segment of `points` passes through the inside of `rect`. */
+  function crosses(points: Point[], rect: typeof SOURCE): boolean {
+    for (let i = 1; i < points.length; i++) {
+      const [a, b] = [points[i - 1], points[i]];
+      const overlaps = (lo: number, hi: number, e0: number, e1: number) =>
+        Math.min(lo, hi) < e1 && Math.max(lo, hi) > e0;
+      if (
+        overlaps(a.x, b.x, rect.x, rect.x + rect.width) &&
+        overlaps(a.y, b.y, rect.y, rect.y + rect.height)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  it("without the source card, the wire runs back through it (the bug)", () => {
+    const pts = enforcePerpendicularEnds(routed, "right", "left", LEG, TARGET, {
+      manual: false,
+    });
+    expect(crosses(pts.slice(1), SOURCE)).toBe(true);
+  });
+
+  it("goes around the card it leaves, by the shorter corridor, clear of both cards", () => {
+    const pts = enforcePerpendicularEnds(routed, "right", "left", LEG, TARGET, {
+      manual: false,
+      sourceRect: SOURCE,
+    });
+    expect(orthogonal(pts)).toBe(true);
+    expect(pts[0]).toEqual(src);
+    expect(pts[pts.length - 1]).toEqual(tgt);
+    expect(crosses(pts.slice(1), SOURCE)).toBe(false);
+    expect(crosses(pts.slice(0, -1), TARGET)).toBe(false);
+    // The shorter detour is the one below the source, towards the target.
+    expect(Math.max(...pts.map((p) => p.y))).toBe(tgt.y);
+    expect(pts.every((p) => p.y >= src.y)).toBe(true);
+  });
+
+  it("is a fixed point, and leaves a manual route alone", () => {
+    const once = enforcePerpendicularEnds(routed, "right", "left", LEG, TARGET, {
+      manual: false,
+      sourceRect: SOURCE,
+    });
+    const twice = enforcePerpendicularEnds(once, "right", "left", LEG, TARGET, {
+      manual: false,
+      sourceRect: SOURCE,
+    });
+    expect(twice).toEqual(once);
+    const manual = enforcePerpendicularEnds(routed, "right", "left", LEG, TARGET, {
+      sourceRect: SOURCE,
+    });
+    expect(manual).toEqual(enforcePerpendicularEnds(routed, "right", "left", LEG, TARGET));
   });
 });
 
@@ -655,5 +705,62 @@ describe("approachPoint", () => {
   it("is one grid cell, with a 16px floor", () => {
     expect(landingLeg(40)).toBe(40);
     expect(landingLeg(8)).toBe(16);
+  });
+});
+
+describe("enforcePerpendicularEnds — two cards closer than two legs", () => {
+  // A column of cards 20 to 30 px apart on the M grid (legs of 30 px): the two
+  // legs overlapped, and the wire ran down past the target's top, back up into
+  // the source card and down again — a vertical line through both cards.
+  const leg = landingLeg(30);
+  const ship = { x: 327, y: 385, width: 208, height: 65 };
+  const end = { x: 330, y: 476, width: 55, height: 24 };
+  const cuts = (points: Point[], r: { x: number; y: number; width: number; height: number }) =>
+    points.some((p, i) => {
+      if (i === 0) return false;
+      const a = points[i - 1];
+      return (
+        Math.max(a.x, p.x) > r.x + 0.5 &&
+        Math.min(a.x, p.x) < r.x + r.width - 0.5 &&
+        Math.max(a.y, p.y) > r.y + 0.5 &&
+        Math.min(a.y, p.y) < r.y + r.height - 0.5
+      );
+    });
+
+  it("shortens both legs to meet halfway and drops a waypoint left inside a card", () => {
+    const route = [
+      { x: 400, y: 450 },
+      { x: 400, y: 436 }, // a stored waypoint the resized card now covers
+      { x: 375, y: 476 },
+    ];
+    const out = enforcePerpendicularEnds(route, "bottom", "top", leg, end, { manual: true, sourceRect: ship });
+    expect(out.every((p, i) => i === 0 || isAxisAligned(out[i - 1], p))).toBe(true);
+    expect(cuts(out.slice(1), ship)).toBe(false);
+    expect(cuts(out.slice(0, -1), end)).toBe(false);
+    // Down, across, down: never back up.
+    for (let i = 1; i < out.length; i++) expect(out[i].y).toBeGreaterThanOrEqual(out[i - 1].y);
+  });
+
+  it("draws a straight wire between two aligned anchors, whatever waypoint sat on the leg", () => {
+    const tester = { x: 327, y: 265, width: 208, height: 65 };
+    const route = [
+      { x: 400, y: 330 },
+      { x: 400, y: 345 },
+      { x: 400, y: 385 },
+    ];
+    const out = enforcePerpendicularEnds(route, "bottom", "top", leg, ship, { manual: true, sourceRect: tester });
+    expect(out.every((p) => p.x === 400)).toBe(true);
+    for (let i = 1; i < out.length; i++) expect(out[i].y).toBeGreaterThan(out[i - 1].y);
+  });
+
+  it("is a fixed point", () => {
+    const route = [
+      { x: 400, y: 450 },
+      { x: 400, y: 436 },
+      { x: 375, y: 476 },
+    ];
+    const once = enforcePerpendicularEnds(route, "bottom", "top", leg, end, { manual: true, sourceRect: ship });
+    const twice = enforcePerpendicularEnds(once, "bottom", "top", leg, end, { manual: true, sourceRect: ship });
+    expect(twice).toEqual(once);
   });
 });

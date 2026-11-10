@@ -1,0 +1,1671 @@
+//! Layer 3a integration tests for the Trigger scheduler (#160).
+//!
+//! Boots a real daemon, creates Triggers over HTTP, and drives the scheduler a
+//! tick at a time via the test seam `DaemonHandle::run_trigger_tick`. Asserts on
+//! observable state through the HTTP API (`GET /runs`, `GET /triggers`,
+//! `GET /triggers/<id>/fires`) rather than internals.
+//!
+//! These exercise the effectful path (`create_run_inner`) that unit tests skip.
+//! tmux is substituted with `sleep` so the box doesn't need claude; the run is
+//! recorded (with `triggered_by`) before any session spawn, so assertions hold
+//! whether or not tmux is present.
+
+use crate::common::{lock_guard_timeout_ms, TestDaemon};
+
+const PIPELINE_NAME: &str = "auditor";
+const PIPELINE_YAML: &str = r#"name: auditor
+version: "1.0"
+prompt_required: false
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: solo
+    name: solo
+    type: agent
+    isolated_worktree: false
+    inputs:
+      - name: in
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: solo, port: in }
+"#;
+
+fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
+    let pipelines_dir = repo.join(".pdo").join("pipelines");
+    std::fs::create_dir_all(&pipelines_dir)?;
+    std::fs::write(
+        pipelines_dir.join(format!("{PIPELINE_NAME}.yaml")),
+        PIPELINE_YAML,
+    )?;
+    git_init_with_commit(repo)?;
+    Ok(())
+}
+
+fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
+    let run = |args: &[&str]| -> anyhow::Result<()> {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()?;
+        if !out.status.success() {
+            anyhow::bail!(
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        Ok(())
+    };
+    run(&["init", "-q", "-b", "main"])?;
+    run(&["config", "user.email", "test@example.com"])?;
+    run(&["config", "user.name", "Test"])?;
+    run(&["config", "commit.gpgsign", "false"])?;
+    std::fs::write(repo.join(".gitignore"), ".pdo/runs/\n")?;
+    run(&["add", "."])?;
+    run(&["commit", "-q", "-m", "init"])?;
+    Ok(())
+}
+
+async fn create_trigger(daemon: &TestDaemon, name: &str, cron: &str) -> serde_json::Value {
+    let body = serde_json::json!({
+        "name": name,
+        "pipeline_id": PIPELINE_NAME,
+        "cron": cron,
+        "input_template": "audit the codebase",
+        "target_repo": daemon.target_repo(),
+    });
+    let resp = reqwest::Client::new()
+        .post(format!("{}/triggers", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201, "POST /triggers should succeed");
+    resp.json().await.unwrap()
+}
+
+/// Create a Trigger with a guard command (and no static input template, so the
+/// guard's stdout is the only input source).
+async fn create_trigger_with_guard(
+    daemon: &TestDaemon,
+    name: &str,
+    cron: &str,
+    guard_command: &str,
+) -> serde_json::Value {
+    let body = serde_json::json!({
+        "name": name,
+        "pipeline_id": PIPELINE_NAME,
+        "cron": cron,
+        "guard_command": guard_command,
+        "target_repo": daemon.target_repo(),
+    });
+    let resp = reqwest::Client::new()
+        .post(format!("{}/triggers", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        201,
+        "POST /triggers (guarded) should succeed"
+    );
+    resp.json().await.unwrap()
+}
+
+/// Pin the guard timeout in this daemon's **stored** settings.
+///
+/// `guard_timeout_with` ranks `stored → env → default` (#129, ADR-0015), so this
+/// outranks the process-wide `PDO_GUARD_TIMEOUT_MS` seam that other tests in
+/// this binary set — and unlike that seam it is per-daemon state, so it cannot
+/// leak across parallel tests.
+async fn pin_guard_timeout_secs(daemon: &TestDaemon, secs: u64) {
+    let resp = reqwest::Client::new()
+        .put(format!("{}/settings", daemon.url()))
+        .json(&serde_json::json!({ "guard_timeout_secs": secs }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "PUT /settings should accept an in-range guard_timeout_secs"
+    );
+}
+
+/// Create a Trigger with an explicit overlap policy and optional concurrency cap
+/// (#239). `max_concurrent: None` posts no cap (unbounded under `allow`).
+async fn create_trigger_with_overlap(
+    daemon: &TestDaemon,
+    name: &str,
+    cron: &str,
+    overlap_policy: &str,
+    max_concurrent: Option<i64>,
+) -> reqwest::Response {
+    let mut body = serde_json::json!({
+        "name": name,
+        "pipeline_id": PIPELINE_NAME,
+        "cron": cron,
+        "input_template": "audit the codebase",
+        "overlap_policy": overlap_policy,
+        "target_repo": daemon.target_repo(),
+    });
+    if let Some(m) = max_concurrent {
+        body["max_concurrent"] = serde_json::json!(m);
+    }
+    reqwest::Client::new()
+        .post(format!("{}/triggers", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+}
+
+async fn list_runs(daemon: &TestDaemon) -> Vec<serde_json::Value> {
+    reqwest::Client::new()
+        .get(format!("{}/runs", daemon.url()))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+async fn list_fires(daemon: &TestDaemon, trigger_id: &str) -> Vec<serde_json::Value> {
+    reqwest::Client::new()
+        .get(format!("{}/triggers/{}/fires", daemon.url(), trigger_id))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+async fn get_trigger(daemon: &TestDaemon, trigger_id: &str) -> serde_json::Value {
+    let triggers: Vec<serde_json::Value> = reqwest::Client::new()
+        .get(format!("{}/triggers", daemon.url()))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    triggers
+        .into_iter()
+        .find(|t| t["id"].as_str() == Some(trigger_id))
+        .expect("trigger should exist")
+}
+
+#[tokio::test]
+async fn due_trigger_creates_a_run_with_triggered_by_provenance() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let trigger = create_trigger(&daemon, "nightly audit", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    let runs = list_runs(&daemon).await;
+    assert_eq!(runs.len(), 1, "expected exactly one triggered run");
+    assert_eq!(
+        runs[0]["triggered_by"].as_str(),
+        Some(trigger_id.as_str()),
+        "the run must carry triggered_by provenance"
+    );
+
+    let fires: Vec<serde_json::Value> = reqwest::Client::new()
+        .get(format!("{}/triggers/{}/fires", daemon.url(), trigger_id))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(fires.len(), 1);
+    assert_eq!(fires[0]["outcome"].as_str(), Some("fired"));
+    assert_eq!(
+        fires[0]["run_id"].as_str(),
+        runs[0]["run_id"].as_str(),
+        "fire audit row must link the created run"
+    );
+
+    cleanup_runs(&daemon).await;
+}
+
+#[tokio::test]
+async fn overlap_skip_while_previous_run_is_live() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let trigger = create_trigger(&daemon, "overlapping", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+    assert_eq!(list_runs(&daemon).await.len(), 1);
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+    let runs = list_runs(&daemon).await;
+    assert_eq!(
+        runs.len(),
+        1,
+        "overlap policy must skip a second concurrent fire"
+    );
+
+    let fires: Vec<serde_json::Value> = reqwest::Client::new()
+        .get(format!("{}/triggers/{}/fires", daemon.url(), trigger_id))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    // Newest first: a skipped-overlap on top of the fired row.
+    assert_eq!(fires[0]["outcome"].as_str(), Some("skipped-overlap"));
+    assert_eq!(fires[1]["outcome"].as_str(), Some("fired"));
+
+    cleanup_runs(&daemon).await;
+}
+
+#[tokio::test]
+async fn bounded_allow_fires_up_to_cap_then_skips() {
+    // #239: an `allow` Trigger with max_concurrent=2 fires while fewer than 2 of
+    // its own Runs are live, then skips once the cap is reached. Each fire leaves
+    // a live Run (the seed pipeline's `solo` node stays running), so the live
+    // count climbs 0 → 1 → 2 and the third tick skips.
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let resp = create_trigger_with_overlap(&daemon, "bounded", "* * * * *", "allow", Some(2)).await;
+    assert_eq!(
+        resp.status(),
+        201,
+        "POST /triggers (bounded allow) should succeed"
+    );
+    let trigger: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(
+        trigger["max_concurrent"].as_i64(),
+        Some(2),
+        "the cap must round-trip on create"
+    );
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+    assert_eq!(list_runs(&daemon).await.len(), 1, "first fire (0<2)");
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+    assert_eq!(list_runs(&daemon).await.len(), 2, "second fire (1<2)");
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+    assert_eq!(
+        list_runs(&daemon).await.len(),
+        2,
+        "third tick must skip at the cap (2>=2)"
+    );
+
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires[0]["outcome"].as_str(), Some("skipped-overlap"));
+    assert!(
+        fires[0]["reason"].as_str().unwrap_or("").contains("2/2"),
+        "the skip reason must carry the cap, got {:?}",
+        fires[0]["reason"]
+    );
+
+    cleanup_runs(&daemon).await;
+}
+
+#[tokio::test]
+async fn create_rejects_zero_max_concurrent() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let resp = create_trigger_with_overlap(&daemon, "zero", "* * * * *", "allow", Some(0)).await;
+    assert_eq!(resp.status(), 400, "max_concurrent=0 must be rejected");
+    let err: serde_json::Value = resp.json().await.unwrap();
+    assert!(err["error"].as_str().unwrap().contains("max_concurrent"));
+}
+
+#[tokio::test]
+async fn missed_slots_are_forward_only_no_backfill() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    // Hourly trigger; force it long-overdue (as if the daemon were off for days).
+    let trigger = create_trigger(&daemon, "hourly", "0 * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    assert_eq!(
+        list_runs(&daemon).await.len(),
+        1,
+        "missed slots must not be backfilled into a flood of runs"
+    );
+
+    let triggers: Vec<serde_json::Value> = reqwest::Client::new()
+        .get(format!("{}/triggers", daemon.url()))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let next = triggers
+        .iter()
+        .find(|t| t["id"].as_str() == Some(trigger_id.as_str()))
+        .and_then(|t| t["next_fire_at"].as_str())
+        .expect("trigger should have a recomputed next fire");
+    assert!(
+        next > "2020-01-01T00:00:00.000Z",
+        "next fire must be forward of the forced-past slot; got {next}"
+    );
+
+    cleanup_runs(&daemon).await;
+}
+
+/// The resolved Run input is recorded in the `run_started` event payload; this
+/// reads it back so a test can assert what input a guarded fire produced.
+async fn run_started_input(daemon: &TestDaemon, run_id: &str) -> String {
+    let events: Vec<serde_json::Value> = reqwest::Client::new()
+        .get(format!("{}/runs/{}/events", daemon.url(), run_id))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    events
+        .iter()
+        .find(|e| e["kind"].as_str() == Some("run_started"))
+        .and_then(|e| e["payload"]["input"].as_str())
+        .expect("run_started event with an input")
+        .to_string()
+}
+
+#[tokio::test]
+async fn guard_exit_zero_fires_with_stdout_as_input() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let trigger =
+        create_trigger_with_guard(&daemon, "fixer", "* * * * *", "printf 'issue-42'").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    let runs = list_runs(&daemon).await;
+    assert_eq!(runs.len(), 1, "guard exit 0 must fire a Run");
+    let run_id = runs[0]["run_id"].as_str().unwrap();
+    assert_eq!(
+        run_started_input(&daemon, run_id).await,
+        "issue-42",
+        "the guard stdout must be the Run input"
+    );
+
+    // Don't assert on `fires[0]`: the list is newest-first and the daemon's own
+    // 30 s tick can legitimately add a NEWER `skipped-overlap` row (the Run above
+    // is still live), shifting `fired` off index 0.
+    let fires = list_fires(&daemon, &trigger_id).await;
+    let fired: Vec<_> = fires
+        .iter()
+        .filter(|f| f["outcome"].as_str() == Some("fired"))
+        .collect();
+    assert_eq!(
+        fired.len(),
+        1,
+        "guard exit 0 must produce exactly one `fired`, got: {fires:?}"
+    );
+    assert_eq!(fired[0]["run_id"].as_str(), Some(run_id));
+
+    cleanup_runs(&daemon).await;
+}
+
+#[tokio::test]
+async fn concurrent_ticks_fire_a_due_trigger_exactly_once() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    // The guard sleeps long enough that a second tick starting mid-guard still
+    // reads the trigger as due (next_fire is recomputed only after the guard
+    // returns) and would double-fire it. The yearly cron keeps the recomputed
+    // next fire far away, so a second fire can never be legitimate.
+    //
+    // Don't rely on the `PDO_GUARD_TIMEOUT_MS` env seam here: a sibling test sets
+    // it to 200 ms process-wide, and `sh -c` overhead plus this 150 ms sleep
+    // crossed it under load. Pin the timeout in *this daemon's* store instead —
+    // `guard_timeout_with` ranks `stored → env → default` (ADR-0015).
+    pin_guard_timeout_secs(&daemon, 60).await;
+
+    let trigger = create_trigger_with_guard(
+        &daemon,
+        "racer",
+        "0 0 1 1 *",
+        "sleep 0.15; printf 'issue-7'",
+    )
+    .await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    daemon.force_trigger_due(&trigger_id).await;
+    tokio::join!(daemon.run_trigger_tick(), daemon.run_trigger_tick());
+
+    let runs = list_runs(&daemon).await;
+    assert_eq!(runs.len(), 1, "concurrent ticks must not double-fire");
+
+    let fired = list_fires(&daemon, &trigger_id)
+        .await
+        .iter()
+        .filter(|f| f["outcome"].as_str() == Some("fired"))
+        .count();
+    assert_eq!(fired, 1, "exactly one 'fired' record");
+
+    cleanup_runs(&daemon).await;
+}
+
+#[tokio::test]
+async fn guard_exit_nonzero_skips_without_firing() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    // Guard exits non-zero and prints to BOTH streams (the grep-style "no work"
+    // diagnostic): no Run is created, and #244 now captures stdout/stderr/exit
+    // code onto the fire-history row so the user can see *why* it skipped.
+    let trigger = create_trigger_with_guard(
+        &daemon,
+        "no-work",
+        "* * * * *",
+        "echo 'why I skipped' >&2; printf 'detail'; exit 3",
+    )
+    .await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    assert!(
+        list_runs(&daemon).await.is_empty(),
+        "a non-zero guard must not fire a Run"
+    );
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires[0]["outcome"].as_str(), Some("guard-exit-nonzero"));
+
+    // #244 acceptance gate: the three guard fields surface on `/fires`.
+    assert_eq!(
+        fires[0]["guard_stdout"].as_str(),
+        Some("detail"),
+        "guard stdout must be captured"
+    );
+    assert!(
+        fires[0]["guard_stderr"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("why I skipped"),
+        "guard stderr must be captured, got {:?}",
+        fires[0]["guard_stderr"]
+    );
+    assert_eq!(
+        fires[0]["guard_exit_code"].as_i64(),
+        Some(3),
+        "guard exit code must be captured"
+    );
+}
+
+#[tokio::test]
+async fn guard_timeout_records_guard_error_and_skips() {
+    // Shrink the guard timeout so a hung guard times out fast in the test. The
+    // guard also excludes `guard_dry_run_timeout.rs`, which sets the same var.
+    let _timeout = lock_guard_timeout_ms("200");
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    // A guard that never returns: the hard timeout classifies it as an error,
+    // records `guard-error`, and no Run is created.
+    let trigger = create_trigger_with_guard(&daemon, "hung-guard", "* * * * *", "sleep 30").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    assert!(
+        list_runs(&daemon).await.is_empty(),
+        "a timed-out guard must not fire a Run"
+    );
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(
+        fires[0]["outcome"].as_str(),
+        Some("guard-error"),
+        "a guard timeout must record a guard-error outcome"
+    );
+    // D2 negative scope (#244): a guard-error row carries no captured streams —
+    // its diagnostic lives in `reason`. The three guard fields stay absent/null.
+    assert!(
+        fires[0]["guard_stdout"].is_null(),
+        "guard-error must not capture stdout"
+    );
+    assert!(
+        fires[0]["guard_stderr"].is_null(),
+        "guard-error must not capture stderr"
+    );
+    assert!(
+        fires[0]["guard_exit_code"].is_null(),
+        "guard-error must not capture an exit code"
+    );
+}
+
+#[tokio::test]
+async fn dangling_pipeline_reference_yields_error_outcome_and_stops_firing() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let trigger = create_trigger(&daemon, "audit", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    std::fs::remove_file(
+        daemon
+            .repo_root()
+            .join(".pdo")
+            .join("pipelines")
+            .join(format!("{PIPELINE_NAME}.yaml")),
+    )
+    .unwrap();
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    assert!(
+        list_runs(&daemon).await.is_empty(),
+        "a dangling pipeline must not fire a Run"
+    );
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(
+        fires[0]["outcome"].as_str(),
+        Some("error"),
+        "a dangling pipeline must record an error outcome"
+    );
+    // The Trigger stops firing: next_fire is cleared, last_outcome shows error.
+    let t = get_trigger(&daemon, &trigger_id).await;
+    assert!(
+        t["next_fire_at"].is_null(),
+        "a dangling-ref Trigger must stop firing (next_fire cleared)"
+    );
+    assert_eq!(t["last_outcome"].as_str(), Some("error"));
+}
+
+#[tokio::test]
+async fn dangling_target_repo_reference_yields_error_outcome() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let body = serde_json::json!({
+        "name": "ghost-repo",
+        "pipeline_id": PIPELINE_NAME,
+        "cron": "* * * * *",
+        "input_template": "audit",
+        "target_repo": daemon.repo_root().to_string_lossy(),
+    });
+    let created: serde_json::Value = reqwest::Client::new()
+        .post(format!("{}/triggers", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let trigger_id = created["id"].as_str().unwrap().to_string();
+
+    std::fs::remove_dir_all(daemon.repo_root().join(".git")).unwrap();
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    assert!(
+        list_runs(&daemon).await.is_empty(),
+        "a dangling target repo must not fire a Run"
+    );
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires[0]["outcome"].as_str(), Some("error"));
+}
+
+/// #470 — why the refusal lives in `trigger_dangling_reason` and not at
+/// `create_run_inner`: the guard runs *before* the creation chokepoint, so a
+/// Trigger with an unnamed repo would execute its `sh -c` (real side effects:
+/// `git pull`, `gh issue list`) in the daemon's own working directory, and emit
+/// one red fire row per tick forever. Refusing upstream buys no guard execution,
+/// a dormant Trigger, and a 409 on "Run now".
+#[tokio::test]
+async fn trigger_with_null_target_repo_goes_dormant_without_running_its_guard() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    // A guard whose ONLY job is to leave a witness file behind. Seeded under the
+    // API because `POST /triggers` refuses a null repo now — that is the point.
+    let witness = daemon.repo_root().join("guard-side-effect.txt");
+    let trigger_id = daemon
+        .seed_legacy_trigger_without_target_repo(
+            "legacy-null-repo",
+            PIPELINE_NAME,
+            "* * * * *",
+            Some("touch guard-side-effect.txt"),
+        )
+        .await;
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    assert!(
+        list_runs(&daemon).await.is_empty(),
+        "a Trigger with no target repo must not create a Run"
+    );
+
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(
+        fires[0]["outcome"].as_str(),
+        Some("error"),
+        "the refusal must be visible in the fire history: {:?}",
+        fires[0]
+    );
+    assert!(
+        fires[0]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("target_repo"),
+        "the reason must name the field verbatim: {:?}",
+        fires[0]
+    );
+
+    // The distinguishing assertion: refusing at the chokepoint would have let the
+    // guard run first. Nothing executed in the daemon's own repository.
+    assert!(
+        !witness.exists(),
+        "the guard command must NOT have executed — no side effect in the unnamed repo"
+    );
+
+    // Dormant, not one red row per tick forever.
+    let trigger = get_trigger(&daemon, &trigger_id).await;
+    assert!(
+        trigger["next_fire_at"].is_null(),
+        "the Dangling transition must NULL next_fire_at: {trigger:?}"
+    );
+
+    // "Run now" answers 409 with a reason, instead of a 200 {fired:false} the
+    // operator would have to go dig out of the fire history.
+    let resp = reqwest::Client::new()
+        .post(format!("{}/triggers/{}/fire", daemon.url(), trigger_id))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        409,
+        "Run now on a dangling Trigger must be a loud 409"
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("target_repo"),
+        "the 409 body must carry the reason: {body:?}"
+    );
+    assert!(
+        !witness.exists(),
+        "Run now must not have executed the guard either"
+    );
+}
+
+#[tokio::test]
+async fn create_trigger_rejects_prompt_required_pipeline_without_input() {
+    let daemon = TestDaemon::spawn(seed_prompt_required).await.unwrap();
+    let body = serde_json::json!({
+        "name": "bad",
+        "pipeline_id": "needs-prompt",
+        "cron": "* * * * *",
+        "target_repo": daemon.target_repo(),
+    });
+    let resp = reqwest::Client::new()
+        .post(format!("{}/triggers", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400, "must reject at creation");
+    let err: serde_json::Value = resp.json().await.unwrap();
+    assert!(err["error"].as_str().unwrap().contains("requires a prompt"));
+}
+
+#[tokio::test]
+async fn create_trigger_rejects_invalid_cron() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let body = serde_json::json!({
+        "name": "bad cron",
+        "pipeline_id": PIPELINE_NAME,
+        "cron": "not a cron expr",
+        "input_template": "x",
+        "target_repo": daemon.target_repo(),
+    });
+    let resp = reqwest::Client::new()
+        .post(format!("{}/triggers", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+async fn patch_trigger(
+    daemon: &TestDaemon,
+    trigger_id: &str,
+    body: serde_json::Value,
+) -> reqwest::Response {
+    reqwest::Client::new()
+        .patch(format!("{}/triggers/{}", daemon.url(), trigger_id))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+}
+
+async fn get_trigger_one(daemon: &TestDaemon, trigger_id: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .get(format!("{}/triggers/{}", daemon.url(), trigger_id))
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn get_single_trigger_returns_its_config() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let trigger = create_trigger(&daemon, "audit", "0 9 * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    let resp = get_trigger_one(&daemon, &trigger_id).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["id"].as_str(), Some(trigger_id.as_str()));
+    assert_eq!(body["name"].as_str(), Some("audit"));
+    assert_eq!(body["cron"].as_str(), Some("0 9 * * *"));
+}
+
+#[tokio::test]
+async fn get_single_trigger_404_when_missing() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let resp = get_trigger_one(&daemon, "trg-nope").await;
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn patch_disable_then_enable_pauses_and_resumes_firing() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let trigger = create_trigger(&daemon, "pausable", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    let resp = patch_trigger(
+        &daemon,
+        &trigger_id,
+        serde_json::json!({ "enabled": false }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(get_trigger(&daemon, &trigger_id).await["enabled"], false);
+
+    // A disabled, forced-due Trigger does not fire.
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+    assert!(
+        list_runs(&daemon).await.is_empty(),
+        "a disabled Trigger must not fire"
+    );
+
+    let resp = patch_trigger(&daemon, &trigger_id, serde_json::json!({ "enabled": true })).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(get_trigger(&daemon, &trigger_id).await["enabled"], true);
+}
+
+/// #372, decision B (primary end-to-end proof): re-enabling a Trigger recomputes
+/// `next_fire_at` FORWARD from now and skips the slot missed while disabled — no
+/// hidden catch-up fire. A daily cron keeps the recomputed slot comfortably in
+/// the future so the immediate tick is deterministically not-due.
+#[tokio::test]
+async fn reenable_recomputes_next_fire_forward_no_catchup() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let trigger = create_trigger(&daemon, "reenable-forward", "0 9 * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    // Disable, then force the stored next_fire into the past — the "slot missed
+    // while disabled" the pre-#372 enable path would have caught up on.
+    let resp = patch_trigger(
+        &daemon,
+        &trigger_id,
+        serde_json::json!({ "enabled": false }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    daemon.force_trigger_due(&trigger_id).await;
+    assert_eq!(
+        get_trigger(&daemon, &trigger_id).await["next_fire_at"].as_str(),
+        Some("2020-01-01T00:00:00.000Z"),
+        "precondition: next_fire is frozen in the past while disabled"
+    );
+
+    // Re-enable: the Enable arm recomputes forward.
+    let resp = patch_trigger(&daemon, &trigger_id, serde_json::json!({ "enabled": true })).await;
+    assert_eq!(resp.status(), 200);
+    let next = get_trigger(&daemon, &trigger_id).await["next_fire_at"]
+        .as_str()
+        .expect("next_fire recomputed on re-enable")
+        .to_string();
+    assert!(
+        next.ends_with('Z'),
+        "next_fire must stay canonical UTC (…Z), got {next}"
+    );
+    assert_ne!(
+        next, "2020-01-01T00:00:00.000Z",
+        "re-enable must recompute next_fire forward, not leave the frozen past slot"
+    );
+
+    // The tick sees a future next_fire → no catch-up fire, no audit row.
+    daemon.run_trigger_tick().await;
+    assert!(
+        list_runs(&daemon).await.is_empty(),
+        "re-enabling must not fire a catch-up run for the missed slot"
+    );
+    assert!(
+        list_fires(&daemon, &trigger_id).await.is_empty(),
+        "no catch-up means no audit row on re-enable"
+    );
+}
+
+/// #372 anti-overcorrection guard: a re-enabled Trigger still fires when its
+/// (forward) slot actually comes due — the Enable arm must recompute forward,
+/// never clear firing altogether.
+#[tokio::test]
+async fn reenabled_trigger_still_fires_on_next_slot() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let trigger = create_trigger(&daemon, "reenable-fires", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    let resp = patch_trigger(
+        &daemon,
+        &trigger_id,
+        serde_json::json!({ "enabled": false }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let resp = patch_trigger(&daemon, &trigger_id, serde_json::json!({ "enabled": true })).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(get_trigger(&daemon, &trigger_id).await["enabled"], true);
+
+    // Its slot arrives (forced due) → it fires exactly once.
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    let runs = list_runs(&daemon).await;
+    assert_eq!(
+        runs.len(),
+        1,
+        "a re-enabled Trigger must fire when its slot comes due"
+    );
+    assert_eq!(runs[0]["triggered_by"].as_str(), Some(trigger_id.as_str()));
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires[0]["outcome"].as_str(), Some("fired"));
+
+    cleanup_runs(&daemon).await;
+}
+
+#[tokio::test]
+async fn patch_edits_schedule_input_and_overlap_and_recomputes_next_fire() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    // Daily at minute 07: a minute `*/15` (fires at :00/:15/:30/:45) can never
+    // land on, so the post-edit `next_fire_at` is guaranteed to differ from the
+    // original regardless of the wall-clock at test time. (A `0 9 * * *` seed
+    // would collide with `*/15` whenever "now" falls in (08:45, 09:00], making
+    // the recompute assertion below flaky around that minute each day.)
+    let trigger = create_trigger(&daemon, "editable", "7 9 * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+    let original_next = trigger["next_fire_at"].as_str().unwrap().to_string();
+
+    let resp = patch_trigger(
+        &daemon,
+        &trigger_id,
+        serde_json::json!({
+            "cron": "*/15 * * * *",
+            "input_template": "do the new thing",
+            "overlap_policy": "allow",
+            "max_concurrent": 4,
+        }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+
+    let after = get_trigger(&daemon, &trigger_id).await;
+    assert_eq!(after["cron"].as_str(), Some("*/15 * * * *"));
+    assert_eq!(after["input_template"].as_str(), Some("do the new thing"));
+    assert_eq!(after["overlap_policy"].as_str(), Some("allow"));
+    assert_eq!(after["max_concurrent"].as_i64(), Some(4));
+    let new_next = after["next_fire_at"].as_str().unwrap();
+    assert_ne!(
+        new_next, original_next,
+        "a schedule edit must recompute next_fire_at"
+    );
+
+    let resp = patch_trigger(
+        &daemon,
+        &trigger_id,
+        serde_json::json!({ "max_concurrent": null }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    assert!(
+        get_trigger(&daemon, &trigger_id).await["max_concurrent"].is_null(),
+        "patching max_concurrent to null must clear the cap"
+    );
+}
+
+#[tokio::test]
+async fn patch_rejects_zero_max_concurrent() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let trigger = create_trigger(&daemon, "audit", "0 9 * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    let resp = patch_trigger(
+        &daemon,
+        &trigger_id,
+        serde_json::json!({ "max_concurrent": 0 }),
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "patching max_concurrent=0 must be rejected"
+    );
+    let err: serde_json::Value = resp.json().await.unwrap();
+    assert!(err["error"].as_str().unwrap().contains("max_concurrent"));
+}
+
+#[tokio::test]
+async fn patch_rejects_an_invalid_cron() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let trigger = create_trigger(&daemon, "audit", "0 9 * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    let resp = patch_trigger(
+        &daemon,
+        &trigger_id,
+        serde_json::json!({ "cron": "not a cron" }),
+    )
+    .await;
+    assert_eq!(resp.status(), 400);
+    assert_eq!(get_trigger(&daemon, &trigger_id).await["cron"], "0 9 * * *");
+}
+
+#[tokio::test]
+async fn patch_missing_trigger_is_404() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let resp = patch_trigger(&daemon, "trg-nope", serde_json::json!({ "enabled": false })).await;
+    assert_eq!(resp.status(), 404);
+}
+
+async fn get_health(daemon: &TestDaemon) -> serde_json::Value {
+    reqwest::Client::new()
+        .get(format!("{}/triggers/health", daemon.url()))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+/// #222 write-side: a created Trigger stores `next_fire_at` as canonical UTC
+/// (`…Z`), not a local offset, and it round-trips through GET unchanged. The
+/// load-bearing read-side regression (a past-due local-offset row staying due)
+/// lives in the trigger context's SQLite tests, where it can fail pre-fix on any host.
+#[tokio::test]
+async fn created_trigger_stores_next_fire_in_utc() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let trigger = create_trigger(&daemon, "utc-check", "*/15 * * * *").await;
+    let next = trigger["next_fire_at"].as_str().expect("a next fire");
+    assert!(
+        next.ends_with('Z'),
+        "next_fire_at must be stored as canonical UTC (…Z), got {next}"
+    );
+    let fetched = get_trigger(&daemon, trigger["id"].as_str().unwrap()).await;
+    assert_eq!(
+        fetched["next_fire_at"].as_str(),
+        Some(next),
+        "next_fire_at must round-trip through GET unchanged"
+    );
+}
+
+/// #222 ask #1: a tick that panics no longer kills the scheduler. The panic is
+/// contained at the supervised `tokio::spawn` boundary, so the driving call
+/// returns normally and the next tick keeps firing due Triggers.
+#[tokio::test]
+async fn a_panicking_tick_does_not_disable_the_scheduler() {
+    let daemon = TestDaemon::spawn_with_panic_trigger(seed, "poison")
+        .await
+        .unwrap();
+
+    let healthy = create_trigger(&daemon, "healthy", "* * * * *").await;
+    let healthy_id = healthy["id"].as_str().unwrap().to_string();
+    let poison = create_trigger(&daemon, "poison", "* * * * *").await;
+    let poison_id = poison["id"].as_str().unwrap().to_string();
+
+    // Tick 1: only `poison` is due (a freshly created `* * * * *` Trigger's next
+    // fire is the upcoming whole minute, so `healthy` is not yet due). The poison
+    // tick panics — but the supervised boundary contains it, so this call returns
+    // NORMALLY. Pre-fix, the panic would unwind the test task right here.
+    daemon.force_trigger_due(&poison_id).await;
+    daemon.run_trigger_tick().await;
+    assert!(
+        list_runs(&daemon).await.is_empty(),
+        "the panicking tick must not have created a run"
+    );
+
+    // Retire the poison pill (an operator disables the bad Trigger) and tick
+    // again. This is the payload: a dead scheduler loop could never fire here.
+    let resp = patch_trigger(&daemon, &poison_id, serde_json::json!({ "enabled": false })).await;
+    assert_eq!(resp.status(), 200);
+    daemon.force_trigger_due(&healthy_id).await;
+    daemon.run_trigger_tick().await;
+
+    let runs = list_runs(&daemon).await;
+    assert_eq!(
+        runs.len(),
+        1,
+        "the scheduler must keep firing after a contained panic"
+    );
+    assert_eq!(runs[0]["triggered_by"].as_str(), Some(healthy_id.as_str()));
+    let fires = list_fires(&daemon, &healthy_id).await;
+    assert_eq!(fires[0]["outcome"].as_str(), Some("fired"));
+
+    cleanup_runs(&daemon).await;
+}
+
+/// #222 ask #2: `GET /triggers/health` exposes the scheduler's last tick and the
+/// configured interval, and the timestamp advances as ticks run.
+#[tokio::test]
+async fn triggers_health_reports_last_tick_and_advances() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let h = get_health(&daemon).await;
+    assert_eq!(
+        h["tick_interval_secs"].as_u64(),
+        Some(30),
+        "health must report the configured tick interval"
+    );
+
+    daemon.run_trigger_tick().await;
+    let t1 = get_health(&daemon).await["last_tick_at"]
+        .as_str()
+        .expect("last_tick_at set after a tick")
+        .to_string();
+
+    // A later tick advances it (canonical-UTC strings compare chronologically;
+    // tolerate extra background-loop ticks — the value only moves forward).
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    daemon.run_trigger_tick().await;
+    let t2 = get_health(&daemon).await["last_tick_at"]
+        .as_str()
+        .expect("last_tick_at still set")
+        .to_string();
+
+    assert!(
+        t2 > t1,
+        "last_tick_at must advance across ticks: {t1} then {t2}"
+    );
+}
+
+fn seed_prompt_required(repo: &std::path::Path) -> anyhow::Result<()> {
+    let pipelines_dir = repo.join(".pdo").join("pipelines");
+    std::fs::create_dir_all(&pipelines_dir)?;
+    // No `prompt_required` key → defaults to true.
+    let yaml = r#"name: needs-prompt
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: end, port: result }
+"#;
+    std::fs::write(pipelines_dir.join("needs-prompt.yaml"), yaml)?;
+    git_init_with_commit(repo)?;
+    Ok(())
+}
+
+async fn fire_trigger(daemon: &TestDaemon, trigger_id: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!("{}/triggers/{}/fire", daemon.url(), trigger_id))
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn manual_fire_creates_a_run_with_provenance_and_manual_source() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    // Not due: next_fire_at is in the future — a manual fire must not care.
+    let trigger = create_trigger(&daemon, "manual", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+    let next_before = get_trigger(&daemon, &trigger_id).await["next_fire_at"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let resp = fire_trigger(&daemon, &trigger_id).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["ok"].as_bool(), Some(true));
+    assert_eq!(body["fired"].as_bool(), Some(true));
+    let run_id = body["run_id"].as_str().expect("fire must return run_id");
+
+    let runs = list_runs(&daemon).await;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0]["run_id"].as_str(), Some(run_id));
+    assert_eq!(runs[0]["triggered_by"].as_str(), Some(trigger_id.as_str()));
+
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires.len(), 1);
+    assert_eq!(fires[0]["outcome"].as_str(), Some("fired"));
+    assert_eq!(fires[0]["source"].as_str(), Some("manual"));
+    assert_eq!(fires[0]["run_id"].as_str(), Some(run_id));
+
+    // The cron schedule is untouched: a 14:32 click must not shift the 15:00 slot.
+    let next_after = get_trigger(&daemon, &trigger_id).await["next_fire_at"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        next_after, next_before,
+        "a manual fire must never recompute next_fire_at"
+    );
+
+    cleanup_runs(&daemon).await;
+}
+
+#[tokio::test]
+async fn manual_fire_runs_the_guard_and_reports_a_truthful_skip() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let trigger = create_trigger_with_guard(
+        &daemon,
+        "guarded-manual",
+        "* * * * *",
+        "echo 'nothing to do' >&2; exit 3",
+    )
+    .await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    let resp = fire_trigger(&daemon, &trigger_id).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "a guard skip is an honest 200, not an error"
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["ok"].as_bool(), Some(true));
+    assert_eq!(body["fired"].as_bool(), Some(false));
+    assert_eq!(body["outcome"].as_str(), Some("guard-exit-nonzero"));
+
+    // No run created; the skip is audited with source=manual.
+    assert!(list_runs(&daemon).await.is_empty());
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires.len(), 1);
+    assert_eq!(fires[0]["outcome"].as_str(), Some("guard-exit-nonzero"));
+    assert_eq!(fires[0]["source"].as_str(), Some("manual"));
+    assert_eq!(fires[0]["guard_exit_code"].as_i64(), Some(3));
+}
+
+#[tokio::test]
+async fn manual_fire_honours_the_overlap_gate() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let trigger = create_trigger(&daemon, "overlap-manual", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    let resp = fire_trigger(&daemon, &trigger_id).await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["fired"].as_bool(), Some(true));
+
+    let resp = fire_trigger(&daemon, &trigger_id).await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["ok"].as_bool(), Some(true));
+    assert_eq!(body["fired"].as_bool(), Some(false));
+    assert_eq!(body["outcome"].as_str(), Some("skipped-overlap"));
+    assert_eq!(list_runs(&daemon).await.len(), 1);
+
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires[0]["outcome"].as_str(), Some("skipped-overlap"));
+    assert_eq!(fires[0]["source"].as_str(), Some("manual"));
+
+    cleanup_runs(&daemon).await;
+}
+
+#[tokio::test]
+async fn manual_fire_on_a_disabled_trigger_is_409_with_no_audit_row() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let trigger = create_trigger(&daemon, "paused", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+    let resp = patch_trigger(
+        &daemon,
+        &trigger_id,
+        serde_json::json!({ "enabled": false }),
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+
+    let resp = fire_trigger(&daemon, &trigger_id).await;
+    assert_eq!(
+        resp.status(),
+        409,
+        "disabled trigger must refuse explicitly"
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body["error"].as_str().unwrap().contains("disabled"),
+        "the 409 must name the cause, got {:?}",
+        body["error"]
+    );
+
+    assert!(list_runs(&daemon).await.is_empty());
+    assert!(
+        list_fires(&daemon, &trigger_id).await.is_empty(),
+        "a 409 must leave no audit row"
+    );
+}
+
+#[tokio::test]
+async fn manual_fire_on_an_unknown_trigger_is_404() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let resp = fire_trigger(&daemon, "trg-nope").await;
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn cron_fires_are_stamped_source_cron() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let trigger = create_trigger(&daemon, "cron-stamped", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires.len(), 1);
+    assert_eq!(fires[0]["outcome"].as_str(), Some("fired"));
+    assert_eq!(fires[0]["source"].as_str(), Some("cron"));
+
+    cleanup_runs(&daemon).await;
+}
+
+/// Flip the global pause flag via `POST /triggers/pause`. Returns the parsed
+/// `{ ok, paused }` body after asserting a 200.
+async fn set_paused(daemon: &TestDaemon, paused: bool) -> serde_json::Value {
+    let resp = reqwest::Client::new()
+        .post(format!("{}/triggers/pause", daemon.url()))
+        .json(&serde_json::json!({ "paused": paused }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "POST /triggers/pause should succeed");
+    resp.json().await.unwrap()
+}
+
+/// #348: while paused, a forced-due Trigger is NOT fired and its `next_fire_at`
+/// stays frozen in the past — proof that `due_triggers` was never called (so no
+/// recompute happened). Liveness still advances and health reports `paused:true`
+/// (paused ≠ dead). Daemon-wide analogue of `patch_disable_then_enable…`.
+#[tokio::test]
+async fn paused_gates_the_tick() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let trigger = create_trigger(&daemon, "kill-switched", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    let body = set_paused(&daemon, true).await;
+    assert_eq!(body["paused"].as_bool(), Some(true));
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    assert!(
+        list_runs(&daemon).await.is_empty(),
+        "a paused scheduler must not fire any Run"
+    );
+    // The frozen-in-the-past next_fire proves due_triggers never ran (no
+    // recompute) — this is what makes the unpause catch-up work.
+    assert_eq!(
+        get_trigger(&daemon, &trigger_id).await["next_fire_at"].as_str(),
+        Some("2020-01-01T00:00:00.000Z"),
+        "paused: next_fire_at must stay frozen (due_triggers never called)"
+    );
+    assert!(
+        list_fires(&daemon, &trigger_id).await.is_empty(),
+        "paused: no fire-history row is written"
+    );
+
+    // Health: paused is truthful, and liveness advanced (heartbeat non-null).
+    let health = get_health(&daemon).await;
+    assert_eq!(
+        health["paused"].as_bool(),
+        Some(true),
+        "health must report paused=true"
+    );
+    assert!(
+        health["last_tick_at"].as_str().is_some(),
+        "liveness must advance even while paused (paused ≠ dead)"
+    );
+}
+
+/// #348: unpausing does a forward-only, one-shot catch-up of the current slot —
+/// exactly ONE fire, then `next_fire_at` recomputed forward. No dedicated code:
+/// it falls out of the ordinary tick seeing the frozen past slot, mirroring the
+/// first tick at boot. Structural mirror of `missed_slots_are_forward_only…`.
+#[tokio::test]
+async fn unpause_does_forward_only_one_shot_catchup() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    // Hourly, forced long-overdue: the many missed slots must NOT flood on unpause.
+    let trigger = create_trigger(&daemon, "resumes", "0 * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    set_paused(&daemon, true).await;
+    daemon.force_trigger_due(&trigger_id).await;
+    // A tick while paused is a no-op (guarded above by paused_gates_the_tick).
+    daemon.run_trigger_tick().await;
+    assert!(list_runs(&daemon).await.is_empty(), "paused: still no run");
+
+    // Unpause, then the next ordinary tick catches up exactly once.
+    let body = set_paused(&daemon, false).await;
+    assert_eq!(body["paused"].as_bool(), Some(false));
+    daemon.run_trigger_tick().await;
+
+    assert_eq!(
+        list_runs(&daemon).await.len(),
+        1,
+        "unpause must fire the current slot exactly once (no backfill flood)"
+    );
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires[0]["outcome"].as_str(), Some("fired"));
+    // Recomputed forward from now, like boot — not left on the frozen past slot.
+    let next = get_trigger(&daemon, &trigger_id).await["next_fire_at"]
+        .as_str()
+        .expect("next_fire recomputed after the catch-up fire")
+        .to_string();
+    assert!(
+        next.as_str() > "2020-01-01T00:00:00.000Z",
+        "unpause fire must recompute next_fire forward; got {next}"
+    );
+    assert_eq!(
+        get_health(&daemon).await["paused"].as_bool(),
+        Some(false),
+        "health must report paused=false after unpause"
+    );
+
+    cleanup_runs(&daemon).await;
+}
+
+/// #348 (D3-A permissive): a manual "Run now" fires even while globally paused —
+/// the manual path (`fire_trigger_now`) is disjoint from the tick and consults no
+/// pause flag. The confirmation lives in the UI; the backend stays permissive.
+#[tokio::test]
+async fn manual_fire_still_works_while_paused() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let trigger = create_trigger(&daemon, "manual-during-pause", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    set_paused(&daemon, true).await;
+
+    let resp = fire_trigger(&daemon, &trigger_id).await;
+    assert_eq!(resp.status(), 200, "manual fire is unaffected by the pause");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["fired"].as_bool(), Some(true));
+
+    assert_eq!(
+        list_runs(&daemon).await.len(),
+        1,
+        "manual fire must create its Run even while paused"
+    );
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires[0]["outcome"].as_str(), Some("fired"));
+    assert_eq!(
+        fires[0]["source"].as_str(),
+        Some("manual"),
+        "the fire is stamped manual"
+    );
+
+    cleanup_runs(&daemon).await;
+}
+
+/// #348: the pause flag round-trips through `GET /triggers/health` and is
+/// idempotent — re-sending the same value keeps the reported state. (Persistence
+/// across a restart is covered by the fresh per-tick DB read + the
+/// `instance_config` unit tests.)
+#[tokio::test]
+async fn pause_flag_round_trips_through_health() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    assert_eq!(
+        get_health(&daemon).await["paused"].as_bool(),
+        Some(false),
+        "a fresh daemon reports not-paused"
+    );
+
+    set_paused(&daemon, true).await;
+    assert_eq!(get_health(&daemon).await["paused"].as_bool(), Some(true));
+    set_paused(&daemon, true).await;
+    assert_eq!(get_health(&daemon).await["paused"].as_bool(), Some(true));
+
+    set_paused(&daemon, false).await;
+    assert_eq!(get_health(&daemon).await["paused"].as_bool(), Some(false));
+}
+
+/// Create a Trigger with an explicit `auto_name`, returning the parsed row.
+async fn create_trigger_with_auto_name(
+    daemon: &TestDaemon,
+    name: &str,
+    cron: &str,
+    auto_name: bool,
+) -> serde_json::Value {
+    let body = serde_json::json!({
+        "name": name,
+        "pipeline_id": PIPELINE_NAME,
+        "cron": cron,
+        "input_template": "audit the codebase",
+        "target_repo": daemon.target_repo(),
+        "auto_name": auto_name,
+    });
+    let resp = reqwest::Client::new()
+        .post(format!("{}/triggers", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201, "POST /triggers should succeed");
+    resp.json().await.unwrap()
+}
+
+/// #338: the Trigger's `auto_name` round-trips on create/GET, defaulting to true
+/// when the field is omitted (the pre-#338 behaviour).
+#[tokio::test]
+async fn trigger_auto_name_round_trips_and_defaults_on() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let default_on = create_trigger(&daemon, "default-on", "0 9 * * *").await;
+    assert_eq!(
+        default_on["auto_name"].as_bool(),
+        Some(true),
+        "an omitted auto_name must default to true"
+    );
+
+    let off = create_trigger_with_auto_name(&daemon, "named-off", "0 9 * * *", false).await;
+    assert_eq!(off["auto_name"].as_bool(), Some(false));
+    let fetched = get_trigger(&daemon, off["id"].as_str().unwrap()).await;
+    assert_eq!(fetched["auto_name"].as_bool(), Some(false));
+}
+
+/// #338: a Trigger with `auto_name:false` fires a Run that carries a STABLE
+/// per-id placeholder name — the manager is not instructed to rename it — whereas
+/// the default (`auto_name:true`) leaves the Run unnamed so the manager derives it
+/// from the input. Covers cron fire; the manual path shares the same chokepoint.
+#[tokio::test]
+async fn trigger_auto_name_false_fires_a_run_with_a_stable_placeholder() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let off = create_trigger_with_auto_name(&daemon, "quiet", "* * * * *", false).await;
+    let off_id = off["id"].as_str().unwrap().to_string();
+    daemon.force_trigger_due(&off_id).await;
+    daemon.run_trigger_tick().await;
+
+    let runs = list_runs(&daemon).await;
+    let run = runs
+        .iter()
+        .find(|r| r["triggered_by"].as_str() == Some(off_id.as_str()))
+        .expect("the auto_name:false trigger must have fired a run");
+    let run_id = run["run_id"].as_str().unwrap();
+    assert_eq!(
+        run["name"].as_str(),
+        Some(format!("Untitled run {}", &run_id[..15]).as_str()),
+        "auto_name:false fire must carry a stable placeholder, not a derived/absent name"
+    );
+
+    cleanup_runs(&daemon).await;
+}
+
+/// #338 control: the default (`auto_name:true`) Trigger fires a Run left unnamed,
+/// so the manager derives the name from the input — the pre-#338 behaviour.
+#[tokio::test]
+async fn trigger_auto_name_true_fires_an_unnamed_run_for_manager_to_derive() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let on = create_trigger(&daemon, "loud", "* * * * *").await;
+    let on_id = on["id"].as_str().unwrap().to_string();
+    daemon.force_trigger_due(&on_id).await;
+    daemon.run_trigger_tick().await;
+
+    let runs = list_runs(&daemon).await;
+    let run = runs
+        .iter()
+        .find(|r| r["triggered_by"].as_str() == Some(on_id.as_str()))
+        .expect("the default trigger must have fired a run");
+    assert!(
+        run.get("name").is_none() || run["name"].is_null(),
+        "auto_name:true fire (with input) must leave the Run unnamed for the manager, got {:?}",
+        run.get("name")
+    );
+
+    cleanup_runs(&daemon).await;
+}
+
+/// The Run's projected state (`GET /runs/<id>`), which serializes `RunState` — the only
+/// place the frozen Run `harness` is observable (the list entry does not carry it).
+async fn get_run(daemon: &TestDaemon, run_id: &str) -> serde_json::Value {
+    reqwest::get(format!("{}/runs/{run_id}", daemon.url()))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+/// #551 (ADR-0046): a Trigger carries the harness IN its Run template, and both a cron
+/// tick and a "Run now" manual fire produce a Run FROZEN on that harness — the AC's
+/// "« Run now » et un tir cron produisent le même harnais", proven because both routes
+/// share the trigger context's one fire. Overlap `allow`, so the two fires both create a Run.
+#[tokio::test]
+async fn trigger_fire_freezes_the_declared_harness_cron_and_run_now() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let body = serde_json::json!({
+        "name": "on opencode",
+        "pipeline_id": PIPELINE_NAME,
+        "cron": "* * * * *",
+        "target_repo": daemon.target_repo(),
+        "harness": "opencode",
+        "overlap_policy": "allow",
+    });
+    let trigger: serde_json::Value = reqwest::Client::new()
+        .post(format!("{}/triggers", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        get_trigger(&daemon, &trigger_id).await["harness"].as_str(),
+        Some("opencode"),
+        "the Trigger must store the harness in its Run template"
+    );
+
+    let now_fire: serde_json::Value = reqwest::Client::new()
+        .post(format!("{}/triggers/{}/fire", daemon.url(), trigger_id))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(now_fire["fired"].as_bool(), Some(true), "{now_fire}");
+    let run_now_id = now_fire["run_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        get_run(&daemon, &run_now_id).await["harness"].as_str(),
+        Some("opencode"),
+        "a \"Run now\" fire must freeze the Trigger's harness"
+    );
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+    let cron_run = list_runs(&daemon)
+        .await
+        .into_iter()
+        .find(|r| {
+            r["triggered_by"].as_str() == Some(trigger_id.as_str())
+                && r["run_id"].as_str() != Some(run_now_id.as_str())
+        })
+        .expect("the cron tick must have fired a second run");
+    let cron_run_id = cron_run["run_id"].as_str().unwrap();
+    assert_eq!(
+        get_run(&daemon, cron_run_id).await["harness"].as_str(),
+        Some("opencode"),
+        "a cron tick must freeze the same harness as \"Run now\""
+    );
+
+    cleanup_runs(&daemon).await;
+}
+
+/// Best-effort: kill any tmux sessions the runs spawned so a `sleep 60` doesn't
+/// leak past the test.
+async fn cleanup_runs(daemon: &TestDaemon) {
+    let socket = daemon.tmux_socket();
+    if let Ok(out) = std::process::Command::new("tmux")
+        .args(["-L", &socket, "list-sessions", "-F", "#{session_name}"])
+        .output()
+    {
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            let _ = std::process::Command::new("tmux")
+                .args(["-L", &socket, "kill-session", "-t", line])
+                .output();
+        }
+    }
+}

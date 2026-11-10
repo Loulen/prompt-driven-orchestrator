@@ -11,8 +11,8 @@ const repoOf = (r: Row) => r.repo;
 /** Build a verbatim `path → ProjectRef | null` lookup from a members map. */
 function projectOfFrom(
   members: Record<string, ProjectRef>,
-): (path: string) => ProjectRef | null {
-  return (path) => members[path] ?? null;
+): (row: Row, path: string) => ProjectRef | null {
+  return (_row, path) => members[path] ?? null;
 }
 
 const NO_PROJECTS = projectOfFrom({});
@@ -84,6 +84,18 @@ describe("groupByProject", () => {
     expect(groups![0].title).toBe([back, front].sort().join(", "));
   });
 
+  it("marks the group of a Projet deleted since (CORE-96)", () => {
+    const projectOf = projectOfFrom({ "/repos/a": { id: "gone", name: "Deleted project", deleted: true } });
+    const groups = groupByProject([{ id: "a", repo: "/repos/a" }], repoOf, projectOf);
+    expect(groups![0]).toMatchObject({ kind: "project", label: "Deleted project", deleted: true });
+    const live = groupByProject(
+      [{ id: "a", repo: "/repos/a" }],
+      repoOf,
+      projectOfFrom({ "/repos/a": { id: "p1", name: "Checkout" } }),
+    );
+    expect(live![0].deleted).toBeUndefined();
+  });
+
   it("counts a Projet as one unit — the threshold moved onto projects, not paths", () => {
     // A Projet grouping two repos + one loose repo = 2 groups → grouped, with the
     // Projet collapsing its two member paths into a single header.
@@ -146,5 +158,26 @@ describe("groupByProject", () => {
     const groups = groupByProject(rows, repoOf, projectOf)!;
     // "Zeta" > "mmm"? Code-unit: 'Z'(90) < 'm'(109), so "Zeta" sorts first.
     expect(groups.map((g) => g.label)).toEqual(["Zeta", "mmm"]);
+  });
+
+  it("ranks each item under its own Projet, whatever its repository (ADR-0087)", () => {
+    // One repository in two Projets: each Run goes under the Projet it was
+    // launched in; one launched in no Projet stays under its path.
+    interface Launched extends Row {
+      project: ProjectRef | null;
+    }
+    const p1 = { id: "p1", name: "Checkout" };
+    const p2 = { id: "p2", name: "Mobile" };
+    const rows: Launched[] = [
+      { id: "a", repo: "/repos/shared", project: p1 },
+      { id: "b", repo: "/repos/shared", project: p2 },
+      { id: "c", repo: "/repos/shared", project: null },
+    ];
+    const groups = groupByProject(rows, (r) => r.repo, (r) => r.project)!;
+    expect(groups.map((g) => [g.label, g.items.map((i) => i.id)])).toEqual([
+      ["Checkout", ["a"]],
+      ["Mobile", ["b"]],
+      ["shared", ["c"]],
+    ]);
   });
 });

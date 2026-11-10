@@ -16,30 +16,34 @@ import {
   canAdvance,
   canGoBack,
   confirmStep,
+  copyBlockOf,
   currentStep,
   goBack,
   needsConfirm,
   observeTour,
+  recapIntroOf,
   skipStep,
   startTour,
   stepBody,
   stepNote,
-  copyBlockOf,
-  recapIntroOf,
-  type TourAppState,
-  type TourObservation,
   type TourRun,
-  type TourStep,
 } from "../tour";
-import type { EdgeDef, NodeDef, PipelineDef } from "../../types";
+import type {
+  TourAppState,
+  TourObservation,
+  TourStep,
+} from "../tourDef";
+import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import { FIRST_PIPELINE_TOUR, TUTORIAL_PIPELINE_ID, tutorialPipelineName } from "./firstPipeline";
 import { carriedPorts, defaultConditionPort, withCarriedPorts } from "../edgePorts";
 import { requalifyWhen, rowsToWhen } from "../whenClause";
+import type { EditorNodeDef, EditorPipelineDef } from "../../pipeline/model/pipeline";
 import { probeReplay, type ReplayOutcome } from "../../test/tourReplay";
+import { workspaceButton } from "../nodeIsolation";
 
 const STEPS = FIRST_PIPELINE_TOUR.steps;
 
-/** This browser's identité de tour, pinned for every test (#987). */
+/** This browser's Identité de tour, pinned for every test. */
 const ME = "k3x9";
 const MY_PIPELINE = `${TUTORIAL_PIPELINE_ID}-${ME}`;
 /** A neighbour's pipeline on the same shared instance. */
@@ -49,7 +53,6 @@ beforeEach(() => {
   localStorage.clear();
   localStorage.setItem("pdo.tour.identity", ME);
 });
-
 
 // ---- the simulator --------------------------------------------------------
 
@@ -110,7 +113,7 @@ class FakeApp {
     this.values[selector] = value;
   }
 
-  agents(): NodeDef[] {
+  agents(): EditorNodeDef[] {
     return (this.app.pipeline?.nodes ?? []).filter((n) => n.type === "agent");
   }
 
@@ -123,7 +126,7 @@ class FakeApp {
         variables: {},
         // The daemon's scaffold: a start and an end marker, no edges.
         nodes: [
-          { id: "start", name: "Start", type: "start", inputs: [], outputs: [], interactive: false },
+          { id: "start", name: "Start", type: "start", inputs: [], outputs: [{ name: "user_prompt" }], interactive: false },
           { id: "end", name: "End", type: "end", inputs: [], outputs: [], interactive: false },
         ],
         edges: [],
@@ -158,7 +161,7 @@ class FakeApp {
     this.app = { ...this.app, selection: { kind: "edge", id: null, edgeIndex: index } };
   }
 
-  updateAgent(index: number, updates: Partial<NodeDef>) {
+  updateAgent(index: number, updates: Partial<EditorNodeDef>) {
     const target = this.agents()[index];
     this.patch((p) => {
       p.nodes = p.nodes.map((n) => (n.id === target.id ? { ...n, ...updates } : n));
@@ -223,23 +226,16 @@ class FakeApp {
   }
 
   /** What confirming the trash does: the row and its dialog go, and so does the
-   *  entry the last step watches. `editStore.removePipeline` also closes the
-   *  pipeline's tab in the same update: the active tab becomes `nextActive` (the
-   *  last tab left open), or nothing when it was the only one (#1030 FP, F1). */
-  deleteFromLibrary(nextActive: string | null = null) {
+   *  entry the last step watches. */
+  deleteFromLibrary() {
     this.hide(DELETE_CONFIRM, `[data-testid="library-row-${MY_PIPELINE}"]`);
     this.app = {
       ...this.app,
-      pipelineId: nextActive,
-      pipeline: null,
-      prompts: {},
-      selection: { kind: "none", id: null, edgeIndex: null },
-      dirty: false,
       libraryPipelineIds: this.app.libraryPipelineIds.filter((id) => id !== MY_PIPELINE),
     };
   }
 
-  private patch(fn: (p: PipelineDef) => void) {
+  private patch(fn: (p: EditorPipelineDef) => void) {
     const pipeline = { ...this.app.pipeline! };
     fn(pipeline);
     this.app = { ...this.app, pipeline, dirty: true };
@@ -265,10 +261,12 @@ function gestures(fake: FakeApp): Record<string, () => void> {
   const inspector = () =>
     fake.show(NAME_INPUT, PROMPT_INPUT, outSlot, '[data-testid="node-interactive-toggle"]',
       '[data-testid="workspace-shared"]', '[data-testid="workspace-isolated"]',
-      '[data-testid="add-output-port"]', `${outSlot} [data-testid="output-schema-editor"]`);
+      '[data-testid="add-output-port"]', `${outSlot} [data-testid="output-schema-editor"]`,
+      `${outSlot} [data-testid="add-schema-field"]`);
 
   return {
     "pipelines-tab": () => fake.show('[data-testid="new-pipeline-button"]'),
+    // The dialog opens with its Name field and its Create button.
     "new-pipeline": () =>
       fake.show(
         '[data-testid="new-pipeline-dialog"]',
@@ -282,6 +280,8 @@ function gestures(fake: FakeApp): Record<string, () => void> {
         '[data-testid="new-pipeline-name"]',
         '[data-testid="new-pipeline-create"]',
       );
+      // The DOM has no value left to read once the field is gone.
+      fake.type('[data-testid="new-pipeline-name"]', "");
       fake.createPipeline();
       fake.show('[data-testid="toolbar-add"]', '[data-testid="save-button"]');
     },
@@ -358,26 +358,29 @@ function gestures(fake: FakeApp): Record<string, () => void> {
           },
         ],
       }),
+    // Edge 0: what a Run hands its prompt to (CORE-241).
+    "edge-start-implementer": () =>
+      fake.addEdge({ source: { node: "start", port: "user_prompt" }, target: { node: "n1", port: "in" } }),
     "edge-implementer-tester": () =>
       fake.addEdge({ source: { node: "n1", port: "out" }, target: { node: "n2", port: "in" } }),
     "edge-tester-implementer": () =>
       fake.addEdge({ source: { node: "n2", port: "out" }, target: { node: "n1", port: "in" } }),
     "select-loop-edge": () => {
-      fake.selectEdge(1);
+      fake.selectEdge(2);
       fake.show('[data-testid="when-editor"]');
     },
-    "loop-condition": () => fake.writeCondition(1, "verdict", "fail"),
+    "loop-condition": () => fake.writeCondition(2, "verdict", "fail"),
     "edge-tester-end": () =>
       fake.addEdge({ source: { node: "n2", port: "out" }, target: { node: "end", port: "result" } }),
-    "select-end-edge": () => fake.selectEdge(2),
-    "end-condition": () => fake.writeCondition(2, "verdict", "pass"),
-    // Validate joins Save in the tab bar once the pipeline is saved (#974).
+    "select-end-edge": () => fake.selectEdge(3),
+    "end-condition": () => fake.writeCondition(3, "verdict", "pass"),
+    // Saved, the pipeline is in the Library and Validate appears next to Save.
     save: () => {
       fake.save();
       fake.show(`[data-testid="library-row-${MY_PIPELINE}"]`, '[data-testid="validate-button"]');
     },
-    // #974: Validate opens the modal; saving it closes the modal and the tab
-    // bar's indicator turns to the globe.
+    // Validate opens the modal; saving it closes the modal and the tab bar's
+    // indicator turns to the globe.
     validate: () => {
       fake.show('[data-testid="validate-pipeline-modal"]');
       fake.hide('[data-testid="validate-pipeline-modal"]');
@@ -389,14 +392,11 @@ function gestures(fake: FakeApp): Record<string, () => void> {
 }
 
 /**
- * Drive the machine the way the host does, one step at a time: the gesture, a
- * tick, and `Next` (or `Skip`) when the card asks for it.
+ * Drive the machine the way the host does, one step at a time: each step's
+ * gesture, then `Next` or `Skip` when the card stays. `onStep` is called on
+ * entering each step, before its gesture (the replay probe).
  */
-function walk(
-  fake: FakeApp,
-  /** Called on entering each step, before its gesture (PDO-10's replay probe). */
-  onStep?: (run: TourRun, now: number) => void,
-) {
+function walk(fake: FakeApp, onStep?: (run: TourRun, now: number) => void) {
   const script = gestures(fake);
   let run = startTour(FIRST_PIPELINE_TOUR, fake.obs());
   let clock = 0;
@@ -420,9 +420,7 @@ function walk(
 
     // Still here: the step wants an explicit gesture from the popover.
     if (needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())) {
-      expect(canAdvance(FIRST_PIPELINE_TOUR, run, fake.obs()), `Next stuck on "${step.id}"`).toBe(
-        true,
-      );
+      expect(canAdvance(FIRST_PIPELINE_TOUR, run, fake.obs()), `Next stuck on "${step.id}"`).toBe(true);
       run = confirmStep(FIRST_PIPELINE_TOUR, run, fake.obs());
     } else if (step.skippable) {
       run = skipStep(FIRST_PIPELINE_TOUR, run, fake.obs());
@@ -435,7 +433,6 @@ function walk(
 describe("walking the whole tour", () => {
   it("reaches the end when the user performs the gesture each step asks for", () => {
     const { run, visited } = walk(new FakeApp());
-
     expect(run.phase).toBe("finished");
     expect(visited).toHaveLength(STEPS.length);
     expect(visited).toEqual(STEPS.map((s) => s.id));
@@ -443,8 +440,8 @@ describe("walking the whole tour", () => {
 
   it("produces the pipeline the ticket describes", () => {
     // The same script, read as a result rather than as a path: two interactive
-    // agents, opposite isolation, a verdict enum, an image_list port, and three
-    // edges of which two are conditional.
+    // agents, opposite isolation, a verdict enum, an image_list port, and four
+    // edges of which two are conditional: Start's first (CORE-241).
     const fake = new FakeApp();
     const script = gestures(fake);
     for (const step of STEPS) script[step.id]();
@@ -458,11 +455,89 @@ describe("walking the whole tour", () => {
       allowed: ["pass", "fail"],
     });
     expect(tester.outputs[1]).toMatchObject({ name: "image_list", port_type: "image_list" });
+    expect(fake.app.pipeline?.edges[0]).toMatchObject({ source: { node: "start" }, target: { node: "n1" } });
     expect(fake.app.pipeline?.edges.map((e) => e.when)).toEqual([
+      undefined,
       undefined,
       { verdict: { eq: "fail" } },
       { verdict: { eq: "pass" } },
     ]);
+  });
+
+  /**
+   * FP of CORE-227: the pipeline the tour built had no Start → implementer
+   * edge. The implementer's only way in is the conditional edge back from the
+   * tester, so it is never an entry point (`graph_resolver::ready_nodes`), and
+   * the tester waits on it: a Run of it starts nothing. Start is wired.
+   */
+  it("wires Start to the implementer, or no Run of it would ever start", () => {
+    const fake = new FakeApp();
+    const script = gestures(fake);
+    for (const step of STEPS) script[step.id]();
+    const fromStart = fake.app.pipeline!.edges.filter((e) => e.source.node === "start");
+    expect(fromStart.map((e) => e.target.node)).toEqual(["n1"]);
+    expect(fromStart[0].when).toBeUndefined();
+    const ids = STEPS.map((s) => s.id);
+    expect(ids.indexOf("edge-start-implementer")).toBeLessThan(ids.indexOf("save"));
+  });
+});
+
+/**
+ * CORE-241 — the daemon's scaffold puts Start and End on the canvas with no
+ * edge, and a Run starts only the nodes Start is wired to. The tour wired the
+ * loop and End but never Start, so the pipeline it ended on never started.
+ */
+describe("the edge from Start", () => {
+  const step = STEPS.find((s) => s.id === "edge-start-implementer")!;
+
+  function upTo(fake: FakeApp, stepId: string) {
+    const script = gestures(fake);
+    for (const s of STEPS) {
+      if (s.id === stepId) return;
+      script[s.id]();
+    }
+  }
+
+  it("comes before the first edge between the two agents", () => {
+    const ids = STEPS.map((s) => s.id);
+    expect(ids.indexOf("edge-implementer-tester")).toBe(ids.indexOf("edge-start-implementer") + 1);
+  });
+
+  it("lights the Start marker and the implementer, the two ends of the drag", () => {
+    const fake = new FakeApp();
+    upTo(fake, "edge-start-implementer");
+    expect(step.target(fake.obs())).toEqual([
+      '.react-flow__node[data-id="start"]',
+      '.react-flow__node[data-id="n1"]',
+    ]);
+    expect(stepBody(step, fake.obs())).toContain("border of the Start marker");
+  });
+
+  it("advances on an edge from Start to the implementer, not to the tester", () => {
+    const fake = new FakeApp();
+    upTo(fake, "edge-start-implementer");
+    expect(step.done!(fake.obs())).toBe(false);
+    fake.addEdge({ source: { node: "start", port: "user_prompt" }, target: { node: "n2", port: "in" } });
+    expect(step.done!(fake.obs()), "Start wired to the tester").toBe(false);
+    fake.addEdge({ source: { node: "start", port: "user_prompt" }, target: { node: "n1", port: "in" } });
+    expect(step.done!(fake.obs())).toBe(true);
+  });
+
+  it("is replayed with Previous from the next step, held for Next", () => {
+    const fake = new FakeApp();
+    const script = gestures(fake);
+    const index = STEPS.findIndex((s) => s.id === "edge-implementer-tester");
+    for (const s of STEPS.slice(0, index)) script[s.id]();
+    let run: TourRun = { ...startTour(FIRST_PIPELINE_TOUR, fake.obs()), index };
+    expect(canGoBack(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(true);
+    run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs());
+    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("edge-start-implementer");
+    expect(needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(true);
+  });
+
+  it("says in its recap where a Run starts", () => {
+    const recap = Array.isArray(FIRST_PIPELINE_TOUR.recap) ? FIRST_PIPELINE_TOUR.recap : [];
+    expect(recap.find((r) => r.label === "Start")?.text).toContain("implementer");
   });
 });
 
@@ -510,9 +585,9 @@ describe("the accidents a reader can have", () => {
     fake.addEdge({ source: { node: "n2", port: "image_list" }, target: { node: "n1", port: "in" } });
     fake.addEdge({ source: { node: "n2", port: "out" }, target: { node: "n1", port: "in" } });
 
-    fake.selectEdge(1); // the image_list one
+    fake.selectEdge(2); // the image_list one
     expect(step.done!(fake.obs())).toBe(false);
-    fake.selectEdge(2); // the out one
+    fake.selectEdge(3); // the out one
     expect(step.done!(fake.obs())).toBe(true);
   });
 
@@ -554,43 +629,7 @@ describe("the accidents a reader can have", () => {
     expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("create-pipeline");
     expect(run.satisfiedOnEntry).toBe(true);
     expect(needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(true);
-    expect(stepBody(currentStep(FIRST_PIPELINE_TOUR, run)!, fake.obs())).toContain("Already created");
-  });
-
-  /**
-   * PDO-10 FP (#1029): from `Create it`, once the dialog has closed, Previous is
-   * greyed out — replaying « Name the pipeline » would ask to paste into a field
-   * that is gone, even though its condition (the pipeline exists) still holds.
-   * `Create it` itself stays replayable from the next step, centred with Next.
-   */
-  it("does not replay the naming step once the dialog is gone", () => {
-    const fake = new FakeApp();
-    const script = gestures(fake);
-    let run = startTour(FIRST_PIPELINE_TOUR, fake.obs());
-    let clock = 0;
-    for (const id of ["pipelines-tab", "new-pipeline", "name-pipeline"]) {
-      script[id]();
-      clock += 200;
-      run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), clock);
-      if (needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())) {
-        run = confirmStep(FIRST_PIPELINE_TOUR, run, fake.obs());
-      }
-    }
-    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("create-pipeline");
-    // Dialog still open: the field is on screen, the naming step can be replayed.
-    expect(canGoBack(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(true);
-
-    script["create-pipeline"]();
-    clock += 200;
-    run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), clock);
-    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("open-add-menu");
-    // `Create it` is replayable on its condition alone…
-    expect(canGoBack(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(true);
-    run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs());
-    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("create-pipeline");
-    // …but the naming step before it is not: its field left with the dialog.
-    expect(canGoBack(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(false);
-    expect(goBack(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(run);
+    expect(stepBody(currentStep(FIRST_PIPELINE_TOUR, run)!, fake.obs())).toMatch(/^Already created: /);
   });
 
   /**
@@ -641,8 +680,8 @@ describe("an edge that carries the wrong output", () => {
   }
 
   it.each([
-    ["edge-tester-implementer", { node: "n1", port: "in" }, 1],
-    ["edge-tester-end", { node: "end", port: "result" }, 2],
+    ["edge-tester-implementer", { node: "n1", port: "in" }, 2],
+    ["edge-tester-end", { node: "end", port: "result" }, 3],
   ] as const)("%s guides to the Outputs section, and advances once out is ticked", (stepId, target, index) => {
     const fake = new FakeApp();
     const step = upTo(fake, stepId);
@@ -681,7 +720,7 @@ describe("an edge that carries the wrong output", () => {
       "edge-tester-end": () =>
         fake.addEdge({ source: { node: "n2", port: "image_list" }, target: { node: "end", port: "result" } }),
     };
-    const fix: Record<string, number> = { "edge-tester-implementer": 1, "edge-tester-end": 2 };
+    const fix: Record<string, number> = { "edge-tester-implementer": 2, "edge-tester-end": 3 };
     let run = startTour(FIRST_PIPELINE_TOUR, fake.obs());
     let clock = 0;
     const tick = () => (run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), (clock += 200)));
@@ -720,6 +759,7 @@ describe("an edge that carries the wrong output", () => {
     expect(run.phase).toBe("finished");
     // Both edges carry out AND image_list, so the editor qualified the key.
     expect(fake.app.pipeline?.edges.map((e) => e.when)).toEqual([
+      undefined,
       undefined,
       { "out.verdict": { eq: "fail" } },
       { "out.verdict": { eq: "pass" } },
@@ -799,69 +839,6 @@ describe("the last step, and the confirmation its trash opens", () => {
   });
 });
 
-/**
- * #1030 FP, F1 — deleting the pipeline closes its editor tab in the same store
- * update. When it was the only open tab, the active tab is gone with it: the last
- * step must still see the pipeline leave the Library, not wait on a null tab and
- * stop the tour on a failure card five seconds later.
- */
-describe("the last step, once the pipeline's tab closes with it (#1030)", () => {
-  const step = STEPS.find((s) => s.id === "keep-or-delete")!;
-
-  function walkToTheLastStep(fake: FakeApp) {
-    const script = gestures(fake);
-    let run = startTour(FIRST_PIPELINE_TOUR, fake.obs());
-    let clock = 0;
-    for (const s of STEPS) {
-      if (s.id === "keep-or-delete") break;
-      script[s.id]();
-      run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), (clock += 200));
-      if (needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())) {
-        run = confirmStep(FIRST_PIPELINE_TOUR, run, fake.obs());
-      }
-    }
-    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("keep-or-delete");
-    return { run, clock };
-  }
-
-  it("ends on the recap when the tutorial pipeline was the only open tab", () => {
-    const fake = new FakeApp();
-    const { run: atLast, clock } = walkToTheLastStep(fake);
-    fake.show(DELETE_CONFIRM);
-    fake.deleteFromLibrary(null);
-    expect(fake.app.pipelineId).toBeNull();
-    expect(step.done!(fake.obs())).toBe(true);
-    const run = observeTour(FIRST_PIPELINE_TOUR, atLast, fake.obs(), clock + 200);
-    expect(run.phase).toBe("finished");
-    expect(run.failure).toBeNull();
-  });
-
-  it("ends on the recap when another Library pipeline's tab becomes the active one", () => {
-    const fake = new FakeApp();
-    fake.app = { ...fake.app, libraryPipelineIds: ["tutorial-overview"] };
-    const { run: atLast, clock } = walkToTheLastStep(fake);
-    fake.show(DELETE_CONFIRM);
-    fake.deleteFromLibrary("tutorial-overview");
-    expect(step.done!(fake.obs())).toBe(true);
-    const run = observeTour(FIRST_PIPELINE_TOUR, atLast, fake.obs(), clock + 200);
-    expect(run.phase).toBe("finished");
-  });
-
-  it("follows a pipeline the reader named themselves, by its tab", () => {
-    const fake = new FakeApp();
-    walkToTheLastStep(fake);
-    const custom = "my-own-loop";
-    // The same loop, saved under a name of the reader's own.
-    fake.app = { ...fake.app, pipelineId: custom, libraryPipelineIds: [custom] };
-    expect(step.target(fake.obs())).toEqual([`[data-testid="library-row-${custom}"]`]);
-    expect(step.done!(fake.obs())).toBe(false);
-
-    fake.app = { ...fake.app, pipelineId: null, pipeline: null, libraryPipelineIds: [] };
-    expect(step.target(fake.obs())).toEqual([]);
-    expect(step.done!(fake.obs())).toBe(true);
-  });
-});
-
 /** Resolving a step's body needs an observation even when it does not depend on
  *  one, so the shape checks below borrow a fresh (empty) app to read them. */
 const SHAPE_OBS = new FakeApp().obs();
@@ -898,10 +875,31 @@ describe("the shape of every step", () => {
     expect(STEPS.find((s) => s.id === "keep-or-delete")?.skippable).toBe(true);
   });
 
-  it("validates right after Save, before Keep-or-delete (#974)", () => {
+  it("validates right after Save, before Keep-or-delete", () => {
     const ids = STEPS.map((s) => s.id);
     expect(ids.indexOf("validate")).toBe(ids.indexOf("save") + 1);
     expect(ids.indexOf("keep-or-delete")).toBe(ids.indexOf("validate") + 1);
+  });
+
+  /**
+   * FP of CORE-227: step 10 said « Pick Run worktree » over a segmented control
+   * whose buttons read Isolated and Shared. A card names what is written on the
+   * button, and the end card says the same word.
+   */
+  it("names the Worktree choice the way its button reads", () => {
+    const step = STEPS.find((s) => s.id === "implementer-worktree")!;
+    expect(bodyOf(step)).toContain(`Pick ${workspaceButton(false)}`);
+    expect(`${step.title} ${bodyOf(step)}`).not.toContain("Run worktree");
+    const recap = FIRST_PIPELINE_TOUR.recap as { label: string; text: string }[];
+    const implementer = recap.find((r) => r.label === "implementer")!;
+    expect(implementer.text).toContain(workspaceButton(false));
+  });
+
+  it("says in its recap what validating did", () => {
+    const recap = FIRST_PIPELINE_TOUR.recap;
+    const lines = Array.isArray(recap) ? recap : [];
+    const line = lines.find((r) => r.label === "Validate");
+    expect(line?.text).toContain("Show test pipelines");
   });
 
   it("says which output the edge carries, on a node that has two", () => {
@@ -929,7 +927,7 @@ describe("the shape of every step", () => {
         script[s.id]();
       }
       fake.addEdge({ source: { node: "n2", port: "image_list" }, target: { node: "n1", port: "in" } });
-      if (selectIt) fake.selectEdge(1);
+      if (selectIt) fake.selectEdge(2);
       states.push(fake.obs());
     }
     for (const step of STEPS.filter((s) => s.id.startsWith("edge-"))) {
@@ -972,15 +970,15 @@ describe("a condition on an edge that carries two outputs", () => {
   }
 
   it.each([
-    ["loop-condition", 1, "fail"],
-    ["end-condition", 2, "pass"],
+    ["loop-condition", 2, "fail"],
+    ["end-condition", 3, "pass"],
   ] as const)("%s advances on the out.verdict key the editor writes", (stepId, index, value) => {
     const fake = new FakeApp();
     const step = upTo(fake, stepId);
     fake.setEdgePorts(index, ["out", "image_list"]);
 
     expect(step.done!(fake.obs())).toBe(false);
-    expect(stepBody(step, fake.obs())).toMatch(new RegExp(`^Add the condition verdict eq ${value}\\.`));
+    expect(stepBody(step, fake.obs())).toMatch(new RegExp(`^Add the condition verdict = ${value}\\.`));
 
     fake.writeCondition(index, "verdict", value);
     expect(fake.app.pipeline?.edges[index].when).toEqual({ "out.verdict": { eq: value } });
@@ -990,33 +988,34 @@ describe("a condition on an edge that carries two outputs", () => {
   it("does not count a verdict read on another output", () => {
     const fake = new FakeApp();
     const step = upTo(fake, "loop-condition");
-    fake.setEdgePorts(1, ["out", "image_list"]);
-    fake.setEdgeWhen(1, { "image_list.verdict": { eq: "fail" } });
+    fake.setEdgePorts(2, ["out", "image_list"]);
+    fake.setEdgeWhen(2, { "image_list.verdict": { eq: "fail" } });
     expect(step.done!(fake.obs())).toBe(false);
   });
 
   it("keeps a condition written before the port was ticked", () => {
     const fake = new FakeApp();
     const step = upTo(fake, "loop-condition");
-    fake.writeCondition(1, "verdict", "fail");
-    fake.setEdgePorts(1, ["out", "image_list"]);
-    expect(fake.app.pipeline?.edges[1].when).toEqual({ "out.verdict": { eq: "fail" } });
+    fake.writeCondition(2, "verdict", "fail");
+    fake.setEdgePorts(2, ["out", "image_list"]);
+    expect(fake.app.pipeline?.edges[2].when).toEqual({ "out.verdict": { eq: "fail" } });
     expect(step.done!(fake.obs())).toBe(true);
   });
 
   it("says what it waits for while the clause is another one", () => {
     const fake = new FakeApp();
     const step = upTo(fake, "loop-condition");
-    fake.writeCondition(1, "verdict", "pass");
+    fake.writeCondition(2, "verdict", "pass");
     expect(step.done!(fake.obs())).toBe(false);
     expect(stepBody(step, fake.obs())).toContain("Not there yet");
-    expect(stepBody(step, fake.obs())).toContain("verdict eq fail");
+    expect(stepBody(step, fake.obs())).toContain("verdict = fail");
   });
 });
 
 /**
- * #974 — what PDO creates is born a test pipeline, so *First pipeline* ends by
- * validating it: the button next to Save, then the modal it opens.
+ * CONTEXT.md « Pipeline validé » — what PDO creates is born a test pipeline, so
+ * *First pipeline* ends by validating it: the button next to Save, then the modal
+ * it opens.
  */
 describe("the Validate step", () => {
   const step = STEPS.find((s) => s.id === "validate")!;
@@ -1051,9 +1050,33 @@ describe("the Validate step", () => {
 });
 
 /**
- * #987 — two people build *First pipeline* on one instance. Each pastes a name
- * suffixed with their own identité de tour, so neither Create is refused, and the
- * last step only ever touches the pipeline this browser built.
+ * FP of CORE-227 (First pipeline 35/35): the Save window opened over the dimmer,
+ * unlit, while the card still pointed at the Save… button behind it.
+ */
+describe("the Save step", () => {
+  const step = STEPS.find((s) => s.id === "save")!;
+  const MODAL = '[data-testid="save-version-modal"]';
+
+  it("lights Save…, then the window it opens", () => {
+    const fake = new FakeApp();
+    expect(step.target(fake.obs())).toEqual(['[data-testid="save-button"]']);
+
+    fake.show(MODAL);
+    expect(step.target(fake.obs())).toEqual([MODAL]);
+    const soft = step.soft as (o: TourObservation) => boolean;
+    expect(soft(fake.obs())).toBe(true);
+    expect(stepBody(step, fake.obs())).toMatch(/^Click Save in the window\./);
+
+    fake.hide(MODAL);
+    expect(step.target(fake.obs())).toEqual(['[data-testid="save-button"]']);
+    expect(soft(fake.obs())).toBe(false);
+  });
+});
+
+/**
+ * Two people build *First pipeline* on one instance. Each pastes a name suffixed
+ * with their own Identité de tour, so neither Create is refused, and the last
+ * step only ever touches the pipeline this browser built.
  */
 describe("playing it next to somebody else", () => {
   it("suggests a pipeline name suffixed with this browser's identity", () => {
@@ -1103,15 +1126,15 @@ describe("playing it next to somebody else", () => {
   });
 });
 
-// ---- PDO-10 (#1030) — replaying a step with Previous -----------------------
+// ---- Rejeu d'étape: replaying a step with Previous -------------------------
 
 /**
- * The replay review of #1030, as a property of the walk: from every step a
- * reader can press Previous on, the step before is replayed — held, then left
- * with Next, or live on its own target — and the tour never stops on a failure
- * card for it (CONTEXT.md « Rejeu d'étape »).
+ * As a property of the walk: from every step a reader can press Previous on,
+ * the step before is replayed (held, then left with Next, or live on its own
+ * target) and the tour never stops on a failure card for it (CONTEXT.md §
+ * « Rejeu d'étape »).
  */
-describe("replaying a step with Previous (PDO-10, #1030)", () => {
+describe("replaying a step with Previous", () => {
   function replays() {
     const fake = new FakeApp();
     const outcomes: Array<ReplayOutcome & { from: string }> = [];
@@ -1125,11 +1148,30 @@ describe("replaying a step with Previous (PDO-10, #1030)", () => {
     const { run, outcomes } = replays();
     expect(run.phase).toBe("finished");
     expect(outcomes.flatMap((o) => (o.problem ? [o.problem] : []))).toEqual([]);
-    // Offered from every step but the first, which has nothing before it.
-    expect(outcomes.filter((o) => !o.offered).map((o) => o.from)).toEqual([STEPS[0].id]);
   });
 
-  /** Play the walk's gestures for every step before \`stepId\`, and enter it. */
+  it("offers Previous from every step but the first, and those after a screen that is gone", () => {
+    const { outcomes } = replays();
+    expect(outcomes.filter((o) => !o.offered).map((o) => o.from)).toMatchInlineSnapshot(`
+      [
+        "pipelines-tab",
+        "select-implementer",
+        "select-tester",
+      ]
+    `);
+  });
+
+  /** Each one read and judged: its card still makes sense without its screen. */
+  it("replays off screen only the steps that say what was done", () => {
+    const { outcomes } = replays();
+    expect(outcomes.filter((o) => o.offScreen).map((o) => o.from)).toMatchInlineSnapshot(`
+      [
+        "open-add-menu",
+      ]
+    `);
+  });
+
+  /** Play the walk's gestures for every step before `stepId`, and enter it. */
   function at(fake: FakeApp, stepId: string): TourRun {
     const script = gestures(fake);
     const index = STEPS.findIndex((s) => s.id === stepId);
@@ -1138,85 +1180,165 @@ describe("replaying a step with Previous (PDO-10, #1030)", () => {
   }
 
   /**
-   * #1029's follow-up: replayed after the reader CLICKED Create, the card used
-   * to say « Enter already created it ». It now says what happened, not how.
+   * FP step 3: Enter in the Name field created the pipeline and closed the
+   * dialog. `Create it` is entered satisfied, and `Previous` from it is greyed
+   * out: « Name the pipeline » needs a field that left with the dialog.
    */
-  it("replays Create it after the click, centred, saying it is created — not that Enter did it", () => {
+  it("greys out Previous from Create it once the dialog is closed", () => {
+    const fake = new FakeApp();
+    const script = gestures(fake);
+    let run = at(fake, "name-pipeline");
+    script["name-pipeline"]();
+    // Still open: Previous from Create it replays the name, held for Next.
+    run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), 100);
+    run = confirmStep(FIRST_PIPELINE_TOUR, run, fake.obs());
+    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("create-pipeline");
+    expect(canGoBack(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(true);
+
+    // Enter: the dialog is gone, the pipeline is open.
+    script["create-pipeline"]();
+    expect(canGoBack(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(false);
+    expect(goBack(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(run);
+  });
+
+  it("replays Create it after the click, saying it is done rather than how", () => {
     const fake = new FakeApp();
     let run = at(fake, "open-add-menu");
     run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs());
     const step = currentStep(FIRST_PIPELINE_TOUR, run)!;
     expect(step.id).toBe("create-pipeline");
-    expect(run.satisfiedOnEntry).toBe(true);
-    // The button left with the dialog: nothing to ring, the card is centred.
-    expect(fake.obs().present('[data-testid="new-pipeline-create"]')).toBe(false);
-    const body = stepBody(step, fake.obs());
-    expect(body).toMatch(/^Already created: /);
-    expect(body).not.toContain("Enter");
-  });
-
-  /**
-   * A step replayed after its menu closed is live again on its trigger: the
-   * reader reopens the menu and the tour walks on, through the next step —
-   * entered satisfied, since the node is already there — and never stops.
-   */
-  it("replays Open the Add menu live, then walks on without adding a node", () => {
-    const fake = new FakeApp();
-    let run = at(fake, "select-implementer");
-    run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs()); // choose-node, satisfied
-    run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs()); // open-add-menu, live
-    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("open-add-menu");
-    expect(run.satisfiedOnEntry).toBe(false);
-
-    fake.show(ADD_MENU);
-    run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), 200);
-    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("choose-node");
     expect(needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(true);
-    run = confirmStep(FIRST_PIPELINE_TOUR, run, fake.obs());
-    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("select-implementer");
-    expect(fake.agents()).toHaveLength(1);
+    expect(stepBody(step, fake.obs())).toMatch(/^Already created: /);
+  });
+
+  it.each([
+    ["save", "validate", /^Saved: /],
+    ["validate", "keep-or-delete", /^Validated: /],
+  ])("replays %s from %s, saying it is done", (replayed, from, body) => {
+    const fake = new FakeApp();
+    let run = at(fake, from);
+    run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs());
+    const step = currentStep(FIRST_PIPELINE_TOUR, run)!;
+    expect(step.id).toBe(replayed);
+    expect(needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(true);
+    expect(stepBody(step, fake.obs())).toMatch(body);
+  });
+
+  it("greys out Previous from Select the node: Choose Node needs its menu open", () => {
+    const fake = new FakeApp();
+    const run = at(fake, "select-implementer");
+    expect(canGoBack(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(false);
+    // The menu open again: Choose Node is replayable, its condition held.
+    fake.show(ADD_MENU);
+    expect(canGoBack(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(true);
   });
 
   /**
-   * FP of #1030: replayed from later in the walk, with the tester → End edge
-   * selected, « Only loop back on a failure » lit that edge's When editor and
-   * said « Not there yet » next to a live Next. It now lights its own edge and
-   * says the condition is set.
+   * Previous pressed again and again walks back to « Only loop back on a
+   * failure » with the tester → End edge selected: the step lights the edge it
+   * is about, not the When editor of another one, and says its condition is set.
    */
-  it("replays Only loop back on a failure on its own edge, saying the condition is set", () => {
+  it("lights the Save dialog once it opens, not the button under it (CORE-232)", () => {
     const fake = new FakeApp();
-    let run = at(fake, "save"); // end-condition written, tester → End selected
-    run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs()); // end-condition
-    run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs()); // select-end-edge
-    run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs()); // edge-tester-end
-    run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs()); // loop-condition
-    const step = currentStep(FIRST_PIPELINE_TOUR, run)!;
-    expect(step.id).toBe("loop-condition");
-    expect(run.satisfiedOnEntry).toBe(true);
-    expect(step.target(fake.obs())).toEqual(['.react-flow__edge[data-id="e-1"]']);
-    const body = stepBody(step, fake.obs());
-    expect(body).toMatch(/^Already set: the condition reads verdict eq fail\./);
-    expect(body).not.toContain("Not there yet");
+    at(fake, "save");
+    const step = STEPS.find((s) => s.id === "save")!;
+    expect(step.target(fake.obs())).toEqual(['[data-testid="save-button"]']);
+    fake.show('[data-testid="save-version-modal"]');
+    expect(step.target(fake.obs())).toEqual(['[data-testid="save-version-modal"]']);
   });
 
-  it("replays Finish only on a pass on its selected edge, saying the condition is set", () => {
+  it("replays a condition step on its own edge when another edge is selected", () => {
     const fake = new FakeApp();
     let run = at(fake, "save");
-    run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs());
+    for (const expected of ["end-condition", "select-end-edge", "edge-tester-end", "loop-condition"]) {
+      run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs());
+      expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe(expected);
+    }
     const step = currentStep(FIRST_PIPELINE_TOUR, run)!;
-    expect(step.id).toBe("end-condition");
-    expect(step.target(fake.obs())).toEqual(['[data-testid="when-editor"]']);
-    expect(stepBody(step, fake.obs())).toMatch(/^Already set: the condition reads verdict eq pass\./);
+    expect(fake.app.selection).toEqual({ kind: "edge", id: null, edgeIndex: 3 });
+    expect(step.target(fake.obs())).toEqual(['.react-flow__edge[data-id="e-2"]']);
+    expect(stepBody(step, fake.obs())).toMatch(/^Already set: the condition reads verdict = fail\./);
+    expect(needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(true);
   });
 
-  it("replays Select the edge to End without claiming its outputs were just fixed", () => {
+  it("asks to click the edge first when the condition is missing and another edge is selected", () => {
     const fake = new FakeApp();
-    let run = at(fake, "end-condition");
-    run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs());
-    const step = currentStep(FIRST_PIPELINE_TOUR, run)!;
-    expect(step.id).toBe("select-end-edge");
-    const body = stepBody(step, fake.obs());
-    expect(body).toContain("already selected");
-    expect(body).not.toContain("just fixed");
+    at(fake, "save");
+    // The loop edge's condition removed, the tester → End edge still selected.
+    const edges = fake.app.pipeline!.edges.map((e, i) => (i === 2 ? { ...e, when: undefined } : e));
+    fake.app = { ...fake.app, pipeline: { ...fake.app.pipeline!, edges } };
+    const step = STEPS.find((s) => s.id === "loop-condition")!;
+    expect(stepBody(step, fake.obs())).toMatch(/^Click the edge first, then add the condition verdict = fail/);
+    fake.selectEdge(2);
+    expect(step.target(fake.obs())).toEqual(['[data-testid="when-editor"]']);
+    expect(stepBody(step, fake.obs())).toMatch(/^Add the condition verdict = fail\./);
+  });
+});
+
+/**
+ * Deleting the pipeline closes its tab in the same store update, and activates
+ * whichever tab is left: the last step reads « gone from the Library », not the
+ * active tab.
+ */
+describe("the last step, when the deletion closes the pipeline's tab", () => {
+  const step = STEPS.find((s) => s.id === "keep-or-delete")!;
+
+  function deleted(activeAfter: { id: string; pipeline: EditorPipelineDef } | null): FakeApp {
+    const fake = new FakeApp();
+    fake.app = { ...fake.app, libraryPipelineIds: [THEIR_PIPELINE] };
+    const script = gestures(fake);
+    for (const s of STEPS) script[s.id]();
+    expect(step.done!(fake.obs())).toBe(false);
+    fake.show(DELETE_CONFIRM);
+    fake.deleteFromLibrary();
+    fake.app = { ...fake.app, pipelineId: activeAfter?.id ?? null, pipeline: activeAfter?.pipeline ?? null };
+    return fake;
+  }
+
+  it("is done when no tab is left", () => {
+    expect(step.done!(deleted(null).obs())).toBe(true);
+  });
+
+  it("is done when the tab left open is another pipeline of the Library", () => {
+    const other: EditorPipelineDef = { name: THEIR_PIPELINE, variables: {}, nodes: [], edges: [] };
+    expect(step.done!(deleted({ id: THEIR_PIPELINE, pipeline: other }).obs())).toBe(true);
+  });
+
+  it("follows a pipeline the reader named themselves, by the loop it holds", () => {
+    const fake = new FakeApp();
+    const script = gestures(fake);
+    for (const s of STEPS) script[s.id]();
+    // Renamed: the Library and the tab hold another name, same loop.
+    fake.app = { ...fake.app, pipelineId: "my-own", libraryPipelineIds: ["my-own"] };
+    fake.show('[data-testid="library-row-my-own"]');
+    expect(step.done!(fake.obs())).toBe(false);
+    expect(step.target(fake.obs())).toEqual(['[data-testid="library-row-my-own"]']);
+    fake.app = { ...fake.app, libraryPipelineIds: [] };
+    expect(step.done!(fake.obs())).toBe(true);
+  });
+});
+
+/**
+ * FP of CORE-227 (First pipeline, « Declare the verdict field »): the step lit
+ * the whole schema editor, 443 px wide, for a « + field » button of 52 px; a
+ * click in the lit zone but off the button did nothing.
+ */
+describe("the verdict-field step", () => {
+  const step = STEPS.find((s) => s.id === "tester-verdict")!;
+  const EDITOR = `[data-output-index="0"] [data-testid="output-schema-editor"]`;
+
+  it("lights + field until a field exists, then the editor to fill it in", () => {
+    const fake = new FakeApp();
+    fake.createPipeline();
+    fake.addAgent("n1");
+    fake.addAgent("n2");
+    fake.updateAgent(1, { outputs: [{ name: "out", instructions: "A short verdict" }] });
+    const [first] = step.target(fake.obs());
+    expect(first).toMatch(/\[data-testid="add-schema-field"\]$/);
+
+    fake.updateAgent(1, {
+      outputs: [{ name: "out", instructions: "A short verdict", frontmatter: { field: { type: "string" } } }],
+    });
+    expect(step.target(fake.obs())).toEqual([EDITOR]);
   });
 });

@@ -1,0 +1,214 @@
+// #723 — Orchestration read model shared by the Orchestration tab, the tab-header
+// pastilles and the canvas pastilles, so the three surfaces can never disagree.
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { HarnessCost } from "../../shared/generated/HarnessCost";
+import type { RunStatus } from "../../shared/generated/RunStatus";
+import type { RunState } from "../../shared/generated/RunState";
+import type { NodeStatus } from "../../shared/generated/NodeStatus";
+import type { TreeCost } from "../../shared/generated/TreeCost";
+import { isLiveRun } from "./runStatus";
+import { formatEstCost } from "./costLabel";
+import type { WsMessage } from "./liveStream";
+import { useLiveRefresh } from "../store/useLiveRefresh";
+
+/** One child of `GET /runs/{id}/children` (daemon `RunChildEntry`). */
+export interface RunChildEntry {
+  run_id: string;
+  pipeline_name: string;
+  name?: string;
+  status: RunStatus;
+  /**
+   * #783 — display-only "no forward progress" overlay, derived per read by the
+   * daemon exactly as on `GET /runs` (#180). Optional so a daemon predating the
+   * field (or a fixture omitting it) still typechecks — absent reads as not stalled.
+   */
+  stalled?: boolean;
+  started_at?: string;
+  completed_at?: string;
+  /** The daemon's CostStat, derived on read (ADR-0052) — never persisted.
+   *  Shape mirrors `RunState.cost` (no `form` at the top level: the per-slice
+   *  forms live in `by_harness`). */
+  cost?: {
+    usd: number;
+    partial: boolean;
+    unpriced_models?: string[];
+    uncosted_harnesses?: string[];
+    by_harness?: HarnessCost[];
+  };
+  /** The child's Coût de l'arbre when it has children of its own (its cost
+   *  plus its descendants'); absent otherwise: its tree cost is `cost`. */
+  tree_cost?: TreeCost;
+}
+
+export interface RunChildrenGroup {
+  node_id: string | null;
+  children: RunChildEntry[];
+}
+
+export interface RunChildrenResponse {
+  run_id: string;
+  nodes: RunChildrenGroup[];
+}
+
+/**
+ * Pastille counters — the « compteurs d'enfants » of CONTEXT.md (#783): green
+ * finished / red failed / orange stale / blue running. Four DISJOINT sets whose
+ * sum is the number of children (or descendants, on the run list).
+ */
+export interface ChildCounts {
+  /** Terminal, not failed: completed, halted, skipped, archived. */
+  finished: number;
+  failed: number;
+  /** Live AND `stalled` (#180): no forward progress, amber like the list dot. */
+  stale: number;
+  /** Live and not stalled: running, awaiting_user, paused. */
+  running: number;
+}
+
+/**
+ * `awaiting_user` / `paused` count as **running** (decision 3 of the design,
+ * 2026-09-07): the blue pill is "still to settle", and a failed child is red.
+ * #783 carves **stale** out of running (live + `stalled`) — the four sets stay
+ * disjoint, so the pills always total the children.
+ */
+export function countChildren(children: RunChildEntry[]): ChildCounts {
+  const counts: ChildCounts = { finished: 0, failed: 0, stale: 0, running: 0 };
+  for (const child of children) {
+    if (child.status === "failed") counts.failed += 1;
+    else if (isLiveRun(child.status)) {
+      if (child.stalled) counts.stale += 1;
+      else counts.running += 1;
+    } else counts.finished += 1;
+  }
+  return counts;
+}
+
+export function totalChildren(counts: ChildCounts): number {
+  return counts.finished + counts.failed + counts.stale + counts.running;
+}
+
+/**
+ * The child's cost, rendered through the shared honesty vocabulary (#272/#377):
+ * "—" when unavailable, never "$0". Unavailable means: the cost is absent,
+ * a harness has no cost source (the helper itself refuses to sum), or there
+ * was simply no costable session (`usd == 0` and no per-harness slice).
+ */
+export function childCostText(cost?: RunChildEntry["cost"]): string {
+  if (!cost) return "—";
+  const byHarness = cost.by_harness ?? [];
+  if ((cost.uncosted_harnesses?.length ?? 0) > 0) {
+    return formatEstCost(cost.usd, cost.partial, cost.unpriced_models ?? [], cost.uncosted_harnesses ?? [], byHarness).text;
+  }
+  if (cost.usd === 0 && byHarness.length === 0) return "—";
+  return formatEstCost(cost.usd, cost.partial, cost.unpriced_models ?? [], [], byHarness).text;
+}
+
+/** The child's summable dollars, or `null` when its cost is unavailable (the
+ *  footer's Σ marks itself partial on any `null`). */
+export function childCostKnown(cost?: RunChildEntry["cost"]): number | null {
+  if (!cost) return null;
+  if ((cost.uncosted_harnesses?.length ?? 0) > 0) return null;
+  if (cost.usd === 0 && (cost.by_harness ?? []).length === 0) return null;
+  return cost.usd;
+}
+
+/**
+ * The cost an Orchestration row shows for a child: its **tree cost** when it
+ * has descendants, its own cost otherwise. A tree total the daemon refused
+ * (`null`) reads as unavailable (`undefined`, so « — »).
+ */
+export function childTreeCost(child: RunChildEntry): RunChildEntry["cost"] {
+  if (child.tree_cost) return child.tree_cost.total ?? undefined;
+  return child.cost;
+}
+
+/** How often the children are read while the event stream is down. */
+const CHILDREN_POLL_MS = 3000;
+
+/**
+ * Read `GET /runs/{id}/children`, then again on every event of the Run or of
+ * one of its children, and on the start of a Run naming it as parent
+ * (ADR-0084: no poll while the event stream is open; every 3 s while it is
+ * not). Non-2xx and network errors keep the last good read: a momentarily
+ * unreachable daemon must not blank a surface the user is reading. The
+ * response is NEVER reset to null between runs — `childrenOfNode` guards on
+ * the response's own `run_id`, so a stale read can never dress another run's
+ * cards (no setState-in-effect reset to trip the compiler).
+ */
+export function useRunChildren(runId: string | null, enabled: boolean): RunChildrenResponse | null {
+  const [data, setData] = useState<RunChildrenResponse | null>(null);
+  const loadRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    if (!runId || !enabled) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(`/runs/${runId}/children`);
+        if (!res.ok) return;
+        const json = (await res.json()) as RunChildrenResponse;
+        if (!cancelled) setData(json);
+      } catch {
+        /* keep the last good read */
+      }
+    };
+    loadRef.current = () => void load();
+    void load();
+    return () => {
+      cancelled = true;
+      loadRef.current = () => {};
+    };
+  }, [runId, enabled]);
+  const reload = useCallback(() => loadRef.current(), []);
+  const concerns = useCallback(
+    (msg: WsMessage) => concernsChildren(msg, runId, data),
+    [runId, data],
+  );
+  useLiveRefresh(reload, concerns, CHILDREN_POLL_MS, !!runId && enabled);
+  return data;
+}
+
+/** Whether `msg` may change the children of `runId`: an event of the Run, of
+ *  one of its known children, the start of a Run naming it as parent, or a
+ *  wait starting or ending anywhere (a grandchild's lifts a child). */
+export function concernsChildren(
+  msg: WsMessage,
+  runId: string | null,
+  data: RunChildrenResponse | null,
+): boolean {
+  const event = msg.type === "event" ? msg.event : undefined;
+  if (!runId || !event) return false;
+  if (event.run_id === runId) return true;
+  if (event.kind === "run_started" && event.payload?.parent_run_id === runId) return true;
+  // A grandchild's wait lifts its parent, one of the children (#588).
+  if (event.kind === "node_awaiting_user" || event.kind === "node_resumed") return true;
+  return (
+    data?.run_id === runId &&
+    data.nodes.some((group) => group.children.some((child) => child.run_id === event.run_id))
+  );
+}
+
+/** This node's slice of the children response, in the daemon's (chronological)
+ *  order — empty unless the read belongs to THIS run (the hook never resets,
+ *  so the consumer must run-guard). */
+export function childrenOfNode(
+  data: RunChildrenResponse | null,
+  runId: string,
+  nodeId: string,
+): RunChildEntry[] {
+  if (!data || data.run_id !== runId) return [];
+  return data.nodes.find((g) => g.node_id === nodeId)?.children ?? [];
+}
+
+/** What a child run opened from the Orchestration tab lands on, in this order:
+ *  the node waiting for someone, a failed one, a running one. */
+const LANDING_ORDER: NodeStatus[] = ["awaiting_user", "failed", "running"];
+
+/** The node a child run opened from the Orchestration tab selects, so its
+ *  banner shows at once; null when none needs a look. */
+export function childLandingNode(run: RunState): string | null {
+  for (const status of LANDING_ORDER) {
+    const def = run.node_defs.find((d) => run.nodes[d.id]?.status === status);
+    if (def) return def.id;
+  }
+  return null;
+}

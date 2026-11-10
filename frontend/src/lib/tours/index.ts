@@ -4,22 +4,16 @@
  * entry here; the engine never changes (spec #821, story 34).
  */
 
-import type { TourDef } from "../tour";
+import type { TourDef } from "../tourDef";
 import { FIRST_PIPELINE_TOUR } from "./firstPipeline";
 import { FIRST_RUN_TOUR } from "./firstRun";
-export {
-  EXAMPLE_TRIGGER_NAME,
-  OVERVIEW_TOUR,
-  TUTORIAL_OVERVIEW_PIPELINE_ID,
-} from "./overview";
 import { OVERVIEW_TOUR } from "./overview";
 
 export { FIRST_PIPELINE_TOUR, TUTORIAL_PIPELINE_ID } from "./firstPipeline";
-export {
-  FIRST_RUN_TOUR,
-  TUTORIAL_REPO_PATH,
-  TUTORIAL_RUN_PIPELINE_ID,
-} from "./firstRun";
+export { FIRST_RUN_TOUR } from "./firstRun";
+export { TUTORIAL_REPO_PATH, TUTORIAL_RUN_PIPELINE_ID } from "./firstRunPreparation";
+export { OVERVIEW_TOUR } from "./overview";
+export { EXAMPLE_TRIGGER_NAME, TUTORIAL_OVERVIEW_PIPELINE_ID } from "./overviewPipeline";
 
 export interface TourCatalogEntry {
   id: string;

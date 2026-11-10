@@ -18,7 +18,7 @@ Ctrl+C without a selection still interrupts the program in the pane. On macOS us
 
 If the pane shows `disconnected` on a remote origin, the daemon rejected the WebSocket origin: add it to `PDO_ALLOWED_WS_ORIGINS` (see [reverse-proxy.md](reverse-proxy.md)).
 
-If the connection of a live pane drops (network cut, proxy, daemon restart), the pane is veiled with `Terminal connection closed` and a **Reconnect** button, which reopens the same terminal without leaving the node. A connection that stops answering without closing (laptop asleep, Wi-Fi gone behind a proxy) counts as dropped too: the daemon beats every terminal socket every 10 s, and the pane is veiled after 30 s without a beat, or as soon as the browser reports it is offline. While veiled, the pane retries on its own (1 s, 2 s, 4 s … up to 30 s) and at once when the browser tab becomes visible or the network comes back. A node that finishes while you watch is not veiled: its session ends on purpose.
+If the connection of a live pane falls (network cut, proxy, daemon restart), the pane is veiled with `Terminal connection closed` and a **Reconnect** button, which reopens the same terminal without leaving the node. A connection that stops answering without closing (laptop asleep, Wi-Fi gone behind a proxy) counts as fallen too: the daemon beats every terminal socket every 10 s, and the pane is veiled after 30 s without a beat, or as soon as the browser reports it is offline. While veiled, the pane reattaches on its own once the daemon answers again (it asks about 1 s later, then twice as long each time up to about 30 s), and at once when the browser tab shows again or the network comes back. A node that finishes while you watch is not veiled: its session ends on purpose.
 
 ## Shared terminal: one pilot, spectators
 
@@ -36,14 +36,15 @@ When the pilot closes the terminal, the first browser to have arrived among the 
 
 A direct `tmux attach` (over SSH) and **Detach to OS terminal** open ordinary tmux clients outside these roles: they still weigh on the window size and can type.
 
+
 ## Import a file into a running node
 
-A node with a live session (running or waiting for you) can receive files from your machine, on a local or a remote instance alike (#971).
+A node with a live session (running or waiting for you) can receive files from your machine, on a local or a remote instance alike, over `http://` too.
 
-1. Drop one or more files on the node's terminal, or click the import icon in the terminal toolbar (next to copy and expand). The import window opens with the files listed.
+1. Drop one or more files on the node's terminal, or click the import icon in the terminal toolbar. The import window opens with the files listed; nothing is written yet.
 2. **Import** writes them into the Run's Blackboard, under `.pdo/artifacts/_attachments/<node-id>/` of the Run worktree. These files are never committed and are removed with the Run. A name already there gets a suffix (`contrat-1.pdf`): nothing is overwritten.
-3. The window then shows a ready-to-use text with each file's path relative to the worktree root. The copy icon copies it. **Copy & send to terminal** copies it too and writes it into the agent's input **without pressing Enter**: complete your message in the terminal and submit it yourself. PDO never tells the agent on its own.
+3. The window then shows a ready-to-use text, one sentence per file naming its path relative to the worktree root. The copy icon copies it. **Copy & send to terminal** copies it too, writes it into the agent's input **without pressing Enter**, and closes the window: complete your message in the terminal and submit it yourself. PDO never tells the agent on its own. On a node waiting for you, your Enter lifts the wait as if you had typed the text. A browser that only watches the terminal (another browser has control) can import and copy, but the daemon refuses its send and writes nothing: a toast names who pilots the terminal and offers **Take control**.
 
-The import is refused, and nothing is written, when the node has no live session or when the files exceed `max_attachments_mb` (Settings, 50 MB by default, counted per import). Behind a reverse proxy, the proxy's own body limit (nginx `client_max_body_size`) must allow the same size (see [reverse-proxy.md](reverse-proxy.md)).
+The import is refused, and nothing is written, when the node has no live session (a `script` node, a finished node or Run, a Run without its worktree) or when the files exceed `max_attachments_mb` (Settings, 50 MB by default, counted per import, the same budget as the files attached to a new Run). Behind a reverse proxy, the proxy's own body limit (nginx `client_max_body_size`) must allow the same size (see [reverse-proxy.md](reverse-proxy.md)).
 
-API: `POST /runs/<run-id>/nodes/<node-id>/attachments` (multipart, `files` parts) and `POST /runs/<run-id>/nodes/<node-id>/terminal-text` (`{"text": "…"}`, pasted without Enter).
+API: `POST /runs/<run-id>/nodes/<node-id>/attachments[?iter=N]` (multipart, `files` parts; `201` with the iteration and each file's `name`, `path` and `size`) and `POST /runs/<run-id>/nodes/<node-id>/terminal-text` (`{"text": "…", "iter": N, "poste": "<id>"}`, 16 KB at most, pasted on one line without Enter: a line break becomes a space). With `poste`, the browser's poste, a send from a poste that watches the node's terminal while another pilots it is refused with `409 not_pilot` (« another poste has the terminal », with the pilot's Actor in `pilot`); a request without `poste` (the CLI, an extension) passes, as does a node whose terminal no browser shows. An extension of rights authorizes them as `node` × `import_files` and `node` × `send_text`.

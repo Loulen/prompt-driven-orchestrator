@@ -1,0 +1,39 @@
+import { useContributions, useLocationContext } from "./catalogue";
+import { isPageOpen, togglePage, usePages } from "./deepLink";
+
+/**
+ * The `topbar/start` location (the 0.1 navigation slot): one text entry per
+ * page in the top bar, each opening its page on the full-window surface
+ * Settings and Stats share, under the bar, the location's pages on its rail
+ * (`ExtensionPageHost`). The entry of the page on screen is selected
+ * (`aria-pressed`, CORE-183): a second click closes it. Nothing without a
+ * contribution.
+ */
+export default function ExtensionNavigation() {
+  const context = useLocationContext("topbar/start");
+  const entries = useContributions("topbar/start", context);
+  const open = usePages((s) => s.open);
+  if (entries.length === 0) return null;
+  return (
+    <nav className="sh-tb__nav" aria-label="Extensions" data-testid="extension-nav">
+      {entries.map((entry) => {
+        const on = isPageOpen(open, "topbar/start", entry.key);
+        return (
+          <button
+            key={entry.key}
+            type="button"
+            aria-pressed={on}
+            onClick={() =>
+              togglePage({ key: entry.key, extension: entry.extension.id, location: "topbar/start", path: "" })
+            }
+            data-testid={`extension-nav-${entry.key}`}
+            title={entry.contribution.label}
+            className="sh-tb__navitem sh-tb__surface"
+          >
+            {entry.contribution.label}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}

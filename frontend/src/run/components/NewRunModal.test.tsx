@@ -1,0 +1,4071 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import NewRunModal from "./NewRunModal";
+import { mergeAttachments, overLimitIndices } from "../model/attachments";
+import { useEditStore } from "../../pipeline/store/editStore";
+import { announceSettingsChanged } from "../../settings/store/useSettings";
+import type { BranchList } from "../../shared/generated/BranchList";
+import type { BranchRef } from "../../shared/generated/BranchRef";
+import type { InstanceSettings } from "../../settings/model/settings";
+import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
+import type { Trigger } from "../../shared/generated/Trigger";
+import { legacyScope } from "../../test/legacy";
+import { useEffect } from "react";
+import { resetExtensions, setBundleLoader } from "../../shared/extensions/store";
+import { hostReactMajor } from "../../shared/extensions/shared";
+import type { RunNewContext, SectionProps } from "../../shared/extensions/contract";
+
+// #571: a branch is `{name, kind}`. Terse constructors for fixtures.
+const local = (name: string): BranchRef => ({ upstream: null, ahead: null, behind: null, last_commit_at: null, last_commit_subject: null, head: false, name, kind: "local" });
+const remote = (name: string): BranchRef => ({ upstream: null, ahead: null, behind: null, last_commit_at: null, last_commit_subject: null, head: false, name, kind: "remote" });
+
+/** #802: both branch verbs answer the list PLUS the date it is good as of. */
+function branchList(branches: BranchRef[], over: Partial<BranchList> = {}): BranchList {
+  return { branches, last_fetch_at: null, fetch_error: null, ...over };
+}
+
+// `drifted` is a legacy field an older daemon sent; the drift tests pin that
+// the modal ignores it.
+const makePipeline = (
+  overrides: Partial<PipelineListEntry> & { drifted?: boolean } = {},
+): PipelineListEntry => ({
+  id: "test-pipe",
+  name: "Test Pipeline",
+  scope: legacyScope("repo"),
+  path: "/repo/.pdo/pipelines/test-pipe.yaml",
+  node_count: 3,
+  modified: null,
+  variables: {},
+  prompt_required: true,
+  validation: { kind: "all" },
+  ...overrides,
+});
+
+vi.mock("../../skill/api/bank", () => ({
+  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
+}));
+
+vi.mock("../../settings/api/settings", () => ({
+  fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
+  fetchPipelines: vi.fn().mockResolvedValue([]),
+  // #410: the modal fetches settings on open (default_sandbox prefill +
+  // sandbox_docker greying). Default: off + Docker available. Tests override per case.
+  fetchSettings: vi.fn().mockResolvedValue({
+    session_cap: { effective: 20, source: "default", stored: null, env: null, default: 20 },
+    reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
+    guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+    max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+    public_url: { effective: null, source: "default", stored: null, env: null, default: null },
+    default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+    default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+    default_harness_model: { effective: {}, stored: {} },
+    default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
+    sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
+    // #432: the sandbox `<select>` options are DATA now — the two virtual defaults.
+    sandbox_profiles: [
+      { name: "full", virtual: true },
+      { name: "minimal", virtual: true },
+    ],
+    home: "/home/user",
+    // #469: required on InstanceSettings; this modal does not read it.
+    autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
+    // #338: the modal seeds the "Auto-generated" box from this; default is ON.
+    default_auto_name: { effective: true, source: "default", stored: null, env: null, default: true },
+    // #427: required on InstanceSettings; this modal does not read it.
+    update_check: { effective: true, source: "default", stored: null, env: null, default: true },
+    price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
+    updated_at: "2026-07-01T10:00:00.000Z",
+  }),
+  createRun: vi.fn().mockResolvedValue({ run_id: "test-run" }),
+  createTrigger: vi.fn().mockResolvedValue({ id: "trg-test" }),
+  updateTrigger: vi.fn().mockResolvedValue({ id: "trg-test" }),
+  testGuard: vi.fn().mockResolvedValue({
+    outcome: "pass",
+    stdout: "",
+    stderr: "",
+    exit_code: 0,
+    detail: null,
+  }),
+}));
+// The agentic profiles' API answers with the mock of `../../settings/api/settings` too.
+vi.mock("../../settings/api/agentProfiles", async () => await import("../../settings/api/settings"));
+// The trigger context's API answers with the mock of `../../settings/api/settings`.
+vi.mock("../../trigger/api/triggers", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../settings/api/settings")),
+}));
+vi.mock("../../trigger/api/guard", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../settings/api/settings")),
+}));
+// The run context's API answers with the mock of `../../settings/api/settings`.
+vi.mock("../api/createRun", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../settings/api/settings")),
+}));
+// The pipeline context's API answers with the mock of `../api` above.
+vi.mock("../../pipeline/api/pipelines", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../settings/api/settings")),
+}));
+
+vi.mock("../../workspace/api/browse", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../workspace/api/browse")>()),
+  // #431 prophylaxis: this file renders `RepoCombobox`, which mounts `FsExplorerModal`
+  // on a loupe click. No test clicks it today, but a missing key here would throw at
+  // FIRST ACCESS (`No "browseFs" export is defined`), not at import — a trap worth
+  // disarming rather than rediscovering.
+  browseFs: vi.fn().mockResolvedValue({
+    path: "/home/user",
+    parent: "/",
+    entries: [],
+    truncated: false,
+    error: null,
+  }),
+}));
+
+vi.mock("../../workspace/api/projects", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../workspace/api/projects")>()),
+  fetchProjects: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("../../workspace/api/provisioning", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../workspace/api/provisioning")>()),
+  previewProvisioning: vi.fn().mockResolvedValue({
+    entries: [],
+    rules: [],
+    conflicts: [],
+  }),
+}));
+
+vi.mock("../../workspace/api/repos", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../workspace/api/repos")>()),
+  validateRepo: vi.fn().mockResolvedValue({ valid: true }),
+  listBranches: vi.fn(),
+  // #802: the form fetches every remote on open and on repo change. Mocked here
+  // so no test accidentally exercises the real request; `listBranchesReturns`
+  // keeps the two verbs answering the same repo state.
+  fetchRemotes: vi.fn(),
+}));
+
+const { fetchSettings } = await import("../../settings/api/settings");
+const { createTrigger, updateTrigger } = await import("../../trigger/api/triggers");
+const { testGuard } = await import("../../trigger/api/guard");
+const { createRun } = await import("../api/createRun");
+const { fetchPipelines } = await import("../../pipeline/api/pipelines");
+const { validateRepo, listBranches, fetchRemotes } = await import("../../workspace/api/repos");
+const { fetchProjects } = await import("../../workspace/api/projects");
+const { previewProvisioning } = await import("../../workspace/api/provisioning");
+
+const noop = () => {};
+
+/**
+ * Point BOTH branch verbs at the same repo state (#802). The daemon's fetch
+ * answers the SAME list, refreshed; a fixture where only `listBranches` knows the
+ * branches would have the fetch wipe them a beat later, which no real daemon
+ * does. Tests about the fetch itself re-point `fetchRemotes` afterwards.
+ */
+function listBranchesReturns(branches: BranchRef[], over: Partial<BranchList> = {}) {
+  vi.mocked(fetchRemotes).mockResolvedValue(branchList(branches, over));
+  return vi.mocked(listBranches).mockResolvedValue(branchList(branches, over));
+}
+
+/**
+ * Pick a branch through the quick pick, the way a person does: open the field,
+ * click the row. Replaces the `fireEvent.change` on the old `<select>` (#802).
+ */
+async function pickBranch(name: string, prefix = "source-branch") {
+  fireEvent.click(screen.getByTestId(`${prefix}-trigger`));
+  const option = await screen.findByText((_, el) =>
+    el?.getAttribute("data-testid") === `${prefix}-option` &&
+    el.getAttribute("data-branch") === name,
+  );
+  fireEvent.mouseDown(option.closest("button")!);
+}
+
+/** The branch the field currently holds — what a launch would post. */
+function selectedBranch(prefix = "source-branch"): string {
+  return screen.getByTestId(`${prefix}-trigger`).textContent ?? "";
+}
+
+/**
+ * `userEvent` bound to this file's fake timers. The pipeline menu is the app's own
+ * dropdown since #822, and Base UI opens it on a real pointer sequence — a bare
+ * `fireEvent.click` dispatches no pointerdown and leaves the popup shut.
+ */
+function menuUser() {
+  return userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+}
+
+/** Open the pipeline menu and wait for its popup. */
+async function openPipelineMenu() {
+  await menuUser().click(screen.getByTestId("pipeline-select"));
+  return screen.findByTestId("pipeline-select-menu");
+}
+
+/**
+ * Pick a pipeline the way a person does (#822): open the menu, click the row.
+ * Replaces the `fireEvent.change` the old `<select>` took.
+ */
+async function pickPipeline(id: string) {
+  const user = menuUser();
+  await user.click(screen.getByTestId("pipeline-select"));
+  await user.click(await screen.findByTestId(`pipeline-select-option-${id}`));
+}
+
+/** The pipeline the closed field shows — what a launch would post (its name, not its node count). */
+function selectedPipeline(): string {
+  return screen.getByTestId("pipeline-select").querySelector(".d-sel__val")?.textContent ?? "";
+}
+
+/** The rows the OPEN menu offers, in order, by pipeline id then name. */
+function pipelineOptions(): Array<{ id: string; name: string }> {
+  return Array.from(
+    screen.getByTestId("pipeline-select-menu").querySelectorAll("[data-pipeline-id]"),
+  ).map((row) => ({
+    id: row.getAttribute("data-pipeline-id") ?? "",
+    name: row.querySelector(".ln-pp__name")?.textContent ?? "",
+  }));
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  // `clearAllMocks` wipes recorded calls but KEEPS implementations, so a
+  // `mockResolvedValue` set inside one test leaks into every later one. The
+  // repo-switch tests (#454) re-point this mock per repo, so restore the
+  // documented default here rather than trusting each test to clean up.
+  listBranchesReturns([local("main"), local("dev"), local("feature-x")]);
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  useEditStore.setState({
+    openTabs: [],
+    activeTabId: null,
+    pipelines: [],
+  });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+function renderModal() {
+  return render(
+    <NewRunModal
+      open={true}
+      onClose={noop}
+      onCreated={noop}
+    />,
+  );
+}
+
+/** Pick a Projet in New Run › Where (ADR-0087); `null` for « No project ». */
+async function chooseProject(name: string | null) {
+  fireEvent.click(screen.getByTestId("project-combobox"));
+  const option =
+    name === null
+      ? screen.getByTestId("project-option-none")
+      : screen.getAllByTestId("project-option").find((o) => o.textContent?.includes(name));
+  if (!option) throw new Error(`no project option ${name}`);
+  fireEvent.mouseDown(option);
+}
+
+/** Let the repository the form now holds be validated and its branches read. */
+async function settleRepo(value: string) {
+  await vi.advanceTimersByTimeAsync(500);
+  await waitFor(() => expect(validateRepo).toHaveBeenCalledWith(value));
+  await waitFor(() => expect(listBranches).toHaveBeenCalledWith(value));
+}
+
+async function enterValidRepo(value = "/home/user/project") {
+  const repoInput = screen.getByLabelText(/target repository/i);
+  fireEvent.change(repoInput, { target: { value } });
+  await vi.advanceTimersByTimeAsync(500);
+  await waitFor(() => {
+    expect(validateRepo).toHaveBeenCalledWith(value);
+  });
+  await waitFor(() => {
+    expect(listBranches).toHaveBeenCalledWith(value);
+  });
+}
+
+describe("NewRunModal — pipeline picker", () => {
+  it("shows instance pipelines in the flat picker", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "review", name: "Review Pipeline", scope: "instance" }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    expect(screen.getByTestId("pipeline-select-option-review")).toHaveTextContent(
+      "Review Pipeline",
+    );
+  });
+
+  it("lists a pipeline created since the last opening", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "review", name: "Review Pipeline" })]);
+    const { rerender } = render(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+    await enterValidRepo();
+    rerender(<NewRunModal open={false} onClose={noop} onCreated={noop} />);
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "nightly", name: "Nightly" }),
+      makePipeline({ id: "review", name: "Review Pipeline" }),
+    ]);
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+    await vi.advanceTimersByTimeAsync(500);
+    await openPipelineMenu();
+    expect(pipelineOptions().map((o) => o.id)).toEqual(["nightly", "review"]);
+  });
+
+  it("does not group legacy-scoped responses", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "lib-pipe", name: "Library Pipeline", scope: legacyScope("library") }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    const menu = await openPipelineMenu();
+    // No scope headers the way the harness picker has (#822). The only grouping is
+    // by validation: a repository with no Projet reads the global section.
+    const labels = Array.from(menu.querySelectorAll("[data-slot='dropdown-menu-label']"));
+    expect(labels.map((l) => l.textContent)).toEqual(["Global pipelines"]);
+    expect(pipelineOptions()).toEqual([{ id: "lib-pipe", name: "Library Pipeline" }]);
+  });
+
+  it("shows one flat instance pipeline list", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "lib-pipe", name: "Library Pipeline", scope: legacyScope("library") }),
+      makePipeline({ id: "repo-pipe", name: "Repo Pipeline", scope: legacyScope("repo") }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    const menu = await openPipelineMenu();
+    expect(menu.querySelectorAll("[data-slot='dropdown-menu-label']")).toHaveLength(1);
+    expect(pipelineOptions().map((o) => o.name)).toEqual([
+      "Library Pipeline",
+      "Repo Pipeline",
+    ]);
+  });
+
+  it("shows empty state when no pipelines found", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([]);
+    renderModal();
+    await enterValidRepo();
+
+    // #822: the dead end is stated ON the trigger, which is disabled — a menu with
+    // nothing choosable in it has nothing to offer.
+    const trigger = screen.getByTestId("pipeline-select");
+    expect(trigger).toHaveTextContent(/no pipeline/i);
+    expect(trigger).toBeDisabled();
+  });
+
+  it("pre-selects the first repo pipeline when available", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "first-repo", name: "First Repo", scope: legacyScope("repo") }),
+      makePipeline({ id: "lib-pipe", name: "Lib", scope: legacyScope("library") }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    expect(selectedPipeline()).toBe("First Repo");
+  });
+});
+
+/**
+ * The filter field at the head of the popup (#822) — the one thing the pipeline menu
+ * has that the harness and model pickers do not.
+ */
+describe("NewRunModal — pipeline filter", () => {
+  const threePipelines = [
+    makePipeline({ id: "implement-loop", name: "implement-loop", scope: "instance" }),
+    makePipeline({ id: "review-loop", name: "review-loop", scope: "instance" }),
+    makePipeline({ id: "grill-and-spec", name: "grill-and-spec", scope: legacyScope("repo") }),
+  ];
+
+  it("opens on the full list with the filter focused", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    expect(pipelineOptions().map((o) => o.id)).toEqual([
+      "implement-loop",
+      "review-loop",
+      "grill-and-spec",
+    ]);
+    // Typing filters immediately: the field already has the caret.
+    expect(screen.getByTestId("pipeline-select-filter")).toHaveFocus();
+    // A row is its name: no scope column (every pipeline is the instance's).
+    expect(
+      screen.getByTestId("pipeline-select-option-review-loop").querySelector(".ln-pp__name"),
+    ).toHaveTextContent(/^review-loop$/);
+  });
+
+  it("marks the selected row and no other", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    // The accent check is an SVG rendered only on the selected row (HarnessSelect's
+    // marker, shared so the two menus cannot drift).
+    expect(
+      screen.getByTestId("pipeline-select-option-implement-loop").querySelector("svg"),
+    ).not.toBeNull();
+    expect(
+      screen.getByTestId("pipeline-select-option-review-loop").querySelector("svg"),
+    ).toBeNull();
+    // The check keeps its own 13 px: the row's default icon size (16 px) would
+    // push it over the name.
+    expect(
+      screen.getByTestId("pipeline-select-option-implement-loop").querySelector("svg"),
+    ).toHaveClass("size-[13px]");
+  });
+
+  it("underlines the matched fragment in the surviving rows", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    await menuUser().type(screen.getByTestId("pipeline-select-filter"), "view");
+
+    const row = await screen.findByTestId("pipeline-select-option-review-loop");
+    await waitFor(() =>
+      expect(row.querySelector(".ln-pp__hit")).toHaveTextContent("view"),
+    );
+  });
+
+  it("walks from the field into the list with ↓ and back with ↑", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    const user = menuUser();
+    const filter = screen.getByTestId("pipeline-select-filter");
+
+    await user.keyboard("{ArrowDown}");
+    await waitFor(() =>
+      expect(screen.getByTestId("pipeline-select-option-implement-loop")).toHaveFocus(),
+    );
+
+    // From the first row, ↑ goes to the field above it on screen — not around to
+    // the bottom of the list, which is where the menu's own looping would land.
+    await user.keyboard("{ArrowUp}");
+    await waitFor(() => expect(filter).toHaveFocus());
+  });
+
+  it("takes the first remaining row on Enter from the field", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    const user = menuUser();
+    await user.type(screen.getByTestId("pipeline-select-filter"), "review");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(selectedPipeline()).toBe("review-loop"));
+  });
+
+  it("sends a letter typed on a row back to the field", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    const user = menuUser();
+    await user.keyboard("{ArrowDown}"); // focus is on a row now
+    await user.keyboard("r");
+
+    // One filtering gesture: the letter lands in the field and narrows the list,
+    // rather than driving the menu's own typeahead in parallel.
+    const filter = screen.getByTestId("pipeline-select-filter");
+    await waitFor(() => expect(filter).toHaveValue("r"));
+    expect(filter).toHaveFocus();
+  });
+
+  it("empties the fragment on the first Escape and closes on the second", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    const user = menuUser();
+    await user.type(screen.getByTestId("pipeline-select-filter"), "review");
+    await waitFor(() => expect(pipelineOptions()).toHaveLength(1));
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(pipelineOptions()).toHaveLength(3));
+    expect(screen.getByTestId("pipeline-select-filter")).toHaveValue("");
+
+    await user.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(screen.queryByTestId("pipeline-select-menu")).not.toBeInTheDocument(),
+    );
+    // Nothing was chosen: the selection is the one the menu opened on.
+    expect(selectedPipeline()).toBe("implement-loop");
+  });
+
+  it("narrows the list to the pipelines whose name holds the fragment", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    await menuUser().type(screen.getByTestId("pipeline-select-filter"), "LOOP");
+
+    // Case-insensitive, and on the NAME only — `grill-and-spec` is gone.
+    await waitFor(() =>
+      expect(pipelineOptions().map((o) => o.id)).toEqual([
+        "implement-loop",
+        "review-loop",
+      ]),
+    );
+  });
+
+  it("selects a filtered pipeline and shows it on the closed trigger", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+    expect(selectedPipeline()).toBe("implement-loop"); // the auto-selected first
+
+    await openPipelineMenu();
+    const user = menuUser();
+    await user.type(screen.getByTestId("pipeline-select-filter"), "review");
+    await user.click(await screen.findByTestId("pipeline-select-option-review-loop"));
+
+    expect(selectedPipeline()).toBe("review-loop");
+    await waitFor(() =>
+      expect(screen.queryByTestId("pipeline-select-menu")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("says so when nothing matches, and leaves the selection alone", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    await menuUser().type(screen.getByTestId("pipeline-select-filter"), "deploy");
+
+    const empty = await screen.findByTestId("pipeline-select-empty");
+    expect(empty).toHaveTextContent("No pipeline matches “deploy”");
+    expect(pipelineOptions()).toEqual([]);
+    // The fragment is a lens, not an action.
+    expect(selectedPipeline()).toBe("implement-loop");
+  });
+
+  it("forgets the fragment when the menu closes", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    const user = menuUser();
+    await user.type(screen.getByTestId("pipeline-select-filter"), "review");
+    await user.click(await screen.findByTestId("pipeline-select-option-review-loop"));
+
+    await openPipelineMenu();
+    expect(screen.getByTestId("pipeline-select-filter")).toHaveValue("");
+    expect(pipelineOptions()).toHaveLength(3);
+  });
+
+  it("launches the pipeline chosen through the filter", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    const user = menuUser();
+    await user.type(screen.getByTestId("pipeline-select-filter"), "review");
+    await user.click(await screen.findByTestId("pipeline-select-option-review-loop"));
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+      target: { value: "do the thing" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
+
+    await waitFor(() =>
+      expect(createRun).toHaveBeenCalledWith(
+        expect.objectContaining({ pipeline_id: "review-loop" }),
+      ),
+    );
+  });
+
+  it("disables the trigger, rather than opening an empty menu, before a repo is chosen", () => {
+    vi.mocked(fetchPipelines).mockResolvedValue(threePipelines);
+    renderModal();
+
+    const trigger = screen.getByTestId("pipeline-select");
+    expect(trigger).toBeDisabled();
+    expect(trigger).toHaveTextContent("Choose a repository first");
+  });
+});
+
+/**
+ * Pipelines validés par Projet (CONTEXT.md « Pipeline validé »): the menu offers the
+ * Projet's Pipelines first, then the global ones; test Pipelines wait behind « Show
+ * test pipelines ».
+ */
+describe("NewRunModal — the Projet a Run is launched in (ADR-0087)", () => {
+  const checkout = {
+    id: "prj-checkout",
+    name: "Checkout",
+    members: ["/code/shop-web", "/code/shop-api", "/code/design-system"],
+    primary_repo: "/code/shop-web",
+  };
+  const mobile = {
+    id: "prj-mobile",
+    name: "Mobile",
+    members: ["/code/shop-app", "/code/design-system"],
+    primary_repo: "/code/shop-app",
+  };
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.mocked(fetchProjects).mockResolvedValue([checkout, mobile]);
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", prompt_required: false }),
+    ]);
+  });
+
+  afterEach(() => {
+    vi.mocked(fetchProjects).mockResolvedValue([]);
+  });
+
+  it("opens on a Projet, preselects its default primary and marks it", async () => {
+    renderModal();
+    await settleRepo("/code/shop-web");
+    expect(screen.getByTestId("project-combobox")).toHaveTextContent("Checkout");
+    expect(screen.getByTestId("project-combobox")).toHaveTextContent("3 repos");
+    expect(screen.getByTestId("project-default-badge")).toHaveTextContent("default");
+
+    fireEvent.click(screen.getByTestId("project-combobox"));
+    const options = screen.getAllByTestId("project-option");
+    expect(options.map((o) => o.textContent)).toEqual([
+      "Checkoutshop-web · shop-api · design-system",
+      "Mobileshop-app · design-system",
+    ]);
+    expect(screen.getByTestId("project-option-none")).toBeInTheDocument();
+  });
+
+  it("offers the Projet's other repositories, read-only once checked, and launches in the Projet", async () => {
+    renderModal();
+    await settleRepo("/code/shop-web");
+    const offered = screen.getAllByTestId("project-repo-unchecked").map((r) => r.getAttribute("data-path"));
+    expect(offered).toEqual(["/code/shop-api", "/code/design-system"]);
+    expect(screen.getByTestId("add-secondary-repo")).toHaveTextContent("Repository outside Checkout");
+
+    fireEvent.click(within(screen.getAllByTestId("project-repo-unchecked")[0]).getByRole("checkbox"));
+    await settleRepo("/code/shop-api");
+    expect(screen.getByTestId("project-repo-readonly-0")).toHaveAttribute("aria-checked", "true");
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+    await waitFor(() =>
+      expect(createRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          project_id: "prj-checkout",
+          target_repo: "/code/shop-web",
+          target_repos: [
+            { repo: "/code/shop-web", base_branch: "main" },
+            { repo: "/code/shop-api", base_branch: "main", read_only: true },
+          ],
+        }),
+      ),
+    );
+    expect(window.localStorage.getItem("pdo.newRun.lastProject")).toBeNull();
+  });
+
+  it("switches to another Projet's default primary and remembers the choice", async () => {
+    renderModal();
+    await settleRepo("/code/shop-web");
+    await chooseProject("Mobile");
+    await settleRepo("/code/shop-app");
+    expect(screen.getByLabelText(/target repository/i)).toHaveValue("/code/shop-app");
+    expect(window.localStorage.getItem("pdo.newRun.lastProject")).toBe("prj-mobile");
+    expect(screen.getAllByTestId("project-repo-unchecked").map((r) => r.getAttribute("data-path"))).toEqual([
+      "/code/design-system",
+    ]);
+  });
+
+  it("refuses a primary repository outside the Projet, and launches in no Projet when asked", async () => {
+    renderModal();
+    await settleRepo("/code/shop-web");
+    await enterValidRepo("/code/elsewhere");
+    expect(screen.getByTestId("primary-outside-project")).toHaveTextContent(
+      "/code/elsewhere is not a repository of Checkout.",
+    );
+    expect(screen.getByTestId("launch-button")).toBeDisabled();
+
+    await chooseProject(null);
+    expect(screen.queryByTestId("primary-outside-project")).toBeNull();
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+    await waitFor(() => expect(createRun).toHaveBeenCalled());
+    expect(vi.mocked(createRun).mock.calls[0][0].project_id).toBeUndefined();
+  });
+
+  it("says a repository outside the Projet once, without the verdict of a valid repository", async () => {
+    renderModal();
+    await settleRepo("/code/shop-web");
+    await enterValidRepo("/code/elsewhere");
+    expect(screen.getByTestId("primary-outside-project")).toBeInTheDocument();
+    expect(screen.queryByTestId("repo-valid")).toBeNull();
+    expect(screen.queryByTestId("repo-error")).toBeNull();
+    expect(screen.getByLabelText(/target repository/i)).toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("names no repository outside the Projet while the field is empty", async () => {
+    renderModal();
+    await settleRepo("/code/shop-web");
+    fireEvent.change(screen.getByLabelText(/target repository/i), { target: { value: "" } });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(screen.queryByTestId("primary-outside-project")).toBeNull();
+    expect(screen.getByTestId("launch-button")).toBeDisabled();
+  });
+
+  it("says only the repository's own error when it is neither a repository nor in the Projet", async () => {
+    renderModal();
+    await settleRepo("/code/shop-web");
+    vi.mocked(validateRepo).mockResolvedValueOnce({ valid: false, error: "/code/empty is not a git repository" });
+    fireEvent.change(screen.getByLabelText(/target repository/i), { target: { value: "/code/empty" } });
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => expect(screen.getByTestId("repo-error")).toHaveTextContent("/code/empty is not a git repository"));
+    expect(screen.queryByTestId("primary-outside-project")).toBeNull();
+  });
+
+  it("does not preview the provisioning of a path the field refuses", async () => {
+    renderModal();
+    await settleRepo("/code/shop-web");
+    vi.mocked(validateRepo).mockResolvedValueOnce({ valid: false, error: "/code/gone does not exist or is not a directory" });
+    vi.mocked(previewProvisioning).mockClear();
+    fireEvent.change(screen.getByLabelText(/target repository/i), { target: { value: "/code/gone" } });
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => expect(screen.getByTestId("repo-error")).toHaveTextContent("/code/gone does not exist"));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(vi.mocked(previewProvisioning).mock.calls.map((call) => call[0])).not.toContain("/code/gone");
+    expect(screen.getByTestId("provisioning-run")).not.toHaveTextContent("/code/gone");
+    // The disabled Run gives the field's reason, not the Projet's.
+    expect(screen.getByTestId("launch-button")).toHaveAccessibleDescription("/code/gone does not exist or is not a directory");
+  });
+
+  it("shows an edited Trigger's Projet repository once, among the Projet's, and keeps its Projet", async () => {
+    const trigger: Trigger = {
+      id: "trg-shop",
+      name: "Shop nightly",
+      pipeline_id: "p1",
+      pipeline_name: "Auditor",
+      target_repo: "/code/shop-web",
+      project_id: "prj-checkout",
+      target_repos: JSON.stringify([
+        { repo: "/code/shop-web" },
+        { repo: "/code/shop-api", read_only: true },
+      ]),
+      source_branch: "main",
+      input_template: "go",
+      variables: {},
+      cron: "0 9 * * *",
+      overlap_policy: "skip",
+      auto_name: true,
+      enabled: true,
+    };
+    render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop} openIntent={{ kind: "edit-trigger", trigger }} />,
+    );
+    await settleRepo("/code/shop-web");
+    await waitFor(() => expect(screen.getByTestId("project-combobox")).toHaveTextContent("Checkout"));
+    // Checked among the Projet's repositories, never again « outside ».
+    expect(screen.getByTestId("project-repo-check-0")).toBeChecked();
+    expect(screen.getAllByTestId("project-repo-unchecked").map((r) => r.getAttribute("data-path"))).toEqual([
+      "/code/design-system",
+    ]);
+    expect(screen.queryByTestId("secondary-repo-row-0")).toBeNull();
+    // Checking it again from the list adds no second line.
+    fireEvent.click(within(screen.getAllByTestId("project-repo-unchecked")[0]).getByRole("checkbox"));
+    await settleRepo("/code/design-system");
+    expect(screen.getByTestId("project-repo-check-1")).toBeChecked();
+    expect(screen.queryAllByTestId(/^project-repo-row-/)).toHaveLength(2);
+  });
+});
+
+describe("NewRunModal — pipeline sections", () => {
+  const alpha = { id: "prj-alpha", name: "Alpha", members: ["/repos/alpha"], primary_repo: "/repos/alpha" };
+  const bravo = { id: "prj-bravo", name: "Bravo", members: ["/repos/bravo"], primary_repo: "/repos/bravo" };
+  const mixed = [
+    makePipeline({ id: "common", name: "common", validation: { kind: "all" } }),
+    makePipeline({ id: "legacy", name: "legacy" }),
+    makePipeline({ id: "draft", name: "draft", validation: { kind: "none" } }),
+    makePipeline({
+      id: "alpha-only",
+      name: "alpha-only",
+      validation: { kind: "projects", project_ids: ["prj-alpha"] },
+    }),
+  ];
+
+  function sectionIds(key: string): string[] {
+    const section = screen.queryByTestId(`pipeline-select-section-${key}`);
+    if (!section) return [];
+    return Array.from(section.querySelectorAll("[data-pipeline-id]")).map(
+      (row) => row.getAttribute("data-pipeline-id") ?? "",
+    );
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.mocked(fetchProjects).mockResolvedValue([alpha, bravo]);
+    vi.mocked(fetchPipelines).mockResolvedValue(mixed);
+  });
+
+  afterEach(() => {
+    vi.mocked(fetchProjects).mockResolvedValue([]);
+  });
+
+  it("puts the Projet's pipelines first, then the global ones, and hides the test ones", async () => {
+    renderModal();
+    await enterValidRepo("/repos/alpha");
+    // The Projet's own pipeline is the default.
+    await waitFor(() => expect(selectedPipeline()).toBe("alpha-only"));
+
+    await openPipelineMenu();
+    expect(screen.getByTestId("pipeline-select-section-project")).toHaveTextContent(
+      "Project pipelines · Alpha",
+    );
+    expect(sectionIds("project")).toEqual(["alpha-only"]);
+    expect(sectionIds("global")).toEqual(["common", "legacy"]);
+    expect(screen.queryByTestId("pipeline-select-section-test")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("pipeline-select-option-draft")).not.toBeInTheDocument();
+    expect(pipelineOptions().map((o) => o.id)).toEqual(["alpha-only", "common", "legacy"]);
+  });
+
+  it("shows the test pipelines under « Test pipelines · not validated » on demand, and lets one be launched", async () => {
+    renderModal();
+    await enterValidRepo("/repos/alpha");
+    await openPipelineMenu();
+
+    const user = menuUser();
+    await user.click(screen.getByTestId("pipeline-select-show-tests"));
+    // The menu stays open: unfolding is not a choice.
+    expect(screen.getByTestId("pipeline-select-menu")).toBeInTheDocument();
+    expect(screen.getByTestId("pipeline-select-section-test")).toHaveTextContent(
+      "Test pipelines · not validated",
+    );
+    expect(sectionIds("test")).toEqual(["draft"]);
+
+    await user.click(screen.getByTestId("pipeline-select-option-draft"));
+    expect(selectedPipeline()).toBe("draft");
+  });
+
+  it("lists a pipeline validated for all first for the Projets it names, global elsewhere", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      ...mixed,
+      makePipeline({
+        id: "featured",
+        name: "featured",
+        validation: { kind: "all", project_ids: ["prj-bravo"] },
+      }),
+    ]);
+    renderModal();
+    await settleRepo("/repos/alpha");
+    await chooseProject("Bravo");
+    await settleRepo("/repos/bravo");
+    // The Projet's first pipeline is the default, as for one validated for it only.
+    await waitFor(() => expect(selectedPipeline()).toBe("featured"));
+
+    await openPipelineMenu();
+    expect(sectionIds("project")).toEqual(["featured"]);
+    expect(sectionIds("global")).toEqual(["common", "legacy"]);
+    await menuUser().keyboard("{Escape}");
+
+    await chooseProject("Alpha");
+    await waitFor(() => expect(selectedPipeline()).toBe("alpha-only"));
+    await openPipelineMenu();
+    expect(sectionIds("project")).toEqual(["alpha-only"]);
+    expect(sectionIds("global")).toEqual(["common", "legacy", "featured"]);
+  });
+
+  it("does not offer a pipeline validated for another Projet", async () => {
+    renderModal();
+    await settleRepo("/repos/alpha");
+    await chooseProject("Bravo");
+    await settleRepo("/repos/bravo");
+    await waitFor(() => expect(selectedPipeline()).toBe("common"));
+
+    await openPipelineMenu();
+    expect(screen.getByTestId("pipeline-select-section-project")).toHaveTextContent("Bravo");
+    expect(sectionIds("project")).toEqual([]);
+    expect(screen.getByTestId("pipeline-select-section-project-empty")).toBeInTheDocument();
+    await menuUser().click(screen.getByTestId("pipeline-select-show-tests"));
+    expect(screen.queryByTestId("pipeline-select-option-alpha-only")).not.toBeInTheDocument();
+  });
+
+  it("drops a choice that the new Projet is not offered", async () => {
+    renderModal();
+    await settleRepo("/repos/alpha");
+    await waitFor(() => expect(selectedPipeline()).toBe("alpha-only"));
+
+    await chooseProject("Bravo");
+    await waitFor(() => expect(selectedPipeline()).toBe("common"));
+  });
+
+  it("moves a default selection to the Projet's pipeline once one is offered", async () => {
+    renderModal();
+    await settleRepo("/repos/alpha");
+    await chooseProject(null);
+    await enterValidRepo("/repos/elsewhere");
+    await waitFor(() => expect(selectedPipeline()).toBe("common"));
+
+    await chooseProject("Alpha");
+    await waitFor(() => expect(selectedPipeline()).toBe("alpha-only"));
+  });
+
+  it("keeps a pipeline the user picked, even when the Projet offers its own", async () => {
+    renderModal();
+    await settleRepo("/repos/alpha");
+    await chooseProject(null);
+    await enterValidRepo("/repos/elsewhere");
+    await openPipelineMenu();
+    await menuUser().click(screen.getByTestId("pipeline-select-option-legacy"));
+    expect(selectedPipeline()).toBe("legacy");
+
+    await chooseProject("Alpha");
+    await waitFor(() => expect(screen.getByTestId("pipeline-select")).not.toBeDisabled());
+    expect(selectedPipeline()).toBe("legacy");
+  });
+
+  it("gives a Run in no Projet the global pipelines and the test ones", async () => {
+    renderModal();
+    await settleRepo("/repos/alpha");
+    await chooseProject(null);
+    await enterValidRepo("/repos/elsewhere");
+    await openPipelineMenu();
+
+    expect(screen.queryByTestId("pipeline-select-section-project")).not.toBeInTheDocument();
+    expect(sectionIds("global")).toEqual(["common", "legacy"]);
+    await menuUser().click(screen.getByTestId("pipeline-select-show-tests"));
+    expect(sectionIds("test")).toEqual(["draft"]);
+  });
+
+  it("keeps the edited Trigger's pipeline, even a test one the Projet would not default to", async () => {
+    const trigger: Trigger = {
+      id: "trg-draft",
+      name: "Draft nightly",
+      pipeline_id: "draft",
+      pipeline_name: "draft",
+      target_repo: "/repos/alpha",
+      source_branch: "main",
+      input_template: "go",
+      variables: {},
+      cron: "0 9 * * *",
+      overlap_policy: "skip",
+      auto_name: true,
+      enabled: true,
+    };
+    render(
+      <NewRunModal
+        open={true}
+        onClose={noop}
+        onCreated={noop}
+        openIntent={{ kind: "edit-trigger", trigger }}
+      />,
+    );
+    await waitFor(() => expect(validateRepo).toHaveBeenCalledWith("/repos/alpha"));
+    await waitFor(() => expect(screen.getByTestId("pipeline-select")).not.toBeDisabled());
+    expect(selectedPipeline()).toBe("draft");
+  });
+
+  it("has the same sections in Trigger mode", async () => {
+    renderModal();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    await enterValidRepo("/repos/alpha");
+    await openPipelineMenu();
+
+    expect(sectionIds("project")).toEqual(["alpha-only"]);
+    expect(sectionIds("global")).toEqual(["common", "legacy"]);
+    expect(screen.getByTestId("pipeline-select-show-tests")).toBeInTheDocument();
+  });
+});
+
+describe("NewRunModal — drift indicator", () => {
+  it("does not show legacy drift decorations", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "drifted", name: "Drifted Pipe", scope: legacyScope("library"), drifted: true }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    expect(screen.getByTestId("pipeline-select-option-drifted")).toBeInTheDocument();
+    expect(screen.queryByTestId("drift-indicator")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("drift-warning")).not.toBeInTheDocument();
+  });
+
+  it("does not show a library star", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "synced", name: "Synced Pipe", scope: legacyScope("library"), drifted: false }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    expect(screen.getByTestId("pipeline-select-option-synced")).toBeInTheDocument();
+    expect(screen.queryByTestId("library-star")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("drift-indicator")).not.toBeInTheDocument();
+  });
+
+  it("does not prefix a pipeline name with a legacy drift warning", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "drifted", name: "Drifted Pipe", scope: legacyScope("library"), drifted: true }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    expect(pipelineOptions()).toEqual([{ id: "drifted", name: "Drifted Pipe" }]);
+  });
+});
+
+describe("NewRunModal — instance pipelines", () => {
+  it("does not show legacy promotion controls", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "instance-pipe", name: "Instance Pipeline", scope: "instance" }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    expect(screen.getByTestId("pipeline-select-option-instance-pipe")).toBeInTheDocument();
+    expect(screen.queryByTestId("promote-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("library-star")).not.toBeInTheDocument();
+  });
+});
+
+describe("NewRunModal — multi-repo form flow", () => {
+  it("renders a target repo input field", () => {
+    renderModal();
+    expect(screen.getByLabelText(/target repository/i)).toBeInTheDocument();
+  });
+
+  it("validates the repo path and shows error for invalid repo", async () => {
+    vi.mocked(validateRepo).mockResolvedValueOnce({ valid: false, error: "not a git repository" });
+
+    renderModal();
+    const repoInput = screen.getByLabelText(/target repository/i);
+    fireEvent.change(repoInput, { target: { value: "/tmp/not-a-repo" } });
+    await vi.advanceTimersByTimeAsync(500);
+
+    await waitFor(() => {
+      expect(validateRepo).toHaveBeenCalledWith("/tmp/not-a-repo");
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("repo-error")).toHaveTextContent(/not a git repository/i);
+    });
+  });
+
+  it("fetches branches after valid repo is entered", async () => {
+    renderModal();
+    const repoInput = screen.getByLabelText(/target repository/i);
+    fireEvent.change(repoInput, { target: { value: "/home/user/project" } });
+    await vi.advanceTimersByTimeAsync(500);
+
+    await waitFor(() => {
+      expect(validateRepo).toHaveBeenCalledWith("/home/user/project");
+    });
+    await waitFor(() => {
+      expect(listBranches).toHaveBeenCalledWith("/home/user/project");
+    });
+  });
+
+  it("offers the repo's branches in the quick pick after validation", async () => {
+    renderModal();
+    await enterValidRepo();
+
+    fireEvent.click(screen.getByTestId("source-branch-trigger"));
+    await waitFor(() => {
+      const offered = screen
+        .getAllByTestId("source-branch-option")
+        .map((o) => o.getAttribute("data-branch"));
+      expect(offered).toEqual(expect.arrayContaining(["main", "dev", "feature-x"]));
+    });
+  });
+
+  // #571: remote-tracking refs render under a "Remote" group, locals under
+  // "Local", and the default lands on the local `main` — never a remote while a
+  // local exists.
+  it("groups branches into Local and Remote, defaulting to a local (#571)", async () => {
+    listBranchesReturns([local("main"), remote("origin/feature-remote-only")]);
+    renderModal();
+    await enterValidRepo();
+
+    // The default is the local main, not the remote.
+    await waitFor(() => expect(selectedBranch()).toContain("main"));
+
+    fireEvent.click(screen.getByTestId("source-branch-trigger"));
+    const popover = await screen.findByTestId("source-branch-popover");
+    expect(within(popover).getByText("Local")).toBeInTheDocument();
+    expect(within(popover).getByText("Remote")).toBeInTheDocument();
+    expect(
+      within(popover)
+        .getAllByTestId("source-branch-option")
+        .map((o) => o.getAttribute("data-branch")),
+    ).toEqual(["main", "origin/feature-remote-only"]);
+  });
+
+  // #571 / #452: what the field shows is what launches. A remote source is posted
+  // as `source_branch` VERBATIM — prefix and all — never stripped to a bare name.
+  it("launches a remote branch verbatim, prefix and all (#571)", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "P1", scope: legacyScope("repo") }),
+    ]);
+    listBranchesReturns([
+      local("main"),
+      remote("origin/feature-remote-only"),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    await pickBranch("origin/feature-remote-only");
+    await pickPipeline("p1");
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+      target: { value: "do the thing" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
+
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalledWith(
+        expect.objectContaining({ source_branch: "origin/feature-remote-only" }),
+      );
+    });
+  });
+
+  /**
+   * #454: the `!sourceBranch` guard blocked re-selection when the repo changed.
+   * The `<select>` then DISPLAYED the new repo's only option while the state
+   * still held a branch that repo does not have → launch refused with
+   * `branch 'main' does not exist`. Same shows-one-sends-another family as #452.
+   */
+  describe("changing the target repo re-selects the source branch (#454)", () => {
+    /**
+     * Asserting the DOM value CANNOT catch this bug in its original form, and that
+     * is the whole point of it: a `<select>` whose React value matches none of its
+     * options reports the FIRST option's value, so the DOM read `master` even while
+     * the state held `main` — a read that looks like a check and passes either way.
+     * Only what the form actually submits distinguishes the two. (#802's quick pick
+     * renders the held value verbatim, which closes that particular blind spot, but
+     * the submitted value stays the assertion that matters.)
+     */
+    it("launches against the re-selected branch, not the stale one", async () => {
+      vi.mocked(fetchPipelines).mockResolvedValue([
+        makePipeline({ id: "p1", name: "P1", scope: legacyScope("repo") }),
+      ]);
+      listBranchesReturns([local("main"), local("dev"), local("feature-x")]);
+      renderModal();
+      await enterValidRepo("/home/user/project-a"); // → main
+
+      listBranchesReturns([local("master")]);
+      await enterValidRepo("/home/user/project-b");
+
+      await waitFor(() => expect(selectedBranch()).toContain("master"));
+
+      await pickPipeline("p1");
+      fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+        target: { value: "do the thing" },
+      });
+
+      vi.useRealTimers();
+      fireEvent.click(screen.getByRole("button", { name: /^run/i }));
+
+      await waitFor(() => {
+        // Pre-fix this was `main`, a branch project-b does not have → the daemon
+        // refused the launch with `branch 'main' does not exist`.
+        expect(createRun).toHaveBeenCalledWith(
+          expect.objectContaining({ source_branch: "master" }),
+        );
+      });
+    });
+
+    /**
+     * Guard against over-correcting: resetting unconditionally on every repo
+     * change would throw away a deliberate choice that the new repo still honours.
+     * This one passes before the fix too — it is here to keep the fix honest, not
+     * to prove the bug.
+     */
+    it("keeps the user's branch when the new repo still has it", async () => {
+      vi.mocked(fetchPipelines).mockResolvedValue([
+        makePipeline({ id: "p1", name: "P1", scope: legacyScope("repo") }),
+      ]);
+      listBranchesReturns([local("main"), local("dev"), local("feature-x")]);
+      renderModal();
+      await enterValidRepo("/home/user/project-a");
+
+      await pickBranch("feature-x");
+      expect(selectedBranch()).toContain("feature-x");
+
+      listBranchesReturns([local("main"), local("feature-x")]);
+      await enterValidRepo("/home/user/project-b");
+
+      await pickPipeline("p1");
+      fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+        target: { value: "do the thing" },
+      });
+
+      vi.useRealTimers();
+      fireEvent.click(screen.getByRole("button", { name: /^run/i }));
+
+      await waitFor(() => {
+        expect(createRun).toHaveBeenCalledWith(
+          expect.objectContaining({ source_branch: "feature-x" }),
+        );
+      });
+    });
+  });
+
+  it("passes target_repo and source_branch to createRun on launch", async () => {
+    const onCreated = vi.fn();
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Test Pipeline", scope: legacyScope("repo") }),
+    ]);
+
+    render(
+      <NewRunModal
+        open={true}
+        onClose={noop}
+        onCreated={onCreated}
+      />,
+    );
+
+    await enterValidRepo();
+
+    await pickBranch("dev");
+
+    const inputTextarea = screen.getByPlaceholderText(/free-text prompt/i);
+    fireEvent.change(inputTextarea, { target: { value: "implement feature X" } });
+
+    vi.useRealTimers();
+    const launchButton = screen.getByRole("button", { name: /^run/i });
+    fireEvent.click(launchButton);
+
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target_repo: "/home/user/project",
+          source_branch: "dev",
+          input: "implement feature X",
+        }),
+      );
+    });
+  });
+
+  it("does not show branch dropdown before repo is validated", () => {
+    renderModal();
+    expect(screen.queryByLabelText(/source branch/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps Launch disabled with an empty prompt for a prompt-required pipeline", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Required Pipeline", scope: legacyScope("repo"), prompt_required: true }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    const launchButton = screen.getByRole("button", { name: /^run/i });
+    expect(launchButton).toBeDisabled();
+  });
+
+  it("enables Launch with an empty prompt for a prompt-optional pipeline", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Optional Pipeline", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    await waitFor(() => {
+      const launchButton = screen.getByRole("button", { name: /^run/i });
+      expect(launchButton).toBeEnabled();
+    });
+  });
+
+  it("launches a prompt-optional pipeline with empty input", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Optional Pipeline", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^run/i })).toBeEnabled();
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
+
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalledWith(
+        expect.objectContaining({ pipeline: "Optional Pipeline", input: "" }),
+      );
+    });
+  });
+
+  it("clears branches when repo path changes", async () => {
+    renderModal();
+    await enterValidRepo();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/source branch/i)).toBeInTheDocument();
+    });
+
+    vi.mocked(validateRepo).mockResolvedValueOnce({ valid: false, error: "not a git repository" });
+    const repoInput = screen.getByLabelText(/target repository/i);
+    fireEvent.change(repoInput, { target: { value: "/home/user/other" } });
+    await vi.advanceTimersByTimeAsync(500);
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/source branch/i)).not.toBeInTheDocument();
+    });
+  });
+});
+
+describe("NewRunModal — image upload", () => {
+  it("renders the image upload area", async () => {
+    renderModal();
+    expect(screen.getByTestId("image-drop-zone")).toBeInTheDocument();
+    expect(screen.getByTestId("image-upload-button")).toHaveTextContent("Attach");
+  });
+
+  it("says the budget in the Files label's tooltip, no hint under the row", () => {
+    renderModal();
+    expect(screen.getByText("Files")).toHaveAttribute("title", expect.stringMatching(/50\.0 MB per run/));
+    expect(screen.queryByTestId("attachments-counter")).toBeNull();
+  });
+
+  it("adds images via file input and shows thumbnails", async () => {
+    renderModal();
+    const fileInput = screen.getByTestId("image-file-input") as HTMLInputElement;
+
+    const file = new File(["png-data"], "screenshot.png", { type: "image/png" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      const thumbnails = screen.getAllByTestId("image-thumbnail");
+      expect(thumbnails).toHaveLength(1);
+    });
+    expect(screen.getByTestId("attachments-counter")).toHaveTextContent(/^1 image · /);
+    expect(screen.getByTestId("attachments-counter")).toHaveTextContent("/ 50.0 MB");
+  });
+
+  it("shows remove button and removes image on click", async () => {
+    renderModal();
+    const fileInput = screen.getByTestId("image-file-input") as HTMLInputElement;
+
+    const file = new File(["png-data"], "test.png", { type: "image/png" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("image-thumbnail")).toHaveLength(1);
+    });
+
+    const removeBtn = screen.getByTestId("image-remove-button");
+    fireEvent.click(removeBtn);
+
+    await waitFor(() => {
+      expect(screen.queryAllByTestId("image-thumbnail")).toHaveLength(0);
+    });
+    expect(screen.queryByTestId("attachments-counter")).toBeNull();
+  });
+
+  it("supports multiple images", async () => {
+    renderModal();
+    const fileInput = screen.getByTestId("image-file-input") as HTMLInputElement;
+
+    const file1 = new File(["a"], "one.png", { type: "image/png" });
+    const file2 = new File(["b"], "two.jpg", { type: "image/jpeg" });
+    fireEvent.change(fileInput, { target: { files: [file1, file2] } });
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("image-thumbnail")).toHaveLength(2);
+    });
+    expect(screen.getByTestId("attachments-counter")).toHaveTextContent(/^2 images · /);
+  });
+
+  it("shows add-more button when images exist", async () => {
+    renderModal();
+    const fileInput = screen.getByTestId("image-file-input") as HTMLInputElement;
+
+    const file = new File(["png"], "img.png", { type: "image/png" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("image-add-more-button")).toBeInTheDocument();
+    });
+  });
+
+  it("passes images to createRun on launch", async () => {
+    const onCreated = vi.fn();
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Test Pipeline" }),
+    ]);
+
+    render(
+      <NewRunModal
+        open={true}
+        onClose={noop}
+        onCreated={onCreated}
+      />,
+    );
+
+    await enterValidRepo();
+
+    const inputTextarea = screen.getByPlaceholderText(/free-text prompt/i);
+    fireEvent.change(inputTextarea, { target: { value: "implement feature" } });
+
+    const fileInput = screen.getByTestId("image-file-input") as HTMLInputElement;
+    const file = new File(["png-data"], "design.png", { type: "image/png" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("image-thumbnail")).toHaveLength(1);
+    });
+
+    vi.useRealTimers();
+    const launchButton = screen.getByRole("button", { name: /^run/i });
+    fireEvent.click(launchButton);
+
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: "implement feature",
+          images: expect.arrayContaining([
+            expect.objectContaining({ name: "design.png" }),
+          ]),
+        }),
+      );
+    });
+  });
+
+  it("does not pass images when none attached", async () => {
+    const onCreated = vi.fn();
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Test Pipeline" }),
+    ]);
+
+    render(
+      <NewRunModal
+        open={true}
+        onClose={noop}
+        onCreated={onCreated}
+      />,
+    );
+
+    await enterValidRepo();
+
+    const inputTextarea = screen.getByPlaceholderText(/free-text prompt/i);
+    fireEvent.change(inputTextarea, { target: { value: "text only" } });
+
+    vi.useRealTimers();
+    const launchButton = screen.getByRole("button", { name: /^run/i });
+    fireEvent.click(launchButton);
+
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: "text only",
+          images: undefined,
+        }),
+      );
+    });
+  });
+
+  // #779: the field is « Attachments » — any file is accepted, non-images as chips.
+  it("shows non-image files as chips beside the thumbnails", async () => {
+    renderModal();
+    const fileInput = screen.getByTestId("image-file-input") as HTMLInputElement;
+    expect(fileInput.accept).toBe("");
+
+    const textFile = new File(["# spec"], "SPEC-779.md", { type: "text/markdown" });
+    const imageFile = new File(["png"], "img.png", { type: "image/png" });
+    fireEvent.change(fileInput, { target: { files: [textFile, imageFile] } });
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("image-thumbnail")).toHaveLength(1);
+    });
+    const chips = screen.getAllByTestId("file-chip");
+    expect(chips).toHaveLength(1);
+    expect(chips[0]).toHaveTextContent("MD");
+    expect(chips[0]).toHaveTextContent("SPEC-779.md");
+    expect(chips[0]).toHaveTextContent("6 B");
+    expect(screen.getByTestId("attachments-counter")).toHaveTextContent(/^1 image, 1 file · /);
+    expect(screen.getByTestId("attachments-meter")).toBeInTheDocument();
+  });
+
+  it("removes a chip with its × button or the Delete key", async () => {
+    renderModal();
+    const fileInput = screen.getByTestId("image-file-input") as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: {
+        files: [
+          new File(["{}"], "fixtures.json", { type: "application/json" }),
+          new File(["x"], "dump.sql", { type: "" }),
+        ],
+      },
+    });
+    await waitFor(() => expect(screen.getAllByTestId("file-chip")).toHaveLength(2));
+
+    fireEvent.click(screen.getAllByTestId("file-remove-button")[0]);
+    await waitFor(() => expect(screen.getAllByTestId("file-chip")).toHaveLength(1));
+    expect(screen.getByTestId("file-chip")).toHaveTextContent("dump.sql");
+
+    fireEvent.keyDown(screen.getByTestId("file-chip"), { key: "Delete" });
+    await waitFor(() => expect(screen.queryAllByTestId("file-chip")).toHaveLength(0));
+    expect(screen.queryByTestId("attachments-meter")).toBeNull();
+  });
+
+  it("replaces an attachment with the same name and says so", async () => {
+    renderModal();
+    const fileInput = screen.getByTestId("image-file-input") as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: { files: [new File(["v1"], "SPEC-779.md", { type: "text/markdown" })] },
+    });
+    await waitFor(() => expect(screen.getAllByTestId("file-chip")).toHaveLength(1));
+    fireEvent.change(fileInput, {
+      target: { files: [new File(["v2 longer"], "SPEC-779.md", { type: "text/markdown" })] },
+    });
+    await waitFor(() => expect(screen.getByText(/Replaced SPEC-779.md\./)).toBeInTheDocument());
+    expect(screen.getAllByTestId("file-chip")).toHaveLength(1);
+    expect(screen.getByTestId("file-chip")).toHaveTextContent("9 B");
+    expect(screen.getByTestId("attachments-counter")).toHaveTextContent(/^1 file · /);
+  });
+
+  it("refuses a drop that would exceed the per-run budget, keeps the rest", async () => {
+    // The budget comes from Settings: 1 MB here.
+    const base = await fetchSettings();
+    vi.mocked(fetchSettings).mockResolvedValueOnce({
+      ...base,
+      max_attachments_mb: { effective: 1, source: "stored", stored: 1, env: null, default: 50 },
+      public_url: { effective: null, source: "default", stored: null, env: null, default: null },
+    });
+    renderModal();
+    await waitFor(() =>
+      expect(screen.getByText("Files")).toHaveAttribute("title", expect.stringMatching(/1\.0 MB per run/)),
+    );
+
+    const zone = screen.getByTestId("image-drop-zone");
+    const small = new File(["ok"], "notes.md", { type: "text/markdown" });
+    const big = new File([new Uint8Array(2 * 1024 * 1024)], "recording.mov", {
+      type: "video/quicktime",
+    });
+    fireEvent.drop(zone, { dataTransfer: { files: [big, small] } });
+
+    await waitFor(() => expect(screen.getByTestId("attachments-error")).toBeInTheDocument());
+    expect(screen.getByTestId("attachments-error")).toHaveTextContent(
+      "recording.mov (2.0 MB) not added: total would exceed 1.0 MB per run.",
+    );
+    expect(screen.getAllByTestId("file-chip")).toHaveLength(1);
+    expect(screen.getByTestId("file-chip")).toHaveTextContent("notes.md");
+  });
+
+  it("highlights the zone while dragging over it", () => {
+    renderModal();
+    const zone = screen.getByTestId("image-drop-zone");
+    fireEvent.dragOver(zone, { dataTransfer: { files: [] } });
+    expect(zone).toHaveAttribute("data-drag-over", "true");
+    fireEvent.dragLeave(zone);
+    expect(zone).not.toHaveAttribute("data-drag-over");
+  });
+
+  it("passes non-image files to createRun in `files`, images in `images`", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Test Pipeline" }),
+    ]);
+    render(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+    await enterValidRepo();
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+      target: { value: "implement the spec" },
+    });
+    const fileInput = screen.getByTestId("image-file-input") as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: {
+        files: [
+          new File(["png"], "proto.png", { type: "image/png" }),
+          new File(["# spec"], "SPEC-779.md", { type: "text/markdown" }),
+        ],
+      },
+    });
+    await waitFor(() => expect(screen.getAllByTestId("file-chip")).toHaveLength(1));
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          images: [expect.objectContaining({ name: "proto.png" })],
+          files: [expect.objectContaining({ name: "SPEC-779.md" })],
+        }),
+      );
+    });
+  });
+
+  it("warns once before closing with attachments present", async () => {
+    const onClose = vi.fn();
+    render(<NewRunModal open={true} onClose={onClose} onCreated={noop} />);
+    const fileInput = screen.getByTestId("image-file-input") as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: { files: [new File(["{}"], "fixtures.json", { type: "application/json" })] },
+    });
+    await waitFor(() => expect(screen.getAllByTestId("file-chip")).toHaveLength(1));
+
+    // #822: Cancel is one of the tour's stable targets, so this drives it by
+    // selector — a rename has to break here, not in a tour step.
+    fireEvent.click(screen.getByTestId("new-run-cancel"));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId("attachments-close-warning")).toHaveTextContent(
+      "1 attachment lost on close",
+    );
+    fireEvent.click(screen.getByTestId("new-run-cancel"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes straight away through Cancel when there is nothing to lose (#822)", () => {
+    const onClose = vi.fn();
+    render(<NewRunModal open={true} onClose={onClose} onCreated={noop} />);
+
+    fireEvent.click(screen.getByTestId("new-run-cancel"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("NewRunModal — attachment budget rules (#779)", () => {
+  const mb = 1024 * 1024;
+  const file = (name: string, size: number, type = "application/octet-stream") =>
+    new File([new Uint8Array(size)], name, { type });
+
+  it("replaces a same-named file and refuses only what overflows", () => {
+    const current = [file("a.bin", 10), file("b.bin", 20)];
+    const { next, replaced, refused } = mergeAttachments(
+      current,
+      [file("a.bin", 15), file("huge.bin", 2 * mb), file("c.bin", 5)],
+      mb,
+    );
+    expect(next.map((f) => [f.name, f.size])).toEqual([
+      ["a.bin", 15],
+      ["b.bin", 20],
+      ["c.bin", 5],
+    ]);
+    expect(replaced).toEqual(["a.bin"]);
+    expect(refused.map((f) => f.name)).toEqual(["huge.bin"]);
+  });
+
+  it("a single file may use the whole budget", () => {
+    const { next, refused } = mergeAttachments([], [file("all.bin", mb)], mb);
+    expect(next).toHaveLength(1);
+    expect(refused).toHaveLength(0);
+  });
+
+  it("flags the chips past the budget line when the limit was lowered", () => {
+    const list = [file("a.parquet", 0.4 * mb), file("b.parquet", 0.4 * mb), file("c.sql", 0.4 * mb)];
+    expect([...overLimitIndices(list, mb)]).toEqual([2]);
+    expect([...overLimitIndices(list, 2 * mb)]).toEqual([]);
+  });
+});
+
+describe("NewRunModal — form persistence across close/reopen", () => {
+  it("explains on the disabled Launch that provisioning has a mode conflict (Notion #7)", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Optional Pipeline", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+    vi.mocked(previewProvisioning).mockImplementation(async (_repo, _level, rules) => ({
+      entries: [],
+      rules: [],
+      conflicts:
+        rules.copy.includes(".env") && rules.symlink.includes(".env")
+          ? [{ scope: "run", relative_path: ".env", modes: ["copy", "symlink"] }]
+          : [],
+    }));
+    render(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+    await enterValidRepo();
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    expect(screen.getByTestId("launch-button-wrapper")).not.toHaveAttribute("tabindex");
+
+    const toggle = screen.getByRole("button", { name: /^Provisioning/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(toggle);
+    fireEvent.change(screen.getByLabelText("Copy patterns"), { target: { value: ".env" } });
+    fireEvent.change(screen.getByLabelText("Symlink patterns"), { target: { value: ".env" } });
+
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeDisabled());
+    expect(screen.getByTestId("launch-button")).toHaveAccessibleDescription(
+      "Provisioning has a mode conflict",
+    );
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    // The disabled button takes no focus: its wrapper does, and shows the reason.
+    act(() => screen.getByTestId("launch-button-wrapper").focus());
+    await waitFor(() =>
+      expect(screen.getByTestId("tooltip-content")).toHaveTextContent(
+        "Provisioning has a mode conflict",
+      ),
+    );
+
+    fireEvent.change(screen.getByLabelText("Symlink patterns"), { target: { value: "" } });
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    expect(screen.getByTestId("launch-button")).not.toHaveAccessibleDescription();
+    expect(screen.getByTestId("launch-button-wrapper")).not.toHaveAttribute("tabindex");
+    vi.mocked(previewProvisioning).mockReset();
+    vi.mocked(previewProvisioning).mockResolvedValue({ entries: [], rules: [], conflicts: [] });
+  });
+
+  it("clears run provisioning across close/reopen", async () => {
+    const { rerender } = render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop} />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /^Provisioning/ }));
+    await userEvent.type(screen.getByLabelText("Symlink patterns"), "conflicting-draft");
+    expect(screen.getByLabelText("Symlink patterns")).toHaveValue("conflicting-draft");
+
+    rerender(<NewRunModal open={false} onClose={noop} onCreated={noop} />);
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+
+    // Notion #7: reopened collapsed (no remembered state), and emptied.
+    const toggle = screen.getByRole("button", { name: /^Provisioning/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByTestId("provisioning-summary")).toHaveTextContent("none");
+    await userEvent.click(toggle);
+    expect(screen.getByLabelText("Symlink patterns")).toHaveValue("");
+  });
+
+  it("preserves prompt text across close/reopen", async () => {
+    const { rerender } = render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop} />,
+    );
+
+    await enterValidRepo();
+
+    const textarea = screen.getByPlaceholderText(/free-text prompt/i);
+    fireEvent.change(textarea, { target: { value: "my prompt text" } });
+
+    rerender(<NewRunModal open={false} onClose={noop} onCreated={noop} />);
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+
+    expect(screen.getByPlaceholderText(/free-text prompt/i)).toHaveValue("my prompt text");
+  });
+
+  it("preserves target repo and pipeline selection across close/reopen", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "My Pipeline", scope: legacyScope("repo") }),
+    ]);
+
+    const { rerender } = render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop} />,
+    );
+
+    await enterValidRepo("/home/user/my-repo");
+
+    await waitFor(() => expect(selectedPipeline()).toBe("My Pipeline"));
+
+    rerender(<NewRunModal open={false} onClose={noop} onCreated={noop} />);
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+
+    const repoInput = screen.getByLabelText(/target repository/i) as HTMLInputElement;
+    expect(repoInput.value).toBe("/home/user/my-repo");
+
+    expect(selectedPipeline()).toBe("My Pipeline");
+  });
+
+  it("preserves images across close/reopen", async () => {
+    const { rerender } = render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop} />,
+    );
+
+    const fileInput = screen.getByTestId("image-file-input") as HTMLInputElement;
+    const file = new File(["png-data"], "screenshot.png", { type: "image/png" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("image-thumbnail")).toHaveLength(1);
+    });
+
+    rerender(<NewRunModal open={false} onClose={noop} onCreated={noop} />);
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+
+    expect(screen.getAllByTestId("image-thumbnail")).toHaveLength(1);
+  });
+
+  it("resets form fields after successful launch", async () => {
+    const onCreated = vi.fn();
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Test Pipeline", scope: legacyScope("repo") }),
+    ]);
+
+    const { rerender } = render(
+      <NewRunModal open={true} onClose={noop} onCreated={onCreated} />,
+    );
+
+    await enterValidRepo();
+
+    const textarea = screen.getByPlaceholderText(/free-text prompt/i);
+    fireEvent.change(textarea, { target: { value: "implement feature" } });
+
+    const fileInput = screen.getByTestId("image-file-input") as HTMLInputElement;
+    const file = new File(["png-data"], "design.png", { type: "image/png" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("image-thumbnail")).toHaveLength(1);
+    });
+
+    vi.useRealTimers();
+    const launchButton = screen.getByRole("button", { name: /^run/i });
+    fireEvent.click(launchButton);
+
+    await waitFor(() => {
+      expect(onCreated).toHaveBeenCalledWith("test-run");
+    });
+
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={onCreated} />);
+
+    expect(screen.getByPlaceholderText(/free-text prompt/i)).toHaveValue("");
+    expect(screen.queryAllByTestId("image-thumbnail")).toHaveLength(0);
+  });
+});
+
+describe("NewRunModal run name field", () => {
+  it("renders a name input and auto-generated checkbox", () => {
+    renderModal();
+
+    expect(screen.getByTestId("run-name-input")).toBeInTheDocument();
+    expect(screen.getByTestId("auto-name-checkbox")).toBeInTheDocument();
+    expect(screen.getByTestId("auto-name-checkbox").closest("label")).toHaveTextContent("Auto");
+  });
+
+  // FP of CORE-227: a tour lit the bare box, and its card, placed beside the
+  // hole, covered the word « Auto » its own copy pointed at. The whole control —
+  // box and word — is one target.
+  it("names the whole Auto control, box and word, as one target", () => {
+    renderModal();
+    const control = screen.getByTestId("auto-name");
+    expect(control).toHaveTextContent("Auto");
+    expect(control).toContainElement(screen.getByTestId("auto-name-checkbox"));
+  });
+
+  it("name input is disabled when auto-generated is checked", () => {
+    renderModal();
+
+    const input = screen.getByTestId("run-name-input") as HTMLInputElement;
+    const checkbox = screen.getByTestId("auto-name-checkbox") as HTMLInputElement;
+
+    expect(checkbox.checked).toBe(true);
+    expect(input.disabled).toBe(true);
+  });
+
+  it("name field is the first field in the modal body", () => {
+    renderModal();
+
+    const labels = screen.getAllByText(/^(Name|Pipeline|Input)$/);
+    expect(labels[0].textContent).toBe("Name");
+  });
+});
+
+describe("NewRunModal — auto-naming default (#338)", () => {
+  function settingsWithAutoName(effective: boolean): InstanceSettings {
+    return {
+      session_cap: { effective: 20, source: "default", stored: null, env: null, default: 20 },
+      reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
+      guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+      max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+      public_url: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness_model: { effective: {}, stored: {} },
+      default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
+      sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
+      sandbox_profiles: [{ name: "full", virtual: true }, { name: "minimal", virtual: true }],
+      home: "/home/user",
+      autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
+      default_auto_name: { effective, source: effective ? "default" : "stored", stored: effective ? null : false, env: null, default: true },
+      update_check: { effective: true, source: "default", stored: null, env: null, default: true },
+      manager_enabled: { effective: false, source: "default", stored: null, env: null, default: false },
+      review_agent_can_resolve: { effective: false, source: "default", stored: null, env: null, default: false },
+      manager_profile: { effective: null, source: "default", stored: null, env: null, default: null },
+      price_table: { manual_path: null, fetched_path: null, source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
+      updated_at: "2026-07-01T10:00:00.000Z",
+    };
+  }
+
+  it("seeds the checkbox OFF (and enables the name input) when the instance default is off", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsWithAutoName(false));
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
+    renderModal();
+
+    const checkbox = screen.getByTestId("auto-name-checkbox") as HTMLInputElement;
+    const input = screen.getByTestId("run-name-input") as HTMLInputElement;
+    // Seed is async (waits on fetchSettings): the box starts optimistic-true, then flips.
+    await waitFor(() => expect(checkbox.checked).toBe(false));
+    expect(input.disabled).toBe(false);
+  });
+
+  it("keeps the checkbox ON when the instance default is on", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsWithAutoName(true));
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
+    renderModal();
+    const checkbox = screen.getByTestId("auto-name-checkbox") as HTMLInputElement;
+    await waitFor(() => expect(checkbox.checked).toBe(true));
+  });
+
+  it("launches with auto_name:true by default", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsWithAutoName(true));
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Optional", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+    await waitFor(() => expect(screen.getByRole("button", { name: /^run/i })).toBeEnabled());
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalledWith(expect.objectContaining({ auto_name: true }));
+    });
+  });
+
+  it("unchecking sends auto_name:false with the typed name", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsWithAutoName(true));
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Optional", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    const checkbox = screen.getByTestId("auto-name-checkbox") as HTMLInputElement;
+    // Wait for the async seed to settle before unchecking, else it would overwrite us.
+    await waitFor(() => expect(checkbox.checked).toBe(true));
+    fireEvent.click(checkbox);
+    fireEvent.change(screen.getByTestId("run-name-input"), { target: { value: "Fix bug" } });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalledWith(
+        expect.objectContaining({ auto_name: false, name: "Fix bug" }),
+      );
+    });
+  });
+
+  it("carries the auto_name choice into a created Trigger", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsWithAutoName(true));
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    // Wait for the seed so the box is deterministically ON before we uncheck it.
+    const checkbox = screen.getByTestId("auto-name-checkbox") as HTMLInputElement;
+    await waitFor(() => expect(checkbox.checked).toBe(true));
+
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    fireEvent.change(screen.getByTestId("trigger-name-input"), { target: { value: "Nightly" } });
+    fireEvent.click(screen.getByTestId("preset-every_15_min"));
+    // Turn auto-naming off for the fired runs.
+    fireEvent.click(screen.getByTestId("auto-name-checkbox"));
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("create-trigger-button"));
+    await waitFor(() => {
+      expect(createTrigger).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "Nightly", auto_name: false }),
+      );
+    });
+  });
+});
+
+describe("NewRunModal — Trigger mode (#160)", () => {
+  async function selectPipelineAndRepo() {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+  }
+
+  it("offers a [Run now | Trigger] toggle and defaults to Run now", () => {
+    renderModal();
+    expect(screen.getByTestId("mode-run")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("mode-trigger")).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("switches the footer action to Create trigger in Trigger mode", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    expect(screen.getByTestId("create-trigger-button")).toBeInTheDocument();
+    expect(screen.queryByTestId("launch-button")).not.toBeInTheDocument();
+  });
+
+  it("exposes schedule presets and a raw cron escape hatch", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    expect(screen.getByTestId("preset-every_15_min")).toBeInTheDocument();
+    expect(screen.getByTestId("preset-hourly")).toBeInTheDocument();
+    expect(screen.getByTestId("preset-daily")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("preset-custom"));
+    expect(screen.getByTestId("raw-cron-input")).toBeInTheDocument();
+  });
+
+  it("says the time zone the schedule is read in, beside the expression", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    fireEvent.click(screen.getByTestId("preset-daily"));
+    fireEvent.change(screen.getByTestId("daily-hour"), { target: { value: "3" } });
+    expect(screen.getByTestId("resolved-cron")).toHaveTextContent("0 3 * * *");
+    expect(screen.getByTestId("cron-time-zone")).toHaveTextContent("UTC");
+    expect(screen.getByTestId("new-run-summary")).toHaveTextContent(/^0 3 \* \* \* UTC · /);
+    fireEvent.click(screen.getByTestId("preset-custom"));
+    fireEvent.change(screen.getByTestId("raw-cron-input"), { target: { value: "17 3 * * 1" } });
+    expect(screen.getByTestId("cron-time-zone")).toHaveTextContent("UTC");
+    // A schedule on minutes alone fires alike in every time zone.
+    fireEvent.click(screen.getByTestId("preset-every_15_min"));
+    expect(screen.queryByTestId("cron-time-zone")).toBeNull();
+    expect(screen.getByTestId("new-run-summary")).toHaveTextContent(/^\*\/15 \* \* \* \* · /);
+  });
+
+  it("relabels the prompt field as an optional input template in Trigger mode", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    // No template syntax: the guard's stdout replaces the input, it is never interpolated (CORE-232).
+    expect(screen.getByLabelText("Input")).toHaveAttribute("placeholder", "Free-text input");
+    expect(screen.getByLabelText("Input").getAttribute("placeholder")).not.toMatch(/\{\{/);
+    // A guard example that exits non-zero when there is nothing to do: an empty list skips.
+    expect(screen.getByTestId("guard-command-input")).toHaveAttribute("placeholder", "gh issue list --label ready | grep .");
+  });
+
+  it("creates a trigger with the compiled cron and chosen pipeline", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    fireEvent.change(screen.getByTestId("trigger-name-input"), {
+      target: { value: "Nightly audit" },
+    });
+    fireEvent.click(screen.getByTestId("preset-every_15_min"));
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("create-trigger-button"));
+
+    await waitFor(() => {
+      expect(createTrigger).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Nightly audit",
+          pipeline_id: "p1",
+          cron: "*/15 * * * *",
+          target_repo: "/home/user/project",
+        }),
+      );
+    });
+  });
+
+  it("keeps Create trigger disabled until a name is entered", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    expect(screen.getByTestId("create-trigger-button")).toBeDisabled();
+    fireEvent.change(screen.getByTestId("trigger-name-input"), {
+      target: { value: "Audit" },
+    });
+    expect(screen.getByTestId("create-trigger-button")).not.toBeDisabled();
+  });
+
+  it("surfaces the server reject reason inline", async () => {
+    await selectPipelineAndRepo();
+    vi.mocked(createTrigger).mockRejectedValueOnce(
+      new Error("this pipeline requires a prompt; add a guard, an input template, ..."),
+    );
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    fireEvent.change(screen.getByTestId("trigger-name-input"), {
+      target: { value: "Bad" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("create-trigger-button"));
+
+    await waitFor(() => {
+      expect(screen.getByText(/requires a prompt/i)).toBeInTheDocument();
+    });
+  });
+
+  it("disables Create and shows the reason when a prompt-required pipeline has no guard or input (#161)", async () => {
+    // A pipeline that requires a prompt; with no guard and no input template,
+    // the modal must disable Create and explain why, mirroring the server reject.
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Needs Prompt", scope: legacyScope("repo"), prompt_required: true }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    fireEvent.change(screen.getByTestId("trigger-name-input"), {
+      target: { value: "Bad" },
+    });
+
+    expect(screen.getByTestId("create-trigger-button")).toBeDisabled();
+    expect(screen.getByText(/requires a prompt/i)).toBeInTheDocument();
+
+    // Adding a guard command resolves the misconfiguration.
+    fireEvent.change(screen.getByTestId("guard-command-input"), {
+      target: { value: "gh issue list" },
+    });
+    expect(screen.getByTestId("create-trigger-button")).not.toBeDisabled();
+  });
+
+  it("exposes a guard command field with its contract helper text (#161)", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    expect(screen.getByTestId("guard-command-input")).toBeInTheDocument();
+    // The contract is one hover away, on the row's label (exit 0 fires,
+    // non-zero skips, stdout = input): no sentence under the field.
+    expect(screen.getByText("Guard")).toHaveAttribute("title", expect.stringMatching(/exit 0 fires.*stdout/i));
+  });
+
+  it("passes the guard command to createTrigger (#161)", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    fireEvent.change(screen.getByTestId("trigger-name-input"), {
+      target: { value: "Fixer" },
+    });
+    fireEvent.change(screen.getByTestId("guard-command-input"), {
+      target: { value: "gh issue list --label ready-for-agent" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("create-trigger-button"));
+
+    await waitFor(() => {
+      expect(createTrigger).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Fixer",
+          guard_command: "gh issue list --label ready-for-agent",
+        }),
+      );
+    });
+  });
+
+  it("reveals the max-concurrent input only when the allow checkbox is checked", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    expect(screen.getByTestId("overlap-allow-checkbox")).toBeInTheDocument();
+    expect(screen.getByTestId("max-concurrent-input")).toBeDisabled();
+
+    fireEvent.click(screen.getByTestId("overlap-allow-checkbox"));
+    expect(screen.getByTestId("max-concurrent-input")).toBeEnabled();
+  });
+
+  it("creates an allow trigger with the chosen max_concurrent cap", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    fireEvent.change(screen.getByTestId("trigger-name-input"), {
+      target: { value: "Bounded" },
+    });
+    fireEvent.click(screen.getByTestId("overlap-allow-checkbox"));
+    fireEvent.change(screen.getByTestId("max-concurrent-input"), {
+      target: { value: "2" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("create-trigger-button"));
+
+    await waitFor(() => {
+      expect(createTrigger).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Bounded",
+          overlap_policy: "allow",
+          max_concurrent: 2,
+        }),
+      );
+    });
+  });
+
+  it("creates a skip trigger with no cap when the box is unchecked", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    fireEvent.change(screen.getByTestId("trigger-name-input"), {
+      target: { value: "Default" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("create-trigger-button"));
+
+    await waitFor(() => {
+      expect(createTrigger).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "Default",
+          overlap_policy: "skip",
+          max_concurrent: undefined,
+        }),
+      );
+    });
+  });
+});
+
+describe("NewRunModal — Test guard dry-run (#350)", () => {
+  async function enterTriggerMode(promptRequired = false) {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: promptRequired }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+  }
+
+  it("disables Test guard (with a tooltip) until the target repo is valid", () => {
+    renderModal();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    const button = screen.getByTestId("guard-test-button");
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", "Choose a repository first");
+  });
+
+  it("keeps Test guard disabled with a valid repo but an empty guard command, then enables it", async () => {
+    await enterTriggerMode();
+    expect(screen.getByTestId("guard-test-button")).toBeDisabled();
+    fireEvent.change(screen.getByTestId("guard-command-input"), {
+      target: { value: "gh issue list" },
+    });
+    expect(screen.getByTestId("guard-test-button")).not.toBeDisabled();
+  });
+
+  it("shows 'Would fire' and the stdout for a passing guard", async () => {
+    vi.mocked(testGuard).mockResolvedValueOnce({
+      outcome: "pass",
+      stdout: "issue-123\n",
+      stderr: "",
+      exit_code: 0,
+      detail: null,
+    });
+    await enterTriggerMode();
+    fireEvent.change(screen.getByTestId("guard-command-input"), {
+      target: { value: "gh issue list" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("guard-test-button"));
+
+    expect(await screen.findByTestId("guard-test-verdict")).toHaveTextContent("Would fire");
+    expect(screen.getByTestId("guard-test-output")).toHaveTextContent("issue-123");
+    expect(testGuard).toHaveBeenCalledWith("gh issue list", "/home/user/project");
+  });
+
+  it("shows 'Would skip' with the exit code and stderr for a non-zero guard", async () => {
+    vi.mocked(testGuard).mockResolvedValueOnce({
+      outcome: "skip",
+      stdout: "",
+      stderr: "no work to do",
+      exit_code: 3,
+      detail: null,
+    });
+    await enterTriggerMode();
+    fireEvent.change(screen.getByTestId("guard-command-input"), {
+      target: { value: "exit 3" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("guard-test-button"));
+
+    expect(await screen.findByTestId("guard-test-verdict")).toHaveTextContent("Would skip");
+    expect(screen.getByTestId("guard-test-result")).toHaveTextContent("exit 3");
+    expect(screen.getByTestId("guard-test-output")).toHaveTextContent("no work to do");
+  });
+
+  it("shows 'Guard error' and surfaces a request failure inline", async () => {
+    vi.mocked(testGuard).mockRejectedValueOnce(new Error("boom"));
+    await enterTriggerMode();
+    fireEvent.change(screen.getByTestId("guard-command-input"), {
+      target: { value: "sleep 99" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("guard-test-button"));
+
+    expect(await screen.findByTestId("guard-test-error")).toHaveTextContent("boom");
+    expect(screen.queryByTestId("guard-test-result")).not.toBeInTheDocument();
+  });
+
+  it("clears a stale verdict when the guard command is edited", async () => {
+    vi.mocked(testGuard).mockResolvedValueOnce({
+      outcome: "pass",
+      stdout: "ok",
+      stderr: "",
+      exit_code: 0,
+      detail: null,
+    });
+    await enterTriggerMode();
+    fireEvent.change(screen.getByTestId("guard-command-input"), {
+      target: { value: "true" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("guard-test-button"));
+    await screen.findByTestId("guard-test-result");
+
+    // Editing the command invalidates the verdict.
+    fireEvent.change(screen.getByTestId("guard-command-input"), {
+      target: { value: "true # edited" },
+    });
+    expect(screen.queryByTestId("guard-test-result")).not.toBeInTheDocument();
+  });
+
+  it("shows the would-reject caveat only for a prompt-required pipeline whose input would be empty", async () => {
+    vi.mocked(testGuard).mockResolvedValue({
+      outcome: "pass",
+      stdout: "",
+      stderr: "",
+      exit_code: 0,
+      detail: null,
+    });
+    // Prompt-required pipeline, empty input, guard passes with empty stdout.
+    await enterTriggerMode(true);
+    fireEvent.change(screen.getByTestId("guard-command-input"), {
+      target: { value: "true" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("guard-test-button"));
+
+    await screen.findByTestId("guard-test-result");
+    expect(screen.getByTestId("guard-test-caveat")).toBeInTheDocument();
+  });
+
+  it("omits the caveat for a prompt-optional pipeline even with empty stdout", async () => {
+    vi.mocked(testGuard).mockResolvedValue({
+      outcome: "pass",
+      stdout: "",
+      stderr: "",
+      exit_code: 0,
+      detail: null,
+    });
+    await enterTriggerMode(false);
+    fireEvent.change(screen.getByTestId("guard-command-input"), {
+      target: { value: "true" },
+    });
+
+    vi.useRealTimers();
+    fireEvent.click(screen.getByTestId("guard-test-button"));
+
+    await screen.findByTestId("guard-test-result");
+    expect(screen.queryByTestId("guard-test-caveat")).not.toBeInTheDocument();
+  });
+});
+
+describe("NewRunModal — run-now and edit from a Trigger (#162)", () => {
+  const sampleTrigger: Trigger = {
+    id: "trg-9",
+    name: "Nightly audit",
+    pipeline_id: "p1",
+    pipeline_name: "Auditor",
+    target_repo: "/home/user/project",
+    source_branch: "dev",
+    input_template: "audit the codebase",
+    variables: {},
+    cron: "*/15 * * * *",
+    guard_command: undefined,
+    overlap_policy: "allow",
+    auto_name: true,
+    enabled: true,
+    next_fire_at: undefined,
+    last_fired_at: undefined,
+    last_outcome: undefined,
+  };
+
+  beforeEach(() => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: false }),
+      makePipeline({ id: "p2", name: "Bugfixer", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+  });
+
+  it("edit opens in Trigger mode pre-filled and PATCHes the trigger on submit", async () => {
+    render(
+      <NewRunModal
+        open={true}
+        onClose={noop}
+        onCreated={noop}
+        openIntent={{ kind: "edit-trigger", trigger: sampleTrigger }}
+      />,
+    );
+
+    // Trigger mode with the existing config prefilled.
+    await waitFor(() => {
+      expect(screen.getByRole("dialog", { name: "Edit Trigger" })).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("trigger-name-input")).toHaveValue("Nightly audit");
+    });
+    // The footer becomes a Save action (not "Create trigger").
+    expect(screen.getByTestId("save-trigger-button")).toBeInTheDocument();
+    expect(screen.queryByTestId("create-trigger-button")).not.toBeInTheDocument();
+
+    // Let the debounced repo validation resolve so the form is submittable.
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => expect(validateRepo).toHaveBeenCalledWith("/home/user/project"));
+
+    // Edit the schedule and the input template.
+    fireEvent.click(screen.getByTestId("preset-hourly"));
+    fireEvent.change(screen.getByTestId("input-textarea"), {
+      target: { value: "audit harder" },
+    });
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("save-trigger-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("save-trigger-button"));
+
+    await waitFor(() => {
+      expect(updateTrigger).toHaveBeenCalledWith(
+        "trg-9",
+        expect.objectContaining({
+          name: "Nightly audit",
+          // The current pipeline is always sent so an unchanged edit is a no-op
+          // repoint server-side (#230).
+          pipeline_id: "p1",
+          cron: "0 * * * *",
+          input_template: "audit harder",
+        }),
+      );
+    });
+    // Editing never creates a brand-new trigger.
+    expect(createTrigger).not.toHaveBeenCalled();
+  });
+
+  it("edit-prefills the allow checkbox and cap from a bounded-allow trigger (#239)", async () => {
+    const bounded = { ...sampleTrigger, overlap_policy: "allow", max_concurrent: 3 };
+    render(
+      <NewRunModal
+        open={true}
+        onClose={noop}
+        onCreated={noop}
+        openIntent={{ kind: "edit-trigger", trigger: bounded }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("dialog", { name: "Edit Trigger" })).toBeInTheDocument();
+    });
+    // The box is pre-checked and the cap input pre-filled.
+    await waitFor(() => {
+      expect(screen.getByTestId("overlap-allow-checkbox")).toBeChecked();
+    });
+    expect(screen.getByTestId("max-concurrent-input")).toHaveValue(3);
+
+    // Saving round-trips the policy + cap (no silent reset to skip).
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => expect(validateRepo).toHaveBeenCalledWith("/home/user/project"));
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("save-trigger-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("save-trigger-button"));
+
+    await waitFor(() => {
+      expect(updateTrigger).toHaveBeenCalledWith(
+        "trg-9",
+        expect.objectContaining({
+          overlap_policy: "allow",
+          max_concurrent: 3,
+        }),
+      );
+    });
+  });
+
+  it("edit repoints the trigger to the newly selected pipeline (#230)", async () => {
+    render(
+      <NewRunModal
+        open={true}
+        onClose={noop}
+        onCreated={noop}
+        openIntent={{ kind: "edit-trigger", trigger: sampleTrigger }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("dialog", { name: "Edit Trigger" })).toBeInTheDocument();
+    });
+    // Prefilled with the trigger's current pipeline.
+    await waitFor(() => expect(selectedPipeline()).toBe("Auditor"));
+
+    // Let the debounced repo validation resolve so the form is submittable.
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => expect(validateRepo).toHaveBeenCalledWith("/home/user/project"));
+
+    // Change the pipeline — the dropdown is interactive in edit mode, and the
+    // change must now actually reach the server (it used to be silently dropped).
+    await pickPipeline("p2");
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("save-trigger-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("save-trigger-button"));
+
+    await waitFor(() => {
+      expect(updateTrigger).toHaveBeenCalledWith(
+        "trg-9",
+        expect.objectContaining({ pipeline_id: "p2" }),
+      );
+    });
+    expect(createTrigger).not.toHaveBeenCalled();
+  });
+});
+
+describe("NewRunModal — open-intent reset (#386)", () => {
+  const trigger: Trigger = {
+    id: "trg-9",
+    name: "Nightly audit",
+    pipeline_id: "p1",
+    pipeline_name: "Auditor",
+    target_repo: "/home/user/project",
+    source_branch: "dev",
+    input_template: "audit the codebase",
+    variables: {},
+    cron: "*/15 * * * *",
+    guard_command: undefined,
+    overlap_policy: "allow",
+    auto_name: true,
+    enabled: true,
+    next_fire_at: undefined,
+    last_fired_at: undefined,
+    last_outcome: undefined,
+  };
+
+  it("edit → close → open(run) reopens as a clean New Run (kills the stale Edit-Trigger)", async () => {
+    const { rerender } = render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop}
+        openIntent={{ kind: "edit-trigger", trigger }} />,
+    );
+
+    // Opened in Edit-Trigger mode (footer is Save).
+    await waitFor(() => {
+      expect(screen.getByRole("dialog", { name: "Edit Trigger" })).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("save-trigger-button")).toBeInTheDocument();
+
+    // Dismiss, then reopen as a plain run.
+    rerender(<NewRunModal open={false} onClose={noop} onCreated={noop}
+      openIntent={{ kind: "edit-trigger", trigger }} />);
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={noop}
+      openIntent={{ kind: "run" }} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mode-run")).toHaveAttribute("aria-selected", "true");
+    });
+    expect(screen.getByText("New Run")).toBeInTheDocument();
+    expect(screen.getByTestId("launch-button")).toBeInTheDocument();
+    // No trigger footer leaks — Finding B (silent PATCH of the wrong trigger).
+    expect(screen.queryByTestId("save-trigger-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("create-trigger-button")).not.toBeInTheDocument();
+    // Trigger-only fields aren't even rendered in run mode.
+    expect(screen.queryByTestId("trigger-name-input")).not.toBeInTheDocument();
+  });
+
+  it("edit → close → open(new-trigger) reopens as a blank Create Trigger (Finding B)", async () => {
+    const { rerender } = render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop}
+        openIntent={{ kind: "edit-trigger", trigger }} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("trigger-name-input")).toHaveValue("Nightly audit");
+    });
+    expect(screen.getByTestId("save-trigger-button")).toBeInTheDocument();
+
+    rerender(<NewRunModal open={false} onClose={noop} onCreated={noop}
+      openIntent={{ kind: "edit-trigger", trigger }} />);
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={noop}
+      openIntent={{ kind: "new-trigger" }} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mode-trigger")).toHaveAttribute("aria-selected", "true");
+    });
+    expect(screen.getByText("New Trigger")).toBeInTheDocument();
+    // Footer is Create (a fresh POST), NOT Save: editingTriggerId is cleared, so
+    // submitting can't silently PATCH the previously edited trigger.
+    expect(screen.getByTestId("create-trigger-button")).toBeInTheDocument();
+    expect(screen.queryByTestId("save-trigger-button")).not.toBeInTheDocument();
+    // The trigger name is blank, not the edited trigger's name.
+    expect(screen.getByTestId("trigger-name-input")).toHaveValue("");
+  });
+
+  it("new-trigger opens fresh in Trigger mode with no prior edit", async () => {
+    render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop}
+        openIntent={{ kind: "new-trigger" }} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mode-trigger")).toHaveAttribute("aria-selected", "true");
+    });
+    expect(screen.getByText("New Trigger")).toBeInTheDocument();
+    expect(screen.getByTestId("create-trigger-button")).toBeInTheDocument();
+    expect(screen.queryByTestId("save-trigger-button")).not.toBeInTheDocument();
+  });
+
+  it("edit → close → open(run) clears the shared draft carried from the trigger (#386 Part 2)", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: false }),
+      makePipeline({ id: "p2", name: "Bugfixer", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+
+    const { rerender } = render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop}
+        openIntent={{ kind: "edit-trigger", trigger }} />,
+    );
+
+    // The edit prefilled the shared draft from the trigger (prompt, repo, pipeline).
+    await waitFor(() => {
+      expect(screen.getByTestId("input-textarea")).toHaveValue("audit the codebase");
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => expect(validateRepo).toHaveBeenCalledWith("/home/user/project"));
+    await waitFor(() => expect(selectedPipeline()).toBe("Auditor"));
+
+    rerender(<NewRunModal open={false} onClose={noop} onCreated={noop}
+      openIntent={{ kind: "edit-trigger", trigger }} />);
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={noop}
+      openIntent={{ kind: "run" }} />);
+
+    // A fresh run must not inherit the consulted trigger's prompt or pipeline.
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/free-text prompt/i)).toHaveValue("");
+    });
+    expect(selectedPipeline()).not.toBe("Auditor");
+  });
+});
+
+describe("NewRunModal — sandbox selector (#410)", () => {
+  function settingsFixture(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
+    return {
+      session_cap: { effective: 20, source: "default", stored: null, env: null, default: 20 },
+      reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
+      guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+      max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+      public_url: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness_model: { effective: {}, stored: {} },
+      default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
+      // #431: required fields on InstanceSettings; this modal reads neither, they are
+      // here to satisfy the typed fixture.
+      sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
+      // #432: the `<select>` options come from here. Both virtual defaults, no row.
+      sandbox_profiles: [
+        { name: "full", virtual: true },
+        { name: "minimal", virtual: true },
+      ],
+      home: "/home/user",
+      // #469: required on InstanceSettings; this modal does not read it.
+      autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
+    // #338: the modal seeds the "Auto-generated" box from this; default is ON.
+    default_auto_name: { effective: true, source: "default", stored: null, env: null, default: true },
+      // #427: required on InstanceSettings; this modal does not read it.
+      update_check: { effective: true, source: "default", stored: null, env: null, default: true },
+      manager_enabled: { effective: false, source: "default", stored: null, env: null, default: false },
+      review_agent_can_resolve: { effective: false, source: "default", stored: null, env: null, default: false },
+      manager_profile: { effective: null, source: "default", stored: null, env: null, default: null },
+      price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
+      updated_at: "2026-07-01T10:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  /**
+   * #452 replaces #410's prefill. The run selector NAMES the instance default instead of
+   * copying it into the field: the value stays the `""` sentinel, so the key is omitted and
+   * the daemon resolves. See the `#452` describe below for why copying it was unsound.
+   */
+  it("names the instance default on the inherit option without seeding the field", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(
+      settingsFixture({
+        default_sandbox: { effective: "full", source: "stored", stored: "full", env: null, default: "off", reason: null },
+      }),
+    );
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
+    renderModal();
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(Array.from(select.options).find((o) => o.value === "")).toHaveTextContent(
+        "Default (full)",
+      );
+    });
+    // The field asserts nothing of its own.
+    expect(select.value).toBe("");
+  });
+
+  it("disables full/minimal and BLOCKS the launch when Docker is unavailable (no silent clamp to off)", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(
+      settingsFixture({
+        // The instance default is `minimal`, but Docker is down.
+        default_sandbox: { effective: "minimal", source: "stored", stored: "minimal", env: null, default: "off", reason: null },
+        sandbox_docker: { available: false, reason: "Docker daemon unreachable", checked_at: "x" },
+      }),
+    );
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "P", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    // #452: NOT clamped to `off` — the field still says "I did not choose".
+    await waitFor(() => expect(screen.getByTestId("sandbox-doomed-warning")).toBeInTheDocument());
+    expect(select.value).toBe("");
+    // full/minimal options are disabled; the reason is surfaced.
+    const options = Array.from(select.options);
+    expect(options.find((o) => o.value === "full")?.disabled).toBe(true);
+    expect(options.find((o) => o.value === "minimal")?.disabled).toBe(true);
+    expect(screen.getByTestId("sandbox-doomed-warning")).toHaveAttribute("title", expect.stringMatching(/needs Docker/i));
+
+    // The Run doomed to a RunFailed is still prevented — by refusing it, not by
+    // answering `off` on the user's behalf.
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeDisabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+    expect(createRun).not.toHaveBeenCalled();
+
+    // Demoting to `off` is the user's call, and it unblocks.
+    fireEvent.change(select, { target: { value: "off" } });
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    expect(screen.queryByTestId("sandbox-doomed-warning")).not.toBeInTheDocument();
+  });
+
+  it("passes the chosen sandbox mode to createRun", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(
+      settingsFixture({
+        default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
+      }),
+    );
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Optional Pipeline", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    // An explicit pick — the case this test is named for. It must survive as-is, even
+    // though it disagrees with the instance default (`off`).
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    await waitFor(() => expect(Array.from(select.options).some((o) => o.value === "full")).toBe(true));
+    fireEvent.change(select, { target: { value: "full" } });
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByRole("button", { name: /^run/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
+
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalledWith(expect.objectContaining({ sandbox: "full" }));
+    });
+  });
+
+  it("offers a 'use instance default' option in trigger mode and sends null when picked", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+    // A trigger whose sandbox is set to `minimal` — prefills the select to `minimal`.
+    const trigger: Trigger = {
+      id: "trg-sbx",
+      name: "Nightly",
+      pipeline_id: "p1",
+      pipeline_name: "Auditor",
+      target_repo: "/home/user/project",
+      source_branch: "dev",
+      input_template: "audit",
+      variables: {},
+      cron: "0 9 * * *",
+      guard_command: undefined,
+      overlap_policy: "skip",
+      sandbox: "minimal",
+      auto_name: true,
+      enabled: true,
+      next_fire_at: undefined,
+      last_fired_at: undefined,
+      last_outcome: undefined,
+    };
+    render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop}
+        openIntent={{ kind: "edit-trigger", trigger }} />,
+    );
+
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    await waitFor(() => expect(select.value).toBe("minimal"));
+    // Trigger mode exposes the inherit option.
+    expect(Array.from(select.options).some((o) => o.value === "")).toBe(true);
+
+    // Repo validation must resolve so Save is enabled.
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => expect(validateRepo).toHaveBeenCalledWith("/home/user/project"));
+
+    // Reset to "use instance default" → the PATCH must clear it (null).
+    fireEvent.change(select, { target: { value: "" } });
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("save-trigger-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("save-trigger-button"));
+
+    await waitFor(() => {
+      expect(updateTrigger).toHaveBeenCalledWith(
+        "trg-sbx",
+        expect.objectContaining({ sandbox: null }),
+      );
+    });
+  });
+
+  it("lists off plus every staging profile the daemon serves", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(
+      settingsFixture({
+        sandbox_profiles: [
+          { name: "full", virtual: true },
+          { name: "full-no-mcp", virtual: false },
+          { name: "minimal", virtual: true },
+        ],
+      }),
+    );
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
+    renderModal();
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    await waitFor(() =>
+      // #452: the inherit sentinel leads the list in run mode too.
+      expect(Array.from(select.options).map((o) => o.value)).toEqual([
+        "",
+        "off",
+        "full",
+        "full-no-mcp",
+        "minimal",
+      ]),
+    );
+  });
+
+  /**
+   * THE PHANTOM-PROFILE RULE (#432). A trigger whose stored profile has been deleted keeps
+   * a tombstone option and blocks Save.
+   *
+   * Without it React sets `selectedIndex = -1`, the field renders blank, and saving would
+   * PATCH `sandbox: null` — a SILENT FALLBACK to the instance default, exactly what
+   * ADR-0031 §7 forbids. Deliberately separate from the Docker clamp: clamping to `off` is
+   * legitimate for an unavailable Docker, and would be a silent demotion here.
+   */
+  it("tombstones a trigger's vanished profile and blocks the save", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsFixture());
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+    const trigger: Trigger = {
+      id: "trg-gone",
+      name: "Nightly",
+      pipeline_id: "p1",
+      pipeline_name: "Auditor",
+      target_repo: "/home/user/project",
+      source_branch: "dev",
+      input_template: "audit",
+      variables: {},
+      cron: "0 9 * * *",
+      guard_command: undefined,
+      overlap_policy: "skip",
+      // Materialised once, deleted since — the only way to get a dangling reference.
+      sandbox: "full-no-mcp",
+      auto_name: true,
+      enabled: true,
+      next_fire_at: undefined,
+      last_fired_at: undefined,
+      last_outcome: undefined,
+    };
+    render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop}
+        openIntent={{ kind: "edit-trigger", trigger }} />,
+    );
+
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    // The seeded value is NEVER rewritten: still selected, and visibly a tombstone.
+    await waitFor(() => expect(select.value).toBe("full-no-mcp"));
+    expect(screen.getByTestId("sandbox-missing-profile")).toBeInTheDocument();
+    expect(screen.getByTestId("sandbox-missing-profile-warning")).toHaveAttribute(
+      "title",
+      expect.stringMatching(/does not fall back to a default/i),
+    );
+
+    vi.useRealTimers();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^save/i })).toBeDisabled(),
+    );
+    expect(updateTrigger).not.toHaveBeenCalled();
+  });
+
+  it("does not tombstone `off`, which is never a profile", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsFixture());
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
+    renderModal();
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    await waitFor(() => expect(Array.from(select.options).length).toBeGreaterThan(1));
+    fireEvent.change(select, { target: { value: "off" } });
+    expect(select.value).toBe("off");
+    expect(screen.queryByTestId("sandbox-missing-profile")).not.toBeInTheDocument();
+  });
+
+  it("does not tombstone the inherit sentinel either", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsFixture());
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
+    renderModal();
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    await waitFor(() => expect(Array.from(select.options).length).toBeGreaterThan(1));
+    expect(select.value).toBe("");
+    expect(screen.queryByTestId("sandbox-missing-profile")).not.toBeInTheDocument();
+  });
+
+  describe("Manage staging profiles opens Settings on the section (#691)", () => {
+    it("renders the link on the Sandbox label row only when a host wires it, and calls it", async () => {
+      vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
+      const onManage = vi.fn();
+      const { unmount } = render(
+        <NewRunModal open onClose={noop} onCreated={noop} onManageStagingProfiles={onManage} />,
+      );
+      await screen.findByTestId("sandbox-select");
+      const link = screen.getByTestId("new-run-manage-staging-profiles");
+      expect(link).toHaveAccessibleName("Manage staging profiles");
+      // At the end of the Sandbox row: the field's escape hatch, not a section.
+      expect(link.closest(".ln-row")).toContainElement(screen.getByText("Sandbox", { selector: "label" }));
+      fireEvent.click(link);
+      expect(onManage).toHaveBeenCalledTimes(1);
+      // Opening Settings over the dialog never touches the field (#452).
+      expect((screen.getByTestId("sandbox-select") as HTMLSelectElement).value).toBe("");
+      unmount();
+
+      renderModal();
+      await screen.findByTestId("sandbox-select");
+      expect(screen.queryByTestId("new-run-manage-staging-profiles")).not.toBeInTheDocument();
+    });
+
+    it("refetches settings on pdo:settings-changed so a profile created in Settings is offered without reload", async () => {
+      vi.mocked(fetchSettings).mockResolvedValue(settingsFixture());
+      vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
+      render(<NewRunModal open onClose={noop} onCreated={noop} onManageStagingProfiles={noop} />);
+      const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+      await waitFor(() =>
+        expect(Array.from(select.options).map((o) => o.value)).toEqual(["", "off", "full", "minimal"]),
+      );
+      const calls = vi.mocked(fetchSettings).mock.calls.length;
+
+      vi.mocked(fetchSettings).mockResolvedValue(
+        settingsFixture({
+          sandbox_profiles: [
+            { name: "full", virtual: true },
+            { name: "minimal", virtual: true },
+            { name: "mine", virtual: false },
+          ],
+        }),
+      );
+      window.dispatchEvent(new Event("pdo:settings-changed"));
+      await waitFor(() => expect(vi.mocked(fetchSettings).mock.calls.length).toBeGreaterThan(calls));
+      await waitFor(() => expect(Array.from(select.options).map((o) => o.value)).toContain("mine"));
+      // Offered, not selected: the field still asserts nothing.
+      expect(select.value).toBe("");
+    });
+
+    it("follows a default changed in Settings at once, from the settings the save answered", async () => {
+      vi.mocked(fetchSettings).mockResolvedValue(settingsFixture());
+      vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
+      render(<NewRunModal open onClose={noop} onCreated={noop} onManageStagingProfiles={noop} />);
+      const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+      await waitFor(() => expect(select.options[0].textContent).toBe("Default (off)"));
+      // GET /settings is slow (it probes Docker): it must not be what the label waits on.
+      vi.mocked(fetchSettings).mockReturnValue(new Promise(() => {}));
+      const saved = settingsFixture({
+        default_sandbox: { effective: "full", source: "stored", stored: "full", env: null, default: "off", reason: null },
+      });
+      act(() => announceSettingsChanged(saved));
+      expect(select.options[0].textContent).toBe("Default (full)");
+    });
+  });
+});
+
+/**
+ * #452 — `default_sandbox` must be REACHABLE from the launch dialog.
+ *
+ * The daemon's contract is `Option<SandboxMode>`: `None` = "defer to the instance default",
+ * `Some(Off)` = "run on the host, and nothing may override that upward". #410 seeded the run
+ * selector by copying the resolved default into the field, asynchronously and best-effort, and
+ * `sandbox: sandbox || undefined` omits the key only for `""` — which run mode never held. So
+ * the key was structurally always present, and every way the prefill could miss its window
+ * landed on an explicit `off`: a choice the user never made, in the least protective direction,
+ * that nothing downstream could undo.
+ *
+ * The tests below pin the three ways it missed. Each one FAILS on the pre-fix component (it
+ * posts `sandbox: "off"`), which is the point: the happy path at
+ * "names the instance default…" passed throughout and hid all three.
+ */
+describe("NewRunModal — the launch dialog can defer to default_sandbox (#452)", () => {
+  function settingsFixture(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
+    return {
+      session_cap: { effective: 20, source: "default", stored: null, env: null, default: 20 },
+      reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
+      guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+      max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+      public_url: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness_model: { effective: {}, stored: {} },
+      default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
+      sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
+      sandbox_profiles: [
+        { name: "full", virtual: true },
+        { name: "minimal", virtual: true },
+      ],
+      home: "/home/user",
+      // #469: required on InstanceSettings; this modal does not read it.
+      autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
+    // #338: the modal seeds the "Auto-generated" box from this; default is ON.
+    default_auto_name: { effective: true, source: "default", stored: null, env: null, default: true },
+      // #427: required on InstanceSettings; this modal does not read it.
+      update_check: { effective: true, source: "default", stored: null, env: null, default: true },
+      manager_enabled: { effective: false, source: "default", stored: null, env: null, default: false },
+      review_agent_can_resolve: { effective: false, source: "default", stored: null, env: null, default: false },
+      manager_profile: { effective: null, source: "default", stored: null, env: null, default: null },
+      price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
+      updated_at: "2026-07-01T10:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  const defaultIs = (name: string): Partial<InstanceSettings> => ({
+    default_sandbox: { effective: name, source: "stored", stored: name, env: null, default: "off", reason: null },
+  });
+
+  /**
+   * "Omitted" is read at the `createRun` boundary rather than on the wire: `api.ts` skips a
+   * falsy `sandbox` on BOTH transports (`JSON.stringify` drops `undefined`; the multipart path
+   * guards with `if (req.sandbox)`), so `undefined` here IS an absent key there. Asserted as a
+   * property lookup, not with `toHaveBeenCalledWith`, because `objectContaining` cannot express
+   * absence — and because vitest compares arity strictly, so a spurious trailing argument would
+   * fail the assertion for the wrong reason.
+   */
+  function sandboxSentTo(mock: typeof createRun) {
+    const calls = vi.mocked(mock).mock.calls;
+    expect(calls).toHaveLength(1);
+    return calls[0][0].sandbox;
+  }
+
+  async function launchWithoutTouchingSandbox() {
+    await enterValidRepo();
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+    await waitFor(() => expect(createRun).toHaveBeenCalled());
+  }
+
+  beforeEach(() => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Optional Pipeline", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+  });
+
+  it("omits the sandbox key when the user never touches the selector", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsFixture(defaultIs("full")));
+    renderModal();
+    // Wait for the settings to land, so this is not accidentally the in-flight case below.
+    await screen.findByTestId("sandbox-select");
+    await waitFor(() => expect(fetchSettings).toHaveBeenCalled());
+
+    await launchWithoutTouchingSandbox();
+
+    // The whole issue in one line: never `off`, and never anything at all.
+    expect(sandboxSentTo(createRun)).toBeUndefined();
+  });
+
+  /**
+   * Mode B of the repro, and the only one that needs no fault injection. The modal is
+   * always-mounted, so `settings` survives a close; the old seeding effect therefore ran
+   * synchronously against the STALE value on reopen and latched its one-shot ref before the
+   * fresh fetch could land. A user who changes `default_sandbox` in Settings and reopens New
+   * Run — without reloading the page — got the previous default posted explicitly.
+   */
+  it("does not seed a reopened dialog from settings cached before the default changed", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsFixture(defaultIs("off")));
+    const { rerender } = render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop} openIntent={{ kind: "run" }} />,
+    );
+    await screen.findByTestId("sandbox-select");
+    await waitFor(() => expect(fetchSettings).toHaveBeenCalledTimes(1));
+
+    // Close. The component stays mounted, so `settings` stays in state.
+    rerender(<NewRunModal open={false} onClose={noop} onCreated={noop} openIntent={{ kind: "run" }} />);
+
+    // The operator switches the instance default to `full` in Settings.
+    vi.mocked(fetchSettings).mockResolvedValue(settingsFixture(defaultIs("full")));
+
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={noop} openIntent={{ kind: "run" }} />);
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    expect(select.value).toBe("");
+    // And the label catches up with the new default once the refetch lands.
+    await waitFor(() =>
+      expect(Array.from(select.options).find((o) => o.value === "")).toHaveTextContent(
+        "Default (full)",
+      ),
+    );
+
+    await launchWithoutTouchingSandbox();
+    expect(sandboxSentTo(createRun)).toBeUndefined();
+  });
+
+  /**
+   * Mode C. `GET /settings` failing used to be swallowed whole: the option list silently
+   * degraded to `off` alone — indistinguishable from an instance without Docker — and the
+   * submission went ahead with an explicit `off`. Deferring is the right answer when we know
+   * nothing: the daemon has the default, we do not.
+   */
+  it("still defers, and says so, when GET /settings fails", async () => {
+    vi.mocked(fetchSettings).mockRejectedValue(new Error("daemon unreachable"));
+    renderModal();
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    await waitFor(() => expect(screen.getByTestId("sandbox-settings-error")).toBeInTheDocument());
+    expect(select.value).toBe("");
+
+    await launchWithoutTouchingSandbox();
+    expect(sandboxSentTo(createRun)).toBeUndefined();
+  });
+
+  /**
+   * The prefill also lost its race whenever the fetch was merely SLOW — a Run launched
+   * before it resolved was posted with the `off` initial state. Nothing waits on the fetch
+   * any more, so there is no race left to lose.
+   */
+  it("defers when the launch beats the settings fetch", async () => {
+    let resolveSettings!: (s: InstanceSettings) => void;
+    vi.mocked(fetchSettings).mockReturnValue(
+      new Promise<InstanceSettings>((resolve) => {
+        resolveSettings = resolve;
+      }),
+    );
+    renderModal();
+    await screen.findByTestId("sandbox-select");
+
+    await launchWithoutTouchingSandbox();
+    expect(sandboxSentTo(createRun)).toBeUndefined();
+
+    resolveSettings(settingsFixture(defaultIs("full")));
+  });
+
+  it("sends an explicit off when the user actually picks it", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(settingsFixture(defaultIs("full")));
+    renderModal();
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    await waitFor(() => expect(Array.from(select.options).length).toBeGreaterThan(1));
+    fireEvent.change(select, { target: { value: "off" } });
+
+    await enterValidRepo();
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+    await waitFor(() => expect(createRun).toHaveBeenCalled());
+
+    // The sentinel must not swallow a real choice: `off` on purpose stays `off`, explicitly,
+    // so it keeps winning over the instance default.
+    expect(sandboxSentTo(createRun)).toBe("off");
+  });
+
+  it("surfaces a dangling instance default instead of letting the launch 400 unexplained", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(
+      settingsFixture({
+        default_sandbox: {
+          effective: "deleted-profile",
+          source: "stored",
+          stored: "deleted-profile",
+          env: null,
+          default: "off",
+          reason: "No staging profile named `deleted-profile`",
+        },
+      }),
+    );
+    renderModal();
+    await screen.findByTestId("sandbox-select");
+    await waitFor(() =>
+      expect(screen.getByTestId("sandbox-default-reason")).toHaveAttribute("title", expect.stringMatching(/deleted-profile/)),
+    );
+  });
+
+  /**
+   * Trigger mode is untouched by all of this: a Trigger resolves its sandbox when it FIRES,
+   * so today's Docker probe cannot condemn it and the inherit option stays unqualified.
+   */
+  it("leaves trigger mode's inherit option unqualified and unblocked", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(
+      settingsFixture({
+        ...defaultIs("full"),
+        sandbox_docker: { available: false, reason: "Docker daemon unreachable", checked_at: "x" },
+      }),
+    );
+    render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop} openIntent={{ kind: "new-trigger" }} />,
+    );
+    const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
+    await waitFor(() => expect(screen.getByTestId("sandbox-docker-warning")).toBeInTheDocument());
+    expect(select.value).toBe("");
+    expect(Array.from(select.options).find((o) => o.value === "")).toHaveTextContent(
+      "Default",
+    );
+    expect(Array.from(select.options).find((o) => o.value === "")).not.toHaveTextContent("(full)");
+    expect(screen.queryByTestId("sandbox-doomed-warning")).not.toBeInTheDocument();
+  });
+});
+
+describe("NewRunModal — the target repo is required at the boundary (#470)", () => {
+  // `clearAllMocks` wipes calls but KEEPS implementations, and the sandbox suites
+  // above leave `fetchSettings` on "Docker unavailable + default_sandbox: full" —
+  // which makes `sandboxDoomed` true and Launch permanently disabled here. Restore
+  // the documented default, same reason the global `beforeEach` restores
+  // `listBranches`.
+  beforeEach(() => {
+    vi.mocked(fetchSettings).mockResolvedValue({
+      session_cap: { effective: 20, source: "default", stored: null, env: null, default: 20 },
+      reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
+      guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+      max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+      public_url: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness_model: { effective: {}, stored: {} },
+      default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
+      sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
+      sandbox_profiles: [
+        { name: "full", virtual: true },
+        { name: "minimal", virtual: true },
+      ],
+      home: "/home/user",
+      autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
+    // #338: the modal seeds the "Auto-generated" box from this; default is ON.
+    default_auto_name: { effective: true, source: "default", stored: null, env: null, default: true },
+      // #427: required on InstanceSettings; this modal does not read it.
+      update_check: { effective: true, source: "default", stored: null, env: null, default: true },
+      manager_enabled: { effective: false, source: "default", stored: null, env: null, default: false },
+      review_agent_can_resolve: { effective: false, source: "default", stored: null, env: null, default: false },
+      manager_profile: { effective: null, source: "default", stored: null, env: null, default: null },
+      price_table: { manual_path: "/home/user/.pdo/prices/models.yaml", fetched_path: "/home/user/.pdo/prices/fetched.json", source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
+      updated_at: "2026-07-01T10:00:00.000Z",
+    });
+  });
+
+  const nullRepoTrigger: Trigger = {
+    id: "trg-legacy",
+    name: "Legacy nightly",
+    pipeline_id: "p1",
+    pipeline_name: "Auditor",
+    // A pre-#470 Trigger: nobody ever named a repo for it (ADR-0033).
+    target_repo: undefined,
+    source_branch: undefined,
+    input_template: "audit the codebase",
+    variables: {},
+    cron: "*/15 * * * *",
+    guard_command: undefined,
+    overlap_policy: "skip",
+    auto_name: true,
+    enabled: true,
+    next_fire_at: undefined,
+    last_fired_at: undefined,
+    last_outcome: undefined,
+  };
+
+  it("resets the repo verdict when editing a Trigger with no target repo", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+
+    // 1. Open New Run and validate a real repo, so `repoValid === true`.
+    const { rerender } = render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop} openIntent={{ kind: "run" }} />,
+    );
+    await enterValidRepo();
+    await waitFor(() => {
+      expect(screen.getByTestId("pipeline-select")).not.toBeDisabled();
+    });
+
+    // 2. Close, then reopen on a legacy Trigger whose target repo is null. The
+    //    modal stays MOUNTED (#386), so a `repoValid` left over from step 1 would
+    //    survive next to an emptied repo field — and `canLaunch` would be true
+    //    with no repo, exactly the request the daemon now answers 400 to.
+    rerender(
+      <NewRunModal open={false} onClose={noop} onCreated={noop} openIntent={{ kind: "run" }} />,
+    );
+    rerender(
+      <NewRunModal open={true} onClose={noop} onCreated={noop}
+        openIntent={{ kind: "edit-trigger", trigger: nullRepoTrigger }} />,
+    );
+
+    // The field is empty...
+    await waitFor(() => {
+      expect(screen.getByLabelText(/target repository/i)).toHaveValue("");
+    });
+    // ...and so is the verdict: everything gated on `repoValid` is blocked again.
+    await waitFor(() => {
+      expect(screen.getByTestId("pipeline-select")).toBeDisabled();
+    });
+
+    // An edited Trigger stays a Trigger: no switch to Run mode to launch from.
+    expect(screen.queryByTestId("mode-run")).toBeNull();
+  });
+
+  it("surfaces the daemon's refusal inline when createRun rejects", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+    vi.mocked(createRun).mockRejectedValueOnce(
+      new Error(
+        "target_repo is required: name the absolute path of the git repository this must work in",
+      ),
+    );
+
+    renderModal();
+    await enterValidRepo();
+    await waitFor(() => expect(selectedPipeline()).toBe("Auditor"));
+
+    vi.useRealTimers();
+    // Assert enabled first: a silently-disabled Launch would make the assertion
+    // below fail for a reason that has nothing to do with error surfacing.
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+
+    // The 400 must land in front of the user, not in the console: before this
+    // test only `createTrigger` had an inline-error assertion.
+    await waitFor(() => {
+      expect(screen.getByTestId("launch-error")).toHaveTextContent(/target_repo is required/i);
+    });
+  });
+});
+
+// #465 (ADR-0042): multi-repo create. The primary stays `target_repo`; each added
+// row appends a secondary. `createRun` must receive `target_repos` with `[0]` =
+// primary and `[1..]` = secondaries — asserted on the API call, never the DOM
+// `select.value` (which reports option[0] on a desync and cannot fail; see #454).
+describe("NewRunModal — multi-repo (#465)", () => {
+  it("sends target_repos of length 2 with [0]=primary when a secondary is added", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "P1", scope: legacyScope("repo") }),
+    ]);
+    renderModal();
+    await enterValidRepo("/home/user/primary");
+
+    // Add a secondary row and fill it.
+    fireEvent.click(screen.getByTestId("add-secondary-repo"));
+    const secRow = await screen.findByTestId("secondary-repo-row-0");
+    const secInput = within(secRow).getByTestId("target-repo-input");
+    fireEvent.change(secInput, { target: { value: "/home/user/secondary" } });
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => {
+      expect(validateRepo).toHaveBeenCalledWith("/home/user/secondary");
+    });
+    // The secondary's own branch field must resolve (proves per-row listBranches).
+    await waitFor(() => {
+      expect(
+        within(secRow).getByTestId("secondary-branch-0-trigger"),
+      ).toBeInTheDocument();
+    });
+
+    await pickPipeline("p1");
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+      target: { value: "do the thing" },
+    });
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target_repo: "/home/user/primary",
+          target_repos: [
+            expect.objectContaining({ repo: "/home/user/primary" }),
+            expect.objectContaining({ repo: "/home/user/secondary" }),
+          ],
+        }),
+      );
+    });
+    const call = vi.mocked(createRun).mock.calls.at(-1)![0];
+    expect(call.target_repos).toHaveLength(2);
+    expect(call.target_repos![0].repo).toBe("/home/user/primary");
+    // ADR-0047: a secondary is writable by default (checkbox left unchecked).
+    expect(call.target_repos![1].read_only).toBe(false);
+    // The primary [0] never carries read_only.
+    expect(call.target_repos![0]).not.toHaveProperty("read_only");
+  });
+
+  it("marks a secondary read_only when its checkbox is ticked (ADR-0047)", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "P1", scope: legacyScope("repo") }),
+    ]);
+    renderModal();
+    await enterValidRepo("/home/user/primary");
+
+    fireEvent.click(screen.getByTestId("add-secondary-repo"));
+    const secRow = await screen.findByTestId("secondary-repo-row-0");
+    const secInput = within(secRow).getByTestId("target-repo-input");
+    fireEvent.change(secInput, { target: { value: "/home/user/secondary" } });
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => {
+      expect(validateRepo).toHaveBeenCalledWith("/home/user/secondary");
+    });
+    // The read-only checkbox only shows once the row resolves valid.
+    const checkbox = await within(secRow).findByTestId("secondary-readonly-0");
+    expect(checkbox).not.toBeChecked();
+    fireEvent.click(checkbox);
+    expect(checkbox).toBeChecked();
+
+    await pickPipeline("p1");
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+      target: { value: "do the thing" },
+    });
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+
+    await waitFor(() => expect(createRun).toHaveBeenCalled());
+    const call = vi.mocked(createRun).mock.calls.at(-1)![0];
+    expect(call.target_repos![1].read_only).toBe(true);
+  });
+
+  // #571 mirror: a secondary row offers the same Local/Remote groups and posts a
+  // remote base_branch VERBATIM — the duplicated logic must not drift from the
+  // primary's.
+  it("sends a secondary's remote base_branch verbatim (#571)", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "P1", scope: legacyScope("repo") }),
+    ]);
+    listBranchesReturns([
+      local("main"),
+      remote("origin/feature-remote-only"),
+    ]);
+    renderModal();
+    await enterValidRepo("/home/user/primary");
+
+    fireEvent.click(screen.getByTestId("add-secondary-repo"));
+    const secRow = await screen.findByTestId("secondary-repo-row-0");
+    fireEvent.change(within(secRow).getByTestId("target-repo-input"), {
+      target: { value: "/home/user/secondary" },
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    await within(secRow).findByTestId("secondary-branch-0-trigger");
+    // The remote group is present, and the row can carry a remote base.
+    await pickBranch("origin/feature-remote-only", "secondary-branch-0");
+
+    await pickPipeline("p1");
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+      target: { value: "do the thing" },
+    });
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+
+    await waitFor(() => {
+      const call = vi.mocked(createRun).mock.calls.at(-1)![0];
+      expect(call.target_repos![1]).toEqual(
+        expect.objectContaining({
+          repo: "/home/user/secondary",
+          base_branch: "origin/feature-remote-only",
+        }),
+      );
+    });
+  });
+
+  // #571 mirror: a secondary row offers the same Local/Remote groups and posts a
+  // remote base_branch VERBATIM — the duplicated logic must not drift from the
+  // primary's.
+  it("sends a secondary's remote base_branch verbatim (#571)", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "P1", scope: legacyScope("repo") }),
+    ]);
+    listBranchesReturns([
+      local("main"),
+      remote("origin/feature-remote-only"),
+    ]);
+    renderModal();
+    await enterValidRepo("/home/user/primary");
+
+    fireEvent.click(screen.getByTestId("add-secondary-repo"));
+    const secRow = await screen.findByTestId("secondary-repo-row-0");
+    fireEvent.change(within(secRow).getByTestId("target-repo-input"), {
+      target: { value: "/home/user/secondary" },
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    await within(secRow).findByTestId("secondary-branch-0-trigger");
+    // The remote group is present, and the row can carry a remote base.
+    await pickBranch("origin/feature-remote-only", "secondary-branch-0");
+
+    await pickPipeline("p1");
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+      target: { value: "do the thing" },
+    });
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+
+    await waitFor(() => {
+      const call = vi.mocked(createRun).mock.calls.at(-1)![0];
+      expect(call.target_repos![1]).toEqual(
+        expect.objectContaining({
+          repo: "/home/user/secondary",
+          base_branch: "origin/feature-remote-only",
+        }),
+      );
+    });
+  });
+
+  it("omits target_repos for a mono-repo launch (no secondary rows)", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "P1", scope: legacyScope("repo") }),
+    ]);
+    renderModal();
+    await enterValidRepo("/home/user/only");
+
+    await pickPipeline("p1");
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+      target: { value: "do the thing" },
+    });
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalled();
+    });
+    const call = vi.mocked(createRun).mock.calls.at(-1)![0];
+    expect(call.target_repos).toBeUndefined();
+  });
+
+  it("keeps Launch disabled while a secondary row is invalid", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "P1", scope: legacyScope("repo") }),
+    ]);
+    renderModal();
+    await enterValidRepo("/home/user/primary");
+    await pickPipeline("p1");
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+      target: { value: "do the thing" },
+    });
+
+    // An added-but-empty secondary row is incomplete → Launch blocked.
+    fireEvent.click(screen.getByTestId("add-secondary-repo"));
+    await screen.findByTestId("secondary-repo-row-0");
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeDisabled());
+
+    // A secondary that fails validation stays blocking.
+    vi.mocked(validateRepo).mockResolvedValueOnce({ valid: false, error: "not a git repository" });
+    const secInput = within(screen.getByTestId("secondary-repo-row-0")).getByTestId(
+      "target-repo-input",
+    );
+    fireEvent.change(secInput, { target: { value: "/home/user/bad" } });
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => {
+      expect(validateRepo).toHaveBeenCalledWith("/home/user/bad");
+    });
+    expect(screen.getByTestId("launch-button")).toBeDisabled();
+  });
+});
+
+describe("NewRunModal — harness selector (#551)", () => {
+  function harnessSettings(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
+    return {
+      session_cap: { effective: 20, source: "default", stored: null, env: null, default: 20 },
+      reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
+      guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+      max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+      public_url: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+      default_harness_model: { effective: {}, stored: {} },
+      default_sandbox: { effective: "off", source: "default", stored: null, env: null, default: "off", reason: null },
+      sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
+      sandbox_profiles: [],
+      home: "/home/user",
+      autocomplete_turn_end: { effective: false, source: "default", stored: null, env: null, default: false },
+      default_auto_name: { effective: true, source: "default", stored: null, env: null, default: true },
+      update_check: { effective: true, source: "default", stored: null, env: null, default: true },
+      manager_enabled: { effective: false, source: "default", stored: null, env: null, default: false },
+      review_agent_can_resolve: { effective: false, source: "default", stored: null, env: null, default: false },
+      manager_profile: { effective: null, source: "default", stored: null, env: null, default: null },
+      price_table: { manual_path: null, fetched_path: null, source: null, fetched_at: null, fetched_rows: 0, manual_keys: [], reason: null },
+      updated_at: "2026-07-01T10:00:00.000Z",
+      ...overrides,
+    };
+  }
+
+  /** #452 for the harness axis: the run selector NAMES the instance default on the inherit
+   *  option; it never copies it into the field. Assert on the OPTION TEXT (the muted hint)
+   *  and the presence of the concrete options — never that a concrete value was seeded (the
+   *  memory of #347/#452). #586: the picker is a custom sectioned dropdown, so open it. */
+  it("names the instance default on the inherit option without seeding the field", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(
+      harnessSettings({
+        default_harness: { effective: "opencode", source: "stored", stored: "opencode", env: null, default: null },
+      }),
+    );
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderModal();
+    // The closed trigger shows the inherit label — never the copied default value.
+    const trigger = await screen.findByTestId("harness-select");
+    expect(trigger).toHaveTextContent("Use instance default");
+    // Open it: the inherit row names what "" resolves to (the muted hint), and the
+    // embedded harnesses are offered as concrete options.
+    await user.click(trigger);
+    const inherit = await screen.findByTestId("harness-select-option-inherit");
+    await waitFor(() => expect(inherit).toHaveTextContent("opencode"));
+    expect(inherit).toHaveTextContent("Use instance default");
+    expect(screen.getByTestId("harness-select-option-claude")).toBeInTheDocument();
+    expect(screen.getByTestId("harness-select-option-opencode")).toBeInTheDocument();
+  });
+
+  it("names the claude floor when the instance sets no default", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(harnessSettings());
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", scope: legacyScope("repo") })]);
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderModal();
+    await user.click(await screen.findByTestId("harness-select"));
+    const inherit = await screen.findByTestId("harness-select-option-inherit");
+    await waitFor(() => expect(inherit).toHaveTextContent("claude"));
+    expect(inherit).toHaveTextContent("Use instance default");
+  });
+
+  it("passes the chosen harness to createRun", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(harnessSettings());
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Optional Pipeline", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+
+    // #586: open the custom dropdown and pick opencode (real timers keep userEvent
+    // simple; repo validation above already ran under fake timers).
+    vi.useRealTimers();
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId("harness-select"));
+    await user.click(await screen.findByTestId("harness-select-option-opencode"));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /^run/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
+
+    await waitFor(() => {
+      expect(createRun).toHaveBeenCalledWith(expect.objectContaining({ harness: "opencode" }));
+    });
+  });
+
+  it("omits the harness key when left on the inherit default", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(harnessSettings());
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Optional Pipeline", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+    renderModal();
+    await enterValidRepo();
+    // Leave the harness selector on "" (inherit) — never open it.
+    await screen.findByTestId("harness-select");
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByRole("button", { name: /^run/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
+
+    await waitFor(() => expect(createRun).toHaveBeenCalled());
+    // The Run names no harness — the daemon resolves through the instance default.
+    expect(vi.mocked(createRun).mock.calls[0][0].harness).toBeUndefined();
+  });
+
+  it("round-trips a Trigger's harness and clears it to null on reset", async () => {
+    vi.mocked(fetchSettings).mockResolvedValue(harnessSettings());
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+    const trigger: Trigger = {
+      id: "trg-hns",
+      name: "Nightly",
+      pipeline_id: "p1",
+      pipeline_name: "Auditor",
+      target_repo: "/home/user/project",
+      source_branch: "dev",
+      input_template: "audit",
+      variables: {},
+      cron: "0 9 * * *",
+      guard_command: undefined,
+      overlap_policy: "skip",
+      harness: "opencode",
+      auto_name: true,
+      enabled: true,
+      next_fire_at: undefined,
+      last_fired_at: undefined,
+      last_outcome: undefined,
+    };
+    render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop}
+        openIntent={{ kind: "edit-trigger", trigger }} />,
+    );
+
+    // #586: the closed trigger shows the Trigger's pinned harness by name.
+    const harnessTrigger = await screen.findByTestId("harness-select");
+    await waitFor(() => expect(harnessTrigger).toHaveTextContent("opencode"));
+
+    // Repo validation must resolve so Save is enabled.
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => expect(validateRepo).toHaveBeenCalledWith("/home/user/project"));
+
+    // Reset to "use instance default" → the PATCH must clear it (null). Trigger mode
+    // exposes the inherit option; open the dropdown and pick it.
+    vi.useRealTimers();
+    const user = userEvent.setup();
+    await user.click(harnessTrigger);
+    await user.click(await screen.findByTestId("harness-select-option-inherit"));
+    await waitFor(() => expect(screen.getByTestId("save-trigger-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("save-trigger-button"));
+
+    await waitFor(() => {
+      expect(updateTrigger).toHaveBeenCalledWith(
+        "trg-hns",
+        expect.objectContaining({ harness: null }),
+      );
+    });
+  });
+});
+
+/**
+ * #804 / ADR-0070 §1: the source-branch field is told what it is choosing FOR.
+ * A one-shot Run says nothing about locality — the form just fetched, what you
+ * see is what launches. A Trigger is a template, so a local branch earns an
+ * honest reminder: every fire cuts from its local state, and the pre-fire fetch
+ * cannot move it.
+ */
+describe("NewRunModal — a Trigger's source branch warns on a local one (#804)", () => {
+  const tracked = (name: string): BranchRef => ({ ahead: null, behind: null, last_commit_at: null, last_commit_subject: null, head: false,
+    name,
+    kind: "local",
+    upstream: `origin/${name}`,
+  });
+
+  async function openWithBranches() {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: legacyScope("repo"), prompt_required: false }),
+    ]);
+    listBranchesReturns([tracked("main"), remote("origin/feature-remote-only")]);
+    renderModal();
+    await enterValidRepo();
+  }
+
+  it("says nothing while the form launches one Run", async () => {
+    await openWithBranches();
+    expect(selectedBranch()).toContain("main");
+    expect(screen.queryByTestId("source-branch-local-warning")).not.toBeInTheDocument();
+  });
+
+  it("warns as soon as the form becomes a Trigger", async () => {
+    await openWithBranches();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    expect(screen.getByTestId("source-branch-local-warning")).toHaveAccessibleName(
+      expect.stringContaining("Prefer origin/main"),
+    );
+  });
+
+  it("falls silent once the Trigger points at the tracking ref", async () => {
+    await openWithBranches();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    await pickBranch("origin/feature-remote-only");
+    expect(selectedBranch()).toContain("origin/feature-remote-only");
+    expect(screen.queryByTestId("source-branch-local-warning")).not.toBeInTheDocument();
+    // The slot stays, so nothing moved while the user clicked.
+    expect(screen.getByTestId("source-branch-local-warning-slot")).toBeInTheDocument();
+  });
+
+  it("leaves the field alone again when the form goes back to Run now", async () => {
+    await openWithBranches();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    expect(screen.getByTestId("source-branch-local-warning")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("mode-run"));
+    expect(screen.queryByTestId("source-branch-local-warning")).not.toBeInTheDocument();
+  });
+});
+
+describe("NewRunModal — a run/new section provides a value (API 0.9)", () => {
+  type Props = SectionProps<RunNewContext>;
+  const contexts: unknown[] = [];
+
+  function serveSection(component: string) {
+    // The earlier tests of this file may have read the catalogue already.
+    resetExtensions();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url === "/ext"
+          ? new Response(
+              JSON.stringify([
+                {
+                  id: "test",
+                  name: "Test extension",
+                  version: "0.0.0",
+                  ui: {
+                    bundle_url: "/ext/test/ui.js",
+                    react_major: hostReactMajor(),
+                    ui_module_major: null,
+                    contributions: [
+                      { location: "run/new", id: "s", label: "Test", type: "section", component },
+                    ],
+                    commands: [],
+                    locations: [],
+                  },
+                },
+              ]),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            )
+          : new Response("not found", { status: 404 }),
+      ),
+    );
+    setBundleLoader(async () => ({
+      Providing: ({ form, context }: Props) => {
+        contexts.push(context);
+        useEffect(() => form?.provide?.(() => ({ cle: `from ${context.name || "nothing"}` })), [form, context.name]);
+        return <p>providing section</p>;
+      },
+      Silent: () => <p>silent section</p>,
+    }));
+  }
+
+  afterEach(() => {
+    resetExtensions();
+    vi.unstubAllGlobals();
+    contexts.length = 0;
+  });
+
+  async function launch(sectionText: string) {
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline()]);
+    renderModal();
+    await enterValidRepo();
+    await screen.findByText(sectionText);
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), {
+      target: { value: "do the thing" },
+    });
+    vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
+    await waitFor(() => expect(createRun).toHaveBeenCalled());
+    return vi.mocked(createRun).mock.calls[0][0];
+  }
+
+  it("sends what the section provides under its extension's id, and tells it the typed prompt", async () => {
+    serveSection("Providing");
+    const sent = await launch("providing section");
+    expect(sent.extensions).toEqual({ test: { cle: "from nothing" } });
+    // The form empties itself once launched: the context saw the prompt before.
+    expect(contexts).toContainEqual(
+      expect.objectContaining({ location: "run/new", input: "do the thing", name: "" }),
+    );
+  });
+
+  it("sends no extensions without a providing section", async () => {
+    serveSection("Silent");
+    const sent = await launch("silent section");
+    expect(sent).not.toHaveProperty("extensions");
+  });
+});
+
+describe("NewRunModal — a draft that differs from the last version (ADR-0088)", () => {
+  const versioned = makePipeline({ version: { number: 8, title: "external edit" } });
+
+  function openDraft(changes: number) {
+    useEditStore.setState({
+      pipelines: [versioned],
+      activeTabId: versioned.id,
+      openTabs: [
+        {
+          id: versioned.id,
+          scope: "instance",
+          pipeline: { name: versioned.name, variables: {}, nodes: [], edges: [] },
+          prompts: {},
+          diagnostics: [],
+          dirty: changes > 0,
+          externalDirty: false,
+          draft: {
+            status: "live",
+            synced: true,
+            canWrite: true,
+            connection: "1",
+            participants: [],
+            changes,
+            canUndo: false,
+            canRedo: false,
+            undoLabel: null,
+            redoLabel: null,
+            notices: [],
+          },
+        },
+      ],
+    });
+  }
+
+  async function fillAndLaunch() {
+    renderModal();
+    await enterValidRepo();
+    await waitFor(() => expect(selectedPipeline()).toContain(versioned.name));
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), { target: { value: "go" } });
+    vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
+  }
+
+  beforeEach(() => {
+    vi.mocked(fetchPipelines).mockResolvedValue([versioned]);
+  });
+
+  it("asks before launching, then runs the last version and leaves the draft as it is", async () => {
+    const save = vi.fn();
+    openDraft(3);
+    useEditStore.setState({ save });
+    await fillAndLaunch();
+
+    const modal = await screen.findByTestId("launch-draft-modal");
+    expect(createRun).not.toHaveBeenCalled();
+    expect(modal).toHaveTextContent("The draft has 3 changes that are not in a version yet");
+    expect(within(modal).getByTestId("launch-draft-confirm")).toHaveTextContent("Save as v9 and run");
+    expect(within(modal).getByTestId("launch-draft-last")).toHaveTextContent("Run last version (v8 · external edit)");
+
+    fireEvent.click(within(modal).getByTestId("launch-draft-last").querySelector("input")!);
+    expect(within(modal).getByTestId("launch-draft-confirm")).toHaveTextContent("Run last version");
+    fireEvent.click(within(modal).getByTestId("launch-draft-confirm"));
+
+    await waitFor(() => expect(createRun).toHaveBeenCalledTimes(1));
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("saves the draft as the next version first, by default", async () => {
+    const save = vi.fn().mockResolvedValue({ ok: true, version: { number: 9, title: "v9" } });
+    openDraft(2);
+    useEditStore.setState({ save });
+    await fillAndLaunch();
+
+    fireEvent.click(await screen.findByTestId("launch-draft-confirm"));
+    await waitFor(() => expect(createRun).toHaveBeenCalledTimes(1));
+    expect(save).toHaveBeenCalledWith(versioned.id, { new_version: true, keep_old: false });
+    expect(save.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(createRun).mock.invocationCallOrder[0]);
+  });
+
+  it("launches the pipeline under the id the save moved it to", async () => {
+    const save = vi.fn().mockResolvedValue({ ok: true, id: "renamed-pipe", renamed: true, version: { number: 9, title: "v9" } });
+    openDraft(1);
+    useEditStore.setState({ save });
+    await fillAndLaunch();
+
+    fireEvent.click(await screen.findByTestId("launch-draft-confirm"));
+    await waitFor(() =>
+      expect(createRun).toHaveBeenCalledWith(expect.objectContaining({ pipeline_id: "renamed-pipe" })),
+    );
+  });
+
+  it("launches nothing when the save fails", async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    openDraft(1);
+    useEditStore.setState({ save });
+    await fillAndLaunch();
+
+    fireEvent.click(await screen.findByTestId("launch-draft-confirm"));
+    expect(await screen.findByTestId("launch-error")).toHaveTextContent("could not be saved as v9");
+    expect(createRun).not.toHaveBeenCalled();
+  });
+
+  it("launches at once, with nothing saved, when the draft has no change", async () => {
+    const save = vi.fn();
+    openDraft(0);
+    useEditStore.setState({ save });
+    await fillAndLaunch();
+
+    await waitFor(() => expect(createRun).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId("launch-draft-modal")).not.toBeInTheDocument();
+    expect(save).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The dialog itself (one column of label-left rows, `overlays.newRunLayout`):
+ * Escape closes it unless a layer inside takes it, and with no Projet yet one
+ * can be created from the Project row.
+ */
+describe("NewRunModal — the dialog", () => {
+  afterEach(() => {
+    vi.mocked(fetchProjects).mockResolvedValue([]);
+  });
+
+  it("closes on Escape", () => {
+    const onClose = vi.fn();
+    render(<NewRunModal open={true} onClose={onClose} onCreated={noop} />);
+    fireEvent.keyDown(screen.getByTestId("run-name-input"), { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("warns before an Escape loses attachments, then closes on the second", async () => {
+    const onClose = vi.fn();
+    render(<NewRunModal open={true} onClose={onClose} onCreated={noop} />);
+    fireEvent.change(screen.getByTestId("image-file-input"), {
+      target: { files: [new File(["{}"], "fixtures.json", { type: "application/json" })] },
+    });
+    await waitFor(() => expect(screen.getAllByTestId("file-chip")).toHaveLength(1));
+    const dialog = screen.getByRole("dialog", { name: "New Run" });
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId("attachments-close-warning")).toBeInTheDocument();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets Escape close an open list without closing the dialog", async () => {
+    vi.mocked(fetchProjects).mockResolvedValue([
+      { id: "prj-a", name: "Alpha", members: ["/code/a"], primary_repo: "/code/a" },
+    ]);
+    const onClose = vi.fn();
+    render(<NewRunModal open={true} onClose={onClose} onCreated={noop} />);
+    await settleRepo("/code/a");
+    fireEvent.click(screen.getByTestId("project-combobox"));
+    expect(screen.getByTestId("project-combobox-menu")).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByTestId("project-combobox"), { key: "Escape" });
+    expect(screen.queryByTestId("project-combobox-menu")).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("submits on Ctrl+Enter", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", prompt_required: false })]);
+    render(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+    await enterValidRepo();
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "New Run" }), { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(createRun).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not launch on Ctrl+Enter while the Run button is disabled", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", prompt_required: true })]);
+    render(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+    await enterValidRepo();
+    // A prompt-required pipeline and no prompt: the button is disabled.
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeDisabled());
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "New Run" }), { key: "Enter", ctrlKey: true });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(createRun).not.toHaveBeenCalled();
+  });
+
+  it("keeps Tab inside the dialog", () => {
+    render(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+    const dialog = screen.getByRole("dialog", { name: "New Run" });
+    screen.getByTestId("new-run-cancel").focus();
+    // The last enabled control is Cancel when Run is disabled: Tab wraps to the first.
+    fireEvent.keyDown(screen.getByTestId("new-run-cancel"), { key: "Tab" });
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+  });
+
+  it("offers to create a Projet when there is none yet", async () => {
+    vi.mocked(fetchProjects).mockResolvedValue([]);
+    renderModal();
+    const create = await screen.findByTestId("launch-new-project");
+    expect(screen.queryByTestId("project-combobox")).toBeNull();
+    fireEvent.click(create);
+    expect(await screen.findByTestId("project-edit-modal")).toHaveTextContent("New project");
+  });
+
+  it("states what launches in the footer, in mono", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", node_count: 4 })]);
+    renderModal();
+    await enterValidRepo("/home/user/shop-api");
+    await waitFor(() =>
+      expect(screen.getByTestId("new-run-summary")).toHaveTextContent(/^4 nodes · .+ · shop-api@main$/),
+    );
+  });
+});

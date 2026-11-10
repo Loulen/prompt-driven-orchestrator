@@ -76,16 +76,9 @@ test("the chrome frames a 960 px GIF around content of the crop's aspect", () =>
   assert.equal(layout.content.height % 2, 0);
 });
 
-let ffmpeg = true;
-try {
-  execFileSync("ffmpeg", ["-version"], { stdio: "ignore" });
-} catch {
-  ffmpeg = false;
-}
-
 // The encode runs off the event loop: a SIGINT to node alone is handled at once
 // (not after the encode), and the running ffmpeg dies with it.
-test("a SIGINT mid-encode exits at once and kills the running ffmpeg", { skip: ffmpeg ? false : "no ffmpeg on PATH" }, async () => {
+test("a SIGINT mid-encode exits at once and kills the running ffmpeg", async () => {
   const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "encode-forever.mjs");
   const child = spawn(process.execPath, [fixture], { stdio: ["ignore", "pipe", "inherit"] });
   await new Promise((resolve) => child.stdout.once("data", resolve));

@@ -27,6 +27,8 @@ Use **subagents if available** — each role gets its own context so they don't 
 5. **Drive the Feature Path.** Run `/agentic-tests` to exercise the FP against the running system. A red FP or a blocking finding sends you back to step 2.
 6. **Green gate.** The work is done when, together: the project **builds**, the **test suite** is green, the **FP** is green, and **no blocking finding** is open. Anything red loops back to step 2.
 
+While you build, run the *fast* gate, then the *scoped* gate (`make fast`, `make scoped`). After the FP, fix minor findings under the *scoped* gate on the delta and replay only the FP steps they touch, then run the *full* gate (`make gate`) once.
+
 Refactoring belongs to the review stage, not the red → green cycle (see `/tdd`).
 
 ## Commit

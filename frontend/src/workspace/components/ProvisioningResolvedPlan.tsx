@@ -1,0 +1,111 @@
+import { useMemo } from "react";
+import { pathsOverlap, scopePrecedes } from "../model/provisioning";
+import type { ProvisioningPlan } from "../../shared/generated/ProvisioningPlan";
+import { LEVEL_LABELS } from "../model/provisioningCopy";
+import { plural } from "../../shared/lib/plural";
+
+type PlanRule = ProvisioningPlan["rules"][number];
+
+// The "Resolved plan" footer of the Provisioning block, split out of
+// `ProvisioningRulesEditor.tsx` (file size rule).
+
+function overriddenOrigins(
+  plan: ProvisioningPlan | null,
+  rule: PlanRule,
+): string[] {
+  return (plan?.rules ?? [])
+    .filter(
+      (candidate) =>
+        scopePrecedes(candidate.scope, rule.scope) &&
+        candidate.mode !== rule.mode &&
+        pathsOverlap(candidate.paths, rule.paths),
+    )
+    .map((candidate) => `${LEVEL_LABELS[candidate.scope]} ${candidate.mode}`)
+    .filter((value, index, all) => all.indexOf(value) === index);
+}
+
+function overridingOrigins(
+  plan: ProvisioningPlan | null,
+  rule: PlanRule,
+): string[] {
+  return (plan?.rules ?? [])
+    .filter(
+      (candidate) =>
+        scopePrecedes(rule.scope, candidate.scope) &&
+        candidate.mode !== rule.mode &&
+        pathsOverlap(candidate.paths, rule.paths),
+    )
+    .map((candidate) => `${LEVEL_LABELS[candidate.scope]} ${candidate.mode}`)
+    .filter((value, index, all) => all.indexOf(value) === index);
+}
+
+export default function ProvisioningResolvedPlan({
+  plan,
+  frozen,
+}: {
+  plan: ProvisioningPlan | null;
+  frozen: boolean;
+}) {
+  const gitProvidedPaths = useMemo(
+    () =>
+      new Set(
+        (plan?.entries ?? [])
+          .filter((entry) => entry.provided_by_git)
+          .map((entry) => entry.relative_path),
+      ),
+    [plan],
+  );
+  return (
+    <div className="border-t border-line px-3 py-2">
+      <div className="mb-1 font-medium uppercase tracking-wide text-text-3 text-2xs">
+        Resolved plan · {frozen ? "frozen" : "live"}
+      </div>
+      {(plan?.rules ?? []).filter((rule) => rule.unmatched).map((rule) => (
+        <div
+          key={`${rule.scope}-${rule.mode}-${rule.pattern}`}
+          className="mb-1 rounded bg-st-await/14 px-2 py-1 text-st-await"
+          title="Normal: the Run still starts"
+        >
+          No match: {rule.pattern}
+        </div>
+      ))}
+      {(plan?.rules ?? []).map((rule) => {
+        const overrides = overriddenOrigins(plan, rule);
+        const overriddenBy = overridingOrigins(plan, rule);
+        return (
+          <details
+            key={`${rule.scope}-${rule.mode}-${rule.pattern}`}
+            className="border-t border-line-soft py-1 font-mono"
+          >
+            <summary className="cursor-pointer">
+              {rule.pattern} · {LEVEL_LABELS[rule.scope]} · {rule.mode} ·{" "}
+              {rule.paths.length + rule.excluded_paths.length}
+              {overrides.length > 0 ? ` · overrides ${overrides.join(", ")}` : ""}
+              {overriddenBy.length > 0
+                ? ` · overridden by ${overriddenBy.join(", ")}`
+                : ""}
+            </summary>
+            <div className="pl-4 text-text-3">
+              {rule.paths.map((path) => (
+                <div key={path}>
+                  {path}
+                  {gitProvidedPaths.has(path) ? " · provided by Git · skipped" : ""}
+                </div>
+              ))}
+              {rule.excluded_paths.map((excluded) => (
+                <div key={`excluded-${excluded.relative_path}`} className="line-through">
+                  {excluded.relative_path} · excluded by{" "}
+                  {LEVEL_LABELS[excluded.excluded_by_scope]}
+                </div>
+              ))}
+            </div>
+          </details>
+        );
+      })}
+      <div className="mt-1 text-text-3" data-testid="provisioning-plan-count">
+        {plural(plan?.entries.filter((entry) => !entry.provided_by_git).length ?? 0, "path")} added ·{" "}
+        {plural(plan?.entries.filter((entry) => entry.provided_by_git).length ?? 0, "Git path")} skipped
+      </div>
+    </div>
+  );
+}

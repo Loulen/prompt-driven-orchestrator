@@ -1,6 +1,6 @@
-import type { SelectionKind } from "../stores/editStore";
+import type { SelectionKind } from "../pipeline/store/editState";
 
-export type RightPaneOwner = "info" | "trigger" | "editTab" | "selectedNode";
+export type RightPaneOwner = "page" | "info" | "trigger" | "editTab" | "selectedNode";
 
 export interface RightPaneInputs {
   /** A Trigger is selected in the left panel — its detail should own the pane. */
@@ -9,12 +9,16 @@ export interface RightPaneInputs {
   infoPanelOpen: boolean;
   /** An edit tab (pipeline or run) owns the centre canvas. */
   hasEditTab: boolean;
+  /** A mounted page's tab owns the centre (its guide, the pane). */
+  pageOpen?: boolean;
 }
 
 /**
  * Decide which view owns the right-hand detail pane.
  *
  * Precedence (highest first):
+ *  0. `page`    — a mounted page's tab is shown in the centre: the pane is its
+ *                 reading guide (or nothing, and it collapses).
  *  1. `info`    — the explicit pipeline/run info overlay, toggled from the canvas.
  *  2. `trigger` — a Trigger is selected in the left panel. It wins over an open
  *                 edit tab: opening a run leaves a *persistent* edit tab behind
@@ -29,9 +33,10 @@ export interface RightPaneInputs {
  *                 the active edit tab.
  *  4. `selectedNode` — the legacy no-tab node detail path.
  *
- * The four owners are mutually exclusive: callers render exactly one branch.
+ * The owners are mutually exclusive: callers render exactly one branch.
  */
 export function rightPaneOwner(input: RightPaneInputs): RightPaneOwner {
+  if (input.pageOpen) return "page";
   if (input.infoPanelOpen) return "info";
   if (input.triggerSelected) return "trigger";
   if (input.hasEditTab) return "editTab";
@@ -50,6 +55,8 @@ export interface RightPaneContentInputs {
    * Start/End node, or the "Run archived" notice.
    */
   legacyHasContent: boolean;
+  /** The open page has a guide and the reader has not folded it into its rail. */
+  guideShown?: boolean;
 }
 
 /**
@@ -65,6 +72,8 @@ export interface RightPaneContentInputs {
  */
 export function rightPaneCollapsed(input: RightPaneContentInputs): boolean {
   switch (input.owner) {
+    case "page":
+      return !input.guideShown;
     case "info":
     case "trigger":
       return false;

@@ -1,0 +1,1724 @@
+/*
+ * The edit inspectors (node, edge, region, note, Start / End) and Pipeline
+ * info (ADR-0091): label-left rows in a 96 px column, caps-head sections of
+ * the kit, one-line identity under the pane bar, the Versions table, the
+ * version line under the tab bar, the presence on the shared draft. Tokens
+ * only; the kit's sections, fields, chips and key/value grids.
+ */
+
+@layer components {
+  /* ---------------------------------------------------------------- pane */
+  .ei {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    min-width: 0;
+    overflow-y: auto;
+    container-type: inline-size;
+    background: var(--surface-1);
+    color: var(--text);
+    font-size: var(--fs-md);
+  }
+  .ei :where(p, pre, ul, dl, dd) {
+    margin: 0;
+  }
+  .ei-bar {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    height: var(--h-bar);
+    padding: 0 var(--g-2) 0 var(--pad-x);
+    border-bottom: 1px solid var(--line);
+    background: var(--surface-1);
+  }
+  .ei-bar__title {
+    display: inline-flex;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    font-size: var(--fs-md);
+    font-weight: var(--w-strong);
+    white-space: nowrap;
+  }
+  .ei-bar__title > svg {
+    flex: none;
+    color: var(--text-3);
+  }
+  .ei-bar__title > .ei-trunc {
+    flex: 0 1 auto;
+    max-width: 60%;
+  }
+  /* every inspector head: the sub line (an id, an edge's ports) gives way first; an edge's target keeps its share */
+  .ei-bar__title > .ei-trunc ~ .ei-trunc {
+    flex: none;
+    max-width: 40%;
+  }
+  .ei-bar__title > .ei-bar__sub {
+    flex: 0 1000 auto;
+  }
+  .ei-bar__sub {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-3);
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+    font-weight: var(--w-regular);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ei-bar__actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--g-1);
+    margin-left: auto;
+  }
+  /* one mono line under the bar: what is selected */
+  .ei-idline {
+    flex: none;
+    height: var(--h-row);
+    padding: 0 var(--pad-x);
+    overflow: hidden;
+    border-bottom: 1px solid var(--line-soft);
+    color: var(--text-3);
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+    line-height: var(--h-row);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ---------------------------------------------------------------- helpers */
+  .ei-trunc {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ei-dim {
+    color: var(--text-3);
+  }
+  .ei-ic {
+    flex: none;
+    color: var(--text-3);
+  }
+  .ei-add {
+    color: var(--color-st-done);
+  }
+  .ei-del {
+    color: var(--color-st-failed);
+  }
+  .ei-warn {
+    color: var(--color-st-blocked);
+  }
+  .ei-line {
+    display: flex;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+  }
+  .ei-line > .d-input,
+  .ei-line > .ei-select {
+    flex: 1 1 auto;
+  }
+  .ei-chips {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 3px;
+    min-width: 0;
+  }
+  .ei-pad {
+    padding: 0 var(--pad-x);
+  }
+  .ei-meta {
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+  }
+  .ei-meta.d-mono {
+    font-size: var(--fs-xs);
+  }
+  .ei-line > .ei-meta {
+    flex: none;
+    white-space: nowrap;
+  }
+  /* what others do and what an extension owns stays visible in a section head */
+  .d-sec__aside:has(.ei-keep) {
+    opacity: 1;
+  }
+  .ei-keep {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  /* the native box, in the ruby accent */
+  .ei-checkbox {
+    width: 13px;
+    height: 13px;
+    margin: 0;
+    accent-color: var(--primary);
+    cursor: pointer;
+  }
+  .ei-checkbox:disabled {
+    cursor: not-allowed;
+  }
+
+  /* a native dropdown drawn as the kit's bordered field */
+  .ei-select {
+    width: auto;
+    min-width: 0;
+    height: var(--h-control);
+    padding: 0 2px 0 6px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-ui);
+    background: var(--surface-0);
+    color: var(--text);
+    font: inherit;
+    font-size: var(--fs-sm);
+    color-scheme: inherit;
+    cursor: pointer;
+  }
+  .ei-select:focus {
+    outline: 1px solid var(--focus-ring);
+    outline-offset: -1px;
+    border-color: transparent;
+  }
+  .ei-select:disabled {
+    background: transparent;
+    color: var(--text-3);
+    cursor: not-allowed;
+  }
+  .ei-select--mono {
+    font-family: var(--font-code);
+  }
+  .ei-select--sm {
+    height: var(--h-control-sm);
+    font-size: var(--fs-xs);
+  }
+  /* a value nobody knows, kept as written (a field type the lint names) */
+  .ei-select[aria-invalid="true"] {
+    border-color: var(--color-st-failed);
+    color: var(--color-st-failed);
+  }
+
+  /* a read-only field: a disabled input that still reads */
+  .ei .d-input:disabled,
+  .ei .d-area:disabled {
+    border-color: var(--line-soft);
+    color: var(--text);
+    -webkit-text-fill-color: var(--text);
+    cursor: default;
+  }
+  /* a field that only shows: the Replace title, a frozen name */
+  .d-input.ei-ro,
+  .d-input.ei-ro:disabled {
+    border-style: dashed;
+    border-color: var(--line-strong);
+    background: transparent;
+    color: var(--text-3);
+    -webkit-text-fill-color: var(--text-3);
+    font-style: italic;
+  }
+
+  /* the node's library star: ruby when in the library, a dot when out of sync */
+  .ei-star.is-on {
+    color: var(--primary);
+    fill: var(--primary);
+  }
+  .ei-star__dot {
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--color-st-blocked);
+  }
+
+  /* ---------------------------------------------------------------- rows */
+  .ei-row {
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    height: var(--h-row);
+    padding: 0 var(--pad-x);
+    font-size: var(--fs-sm);
+  }
+  .ei-row--hl {
+    background: var(--selected);
+  }
+  button.ei-row {
+    width: 100%;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    font-size: var(--fs-sm);
+    text-align: left;
+    cursor: pointer;
+  }
+  button.ei-row:hover {
+    background: var(--hover);
+  }
+  .ei-row__name {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ei-row__meta {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ei-row__end {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: var(--g-1);
+    margin-left: auto;
+  }
+  .ei-x {
+    display: inline-grid;
+    flex: none;
+    place-items: center;
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-ui);
+    background: none;
+    color: var(--text-3);
+    cursor: pointer;
+  }
+  .ei-x:hover {
+    background: var(--active);
+    color: var(--text);
+  }
+
+  /* a pooled input: its name, then its sources */
+  .ei-input {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 3px var(--pad-x);
+    border-bottom: 1px solid var(--line-soft);
+    font-size: var(--fs-sm);
+  }
+  .ei-input:last-child {
+    border-bottom: 0;
+  }
+  .ei-input__srcs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px var(--g-2);
+    min-width: 0;
+    padding-left: 20px;
+    color: var(--text-3);
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+  }
+  .ei-input__src {
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  /* ---------------------------------------------------------------- toggles, notes */
+  .ei-note {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--g-2);
+    min-width: 0;
+    padding: 2px 0;
+    color: var(--color-st-blocked);
+    font-size: var(--fs-xs);
+  }
+  .ei-note > svg {
+    flex: none;
+    margin-top: 2px;
+  }
+  .ei-note button {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  .ei-lock {
+    flex: none;
+    color: var(--text-3);
+  }
+
+  .ei-provisioning {
+    padding: var(--g-2) 0;
+    font-size: var(--fs-sm);
+  }
+
+  /* ---------------------------------------------------------------- agent */
+  .ei-agent {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: var(--g-2);
+    min-width: 0;
+    padding: 1px 0;
+  }
+  .ei-agent__pick {
+    display: flex;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+  }
+  .ei-agent__pick > *,
+  .ei-agent__slot > .d-sel {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .ei-agent__slot {
+    display: flex;
+  }
+  /* the three modes share the row's width (`fill`), whatever it is */
+  .ei-agent > .d-seg > .d-seg__btn {
+    padding: 0 var(--g-2);
+  }
+  /* a narrow pane: the agent takes the row's whole width, under its label */
+  @container (max-width: 360px) {
+    .d-field:has(> .d-field__ctl > .ei-agent) {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    /* the model, the longest value, on its own line under harness and effort */
+    .ei-agent__pick {
+      flex-wrap: wrap;
+    }
+    .ei-agent__pick > .ei-agent__model {
+      flex-basis: 100%;
+      order: 1;
+    }
+  }
+  /* the Skills selector takes the row's whole width, like the agent above it */
+  .d-field__ctl > .ln-skills {
+    flex: 1 1 auto;
+  }
+  .d-field__ctl > .ln-skills > .ln-skills__field {
+    width: 100%;
+  }
+  .ei-agent__line {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-3);
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ei-agent[data-broken] .ei-agent__line {
+    color: var(--color-st-blocked);
+  }
+
+  /* ---------------------------------------------------------------- prompt */
+  /* a field of the kit, bordered and inset in its section, with its focus ring */
+  .ei-prompt {
+    position: relative;
+    padding: var(--g-3) var(--pad-x) 0;
+  }
+  .ei-prompt:last-child {
+    padding-bottom: var(--g-3);
+  }
+  .ei-prompt__field {
+    position: relative;
+  }
+  .ei-prompt .d-area {
+    display: block;
+    min-height: 140px;
+    background: var(--surface-0);
+    font-size: var(--fs-xs);
+    line-height: 1.5;
+  }
+  /* what PDO adds at launch: under the field, outside it, locked */
+  .ei-launch {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+    min-height: var(--h-row);
+    padding: var(--g-1) var(--pad-x) var(--g-3);
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+  }
+  .ei-launch > svg {
+    flex: none;
+  }
+  .ei-launch__line {
+    padding: 0 4px;
+    border-radius: var(--radius-ui);
+    background: var(--hover);
+    color: var(--text-2);
+    font-family: var(--font-code);
+  }
+  .ei-amend {
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    min-height: var(--h-row);
+    padding: 0 var(--pad-x);
+    border-bottom: 1px dashed var(--line);
+    color: var(--text-3);
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+  }
+  .ei-amend pre {
+    margin: 0;
+    font: inherit;
+    white-space: pre-wrap;
+  }
+  .ei-caret {
+    position: absolute;
+    pointer-events: none;
+  }
+  .ei-caret__bar {
+    position: absolute;
+    display: block;
+    width: 1.5px;
+    height: 14px;
+    background: var(--pc);
+  }
+  .ei-caret__name {
+    position: absolute;
+    top: -12px;
+    left: 0;
+    padding: 0 3px;
+    border-radius: var(--radius-ui) var(--radius-ui) var(--radius-ui) 0;
+    background: var(--pc);
+    color: var(--surface-0);
+    font-family: var(--font-ui);
+    font-size: var(--fs-2xs);
+    line-height: 12px;
+    white-space: nowrap;
+  }
+
+  /* ---------------------------------------------------------------- outputs, live artifacts */
+  .ei-port {
+    padding: 3px var(--pad-x);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .ei-port:last-child {
+    border-bottom: 0;
+  }
+  .ei-port[data-hl] {
+    background: var(--selected);
+  }
+  .ei-port__head {
+    display: flex;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+  }
+  .ei-port__row {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .ei-port__row .port-row > .d-input {
+    flex: 1 1 auto;
+  }
+  .ei-port__row .port-row > .ei-select {
+    flex: none;
+  }
+  .ei-port__row .port-row[data-hl] {
+    background: var(--selected);
+  }
+  .ei-port__body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    /* under the name: past the fold button and its gap */
+    padding: 2px 0 0 calc(var(--h-control-sm) + var(--g-2));
+    min-width: 0;
+  }
+  .ei-port__notices:empty {
+    display: none;
+  }
+
+  /* expected content: one line, the text under it when open */
+  .ei-exp {
+    min-width: 0;
+  }
+  .ei-exp__trigger {
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    width: 100%;
+    min-width: 0;
+    height: var(--h-control-sm);
+    padding: 0 var(--g-2);
+    border: 0;
+    border-radius: var(--radius-ui);
+    background: none;
+    color: var(--text-3);
+    font: inherit;
+    font-size: var(--fs-xs);
+    text-align: left;
+    cursor: pointer;
+  }
+  .ei-exp__trigger:hover {
+    background: var(--hover);
+    color: var(--text-2);
+  }
+  .ei-exp__trigger:focus-visible {
+    outline: 1px solid var(--focus-ring);
+    outline-offset: -1px;
+  }
+  .ei-exp__label {
+    flex: none;
+  }
+  .ei-exp__preview {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-2);
+    font-family: var(--font-code);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ei-exp__preview:empty::before {
+    content: "+";
+    color: var(--text-3);
+  }
+  .ei-exp__chev {
+    flex: none;
+    transition: transform 0.12s;
+  }
+  .ei-exp[data-open] .ei-exp__chev {
+    transform: rotate(90deg);
+  }
+  .ei-exp .d-area {
+    max-height: 150px;
+    margin-top: 2px;
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+  }
+
+  /* the frontmatter schema of an output: one row per field */
+  .ei-schema {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  /* The type column is as wide as its widest option, so `string` reads whole
+     (`strin` in a fixed 64 px, FP of CORE-227), and an unknown type up to
+     160 px (`banana (unknown)`). */
+  .ei-field {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content auto;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+  }
+  .ei-field > .ei-select {
+    max-width: 160px;
+  }
+  .ei-field__enum {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 3px;
+    min-width: 0;
+    padding-left: var(--g-4);
+  }
+  .ei-field__enum .d-input {
+    width: 96px;
+    flex: 0 1 96px;
+  }
+  .ei-addline {
+    display: inline-flex;
+    align-self: flex-start;
+    align-items: center;
+    gap: 3px;
+    height: var(--h-control-sm);
+    padding: 0 var(--g-2);
+    border: 0;
+    border-radius: var(--radius-ui);
+    background: none;
+    color: var(--text-3);
+    font: inherit;
+    font-size: var(--fs-xs);
+    cursor: pointer;
+  }
+  .ei-addline:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+  .ei-addline:disabled {
+    cursor: default;
+    opacity: 0.45;
+  }
+
+  /* ---------------------------------------------------------------- edge */
+  /* one condition: output, field, operator, value, delete. The rows and their
+     header share one grid, so each column has the same width on every row,
+     and every control the same height. */
+  .ei-cond {
+    display: grid;
+    grid-template-columns: 76px minmax(0, 1fr) 60px 108px 24px;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+    padding: 2px var(--pad-x);
+  }
+  .ei-cond--head {
+    padding-top: var(--g-2);
+    padding-bottom: 0;
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+  }
+  .ei-cond__cell,
+  .ei-cond__fill {
+    display: flex;
+    min-width: 0;
+  }
+  .ei-cond__cell > :is(.d-sel, .d-input, .d-seg, .ei-cond__fill),
+  .ei-cond__fill > :is(.d-sel, .d-seg) {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+  }
+  .ei-cond .d-seg > .d-seg__btn {
+    padding: 0 var(--g-2);
+  }
+  /* the persistent « Add condition », under the last row or under « Always » */
+  .ei-cond-add {
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    padding: var(--g-2) var(--pad-x) var(--g-3);
+  }
+  .ei-cond-add__why {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ei-check {
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    height: var(--h-row);
+    padding: 0 var(--pad-x);
+    font-family: var(--font-code);
+    font-size: var(--fs-sm);
+    cursor: pointer;
+  }
+  .ei-check:hover {
+    background: var(--hover);
+  }
+  .ei-check[data-locked] {
+    cursor: not-allowed;
+  }
+  .ei-check input {
+    flex: none;
+    width: 12px;
+    height: 12px;
+    margin: 0;
+    accent-color: var(--primary);
+  }
+
+  /* ---------------------------------------------------------------- region, start, end */
+  .ei-quote {
+    margin: var(--g-2) var(--pad-x);
+    padding: 2px var(--pad-x);
+    overflow: auto;
+    max-height: 240px;
+    border-left: 2px solid var(--line);
+    color: var(--text-2);
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .ei-thumbs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--g-2);
+    padding: var(--g-2) var(--pad-x);
+  }
+  .ei-thumb {
+    display: block;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-ui);
+    background: var(--surface-0);
+    cursor: zoom-in;
+  }
+  .ei-thumb img {
+    display: block;
+    width: 56px;
+    height: 56px;
+    object-fit: cover;
+  }
+  a.ei-row {
+    color: inherit;
+    text-decoration: none;
+  }
+  a.ei-row:hover {
+    background: var(--hover);
+  }
+  .ei-ext {
+    flex: none;
+    min-width: 28px;
+    padding: 0 3px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-ui);
+    color: var(--text-3);
+    font-family: var(--font-code);
+    font-size: var(--fs-2xs);
+    line-height: 14px;
+    text-align: center;
+  }
+  .ei-reason {
+    padding: 0 var(--pad-x) var(--g-2) 26px;
+    color: var(--text-3);
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+    overflow-wrap: anywhere;
+  }
+  .ei-note-area {
+    display: block;
+    flex: 1 1 auto;
+    min-height: 160px;
+    border: 0;
+    border-radius: 0;
+    resize: none;
+    font-size: var(--fs-sm);
+    line-height: 1.5;
+  }
+
+  /* ---------------------------------------------------------------- pipeline info */
+  .pi-tabs {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: stretch;
+    min-width: 0;
+    height: 100%;
+    margin-left: calc(var(--pad-x) * -1);
+  }
+  .pi-tab {
+    position: relative;
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 5px;
+    height: 100%;
+    padding: 0 var(--pad-x);
+    border: 0;
+    background: none;
+    color: var(--text-2);
+    font: inherit;
+    font-size: var(--fs-sm);
+    font-weight: var(--w-medium);
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .pi-tab:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+  .pi-tab[aria-selected="true"] {
+    color: var(--text);
+    box-shadow: inset 0 -2px 0 var(--selected-edge);
+  }
+  .pi-tab:focus-visible {
+    outline: 1px solid var(--focus-ring);
+    outline-offset: -1px;
+  }
+  .pi-tab[hidden] {
+    display: none;
+  }
+  .pi-tab__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--st);
+  }
+  .pi-tab__n {
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    border-radius: 7px;
+    background: var(--color-st-running);
+    color: var(--primary-ink);
+    font-size: var(--fs-2xs);
+    font-weight: var(--w-strong);
+    line-height: 14px;
+    text-align: center;
+  }
+  .pi-tabs__more {
+    display: flex;
+    flex: none;
+    align-items: center;
+  }
+  .pi-body {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  /* an extension's tab of a Run */
+  .pi-ext {
+    padding: var(--g-3) var(--pad-x);
+    font-size: var(--fs-sm);
+  }
+
+  /* Info: the head, the version line, the stats strip */
+  .pi-head {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    height: var(--h-bar);
+    padding: 0 var(--g-2) 0 var(--pad-x);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .pi-head__name {
+    flex: 0 1 auto;
+    /* the name keeps a few letters when the head is narrow, the chips give way */
+    min-width: min(8ch, 100%);
+    overflow: hidden;
+    font-weight: var(--w-strong);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pi-info {
+    container-type: inline-size;
+  }
+  /* a narrow pane: the read-only chip keeps its icon, the name keeps the room */
+  @container (max-width: 320px) {
+    .pi-head__note .d-chip__t {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+  }
+  .pi-vline {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    height: 20px;
+    padding: 0 var(--pad-x);
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+  }
+  .pi-vline .d-mono {
+    min-width: 0;
+    overflow: hidden;
+    font-size: var(--fs-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pi-newer {
+    flex: none;
+    border: 0;
+    background: color-mix(in oklab, var(--color-st-await) 12%, transparent);
+    color: var(--color-st-await);
+    font-family: var(--font-code);
+  }
+  button.pi-newer {
+    cursor: pointer;
+  }
+  button.pi-newer:hover {
+    background: color-mix(in oklab, var(--color-st-await) 20%, transparent);
+  }
+  /* The strip wraps rather than cut a cell (FP of CORE-227: the cost of a Run
+     on three harnesses lost its slices): a cell too wide for what is left of
+     its row starts the next one, 28 px tall like the first. */
+  .pi-stats {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    min-width: 0;
+    min-height: 28px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .pi-stats__cell {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    height: 28px;
+    gap: 5px;
+    min-width: 0;
+    padding: 0 var(--pad-x);
+    overflow: hidden;
+    font-family: var(--font-code);
+    font-size: var(--fs-sm);
+    white-space: nowrap;
+  }
+  .pi-stats__cell + .pi-stats__cell {
+    border-left: 1px solid var(--line-soft);
+  }
+  .pi-stats__cell > svg {
+    flex: none;
+    color: var(--text-3);
+  }
+  .pi-stats__cell[data-live] > svg {
+    color: var(--color-st-running);
+  }
+  .pi-stats__link {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--line);
+    text-underline-offset: 2px;
+    cursor: pointer;
+  }
+  .pi-stats__link:hover {
+    text-decoration-color: currentColor;
+  }
+  /* A cost line wider than the whole strip still ellipsizes; its tooltip
+     carries all of it. */
+  .pi-stats__value {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .pi-sub {
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+  }
+  .pi-stats__tree {
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+    color: var(--text-3);
+  }
+  .pi-tree-tip {
+    display: grid;
+    gap: 1px;
+    text-align: left;
+  }
+  .pi-var {
+    display: flex;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+    padding: 2px 0;
+  }
+  .pi-var > .d-input:first-child {
+    flex: 0 1 112px;
+  }
+  .pi-var > .d-input:nth-child(3) {
+    flex: 1 1 auto;
+  }
+
+  /* Versions */
+  .pi-vers {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    container-type: inline-size;
+    font-size: var(--fs-sm);
+  }
+  .pi-draft {
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    height: var(--h-row);
+    padding: 0 var(--pad-x);
+    border-bottom: 1px solid var(--line);
+    background: var(--surface-2);
+  }
+  .pi-draft__name {
+    flex: none;
+    font-weight: var(--w-medium);
+  }
+  .pi-draft__people {
+    display: inline-flex;
+    margin-left: auto;
+  }
+  .pi-vrow {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    height: var(--h-row);
+    padding: 0 var(--pad-x);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .pi-vrow:hover {
+    background: var(--hover);
+  }
+  .pi-vrow[aria-current] {
+    background: var(--selected);
+    box-shadow: inset 2px 0 0 var(--selected-edge);
+  }
+  .pi-vrow__n {
+    flex: none;
+    width: 28px;
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+  }
+  .pi-vrow__title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pi-vrow__title[data-ext] {
+    color: var(--text-2);
+    font-style: italic;
+  }
+  .pi-vrow__by {
+    display: inline-grid;
+    flex: none;
+    place-items: center;
+    width: 24px;
+    color: var(--text-3);
+    font-size: var(--fs-2xs);
+  }
+  .pi-vrow__ago {
+    flex: none;
+    width: 32px;
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+    text-align: right;
+  }
+  .pi-vrow__runs {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 2px;
+    width: 36px;
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+  }
+  .pi-vrow__acts {
+    position: absolute;
+    top: 2px;
+    right: var(--g-2);
+    display: none;
+    align-items: center;
+    gap: 1px;
+    border-radius: var(--radius-ui);
+    background: var(--surface-2);
+  }
+  .pi-vrow:is(:hover, :focus-within) .pi-vrow__acts {
+    display: inline-flex;
+  }
+  .pi-vrow__last {
+    display: contents;
+  }
+  /* a narrow pane: the columns tighten, « last » gives way (the first row is the last), the title keeps the room */
+  @container (max-width: 320px) {
+    .pi-vrow__n {
+      width: 20px;
+    }
+    .pi-vrow__runs {
+      width: 28px;
+    }
+    .pi-vrow__last {
+      display: none;
+    }
+  }
+
+  /* the YAML of the document */
+  .pi-yaml {
+    flex: 1 1 auto;
+    min-height: 0;
+    margin: 0;
+    padding: var(--g-2) var(--pad-x);
+    overflow: auto;
+    background: var(--surface-0);
+    color: var(--text-2);
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+    line-height: 1.6;
+    tab-size: 2;
+    user-select: text;
+  }
+  .pi-docbar {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+    height: var(--h-row);
+    padding: 0 var(--g-2) 0 var(--pad-x);
+    border-bottom: 1px solid var(--line-soft);
+    font-size: var(--fs-sm);
+  }
+  .pi-docbar > .d-chip {
+    font-family: var(--font-code);
+  }
+  .pi-docnote {
+    display: flex;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+    padding: 0 var(--pad-x);
+    min-height: 20px;
+    border-bottom: 1px solid var(--line-soft);
+    font-size: var(--fs-xs);
+  }
+
+  /* Repositories: one row a repository */
+  .pi-repo {
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    min-height: var(--h-row);
+    font-size: var(--fs-sm);
+  }
+  .pi-repo--two {
+    padding: 2px var(--pad-x);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .pi-repo--two:last-child {
+    border-bottom: 0;
+  }
+  .pi-repo__path {
+    flex: 1 1 auto;
+  }
+  .pi-repo__text {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .pi-repo__cut {
+    display: flex;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+    padding-left: 20px;
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+  }
+  .pi-repo--two .pi-repo__cut {
+    padding-left: 0;
+  }
+  .pi-repo__draft {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--g-3);
+    padding: var(--g-3) var(--pad-x);
+  }
+  .pi-repo__draft > :first-child {
+    align-self: stretch;
+  }
+
+  /* a session tab (Manager, Assistant): a bar, then the terminal */
+  .pi-session {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .pi-session__bar {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    height: var(--h-row);
+    padding: 0 var(--g-2) 0 var(--pad-x);
+    border-bottom: 1px solid var(--line-soft);
+    font-size: var(--fs-sm);
+  }
+  .pi-center {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Diff: the summary, the ledger of SCM rows, the files */
+  .pi-diff {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  .pi-diffhead {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    flex: none;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 var(--g-3);
+    min-width: 0;
+    min-height: 28px;
+    padding: 0 var(--g-2) 0 var(--pad-x);
+    border-bottom: 1px solid var(--line);
+    background: var(--surface-1);
+    font-size: var(--fs-sm);
+  }
+  /* the refs keep their two shas; the actions wrap onto a second line rather than leave the pane */
+  .pi-diffhead > .ei-trunc {
+    flex: 1 1 0;
+    min-width: 17ch;
+  }
+  .pi-diffhead__end {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: var(--g-2);
+    min-height: 28px;
+    margin-left: auto;
+  }
+  .pi-counts {
+    display: inline-flex;
+    flex: none;
+    gap: 4px;
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+  }
+  .pi-dfiles {
+    flex: none;
+    border-bottom: 1px solid var(--line);
+  }
+  .pi-dfile {
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    width: 100%;
+    min-width: 0;
+    height: var(--h-row);
+    padding: 0 var(--pad-x);
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    font-size: var(--fs-sm);
+    text-align: left;
+    cursor: pointer;
+  }
+  .pi-dfile:hover {
+    background: var(--hover);
+  }
+  .pi-dfile[aria-current="true"],
+  .pi-dfile[aria-expanded="true"] {
+    background: var(--active);
+  }
+  .pi-dfile > svg {
+    flex: none;
+  }
+  /* the folder gives way first, then the name down to its tail */
+  .pi-dfile__name {
+    display: inline-flex;
+    flex: 0 1 auto;
+    max-width: 60%;
+    min-width: 0;
+    white-space: nowrap;
+  }
+  .pi-dfile__lead {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .pi-dfile__tail {
+    flex: none;
+  }
+  .pi-dfile__dir {
+    flex: 1 1000 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pi-dfile__st {
+    flex: none;
+    width: 12px;
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+    font-weight: var(--w-strong);
+    text-align: center;
+  }
+  .pi-dfile__head {
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .pi-hunks {
+    overflow-x: auto;
+    border-bottom: 1px solid var(--line-soft);
+    background: var(--surface-0);
+  }
+  .pi-hunks table {
+    width: max-content;
+    min-width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+    line-height: 18px;
+    user-select: text;
+  }
+  .pi-hunk__head td {
+    background: color-mix(in oklab, var(--color-st-running) 8%, var(--surface-0));
+    color: var(--text-3);
+  }
+  .pi-hunk__gut {
+    position: sticky;
+    z-index: 1;
+    width: 32px;
+    min-width: 32px;
+    padding: 0 4px;
+    background: var(--surface-0);
+    color: var(--text-3);
+    text-align: right;
+    user-select: none;
+  }
+  .pi-hunk__gut--old {
+    left: 0;
+  }
+  .pi-hunk__gut--new {
+    left: 32px;
+  }
+  .pi-hunk__sign {
+    width: 14px;
+    padding-left: 4px;
+    color: var(--text-3);
+    user-select: none;
+  }
+  .pi-hunk__t {
+    padding-right: var(--g-6);
+    color: var(--text);
+    white-space: pre;
+  }
+  .pi-hunk__line[data-kind="context"] .pi-hunk__t {
+    color: var(--text-2);
+  }
+  .pi-hunk__line[data-kind="add"],
+  .pi-hunk__line[data-kind="add"] .pi-hunk__gut {
+    background: color-mix(in oklab, var(--color-st-done) 12%, var(--surface-0));
+  }
+  .pi-hunk__line[data-kind="del"],
+  .pi-hunk__line[data-kind="del"] .pi-hunk__gut {
+    background: color-mix(in oklab, var(--color-st-failed) 12%, var(--surface-0));
+  }
+  .pi-hunk__line[data-kind="add"] .pi-hunk__sign {
+    color: var(--color-st-done);
+  }
+  .pi-hunk__line[data-kind="del"] .pi-hunk__sign {
+    color: var(--color-st-failed);
+  }
+  .pi-word[data-kind="add"] {
+    border-radius: var(--radius-ui);
+    background: color-mix(in oklab, var(--color-st-done) 35%, transparent);
+  }
+  .pi-word[data-kind="del"] {
+    border-radius: var(--radius-ui);
+    background: color-mix(in oklab, var(--color-st-failed) 35%, transparent);
+  }
+  .pi-expand {
+    margin-left: auto;
+    padding-left: var(--g-6);
+    color: var(--text-3);
+    text-decoration: none;
+  }
+  .pi-expand:hover {
+    color: var(--text);
+  }
+  .pi-more {
+    display: block;
+    width: 100%;
+    height: var(--h-row);
+    border: 0;
+    background: none;
+    color: var(--text-2);
+    font: inherit;
+    font-size: var(--fs-xs);
+    cursor: pointer;
+  }
+  .pi-more:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+  .pi-skel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--g-3);
+    padding: var(--g-4) var(--pad-x);
+  }
+  .pi-skel > span {
+    display: block;
+    height: 10px;
+    border-radius: var(--radius-ui);
+    background: var(--hover);
+  }
+
+  /* ---------------------------------------------------------------- the line under the tab bar */
+  .pi-vban {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    height: var(--h-row);
+    padding: 0 var(--g-2) 0 var(--pad-x);
+    border-bottom: 1px solid var(--line);
+    background: var(--surface-0);
+    color: var(--text-2);
+    font-size: var(--fs-sm);
+    white-space: nowrap;
+  }
+  .pi-vban[data-kind="viewing"] {
+    padding-left: var(--g-2);
+    background: color-mix(in oklab, var(--color-st-running) 8%, var(--surface-0));
+    color: var(--text);
+  }
+  .pi-vban__ic {
+    flex: none;
+    color: var(--color-st-running);
+  }
+  .pi-vban__v {
+    flex: none;
+    font-weight: var(--w-strong);
+  }
+  .pi-vban__end {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: var(--g-2);
+    margin-left: auto;
+  }
+  .pi-by {
+    display: inline-flex;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+    color: var(--text-2);
+  }
+  .pi-notice {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    height: var(--h-row);
+    padding: 0 var(--g-2) 0 var(--pad-x);
+    border-bottom: 1px solid var(--line);
+    background: color-mix(in oklab, var(--color-st-running) 6%, var(--surface-0));
+    color: var(--text-2);
+    font-size: var(--fs-sm);
+    white-space: nowrap;
+  }
+  .pi-notice > svg {
+    flex: none;
+    color: var(--color-st-running);
+  }
+
+  /* ---------------------------------------------------------------- presence on the shared draft */
+  .pi-pres {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: var(--g-3);
+  }
+  .pi-typing {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+    color: var(--pc);
+    font-size: var(--fs-xs);
+  }
+  .pi-typing__dots {
+    display: inline-flex;
+    gap: 2px;
+  }
+  .pi-typing__dots i {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: pi-blink 1.2s infinite both;
+  }
+  .pi-typing__dots i:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+  .pi-typing__dots i:nth-child(3) {
+    animation-delay: 0.4s;
+  }
+  @keyframes pi-blink {
+    0%,
+    80%,
+    100% {
+      opacity: 0.25;
+    }
+    40% {
+      opacity: 1;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pi-typing__dots i {
+      animation: none;
+      opacity: 0.7;
+    }
+  }
+  /* the first name of who selected a node, on a tag above its top-left corner */
+  .pi-tag {
+    position: absolute;
+    bottom: calc(100% + 1px);
+    left: -1.5px;
+    z-index: 5;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    max-width: 220px;
+    height: 14px;
+    padding: 0 4px;
+    overflow: hidden;
+    border-radius: var(--radius-ui) var(--radius-ui) 0 0;
+    background: var(--pc);
+    color: var(--surface-0);
+    font-size: var(--fs-2xs);
+    font-weight: var(--w-strong);
+    line-height: 14px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  /* ------------------------------------------- loop cost and cost cap (region) */
+  .ei-loopcost {
+    display: flex;
+    flex-direction: column;
+    gap: var(--g-2);
+    padding: 2px 0 4px;
+  }
+  .ei-loopcost__line {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--g-2);
+    min-width: 0;
+  }
+  .ei-loopcost__amount { color: var(--text-1); font-size: var(--fs-sm); }
+  .ei-loopcost__amount[data-warn] { color: var(--color-st-await); }
+  .ei-loopcost__meta { color: var(--text-3); font-size: var(--fs-xs); white-space: nowrap; }
+  .ei-loopcost__bar {
+    height: 3px;
+    overflow: hidden;
+    border-radius: 2px;
+    background: var(--hover);
+  }
+  .ei-loopcost__bar > span {
+    display: block;
+    height: 100%;
+    background: var(--primary);
+  }
+  .ei-loopcost__bar[data-warn] > span { background: var(--color-st-await); }
+  .ei-cap {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+  }
+  .ei-cap > .d-input { flex: 1 1 auto; min-width: 0; }
+  .ei-cap__prefix { flex: none; color: var(--text-3); font-size: var(--fs-xs); }
+  .ei-note--await { color: var(--color-st-await); }
+  .ei-note--info { color: var(--text-3); }
+  .ei-row__meta[data-await] { color: var(--color-st-await); }
+  .ei-budget {
+    margin: 0;
+    padding: var(--g-3) var(--g-4);
+    color: var(--text-2);
+    font-size: var(--fs-xs);
+    line-height: 1.5;
+  }
+  .ei-budget strong { color: var(--text-1); font-weight: var(--w-medium); }
+  .ei-budget__region {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--primary);
+    font: inherit;
+    cursor: pointer;
+  }
+  .ei-budget__region:hover { text-decoration: underline; }
+
+  /* --------------------------- « Edit for this run » on a region (raise cap) */
+  .ei[data-run-edit] {
+    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--color-st-await) 55%, transparent);
+  }
+  .ei-runedit {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 4px;
+    height: 18px;
+    margin-left: auto;
+    padding: 0 6px;
+    border: 1px solid color-mix(in oklch, var(--color-st-await) 45%, transparent);
+    border-radius: var(--radius-ui);
+    background: color-mix(in oklch, var(--color-st-await) 14%, transparent);
+    color: var(--color-st-await);
+    font-size: var(--fs-2xs);
+    font-weight: var(--w-medium);
+    white-space: nowrap;
+  }
+  .ei-budgetnote {
+    padding: var(--g-3) var(--pad-x);
+    border-bottom: 1px solid var(--line);
+  }
+  .ei-foot {
+    display: flex;
+    padding: var(--g-3) var(--pad-x);
+    border-top: 1px solid var(--line);
+  }
+}

@@ -1,0 +1,1025 @@
+/*
+ * Stats, full window: a filter bar per tab, then the page — the figures on one
+ * line, the charts and the tables in hairline panels. Tokens only (ADR-0091):
+ * the type scale, the roles, the status colours; the harnesses keep their own
+ * stable colours (`harness/model/color.ts`).
+ */
+
+.sx-main {
+  display: flex;
+  flex-direction: column;
+}
+
+/* The period presets in the header: a segmented control of toggles. */
+.sx-period .d-seg__btn[aria-pressed="true"] {
+  background: var(--surface-0);
+  color: var(--text);
+  box-shadow: 0 0 0 1px var(--line);
+}
+.sx-spin svg {
+  animation: sx-spin 1s linear infinite;
+}
+@keyframes sx-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ------------------------------------------------------------ filter bar */
+/* One line whatever the width: the drill path shrinks first, then the bar
+ * scrolls sideways rather than growing a second row. */
+.sx-filt {
+  position: sticky;
+  top: 0;
+  z-index: 15;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--g-3);
+  height: var(--h-bar);
+  padding: 0 var(--g-5);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-1);
+  font-size: var(--fs-sm);
+  flex: none;
+}
+.sx-filt > * {
+  flex: none;
+}
+.sx-filt > .sx-crumbs {
+  flex: 0 1 auto;
+  min-width: 120px;
+}
+.sx-grow,
+.sx-filt > .sx-grow {
+  flex: 1 1 auto;
+}
+.sx-vsep {
+  width: 1px;
+  height: 16px;
+  background: var(--line);
+  flex: none;
+}
+
+/* The drill path: All › pipeline › node. */
+.sx-crumbs {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--g-1);
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+/* Squeezed, the levels below Total give way; Total itself stays whole. */
+.sx-crumbs > * {
+  flex: none;
+}
+.sx-crumbs > .sx-crumb ~ .sx-crumb {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.sx-crumbs :focus-visible {
+  outline-offset: -2px;
+}
+.sx-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--g-2);
+  height: var(--h-control-sm);
+  max-width: 260px;
+  padding: 0 var(--g-3);
+  border-radius: var(--radius-ui);
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sx-crumb > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+button.sx-crumb {
+  cursor: pointer;
+}
+button.sx-crumb:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.sx-crumb[aria-current="page"] {
+  color: var(--text);
+  font-weight: var(--w-medium);
+}
+.sx-crumbs__sep {
+  color: var(--text-3);
+  flex: none;
+}
+
+/* Toggles of the bar: completed only, uncombined, node kinds. */
+.sx-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--g-2);
+  height: var(--h-control-sm);
+  padding: 0 var(--g-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ui);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sx-toggle:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.sx-toggle[aria-checked="true"],
+.sx-toggle[aria-pressed="true"] {
+  border-color: var(--selected-edge);
+  background: var(--selected);
+  color: var(--text);
+}
+.sx-toggle .sx-toggle__n {
+  font-family: var(--font-code);
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+}
+.sx-select {
+  height: var(--h-control-sm);
+  padding: 0 var(--g-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ui);
+  background: var(--surface-0);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.sx-select:hover {
+  border-color: var(--line-strong);
+}
+
+/* ------------------------------------------------------------ page */
+.sx-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--g-4);
+  padding: var(--g-4) var(--g-5) var(--g-7);
+  min-width: 0;
+  font-size: var(--fs-sm);
+}
+.sx-split {
+  display: flex;
+  gap: var(--g-4);
+  min-width: 0;
+  align-items: flex-start;
+}
+.sx-split > .sx-aside {
+  flex: none;
+  width: clamp(220px, 32%, 300px);
+  position: sticky;
+  top: calc(var(--h-bar) + var(--g-4));
+}
+.sx-split > .sx-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--g-4);
+}
+.sx-empty {
+  padding: var(--g-7) var(--g-4);
+  text-align: center;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+.sx-note {
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+.sx-note--warn {
+  color: var(--color-st-await);
+}
+.sx-err {
+  padding: var(--g-3) var(--g-4);
+  border: 1px solid color-mix(in oklch, var(--color-st-failed) 40%, transparent);
+  color: var(--color-st-failed);
+  font-size: var(--fs-sm);
+}
+.sx-mono {
+  font-family: var(--font-code);
+}
+.sx-num {
+  font-family: var(--font-code);
+  font-variant-numeric: tabular-nums;
+}
+.sx-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* ------------------------------------------------------------ figures on one line */
+.sx-kpi {
+  display: flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--line);
+  background: var(--surface-0);
+  min-width: 0;
+}
+.sx-kpi__cell {
+  display: flex;
+  align-items: baseline;
+  gap: var(--g-3);
+  flex: 1 1 0;
+  min-width: 140px;
+  height: 32px;
+  padding: 0 var(--g-4);
+  border-right: 1px solid var(--line-soft);
+  line-height: 32px;
+  overflow: hidden;
+}
+.sx-kpi__cell:last-child {
+  border-right: 0;
+}
+.sx-kpi__label {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+.sx-kpi__value {
+  font-family: var(--font-code);
+  font-size: var(--fs-md);
+  font-weight: var(--w-medium);
+  color: var(--text);
+  white-space: nowrap;
+}
+/* The headline figure carries the ruby (the brand's sum). */
+.sx-kpi__cell:first-child .sx-kpi__value {
+  color: var(--primary);
+}
+.sx-kpi__sub {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.sx-kpi__sub[data-tone="warn"] {
+  color: var(--color-st-await);
+}
+.sx-swatch {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  align-self: center;
+}
+
+/* ------------------------------------------------------------ panels: charts and tables */
+.sx-panel {
+  margin: 0;
+  border: 1px solid var(--line);
+  background: var(--surface-0);
+  min-width: 0;
+}
+.sx-panel__head {
+  display: flex;
+  align-items: center;
+  gap: var(--g-4);
+  height: 28px;
+  padding: 0 var(--g-4);
+  border-bottom: 1px solid var(--line-soft);
+  min-width: 0;
+}
+.sx-panel__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  font-weight: var(--w-strong);
+  white-space: nowrap;
+  color: var(--text);
+}
+/* The ruby "nudge" square before a panel title. */
+.sx-panel__title::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  background: var(--primary);
+  flex: none;
+}
+.sx-panel__body {
+  padding: var(--g-2) var(--g-2) 0;
+}
+.sx-panel__body--flush {
+  padding: 0;
+}
+.sx-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--g-5);
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+.sx-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.sx-legend__item .sx-num {
+  color: var(--text-3);
+}
+
+/* recharts, painted with the tokens */
+.sx-chart {
+  width: 100%;
+  height: 220px;
+}
+.sx-chart .recharts-cartesian-axis-tick-value,
+.sx-chart .recharts-cartesian-axis-tick text {
+  font-family: var(--font-code);
+  font-size: var(--fs-2xs);
+  fill: var(--text-3);
+}
+.sx-chart .recharts-cartesian-grid line {
+  stroke: var(--line-soft);
+}
+.sx-chart .recharts-cartesian-axis-line,
+.sx-chart .recharts-cartesian-axis-tick-line {
+  stroke: var(--line);
+}
+.sx-chart .recharts-tooltip-cursor {
+  fill: var(--hover);
+}
+.sx-tip {
+  min-width: 140px;
+  max-width: 320px;
+  padding: var(--g-3) var(--g-4);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  box-shadow: 0 6px 18px var(--shadow);
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+  color: var(--text);
+}
+.sx-tip__head {
+  font-family: var(--font-code);
+  color: var(--text-2);
+  margin-bottom: var(--g-2);
+}
+.sx-tip__row {
+  display: flex;
+  align-items: center;
+  gap: var(--g-3);
+  line-height: 18px;
+}
+.sx-tip__row .sx-num {
+  margin-left: auto;
+  padding-left: var(--g-4);
+}
+
+/* ------------------------------------------------------------ tables */
+.sx-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: var(--fs-sm);
+  text-align: left;
+}
+.sx-table th {
+  height: 24px;
+  padding: 0 var(--g-4);
+  border-bottom: 1px solid var(--line);
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  font-weight: var(--w-regular);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sx-table td {
+  height: 26px;
+  padding: 2px var(--g-4);
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--text);
+  vertical-align: middle;
+}
+.sx-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.sx-table tbody tr:hover td {
+  background: var(--hover);
+}
+.sx-table tbody tr[data-checked="true"] td {
+  background: var(--selected);
+}
+.sx-table tbody tr[data-checked="true"] td:first-child {
+  box-shadow: inset 2px 0 0 var(--selected-edge);
+}
+.sx-table tbody tr[data-flash="true"] td {
+  animation: sx-flash 1.6s ease-out;
+}
+@keyframes sx-flash {
+  from {
+    background: color-mix(in oklab, var(--primary) 22%, transparent);
+  }
+}
+.sx-table .sx-r {
+  text-align: right;
+}
+.sx-table td.sx-r {
+  font-family: var(--font-code);
+  font-variant-numeric: tabular-nums;
+}
+.sx-table .sx-name {
+  display: flex;
+  align-items: center;
+  gap: var(--g-2);
+  min-width: 0;
+}
+.sx-table .sx-name > .sx-ellipsis {
+  flex: 0 1 auto;
+}
+.sx-table tr.sx-sub td {
+  background: color-mix(in oklab, var(--surface-1) 60%, transparent);
+  color: var(--text-2);
+}
+.sx-table tr.sx-sub td:first-child {
+  padding-left: calc(var(--g-4) + 20px);
+}
+/* A sortable header. */
+/* Narrower than its label, a header ends in an ellipsis; its arrow and « i »
+ * stay. */
+.sx-th__row {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  vertical-align: middle;
+}
+.sx-th__row > * {
+  flex: none;
+}
+.sx-th {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  min-width: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sx-th__row > .sx-th {
+  flex: 0 1 auto;
+}
+.sx-th__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sx-th:hover,
+.sx-th[data-on] {
+  color: var(--text);
+}
+.sx-th:focus-visible {
+  outline: 2px solid var(--focus-ring);
+}
+/* The bar column: an inline share bar behind the figure. */
+.sx-barcell {
+  position: relative;
+}
+.sx-barcell > :not(.sx-inbar) {
+  position: relative;
+}
+.sx-inbar {
+  position: absolute;
+  right: 0;
+  top: 3px;
+  bottom: 3px;
+  max-width: 100%;
+  background: color-mix(in oklch, var(--text) 10%, transparent);
+  pointer-events: none;
+}
+/* The largest row of a ranked table carries the accent (the brand's "jump"). */
+.sx-inbar[data-top] {
+  background: color-mix(in oklab, var(--primary) 32%, transparent);
+}
+.sx-cell2 {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.2;
+}
+.sx-cell2__sub {
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: help;
+}
+.sx-chev {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--text-3);
+  border-radius: var(--radius-ui);
+  cursor: pointer;
+}
+.sx-chev:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.sx-open {
+  all: unset;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sx-open:hover {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--primary);
+  text-underline-offset: 2px;
+}
+.sx-open:focus-visible {
+  outline: 2px solid var(--focus-ring);
+}
+
+/* ------------------------------------------------------------ ranked list (the master list) */
+.sx-rank {
+  display: flex;
+  flex-direction: column;
+  padding: var(--g-1) 0;
+}
+.sx-rank__row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--g-3);
+  height: var(--h-row);
+  padding: 0 var(--g-4);
+  border: 0;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.sx-rank__row:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.sx-rank__row[aria-selected="true"] {
+  background: var(--surface-2);
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--text-3);
+}
+.sx-rank__row[data-checked="true"] {
+  background: var(--selected);
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--selected-edge);
+}
+.sx-rank__row[data-flash="true"] {
+  animation: sx-flash 1.6s ease-out;
+}
+.sx-rank__row:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.sx-rank__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sx-rank__v {
+  position: relative;
+  flex: none;
+  min-width: 64px;
+  text-align: right;
+  font-family: var(--font-code);
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+/* ------------------------------------------------------------ absorptions */
+.sx-absmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  height: 16px;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ui);
+  background: var(--surface-1);
+  color: var(--text-2);
+  font-family: var(--font-code);
+  font-size: var(--fs-2xs);
+  cursor: pointer;
+}
+.sx-absmark:hover {
+  border-color: var(--selected-edge);
+  color: var(--text);
+}
+.sx-absmark--global {
+  border-style: dashed;
+  color: var(--text-3);
+}
+.sx-absmark--global:hover {
+  border-color: var(--line-strong);
+  color: var(--text-2);
+}
+.sx-mlist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  border: 1px solid var(--line);
+}
+.sx-mlist__row {
+  display: flex;
+  align-items: center;
+  gap: var(--g-3);
+  min-height: var(--h-row);
+  padding: 3px var(--pad-x);
+  min-width: 0;
+}
+.sx-mlist__row + .sx-mlist__row {
+  border-top: 1px solid var(--line-soft);
+}
+.sx-mlist__name {
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sx-mlist__two {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+  line-height: 1.3;
+}
+.sx-mlist__two .d-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sx-uncombine:hover {
+  color: var(--color-st-failed);
+}
+.sx-acc {
+  color: var(--primary);
+  flex: none;
+}
+
+/* The absorption modals, drawn like the kit's dialog. */
+.sx-dlg-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: var(--dim);
+}
+.sx-dlg {
+  width: min(500px, calc(100vw - 32px));
+  max-height: calc(100dvh / var(--app-zoom, 1) - 64px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  background: var(--surface-0);
+  box-shadow: 0 16px 48px var(--shadow);
+  font-size: var(--fs-sm);
+}
+.sx-dlg--s {
+  width: min(400px, calc(100vw - 32px));
+}
+.sx-dlg__head {
+  display: flex;
+  align-items: center;
+  gap: var(--g-3);
+  height: var(--h-bar);
+  padding: 0 var(--g-2) 0 var(--g-4);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-1);
+  flex: none;
+}
+.sx-dlg__title {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--fs-md);
+  font-weight: var(--w-strong);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sx-dlg__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--g-3);
+  padding: var(--g-4);
+  overflow: auto;
+  min-height: 0;
+}
+.sx-dlg__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--g-3);
+  min-height: 40px;
+  padding: 0 var(--g-4);
+  border-top: 1px solid var(--line);
+  flex: none;
+}
+.sx-dlg__note {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--g-3);
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+.sx-dlg__note .sx-mono {
+  max-width: 220px;
+}
+.sx-combine__opt {
+  display: flex;
+  align-items: center;
+  gap: var(--g-4);
+  min-height: 40px;
+  padding: 4px var(--pad-x);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ui);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  width: 100%;
+}
+.sx-combine__opt:hover {
+  background: var(--hover);
+}
+.sx-combine__opt[aria-checked="true"] {
+  border-color: var(--selected-edge);
+  background: var(--selected);
+}
+.sx-radio {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border: 1px solid var(--text-3);
+  border-radius: 50%;
+  color: var(--primary-ink);
+}
+.sx-combine__opt[aria-checked="true"] .sx-radio {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+/* The selection bar and the refusal, floating at the foot of the page. */
+.sx-bulkpos {
+  position: fixed;
+  left: 50%;
+  bottom: var(--g-6);
+  transform: translateX(-50%);
+  z-index: 30;
+  max-width: calc(100% - 16px);
+}
+.sx-bulk {
+  display: flex;
+  align-items: center;
+  gap: var(--g-2);
+  height: 32px;
+  padding: 0 var(--g-2) 0 var(--g-4);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pop);
+  box-shadow: 0 6px 18px var(--shadow);
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+}
+.sx-bulk__n {
+  font-weight: var(--w-strong);
+}
+.sx-refusal {
+  max-width: 460px;
+  padding: var(--g-3) var(--g-4);
+  border: 1px solid color-mix(in oklab, var(--color-st-await) 45%, transparent);
+  background: var(--surface-2);
+  color: var(--color-st-await);
+  font-size: var(--fs-sm);
+  box-shadow: 0 6px 18px var(--shadow);
+}
+
+/* Controls on top of a panel's body (the Performance ranking's selects). */
+.sx-panel__tools {
+  display: flex;
+  align-items: center;
+  gap: var(--g-2);
+  height: 30px;
+  padding: 0 var(--g-4);
+  border-bottom: 1px solid var(--line-soft);
+}
+.sx-panel__tools .sx-select {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* The harness cards of Performance. */
+.sx-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--g-4);
+}
+.sx-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--g-3) var(--g-4);
+  border: 1px solid var(--line);
+  background: var(--surface-0);
+  font-size: var(--fs-sm);
+  min-width: 0;
+}
+.sx-card--wide {
+  grid-column: span 2;
+}
+.sx-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--g-3);
+  margin-bottom: var(--g-2);
+  color: var(--text-2);
+}
+
+/* Performance: a row stacks one box-plot per harness. Below its minimum
+   width the table scrolls sideways instead of letting a plot's legend run
+   over the next column. */
+.sx-hscroll {
+  overflow-x: auto;
+  min-width: 0;
+}
+.sx-table--perf {
+  min-width: 540px;
+}
+/* Cost: the Name column keeps a readable width beside Total (w-32) and one
+   column per harness (w-28, `--sx-cols` of them); below that the table
+   scrolls sideways. */
+.sx-table--cost {
+  min-width: calc(12rem + 8rem + var(--sx-cols, 0) * 7rem);
+}
+/* Scrolled sideways, the Name column stays put; the row states paint over
+   an opaque surface so the columns sliding under it do not show through. */
+.sx-table--cost th:first-child,
+.sx-table--cost td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background-color: var(--surface-0);
+}
+.sx-table--cost tbody tr.sx-sub td:first-child {
+  background: linear-gradient(
+      color-mix(in oklab, var(--surface-1) 60%, transparent),
+      color-mix(in oklab, var(--surface-1) 60%, transparent)
+    )
+    var(--surface-0);
+}
+.sx-table--cost tbody tr:hover td:first-child {
+  background: linear-gradient(var(--hover), var(--hover)) var(--surface-0);
+}
+.sx-table--cost tbody tr[data-checked="true"] td:first-child {
+  background: linear-gradient(var(--selected), var(--selected)) var(--surface-0);
+}
+.sx-table--cost tbody tr[data-flash="true"] td:first-child {
+  animation-name: sx-flash-sticky;
+}
+@keyframes sx-flash-sticky {
+  from {
+    background: linear-gradient(
+        color-mix(in oklab, var(--primary) 22%, transparent),
+        color-mix(in oklab, var(--primary) 22%, transparent)
+      )
+      var(--surface-0);
+  }
+}
+/* Columns left to the right: a fade over the right edge until the table is
+   scrolled to its end. */
+.sx-hscroll-wrap {
+  position: relative;
+  min-width: 0;
+}
+.sx-hscroll-wrap[data-more="true"]::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 2.5rem;
+  background: linear-gradient(to left, var(--surface-0), transparent);
+  pointer-events: none;
+}
+.sx-table--perf th:first-child {
+  width: 28%;
+}
+.sx-table--perf th,
+.sx-table--perf td {
+  padding-left: var(--g-3);
+  padding-right: var(--g-3);
+}
+.sx-table--perf td {
+  height: auto;
+  padding-top: var(--g-3);
+  padding-bottom: var(--g-3);
+  vertical-align: top;
+  overflow: hidden;
+}
+.sx-cell2__v {
+  position: relative;
+  display: block;
+  width: 100%;
+  text-align: right;
+}
+.sx-cell2__v > span:not(.sx-inbar) {
+  position: relative;
+}
+.sx-cell2__v > .sx-inbar {
+  top: 0;
+  bottom: 0;
+}
+/* Pipeline, node and model names are ids: mono, like the rest of the figures. */
+.sx-rank__name,
+.sx-table .sx-name {
+  font-family: var(--font-code);
+}
+.sx-bulkpos--up {
+  bottom: calc(var(--g-6) + 44px);
+}
+
+/* « Roll up child runs »: the (i) beside its chip, the « ⑂ N » of a root
+   Pipeline, the tags of the Parent run / Child runs / Depth rows, and the rows
+   that unfold in place, one indent per level. */
+.sx-info {
+  display: inline-flex;
+  color: var(--text-3);
+  cursor: help;
+}
+.sx-info:hover,
+.sx-info:focus-visible {
+  color: var(--text-2);
+}
+.sx-fork {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  color: var(--text-3);
+  font-family: var(--font-code);
+  font-size: var(--fs-2xs);
+}
+.sx-tag {
+  flex: none;
+  margin-left: var(--g-3);
+  color: var(--text-3);
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.sx-table .sx-open:has(.sx-tag) {
+  display: inline-flex;
+  align-items: baseline;
+}
+.sx-table--cost tbody tr.sx-tree td:first-child {
+  padding-left: calc(var(--g-4) + var(--sx-level, 1) * 16px);
+}
+.sx-chev-gap {
+  width: 16px;
+  flex: none;
+}

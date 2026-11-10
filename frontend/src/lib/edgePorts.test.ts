@@ -7,10 +7,13 @@ import {
   defaultConditionPort,
   emergentInputs,
   inDeclarationOrder,
+  missingCarriedPorts,
+  outputRenameImpact,
   primaryPort,
   withCarriedPorts,
 } from "./edgePorts";
-import type { EdgeDef, NodeDef, PipelineDef } from "../types";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
 
 const single: EdgeDef = {
   source: { node: "design", port: "out" },
@@ -101,7 +104,7 @@ describe("emergentInputs", () => {
 });
 
 describe("declaredOutputs / inDeclarationOrder", () => {
-  const node: NodeDef = {
+  const node: EditorNodeDef = {
     id: "design",
     name: "design",
     type: "agent",
@@ -113,7 +116,7 @@ describe("declaredOutputs / inDeclarationOrder", () => {
     ],
     interactive: false,
   };
-  const pipeline: PipelineDef = {
+  const pipeline: EditorPipelineDef = {
     name: "p",
     version: "1.0",
     variables: {},
@@ -134,6 +137,29 @@ describe("declaredOutputs / inDeclarationOrder", () => {
   });
 });
 
+describe("live artifacts never wired (ADR-0089)", () => {
+  const design: EditorNodeDef = {
+    id: "design",
+    name: "designer",
+    type: "agent",
+    inputs: [],
+    outputs: [{ name: "out" }, { name: "spec" }],
+    live_artifacts: [{ name: "preview" }],
+    interactive: false,
+  };
+  const pipeline: EditorPipelineDef = {
+    name: "p",
+    version: "1.0",
+    variables: {},
+    nodes: [design],
+    edges: [multi],
+  };
+
+  it("never offers a live artifact among an edge's ports", () => {
+    expect(declaredOutputs(pipeline, multi)).toEqual(["out", "spec"]);
+  });
+});
+
 describe("canonicalizeCarriedPorts", () => {
   it("sorts the carried ports so the semantic diff compares a SET (ADR-0073 §2)", () => {
     const a = canonicalizeCarriedPorts({
@@ -148,5 +174,45 @@ describe("canonicalizeCarriedPorts", () => {
   it("leaves the single-port form untouched", () => {
     const obj = { edges: [{ source: { node: "design", port: "out" }, target: {} }] };
     expect(canonicalizeCarriedPorts(structuredClone(obj))).toEqual(obj);
+  });
+});
+
+describe("output rename and broken edges (CORE-88)", () => {
+  const node = (id: string, type: EditorNodeDef["type"], outputs: string[] = []): EditorNodeDef => ({
+    id,
+    name: id,
+    type,
+    inputs: [],
+    outputs: outputs.map((name) => ({ name })),
+    interactive: false,
+  });
+  const pipeline: EditorPipelineDef = {
+    name: "p",
+    version: "1.0",
+    variables: {},
+    nodes: [node("designer", "agent", ["spec", "verdict"]), node("builder", "agent"), node("reviewer", "agent"), node("end", "end")],
+    edges: [
+      { source: { node: "designer", port: "spec" }, target: { node: "builder", port: "spec" } },
+      { source: { node: "designer", ports: ["spec", "verdict"] }, target: { node: "reviewer", port: "spec" } },
+      { source: { node: "designer", port: "spec" }, target: { node: "end", port: "spec" } },
+      { source: { node: "designer", port: "draft" }, target: { node: "builder", port: "draft" } },
+    ],
+  };
+
+  it("counts the edges carrying the output and names the emergent inputs it renames", () => {
+    expect(outputRenameImpact(pipeline, "designer", "spec")).toEqual({
+      edges: 3,
+      inputsOf: ["builder", "reviewer"],
+    });
+    expect(outputRenameImpact(pipeline, "designer", "verdict")).toEqual({ edges: 1, inputsOf: [] });
+    expect(outputRenameImpact(pipeline, "builder", "spec")).toEqual({ edges: 0, inputsOf: [] });
+  });
+
+  it("lists the carried ports the source no longer declares", () => {
+    expect(missingCarriedPorts(pipeline, pipeline.edges[3])).toEqual(["draft"]);
+    expect(missingCarriedPorts(pipeline, pipeline.edges[1])).toEqual([]);
+    expect(
+      missingCarriedPorts(pipeline, { source: { node: "ghost", port: "x" }, target: { node: "builder", port: "x" } }),
+    ).toEqual([]);
   });
 });

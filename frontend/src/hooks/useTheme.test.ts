@@ -2,93 +2,82 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { initTheme, useTheme } from "./useTheme";
 
-/** A `prefers-color-scheme` stub whose answer can be flipped, as the OS would. */
 function stubOs(dark: boolean) {
-  const listeners = new Set<(e: { matches: boolean }) => void>();
-  let current = dark;
-  vi.stubGlobal("matchMedia", (query: string) => ({
-    media: query,
-    get matches() {
-      return current;
-    },
-    addEventListener: (_: string, cb: (e: { matches: boolean }) => void) => listeners.add(cb),
-    removeEventListener: (_: string, cb: (e: { matches: boolean }) => void) => listeners.delete(cb),
-  }));
-  return {
-    flip(next: boolean) {
-      current = next;
-      for (const cb of listeners) cb({ matches: next });
-    },
-  };
+  vi.stubGlobal("matchMedia", (query: string) => ({ media: query, matches: query.includes("dark") === dark }));
 }
+
+const attributes = () => [
+  document.documentElement.getAttribute("data-theme"),
+  document.documentElement.getAttribute("data-mode"),
+];
 
 beforeEach(() => {
   localStorage.clear();
   document.documentElement.removeAttribute("data-theme");
+  document.documentElement.removeAttribute("data-mode");
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("useTheme (#759)", () => {
-  it("starts dark when nothing is stored, whatever the OS asks (#781)", () => {
+describe("useTheme (ADR-0093)", () => {
+  it("starts on Acogni and dark when nothing is stored, whatever the OS asks", () => {
     stubOs(false);
     initTheme();
     const { result } = renderHook(() => useTheme());
-    expect(result.current.preference).toBe("dark");
-    expect(result.current.resolved).toBe("dark");
-    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+    expect([result.current.theme, result.current.mode]).toEqual(["acogni", "dark"]);
+    expect(attributes()).toEqual(["acogni", "dark"]);
   });
 
-  it("starts on the stored choice, whatever the OS says", () => {
-    localStorage.setItem("pdo.ui.theme", "light");
-    stubOs(true);
+  it("starts on the stored choice", () => {
+    localStorage.setItem("pdo.ui.theme", "classic");
+    localStorage.setItem("pdo.ui.mode", "light");
     initTheme();
     const { result } = renderHook(() => useTheme());
-    expect(result.current.resolved).toBe("light");
-    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+    expect([result.current.theme, result.current.mode]).toEqual(["classic", "light"]);
+    expect(attributes()).toEqual(["classic", "light"]);
   });
 
-  it("repaints and persists when the preference changes", () => {
-    stubOs(true);
+  it("migrates a System preference to the OS's mode at boot", () => {
+    localStorage.setItem("pdo.ui.theme", "system");
+    stubOs(false);
     initTheme();
     const { result } = renderHook(() => useTheme());
-    act(() => result.current.setPreference("light"));
-    expect(result.current.resolved).toBe("light");
-    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
-    expect(localStorage.getItem("pdo.ui.theme")).toBe("light");
+    expect([result.current.theme, result.current.mode]).toEqual(["acogni", "light"]);
   });
 
-  it("follows the OS while the preference is system", () => {
-    const os = stubOs(true);
+  it("repaints and persists the Theme and the mode, each on its own", () => {
     initTheme();
     const { result } = renderHook(() => useTheme());
-    // #781: nothing stored now pins `dark` — following the OS requires an
-    // explicit `system` choice.
-    act(() => result.current.setPreference("system"));
-    expect(result.current.resolved).toBe("dark");
-    act(() => os.flip(false));
-    expect(result.current.resolved).toBe("light");
-    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
-  });
-
-  it("ignores the OS once a theme is pinned", () => {
-    const os = stubOs(true);
-    initTheme();
-    const { result } = renderHook(() => useTheme());
-    act(() => result.current.setPreference("dark"));
-    act(() => os.flip(false));
-    expect(result.current.resolved).toBe("dark");
-    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+    act(() => result.current.setTheme("classic"));
+    expect(attributes()).toEqual(["classic", "dark"]);
+    act(() => result.current.toggleMode());
+    expect(attributes()).toEqual(["classic", "light"]);
+    expect([result.current.theme, result.current.mode]).toEqual(["classic", "light"]);
+    expect([localStorage.getItem("pdo.ui.theme"), localStorage.getItem("pdo.ui.mode")]).toEqual(["classic", "light"]);
+    act(() => result.current.setMode("dark"));
+    act(() => result.current.setTheme("acogni"));
+    expect(attributes()).toEqual(["acogni", "dark"]);
   });
 
   it("keeps two mounted consumers in sync", () => {
-    stubOs(true);
     initTheme();
     const a = renderHook(() => useTheme());
     const b = renderHook(() => useTheme());
-    act(() => a.result.current.setPreference("light"));
-    expect(b.result.current.resolved).toBe("light");
+    act(() => a.result.current.setTheme("classic"));
+    expect(b.result.current.theme).toBe("classic");
+  });
+
+  it("follows a change another tab wrote", () => {
+    initTheme();
+    const { result } = renderHook(() => useTheme());
+    localStorage.setItem("pdo.ui.theme", "classic");
+    localStorage.setItem("pdo.ui.mode", "light");
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "pdo.ui.mode" }));
+    });
+    expect([result.current.theme, result.current.mode]).toEqual(["classic", "light"]);
+    expect(attributes()).toEqual(["classic", "light"]);
   });
 });

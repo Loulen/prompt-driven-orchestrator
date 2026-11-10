@@ -1,0 +1,947 @@
+// #717 — Settings page cannot be closed (✕ / Cancel / Escape all dead).
+//
+// Regression test mounting the REAL App: the bug was never inside
+// <SettingsSurface> (its own tests close it fine) but at the App level, where two
+// always-mounted stateful siblings — SettingsSurface and StatsModal — used to share
+// the same React key (`0`). React 19's `mapRemainingChildren` keys its lookup map by
+// `fiber.key` alone, so the second `key=0` fiber overwrote the first and the update
+// that should have flipped Settings' `open` landed on the wrong fiber — the surface
+// became permanently unclosable (✕, Cancel and Escape all dead, DOM frozen).
+//
+// The fix namespaces the keys (`settings-N` / `stats-N`); these tests fail if the
+// colliding sibling keys ever come back.
+//
+// The harness below — the real App with both full-window surfaces and a complete
+// api fixture — also carries the other host-level contracts of those two surfaces
+// (see the #819 block at the bottom).
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+
+// ---------------------------------------------------------------------------
+// Environment shims (jsdom)
+// ---------------------------------------------------------------------------
+
+// ReactFlow's container measurement needs ResizeObserver (mirrors
+// EditCanvas.banner225.test.tsx).
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+const realResizeObserver = globalThis.ResizeObserver;
+
+// The daemon socket would otherwise really dial `ws://localhost/ws` and retry
+// every 3 s under the test. A never-opening socket keeps App in `disconnected`
+// state, which is exactly what the surfaces under test see in a cold start.
+class FakeWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
+  url: string;
+  readyState = FakeWebSocket.CONNECTING;
+  private handlers = new Map<string, Set<(e: unknown) => void>>();
+  constructor(url: string) {
+    this.url = url;
+  }
+  addEventListener(type: string, cb: (e: unknown) => void) {
+    if (!this.handlers.has(type)) this.handlers.set(type, new Set());
+    this.handlers.get(type)!.add(cb);
+  }
+  removeEventListener(type: string, cb: (e: unknown) => void) {
+    this.handlers.get(type)?.delete(cb);
+  }
+  close() {
+    this.readyState = FakeWebSocket.CLOSED;
+    for (const cb of this.handlers.get("close") ?? []) cb({});
+  }
+  send() {}
+}
+
+beforeAll(() => {
+  globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
+  vi.stubGlobal("WebSocket", FakeWebSocket);
+  // Some surfaces scroll programmatically; jsdom has no layout engine.
+  Element.prototype.scrollIntoView ??= () => {};
+});
+
+afterAll(() => {
+  if (realResizeObserver) globalThis.ResizeObserver = realResizeObserver;
+  vi.unstubAllGlobals();
+});
+
+// ---------------------------------------------------------------------------
+// API mocks — every call App makes on mount plus what Settings/Stats read on open.
+// App wraps its mount fetches in try/catch, but Settings' open-effect does not:
+// its fixture must be complete for the surface to leave its loading state.
+// ---------------------------------------------------------------------------
+
+const { fetchSettingsMock } = vi.hoisted(() => ({ fetchSettingsMock: vi.fn() }));
+
+vi.mock("../skill/api/bank", () => ({
+  fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "/home/user/.pdo/skills" }),
+  createSkill: vi.fn().mockResolvedValue({}),
+  fetchSkill: vi.fn().mockResolvedValue(""),
+  updateSkill: vi.fn().mockResolvedValue(undefined),
+  deleteSkill: vi.fn().mockResolvedValue(undefined),
+  fetchSkillReferents: vi.fn().mockResolvedValue([]),
+  createSkillFolder: vi.fn().mockResolvedValue(undefined),
+  updateSkillFolder: vi.fn().mockResolvedValue(undefined),
+  deleteSkillFolder: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../skill/api/files", () => ({
+  deleteSkillFile: vi.fn().mockResolvedValue(undefined),
+  fetchSkillFile: vi.fn().mockResolvedValue(""),
+  uploadSkillFileFromPath: vi.fn().mockResolvedValue({}),
+  uploadSkillFiles: vi.fn().mockResolvedValue({}),
+  writeSkillFile: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../settings/api/settings", () => {
+  // Vanilla `InstanceSettings` as `GET /settings` serves a pristine instance
+  // (mirrors the `sample()` fixture of SettingsSurface.test.tsx, default tiers).
+  const settings = {
+    session_cap: { effective: 20, source: "default", stored: null, env: null, default: 20 },
+    reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
+    guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
+    max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+    public_url: { effective: null, source: "default", stored: null, env: null, default: null },
+    default_model: { effective: null, source: "default", stored: null, env: null, default: null },
+    default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
+    default_harness_model: { effective: {}, stored: {} },
+    default_sandbox: {
+      effective: "off",
+      source: "default",
+      stored: null,
+      env: null,
+      default: "off",
+      reason: null,
+    },
+    sandbox_docker: { available: true, reason: null, checked_at: "2026-07-01T10:00:00.000Z" },
+    sandbox_profiles: [
+      { name: "full", virtual: true },
+      { name: "minimal", virtual: true },
+    ],
+    home: "/home/user",
+    autocomplete_turn_end: {
+      effective: false,
+      source: "default",
+      stored: null,
+      env: null,
+      default: false,
+    },
+    default_auto_name: {
+      effective: true,
+      source: "default",
+      stored: null,
+      env: null,
+      default: true,
+    },
+    manager_enabled: { effective: false, source: "default", stored: null, env: null, default: false },
+    review_agent_can_resolve: { effective: false, source: "default", stored: null, env: null, default: false },
+    manager_profile: { effective: null, source: "default", stored: null, env: null, default: null },
+    update_check: { effective: true, source: "default", stored: null, env: null, default: true },
+    price_table: {
+      manual_path: "/home/user/.pdo/prices/models.yaml",
+      fetched_path: "/home/user/.pdo/prices/fetched.json",
+      source: null,
+      fetched_at: null,
+      fetched_rows: 0,
+      manual_keys: [],
+      reason: null,
+    },
+    harness_descriptors: {
+      path: "/home/user/.pdo/harnesses/descriptors.yaml",
+      names: ["claude", "opencode"],
+      harnesses: [
+        {
+          name: "claude",
+          source: "builtin",
+          installed: true,
+          models: ["sonnet", "opus", "haiku", "opusplan"],
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          has_effort: true,
+          version: "claude 1.0",
+        },
+        {
+          name: "opencode",
+          source: "builtin",
+          installed: true,
+          models: ["openrouter/foo"],
+          efforts: [],
+          has_effort: false,
+          version: "opencode 1.18",
+        },
+      ],
+      rejected: [],
+      reason: null,
+    },
+    updated_at: "2026-07-01T10:00:00.000Z",
+  };
+  fetchSettingsMock.mockResolvedValue(settings);
+
+  // Empty Stats payloads (a fresh daemon): the shapes only need to satisfy the
+  // rendering paths — no buckets, no rows, no harnesses.
+  const emptyAggregate = {
+    usd: null,
+    average_usd: null,
+    median_usd: null,
+    estimated: false,
+    partial: false,
+    executions: 0,
+    readable: 0,
+    unknown: 0,
+    unpriced_models: [],
+    missing_reasons: [],
+    harnesses: [],
+  };
+
+  return new Proxy(
+    {
+      fetchTriggers: vi.fn().mockResolvedValue([]),
+      fetchTriggersHealth: vi.fn().mockResolvedValue({
+        last_tick_at: null,
+        tick_interval_secs: 30,
+        paused: false,
+      }),
+      pauseTriggers: vi.fn().mockResolvedValue(undefined),
+      fetchLibrary: vi.fn().mockResolvedValue([]),
+      fetchLibraryPipelines: vi.fn().mockResolvedValue([]),
+      fetchPipelines: vi.fn().mockResolvedValue([]),
+      fetchAgentProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
+      createAgentProfile: vi.fn().mockResolvedValue({}),
+      updateAgentProfile: vi.fn().mockResolvedValue(undefined),
+      deleteAgentProfile: vi.fn().mockResolvedValue(undefined),
+      fetchAgentProfileReferents: vi.fn().mockResolvedValue([]),
+      fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
+      // « Save & close » of the draft guard writes the form.
+      updateSettings: vi.fn().mockResolvedValue(settings),
+      fetchStatsAbsorptions: vi.fn().mockResolvedValue({ absorptions: [] }),
+      uncombineStatsMember: vi.fn(),
+      fetchStatsOverview: vi.fn().mockResolvedValue({
+        buckets: [],
+        runs: [],
+        errors: [],
+        sessions: [],
+        session_harnesses: [],
+        sessions_by_period: [],
+        sessions_by_pipeline: [],
+        fires_by_pipeline: [],
+        triggers_created_runs: { fired: 0, distinct_triggers: 0, enabled_triggers: 0 },
+      }),
+      fetchStatsCost: vi.fn().mockResolvedValue({
+        harnesses: [],
+        total: emptyAggregate,
+        by_period: [],
+        by_pipeline: [],
+        by_model: [],
+        by_project: [],
+        resolved: [],
+      }),
+      fetchStatsPerformance: vi.fn().mockResolvedValue({
+        harnesses: [],
+        total: { harnesses: [] },
+        infrastructure_total: { harnesses: [] },
+        by_pipeline: [],
+        by_model: [],
+        infrastructure: [],
+        waited_executions: 0,
+        executions: 0,
+      }),
+      syncCostPrices: vi.fn().mockResolvedValue({
+        noop: true,
+        reason: "Nothing to sync.",
+        rows: 0,
+        added: [],
+        updated: [],
+        shadowed_by_manual: [],
+        rejected: [],
+        source: null,
+        fetched_at: null,
+      }),
+    },
+    {
+      // Vitest 4 wraps the factory's return in a Proxy whose `get` trap throws on
+      // unknown keys (the loud-failure contract documented in
+      // SettingsSurface.test.tsx). Keep that contract, but back it with a generic
+      // array-resolving stub so an api function nobody anticipated still answers
+      // instead of killing the mount — App's mount reads are try/catch-wrapped,
+      // its children's are not.
+      get(target: Record<string, unknown>, prop: string | symbol) {
+        if (typeof prop !== "string") return target[prop as never];
+        if (prop in target) return target[prop];
+        if (prop === "__esModule") return false;
+        // Module-namespace thenable probes (vitest awaits the factory result);
+        // `then` present would make the namespace a thenable — must be absent.
+        if (prop === "then") return undefined;
+        throw new Error(
+          `No "${prop}" export is defined in the ./api mock of App.settingsClose.test.tsx — add it explicitly (see the Proxy note in SettingsSurface.test.tsx).`,
+        );
+      },
+    },
+  );
+});
+// The agentic profiles' API answers with the mock of `../settings/api/settings` too.
+vi.mock("../settings/api/agentProfiles", async () => await import("../settings/api/settings"));
+// The trigger context's API answers with the mock of `../settings/api/settings` above.
+vi.mock("../trigger/api/triggers", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../settings/api/settings")),
+}));
+// The pipeline context's API answers with the mock of `../settings/api/settings` above.
+vi.mock("../pipeline/api/pipelines", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../settings/api/settings")),
+}));
+vi.mock("../pipeline/api/library", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../settings/api/settings")),
+}));
+vi.mock("../pipeline/api/libraryPipelines", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../settings/api/settings")),
+}));
+// So does the stats context's (#928): its figures, absorptions and price sync.
+vi.mock("../stats/api/stats", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../settings/api/settings")),
+}));
+vi.mock("../stats/api/absorptions", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../settings/api/settings")),
+}));
+vi.mock("../stats/api/prices", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../settings/api/settings")),
+}));
+
+// The staging-profile panel reads the sandbox context's own API module (#432).
+vi.mock("../sandbox/api/profiles", () => {
+  // Minimal but complete virtual staging profile (#432): the editor renders
+  // `floor`, `disabled`, `extras`, `env`… of the selected one.
+  const virtualProfile = (name: string) => ({
+    name,
+    virtual: true,
+    materialised: false,
+    disabled: [],
+    extras: [],
+    resolved: [],
+    entries: [],
+    redundant_extras: [],
+    inactive_disabled: [],
+    floor: [],
+    sensitive_prefixes: [],
+    env: {},
+    reserved_env_keys: ["HOME", "PDO_DAEMON_URL", "PDO_RUN_ID"],
+    image: null,
+    updated_at: null,
+  });
+
+  return {
+    // A minimal but complete virtual profile — the editor renders `floor`,
+    // `disabled`, `extras`, `env`… of the selected one.
+    fetchSandboxProfile: vi.fn().mockImplementation((name: string) =>
+      Promise.resolve(virtualProfile(name)),
+    ),
+    fetchSandboxProfiles: vi.fn().mockResolvedValue({
+      profiles: [virtualProfile("full"), virtualProfile("minimal")],
+      home: "/home/user",
+    }),
+    saveSandboxProfile: vi.fn().mockResolvedValue(undefined),
+    deleteSandboxProfile: vi.fn().mockResolvedValue(undefined),
+    fetchSandboxProfileReferents: vi.fn().mockResolvedValue({ runs: [], triggers: [] }),
+  };
+});
+
+vi.mock("../run/api/runs", () => ({
+  fetchRun: vi.fn().mockResolvedValue({}),
+  fetchRunEvents: vi.fn().mockResolvedValue([]),
+  fetchRuns: vi.fn().mockResolvedValue([]),
+  forgetRun: vi.fn().mockResolvedValue(undefined),
+  fetchSourceDrift: vi.fn().mockResolvedValue({ state: "unavailable", reason: "test" }),
+}));
+vi.mock("../session/api/sessions", () => ({
+  fetchSessions: vi.fn().mockResolvedValue({ live: 0, cap: 20, version: "9.9.9-test" }),
+}));
+
+vi.mock("../session/api/assistant", () => ({
+  closeLibraryAssistant: vi.fn().mockResolvedValue(undefined),
+  // #938: the Assistant tab spawns its session on mount — kept pending, the
+  // tests only look at which tab is shown.
+  openLibraryAssistant: vi.fn().mockReturnValue(new Promise(() => {})),
+  putLibassistFocus: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../workspace/api/projects", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/projects")>()),
+  fetchProjects: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("../workspace/api/repos", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/repos")>()),
+  listBranches: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("../workspace/api/browse", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/browse")>()),
+  browseFs: vi.fn().mockResolvedValue({
+    path: "/home/user",
+    parent: null,
+    entries: [],
+    truncated: false,
+    error: null,
+  }),
+}));
+
+vi.mock("../workspace/api/provisioning", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../workspace/api/provisioning")>()),
+  // Instance provisioning rules (Settings › Provisioning): the empty rule set.
+  fetchInstanceProvisioning: vi.fn().mockResolvedValue({
+    copy: [],
+    hardlink: [],
+    symlink: [],
+  }),
+  saveInstanceProvisioning: vi.fn().mockResolvedValue({
+    copy: [],
+    hardlink: [],
+    symlink: [],
+  }),
+}));
+
+// The canvas is outside the paths under test; collapse it like the EditCanvas
+// tests do so no real ReactFlow measurement runs under jsdom.
+vi.mock("../platform/api/update", () => ({
+  fetchUpdateStatus: vi.fn().mockResolvedValue({
+    channel_name: "PDO",
+    installed_version: "9.9.9-test",
+    core_version: "9.9.9-test",
+    latest_version: null,
+    newer_available: false,
+    checked_at: null,
+    source: "GitHub Releases",
+    source_url: "https://example.invalid/releases/latest",
+    source_page_url: null,
+    check_enabled: true,
+    install_method: "unknown",
+    manual_command: "Build from source, then restart the daemon.",
+    supervision: "none",
+    reason: "Not checked yet.",
+    last_error: null,
+    active_runs: 0,
+    can_apply: true,
+    apply_blocked_reason: null,
+    last_attempt: null,
+  }),
+  applyUpdate: vi.fn().mockResolvedValue({}),
+  fetchUpdateAttemptLog: vi.fn().mockResolvedValue(""),
+  checkForUpdateNow: vi.fn().mockResolvedValue({}),
+  fetchUpdateChangelog: vi.fn().mockResolvedValue({
+    installed_version: "9.9.9-test",
+    latest_version: "10.0.0",
+    missed_versions: ["10.0.0"],
+    markdown: "## 10.0.0\n\nWhat changed.",
+    fallback_reason: null,
+  }),
+}));
+
+vi.mock("@xyflow/react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@xyflow/react")>();
+  return {
+    ...actual,
+    ReactFlow: ({ children }: { children?: React.ReactNode }) => (
+      <div data-testid="reactflow-stub">{children}</div>
+    ),
+  };
+});
+
+vi.mock("../pipeline/api/document", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../pipeline/api/document")>()),
+  fetchPipelineDocument: vi
+    .fn()
+    .mockResolvedValue("name: tpl\nversion: '1.0'\nnodes: []\nedges: []\n"),
+  fetchPipelineSkillsSidecar: vi.fn().mockResolvedValue(null),
+}));
+
+import App from "./App";
+import { useEditStore } from "../pipeline/store/editStore";
+import { fetchUpdateStatus } from "../platform/api/update";
+import { updateSettings } from "../settings/api/settings";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+async function openSettings(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByTestId("open-settings"));
+  const surface = await screen.findByTestId("settings-surface");
+  // The open-effect fetches GET /settings; wait for the loading state to clear so
+  // the surface is in its steady state before we try to leave it.
+  await waitFor(
+    () => expect(screen.queryByTestId("settings-loading")).not.toBeInTheDocument(),
+    { timeout: 5_000 },
+  );
+  return surface;
+}
+
+async function expectClosed() {
+  await waitFor(() => {
+    expect(screen.queryByTestId("settings-surface")).not.toBeInTheDocument();
+  });
+  // ...and that the app underneath is still alive: the top bar still answers.
+  expect(screen.getByTestId("open-settings")).toBeInTheDocument();
+}
+
+// ---------------------------------------------------------------------------
+// #717 — every close path, with the Stats sibling opened/closed first so both
+// always-mounted keyed siblings have participated in the tree, as in real use.
+// ---------------------------------------------------------------------------
+
+describe("App — Settings surface closes (#717 sibling-key regression)", () => {
+  beforeEach(() => {
+    // #823: this fixture is a Run-less instance, so the welcome modal would
+    // otherwise cover the app in every case below. Answer it up front — these
+    // tests are about Settings, not about tours.
+    localStorage.setItem("pdo.tour.offered", "1");
+  });
+
+  it("closes via the header ✕ after a Stats open/close cycle", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Exercise the other keyed sibling first — the exact sequence that used to
+    // wedge the committed tree (both full-window overlays mounted at once).
+    await user.click(await screen.findByTestId("open-stats"));
+    await screen.findByTestId("stats-modal");
+    await user.click(screen.getByRole("button", { name: "Close stats" }));
+    await waitFor(() => expect(screen.queryByTestId("stats-modal")).not.toBeInTheDocument());
+
+    const surface = await openSettings(user);
+    await user.click(await screen.findByRole("button", { name: "Close settings" }));
+    void surface;
+    await expectClosed();
+    // The first test of the file pays the cold import of the lazy Stats and
+    // Settings chunks: under a full `make test` beside other builds that alone
+    // passes 20 s.
+  }, 60_000);
+
+  it("closes via the ✕ button", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await openSettings(user);
+    await user.click(screen.getByRole("button", { name: "Close settings" }));
+    await expectClosed();
+  }, 20_000);
+
+  it("closes via Escape", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await openSettings(user);
+    await user.keyboard("{Escape}");
+    await expectClosed();
+  }, 20_000);
+});
+
+// ---------------------------------------------------------------------------
+// CORE-183 — Settings and Stats open under the top bar: their icon is selected,
+// a second click closes, the other icon switches.
+// ---------------------------------------------------------------------------
+
+describe("App — the surfaces under the top bar (CORE-183)", () => {
+  beforeEach(() => {
+    localStorage.setItem("pdo.tour.offered", "1");
+  });
+
+  it("selects the icon of the open surface, switches on the other, closes on a second click", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSettings(user);
+    // The top bar stays there, its gear selected.
+    expect(screen.getByTestId("topbar")).toBeInTheDocument();
+    expect(screen.getByTestId("open-settings")).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByTestId("open-stats"));
+    await screen.findByTestId("stats-modal");
+    await waitFor(() => expect(screen.queryByTestId("settings-surface")).not.toBeInTheDocument());
+    expect(screen.getByTestId("open-stats")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("open-settings")).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(screen.getByTestId("open-stats"));
+    await waitFor(() => expect(screen.queryByTestId("stats-modal")).not.toBeInTheDocument());
+    expect(screen.getByTestId("open-stats")).toHaveAttribute("aria-pressed", "false");
+
+    await openSettings(user);
+    await user.click(screen.getByTestId("open-settings"));
+    await expectClosed();
+    expect(screen.getByTestId("open-settings")).toHaveAttribute("aria-pressed", "false");
+  }, 30_000);
+
+  it("switches from a dirty Settings only through its guard: kept, Settings stays; discarded, Stats opens", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSettings(user);
+    fireEvent.change(await screen.findByTestId("setting-session-cap"), { target: { value: "12" } });
+
+    await user.click(screen.getByTestId("open-stats"));
+    await user.click(await screen.findByTestId("settings-confirm-keep"));
+    expect(screen.getByTestId("settings-surface")).toBeInTheDocument();
+    expect(screen.queryByTestId("stats-modal")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("open-stats"));
+    await user.click(await screen.findByTestId("settings-confirm-discard"));
+    await screen.findByTestId("stats-modal");
+    expect(screen.queryByTestId("settings-surface")).not.toBeInTheDocument();
+    expect(screen.getByTestId("open-stats")).toHaveAttribute("aria-pressed", "true");
+  }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
+// « What's new » and « Update » from Settings › Version & update: Settings
+// closes first, and the modal is the one thing on screen over the app.
+// ---------------------------------------------------------------------------
+
+describe("App — the update modals opened from Settings", () => {
+  beforeEach(() => {
+    localStorage.setItem("pdo.tour.offered", "1");
+  });
+
+  /** A newer release is known and the daemon would apply it: Update is offered. */
+  async function offerAnUpdate() {
+    const current = await fetchUpdateStatus();
+    vi.mocked(fetchUpdateStatus).mockResolvedValue({
+      ...current,
+      latest_version: "10.0.0",
+      newer_available: true,
+      can_apply: true,
+    });
+    return () => vi.mocked(fetchUpdateStatus).mockResolvedValue(current);
+  }
+
+  it("« What's new » closes Settings and shows the changelog", async () => {
+    const restore = await offerAnUpdate();
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await openSettings(user);
+      await user.click(await screen.findByTestId("setting-version-whats-new"));
+      await expectClosed();
+      expect(await screen.findByTestId("changelog-modal")).toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  }, 20_000);
+
+  it("« Update » closes Settings and shows the confirm", async () => {
+    const restore = await offerAnUpdate();
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await openSettings(user);
+      const update = await screen.findByTestId("setting-version-update-button");
+      await waitFor(() => expect(update).not.toBeDisabled());
+      await user.click(update);
+      await expectClosed();
+      expect(await screen.findByTestId("update-confirm")).toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  }, 20_000);
+
+  it("« What's new » with a modified form asks first: kept, Settings stays; discarded, the changelog shows alone", async () => {
+    const restore = await offerAnUpdate();
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await openSettings(user);
+      fireEvent.change(await screen.findByTestId("setting-session-cap"), { target: { value: "12" } });
+
+      await user.click(await screen.findByTestId("setting-version-whats-new"));
+      expect(await screen.findByTestId("settings-confirm-close")).toBeInTheDocument();
+      await user.click(screen.getByTestId("settings-confirm-keep"));
+      expect(screen.getByTestId("settings-surface")).toBeInTheDocument();
+      expect(screen.queryByTestId("changelog-modal")).not.toBeInTheDocument();
+      // The draft is still there.
+      expect(screen.getByTestId("setting-session-cap")).toHaveValue(12);
+
+      await user.click(screen.getByTestId("setting-version-whats-new"));
+      await user.click(await screen.findByTestId("settings-confirm-discard"));
+      await expectClosed();
+      expect(await screen.findByTestId("changelog-modal")).toBeInTheDocument();
+
+      // Closing it goes back to the app, not to Settings.
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByTestId("changelog-modal")).not.toBeInTheDocument());
+      expect(screen.queryByTestId("settings-surface")).not.toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  }, 30_000);
+
+  it("« Update » with a modified form goes through the guard: Save & close saves, closes, then shows the confirm", async () => {
+    const restore = await offerAnUpdate();
+    try {
+      const user = userEvent.setup();
+      render(<App />);
+      await openSettings(user);
+      fireEvent.change(await screen.findByTestId("setting-session-cap"), { target: { value: "12" } });
+      const update = await screen.findByTestId("setting-version-update-button");
+      await waitFor(() => expect(update).not.toBeDisabled());
+
+      await user.click(update);
+      expect(await screen.findByTestId("settings-confirm-close")).toBeInTheDocument();
+      expect(screen.queryByTestId("update-confirm")).not.toBeInTheDocument();
+      await user.click(screen.getByTestId("settings-confirm-save-close"));
+      await expectClosed();
+      expect(vi.mocked(updateSettings)).toHaveBeenCalled();
+      expect(await screen.findByTestId("update-confirm")).toBeInTheDocument();
+
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByTestId("update-confirm")).not.toBeInTheDocument());
+      expect(screen.queryByTestId("settings-surface")).not.toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  }, 30_000);
+
+  it("renders the update modals after the full-window surfaces, so neither can hide them", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByTestId("open-stats"));
+    const stats = await screen.findByTestId("stats-modal");
+    // The status-bar version opens the changelog while Stats is still up.
+    await user.click(await screen.findByTestId("statusbar-version"));
+    const changelog = await screen.findByTestId("changelog-modal");
+    expect(stats.compareDocumentPosition(changelog) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  }, 20_000);
+});
+
+// ---------------------------------------------------------------------------
+// #819 — « Réglages de Stats éphémères », through the real App. StatsModal's own
+// tests pin the rule at its seam; this one pins the path a user walks, because
+// the rule was first shipped broken by the host alone: the surface kept its state
+// behind `open={false}`, and the chart icon reopened Stats exactly where it was
+// closed — deviated period included.
+// ---------------------------------------------------------------------------
+
+describe("App — Stats reopens on its defaults (#819)", () => {
+  it("forgets a deviated period between two opens", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByTestId("open-stats"));
+    await screen.findByTestId("stats-modal");
+    expect(screen.getByTestId("stats-period-30d")).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByTestId("stats-period-7d"));
+    expect(screen.getByTestId("stats-period-7d")).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByRole("button", { name: "Close stats" }));
+    await waitFor(() => expect(screen.queryByTestId("stats-modal")).not.toBeInTheDocument());
+
+    await user.click(screen.getByTestId("open-stats"));
+    await screen.findByTestId("stats-modal");
+    expect(screen.getByTestId("stats-period-30d")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("stats-period-7d")).toHaveAttribute("aria-pressed", "false");
+  }, 20_000);
+});
+
+// ---------------------------------------------------------------------------
+// #823 — the welcome modal's wiring. The rule itself is unit-tested
+// (`lib/tourMemory.test.ts`) and the modal's three answers in
+// `components/tour/TourHost.test.tsx`; what only a real App mount can show is
+// that App feeds the rule the LOADED run list rather than the empty array it
+// starts from. This file owns the only complete App fixture, hence its home here.
+// ---------------------------------------------------------------------------
+
+describe("App — the welcome modal (#823)", () => {
+  it("proposes a tour on a fresh browser with no Run", async () => {
+    localStorage.clear();
+    render(<App />);
+    expect(await screen.findByTestId("tour-welcome")).toBeInTheDocument();
+  });
+
+  it("never proposes one to a browser that already answered", async () => {
+    localStorage.clear();
+    localStorage.setItem("pdo.tour.offered", "1");
+    render(<App />);
+    await screen.findByTestId("open-settings");
+    await waitFor(() => expect(screen.queryByTestId("settings-loading")).not.toBeInTheDocument());
+    expect(screen.queryByTestId("tour-welcome")).not.toBeInTheDocument();
+  });
+
+  it("does not flash before the run list has answered", async () => {
+    localStorage.clear();
+    const { fetchRuns } = await import("../run/api/runs");
+    let release: (runs: unknown[]) => void = () => {};
+    vi.mocked(fetchRuns).mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve as (runs: unknown[]) => void;
+      }) as ReturnType<typeof fetchRuns>,
+    );
+
+    render(<App />);
+    await screen.findByTestId("open-settings");
+    expect(screen.queryByTestId("tour-welcome")).not.toBeInTheDocument();
+
+    release([]);
+    expect(await screen.findByTestId("tour-welcome")).toBeInTheDocument();
+  });
+
+  it("takes an instance that already has Runs for what it is", async () => {
+    localStorage.clear();
+    const { fetchRuns } = await import("../run/api/runs");
+    vi.mocked(fetchRuns).mockResolvedValueOnce([
+      {
+        run_id: "r1",
+        name: "a run",
+        pipeline_name: "p",
+        status: "done",
+        created_at: "2026-09-20T10:00:00Z",
+      },
+    ] as unknown as Awaited<ReturnType<typeof fetchRuns>>);
+
+    render(<App />);
+    await screen.findByTestId("open-settings");
+    await waitFor(() => expect(screen.queryByTestId("settings-loading")).not.toBeInTheDocument());
+    expect(screen.queryByTestId("tour-welcome")).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #938 (story PDO-3) — the toolbar's "agent" glyph and `(i)` are mutually
+// exclusive and lit from the tab the Pipeline info panel SHOWS. The rule crosses
+// App (owns the panel's open state + tab), the toolbar and the panel, hence the
+// real App mount on a library template canvas.
+// ---------------------------------------------------------------------------
+
+describe("App — Assistant and Info toolbar buttons are exclusive (#938)", () => {
+  function seedTemplate(saveError?: { message: string; line?: number }) {
+    useEditStore.setState({
+      openTabs: [
+        {
+          id: "tpl",
+          scope: "repo",
+          pipeline: { name: "tpl", version: "1.0", variables: {}, nodes: [], edges: [] },
+          prompts: {},
+          diagnostics: [],
+          dirty: saveError != null,
+          externalDirty: false,
+          saveError,
+        },
+      ],
+      activeTabId: "tpl",
+      selection: { kind: "none", id: null },
+    });
+  }
+
+  beforeEach(() => {
+    localStorage.setItem("pdo.tour.offered", "1");
+  });
+
+  afterEach(() => {
+    useEditStore.setState({ openTabs: [], activeTabId: null });
+  });
+
+  function buttons() {
+    return {
+      bot: screen.getByTestId("toolbar-assistant"),
+      info: screen.getByTestId("toolbar-info"),
+    };
+  }
+
+  /** The lit button(s) and the tab the panel shows (`null` = panel closed). */
+  function view() {
+    const { bot, info } = buttons();
+    const panel = screen.queryByTestId("pipeline-info-panel");
+    const shown = panel
+      ? (["assistant", "info", "yaml"] as const).find((t) =>
+          screen.getByTestId(`info-tab-${t}`).getAttribute("aria-selected") === "true",
+        )
+      : null;
+    return {
+      bot: bot.getAttribute("aria-pressed"),
+      info: info.getAttribute("aria-pressed"),
+      shown,
+    };
+  }
+
+  async function mount() {
+    const user = userEvent.setup();
+    seedTemplate();
+    render(<App />);
+    await screen.findByTestId("toolbar-assistant");
+    return user;
+  }
+
+  it("follows the transition table from a closed panel", async () => {
+    const user = await mount();
+    expect(view()).toEqual({ bot: "false", info: "false", shown: null });
+
+    // closed → glyph: opens on Assistant.
+    await user.click(buttons().bot);
+    expect(view()).toEqual({ bot: "true", info: "false", shown: "assistant" });
+    expect(screen.getByTestId("assistant-tab")).toBeInTheDocument();
+
+    // on Assistant → glyph: closes.
+    await user.click(buttons().bot);
+    expect(view()).toEqual({ bot: "false", info: "false", shown: null });
+
+    // closed → (i): opens on Info.
+    await user.click(buttons().info);
+    expect(view()).toEqual({ bot: "false", info: "true", shown: "info" });
+
+    // on another tab → (i): closes.
+    await user.click(buttons().info);
+    expect(view()).toEqual({ bot: "false", info: "false", shown: null });
+  }, 20_000);
+
+  it("switches between Assistant and Info without closing the panel", async () => {
+    const user = await mount();
+
+    await user.click(buttons().bot);
+    // on Assistant → (i): switches to Info, stays open.
+    await user.click(buttons().info);
+    expect(view()).toEqual({ bot: "false", info: "true", shown: "info" });
+
+    // on another tab → glyph: switches to Assistant.
+    await user.click(buttons().bot);
+    expect(view()).toEqual({ bot: "true", info: "false", shown: "assistant" });
+  }, 20_000);
+
+  it("keeps the toolbar in sync with the panel's own tabs", async () => {
+    const user = await mount();
+
+    await user.click(buttons().info);
+    await user.click(screen.getByTestId("info-tab-assistant"));
+    expect(view()).toEqual({ bot: "true", info: "false", shown: "assistant" });
+
+    await user.click(screen.getByTestId("info-tab-yaml"));
+    expect(view()).toEqual({ bot: "false", info: "true", shown: "yaml" });
+
+    // YAML is "another tab": the glyph jumps to the Assistant...
+    await user.click(buttons().bot);
+    expect(view()).toEqual({ bot: "true", info: "false", shown: "assistant" });
+
+    await user.click(screen.getByTestId("info-tab-info"));
+    expect(view()).toEqual({ bot: "false", info: "true", shown: "info" });
+
+    // ...and a click on the lit (i) closes the panel.
+    await user.click(buttons().info);
+    expect(view()).toEqual({ bot: "false", info: "false", shown: null });
+  }, 20_000);
+
+  it("« View YAML » opens the panel on YAML at the error line, (i) lit", async () => {
+    const user = userEvent.setup();
+    seedTemplate({ message: "bad yaml", line: 3 });
+    render(<App />);
+
+    await user.click(await screen.findByTestId("save-error-view-yaml"));
+    expect(view()).toEqual({ bot: "false", info: "true", shown: "yaml" });
+    await waitFor(() =>
+      expect(document.querySelector('[data-line="3"]')).toHaveClass("bg-st-failed/20"),
+    );
+  }, 20_000);
+});

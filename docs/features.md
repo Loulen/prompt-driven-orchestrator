@@ -34,16 +34,16 @@ LLM involved.
 
 Underneath, a pipeline is plain YAML plus one prompt file per node, so it diffs, reviews and
 travels like code (export and import carry its skills along). A run opens read-only: you follow it,
-and a node's Config shows its prompt and skills without letting you change them. **Edit › Edit for
-this run** unlocks the graph while the run is going: nodes that already run stay as they are, the
-scheduler picks up the new graph on its next tick, and **Save for this run** changes that run only.
-Making the change the default for everyone is a separate, warned gesture (**Overwrite default
-pipeline**, which names the triggers it affects); **Edit source pipeline** opens the shared pipeline
+and a node's Config shows its prompt and skills without letting you change them. The Edit pencil ›
+**Edit for this run** unlocks the graph while the run is going: nodes that already run stay as they
+are, the scheduler picks up the new graph on its next tick, and **Save for this run** changes that run
+only. Making the change the default for everyone is a separate, warned gesture (**Overwrite default
+pipeline…**, which names the triggers it affects); **Edit source pipeline** opens the shared pipeline
 in its own tab.
 
 Decisions: [ADR-0003](adr/0003-stack-rust-react-xyflow.md),
 [ADR-0007](adr/0007-edit-during-run.md),
-[ADR-0080](adr/0080-le-pilotage-d-un-run-est-en-lecture-seule-l-edition-est-un-geste-explicite-limite-au-run.md),
+[ADR-0085](adr/0085-le-pilotage-d-un-run-est-en-lecture-seule-l-edition-est-un-geste-explicite-limite-au-run.md),
 [ADR-0017](adr/0017-script-node.md),
 [ADR-0059](adr/0059-les-pipelines-appartiennent-a-l-instance-et-voyagent-par-document.md).
 
@@ -57,57 +57,103 @@ sibling edge matched. There is no LLM router: an LLM never decides which node ru
 Drag an edge back from `reviewer` to `implementer`, set `verdict = fail`, and PDO turns the cycle
 into a named, **bounded loop** (`↻ 1/8` on the canvas) with a `max_iter`, so a cycle can never run
 forever. A **collection loop** fans a node out over a list field of its input, with laps running in
-parallel.
+parallel. Each lap gets its own item: an agent reads it in its preamble, a `script` in `$PDO_ITEM`
+(and the number of laps in `$PDO_ITEM_TOTAL`).
 
-Each loop's header shows its running cost (`↻ 3/5 · ~$1.20`). A bounded loop can also carry a
-**cost cap** (`max_cost_usd`, set in the region inspector): once the loop's cost reaches it, the next
-lap does not start and the run waits for you (« budget reached »). The lap in progress always
-finishes. While the run goes on, « Edit for this run » lets you change the cap live: raise it and
-save to run the next lap, lower it (even under what was already spent) to stop the loop at the end of
-the current lap, or clear it. The `raise cap` button on a stopped region opens that field directly,
-and the Pipeline Manager has the same lever (`set_region_max_cost`). You can also route the exit or
-end the region.
+Each loop shows what it spent since it was entered, after its counter (`↻ 3/5 · ~$1.20`), with each
+member's share in the tooltip. A bounded loop also takes a cost cap, `max_cost_usd` (a dollar amount
+or a `$variable`): once the loop's cost reaches it, the lap in progress finishes, the next one does
+not start, and the run waits « budget reached » for you to raise the cap or end the region. It never
+follows the loop's exhaustion exit and never fails the run. The cap changes live: « raise cap »
+opens « Edit for this run » on it, and saving a higher cap starts the next lap at once; a cap
+lowered under what the loop already spent stops it at its next re-entry, never mid-lap. The same
+lever is `pdo run region <run> <region> --max-cost <usd|none>` and the `set_region_max_cost` run
+command.
 
 Branches converge on any node: wire several edges into an `agent` and it waits until each incoming
 edge has fired or died, receives only the outputs of the branches that fired (same-named edges group
 into one input), and finds each isolated branch's code already merged back on the run's branch. A
+guarded edge out of a bounded loop has not died while the loop still turns: the node waits for the
+loop to exit (on its guard, or exhausted), never starts on the FAIL of a lap in between. An edge out
+of a collection hands over the output of every lap, in the order of the items. A
 node whose every branch died is skipped; if that makes `End` unreachable, the run halts explicitly
 (« unrouted ») instead of stalling. There is no dedicated Merge node: the converging node carries its
 own prompt, so it can do real synthesis work.
 
+A node skipped because its branch was not taken fires nothing: what it fed does not receive it (its
+preamble says « not taken », a `script` gets an empty `PDO_INPUT_<PORT>`), and an `End` reachable only
+through it stays unreached, so the run waits « unrouted » for you to force a route. A node you skip
+yourself (`pdo node skip`, with or without `--output`) feeds what comes after it as if it had run.
+
+A skipped node keeps a ▶: it runs the branch as if it had been taken (a Retry: next iteration, the
+skipped nodes downstream evaluated again, a finished run re-opened).
+
+Some nodes you only want when you ask for them: a review, a diagnosis, a report. Turn **On demand**
+on (an `agent` or a `script`) and the runtime never launches the node nor skips it. In the run its
+card stays greyed with a ▶; you launch it while the run goes or after it ended (the ▶ re-opens a
+finished run, which ends again once the node is done). It reads the last completed output of each
+upstream node; an input whose upstream produced nothing yet is named absent in its preamble, and a
+script gets an empty `PDO_INPUT_<PORT>`. It holds no downstream node until you launch it; once it
+completes, a downstream node not launched yet runs, one already done is not run again.
+
+By default a run ends at `End`, even if a node it launched still works. In Pipeline info, **Wait for
+started nodes** makes it wait: the run stays running, says « waiting for N started nodes » (its End
+card already reached), and ends when the last of them completes.
+
 Decisions: [ADR-0002](adr/0002-mechanical-conditionals-only.md),
 [ADR-0011](adr/0011-conditional-edges-and-loop-regions.md),
 [ADR-0026](adr/0026-collection-region-live-wiring.md),
-[ADR-0079](adr/0079-la-convergence-est-portee-par-tout-noeud-le-merge-est-retire.md),
-[ADR-0083](adr/0083-le-plafond-de-cout-d-une-boucle-se-verifie-a-la-re-entry-et-parque-le-run.md).
+[ADR-0082](adr/0082-la-convergence-est-portee-par-tout-noeud-le-merge-est-retire.md),
+[ADR-0086](adr/0086-un-noeud-a-la-demande-n-est-ni-attendu-ni-skippe-par-le-graphe.md).
 
 ## Typed outputs
 
 Each node declares its output ports: what it hands over. A port can be markdown with a frontmatter
 schema (the `verdict` a routing edge reads), an `image_list` (annotated screenshots, shown as
-thumbnails and opened in a lightbox), `html` (rendered in a sandboxed frame), or files. Markdown
-renders with its Mermaid diagrams.
+thumbnails and opened in a lightbox), `html` (rendered in a sandboxed frame), or `files` (one file or more, of any format; the
+node downstream reads the whole folder). Markdown renders with its Mermaid diagrams. Every artifact
+of the run view downloads, and a `files` port downloads as one zip.
 
 PDO validates each output when the node completes. A missing file or a frontmatter field that breaks
 the schema refuses the completion, and the agent is told why in its own session, before the next node
 starts. Artifacts live in the run's blackboard and survive archiving.
 
+**Live artifacts** let you follow the work while it happens, apart from the outputs. A node can
+declare some in the inspector's *Live artifacts* section (name, type, expected content, frontmatter
+schema), and « Free live artifacts » lets it publish others of its own. The preamble tells the agent
+to publish them in the `live/` folder of its iteration, early, then as it goes. The node panel lists
+them while the Run goes, the frontmatter as tags, an amber tag where it misses the declared schema,
+« not produced » for a declared one not written yet, « free » for one nobody declared. Nothing checks
+them at completion and no edge carries them: anything the next node needs goes through an output.
+An output a pipeline still marks `intermediate` reads as a declared live artifact.
+
 Decisions: [ADR-0010](adr/0010-port-output-as-directory.md),
 [ADR-0013](adr/0013-client-side-mermaid-rendering.md),
 [ADR-0020](adr/0020-archive-preserves-outputs.md),
 [ADR-0028](adr/0028-html-output-port.md),
-[ADR-0035](adr/0035-completion-refusal-is-never-2xx.md).
+[ADR-0035](adr/0035-completion-refusal-is-never-2xx.md),
+[ADR-0089](adr/0089-l-artefact-live-vit-hors-des-outputs-et-n-est-jamais-exige.md).
 
 ## Diff review
 
-The run's **Diff** tab shows everything the run changed since it forked. **Expand and comment**
-opens the review page: a diff between any two refs of the run (fork point, run tip, each node's
-before/after, the live working tree), side by side, with inline comments on any line.
+The run's **Diff** tab shows everything the run changed since it forked. Its **Review page** button
+(the arrow icon at the top right) opens the review page: a diff between any two refs of the run (fork point, run tip, each node's
+before/after, the live working tree), side by side, with inline comments on any line. Tick
+**Viewed** on a file (or press `v`) to fold it once read: the mark stays in your browser, for that
+pair of refs.
 
 **Send to manager** hands your comments to the run's manager agent in one message. It answers each
 one with `pdo review reply`, the answer lands in the thread in real time, and the manager can route
 the fix back into the pipeline (restart a node, inject an artifact). By default you resolve a
-comment; the agent only proposes the resolution.
+comment; the agent only proposes the resolution. A manager the send starts reads your comments in its
+launch prompt. If its agent first asks whether to trust the folder, the thread says the comments
+are held and how to go on (answer it in the run's Manager tab); if the manager exits before
+answering, the thread says so and **Send again** hands the unanswered comments to a new manager,
+as written.
+
+Each comment, reply, resolution and reopening keeps who made it: with an extension that names
+people, the thread shows their names, and an extension can complete what you type in the comment
+editor (a character opens its suggestions, see [extension-ui.md](reference/extension-ui.md#sources-of-completion)).
 
 Decisions: [ADR-0067](adr/0067-la-relecture-de-diff-est-une-conversation-dans-l-event-log-entre-deux-refs-du-run.md).
 Commands: [`pdo review`](reference/cli.md#cli-commands).
@@ -134,11 +180,11 @@ Decisions: [ADR-0012](adr/0012-triggers-and-trust-earned-autonomy.md),
 
 ## Run stats by model
 
-The **Stats** page aggregates your own runs over a period: Overview (runs, errors, sessions), fires
-per pipeline, Sessions, **Cost** and **Performance**. Cost breaks down by harness, by node, and **by
+The **Stats** page aggregates your own runs over a period (30 days when it opens): **Runs** (runs,
+failures, failure rate), **Sessions**, **Triggers** (fires per pipeline), **Cost** and **Performance**. Cost breaks down by harness, by node, and **by
 model then effort**, with the model the execution actually ran on, read from the harness's own
-transcript. Performance shows duration, failure rate and steering messages per node or per model as
-box plots. Every summary is a median, never a mean.
+transcript. Performance shows peak context, duration (total, active or waiting on you) and steering
+messages per node or per model as box plots. Every summary is a median, never a mean.
 
 Cost is an estimate read from local transcripts: derived for `claude` (tokens × a price table fed
 from models.dev, overridable by hand), reported for harnesses that count it themselves. A harness
@@ -153,26 +199,25 @@ Which harness reports what: [harnesses.md](reference/harnesses.md).
 
 ## Interactive and orchestrator nodes
 
-Two flags of an agent node, independent of its type (`agent`, `script`): together they
-make its **node kind**, and a node can be both.
+Two flags of a node, apart from its type (`agent`, `script`): **Interactive** (any node) and
+**Orchestrator** (an `agent` node). Together they make its **node kind**, and a node can be both.
 
 Turn **Interactive** on and a human talks to the node. When its agent needs you (a question, a
 choice, a review), it declares the wait with `pdo wait-user --message "<question>"`: the node and its
 run turn **awaiting you**, with the question on the banner. You reply in the node's terminal, and
 your Enter lifts the wait. PDO never infers a wait from a silence. The node's completion is guarded
-until you release it (« Mark ready for completion ») or force it (« Mark complete »).
+until you release it (« Auto-approve when ready », in the menu of **Approve ▾**) or approve it
+(**Approve**, greyed while a declared output is missing).
 
-Turn **Orchestrator** on and its session learns to launch runs itself: `pdo run create` starts a
-child pipeline (the same one, or another), so pipelines run pipelines, and `pdo run wait` blocks
-until a child is done. The daemon records who launched what, so the run list becomes a **run
-tree**: children fold under their parent, with counters for finished, failed, stale and running
-descendants. The node's **Orchestration** tab follows its children to the end, and a child that
-waits for you shows on its parent too.
-
-Any node (agent or script) can launch runs, toggle or not: as soon as it has a child, its card on
-the canvas carries the child counters and its panel grows the **I/O | Orchestration** tabs (I/O
-stays the default). While the node waits for its children, its banner links straight to the
-Orchestration tab. The toggle adds the `pdo-orchestrate` skill and shows the tab from the start.
+Any node can launch runs itself: `pdo run create` starts a child pipeline (the same one, or
+another), so pipelines run pipelines, and `pdo run wait` blocks until a child is done. The daemon
+records who launched what, so the run list becomes a **run tree**: children fold under their
+parent, with counters for finished, failed, stale and running descendants. A node that launched a
+child is a **parent node**: its card shows the counters, its **Orchestration** tab follows its
+children to the end, a child that waits for you shows on its parent too, and the node completes
+only once every child has ended (a failed child parks it awaiting you). Turn **Orchestrator** on
+and the node's agent gets the `pdo-orchestrate` skill, and its Orchestration tab shows from the
+start.
 
 Decisions: [ADR-0064](adr/0064-la-provenance-parent-enfant-est-mecanique-et-la-liaison-orchestrateur-est-forte.md),
 [ADR-0068](adr/0068-la-liberation-de-la-completion-est-une-garde-du-daemon-pas-un-message-dans-le-pane.md),
@@ -221,7 +266,7 @@ Decisions: [ADR-0036](adr/0036-merge-back-resolved-in-the-node-favour.md),
 
 Every node runs in a tmux session you can watch from the web terminal, type into, or take over. An
 interactive node waits for you, and an agent can declare that it waits on you with `pdo wait-user`.
-A shell can be opened in any run's worktree. Drop a file on a running node's terminal to import it into the Run (#971). Copy and paste, import: [terminal.md](reference/terminal.md).
+A shell can be opened in any run's worktree. Drop a file on a running node's terminal to import it into the Run. Copy and paste, import: [terminal.md](reference/terminal.md).
 
 Decisions: [ADR-0005](adr/0005-inline-xterm-over-os-spawn.md),
 [ADR-0021](adr/0021-run-shell-open-session.md).
@@ -230,6 +275,8 @@ Decisions: [ADR-0005](adr/0005-inline-xterm-over-os-spawn.md),
 
 Run nodes inside a container profile. PDO stages the harness home (credentials, settings) into the
 sandbox at spawn and harvests transcripts back, so cost and stats still work. The image is yours.
+The nodes call the daemon through the host gateway: keep it listening beyond `127.0.0.1` (its
+default, all interfaces, does).
 
 Decisions: [ADR-0030](adr/0030-sandbox-execution-model.md),
 [ADR-0031](adr/0031-sandbox-staging-profiles.md),
@@ -260,8 +307,11 @@ Decisions: [ADR-0066](adr/0066-les-page-mounts-servent-du-html-navigable-sur-ges
 ### Service & in-app update
 
 `pdo service install` installs a systemd user unit or a launchd agent, so PDO starts at boot and
-keeps running after logout. When a new release is out, one click on the version in the status bar
-updates PDO with your install method and reloads the page. See [cli.md](reference/cli.md).
+keeps running after logout. When a new release is out, the version in the status bar says so
+(`→ <version>`): click it to read what changed, then **Update** › **Update now**, and PDO updates
+with your install method and reloads the page. Settings › General › Version & update shows the
+installed and latest versions (read from the public repository's releases), your install method and
+the command it runs. See [cli.md](reference/cli.md).
 
 Decisions: [ADR-0019](adr/0019-persistent-daemon-service-unit.md).
 

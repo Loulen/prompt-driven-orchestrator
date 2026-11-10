@@ -1,0 +1,58 @@
+[package]
+# The `trigger` bounded context (ADR-0079): a Trigger, the Run template a cron
+# schedule fires — its cron, its guard, its fires and their history, the global
+# pause, the heartbeat that ticks it. Hexagonal inside: `domain/`,
+# `application/` (ports + one use case per file), `adapters/`.
+name = "pdo-trigger"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "PDO's trigger context: cron schedules, guards, fires and their history"
+publish = false
+autotests = false
+
+[lib]
+name = "pdo_trigger"
+path = "src/lib.rs"
+
+[dependencies]
+pdo-kernel.workspace = true
+# `ts`: the Actor a Run and a Trigger carry (API 0.8) is part of their DTOs.
+pdo-extension-api = { workspace = true, features = ["ts"] }
+pdo-harness.workspace = true
+pdo-platform.workspace = true
+pdo-pipeline.workspace = true
+pdo-run.workspace = true
+pdo-sandbox.workspace = true
+pdo-skill.workspace = true
+pdo-workspace.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+chrono.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+ts-rs.workspace = true
+uuid.workspace = true
+
+[[test]]
+name = "use_cases"
+path = "tests/use_cases/main.rs"
+
+[[test]]
+name = "adapters"
+path = "tests/adapters/main.rs"
+
+[dev-dependencies]
+pdo-extension-api.workspace = true
+pretty_assertions.workspace = true
+tempfile.workspace = true
+chrono-tz = "0.10"
+tower = { version = "0.5", features = ["util"] }

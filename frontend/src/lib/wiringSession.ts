@@ -15,7 +15,7 @@
 // move, for values nothing renders from. This is a per-gesture scratchpad, reset
 // at each `onConnectStart`, consumed at `onConnectEnd`.
 
-import type { EdgeAnchor } from "../types";
+import type { EdgeAnchor } from "../shared/generated/EdgeAnchor";
 import type { Point } from "./orthogonalRouter";
 import type { WiringGesture } from "./wiringGesture";
 

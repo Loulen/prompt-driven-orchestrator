@@ -1,0 +1,1602 @@
+//! A node's inputs and outputs as the node panel reads them.
+
+use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
+
+use serde::Serialize;
+use ts_rs::TS;
+
+use crate::application::node::outputs::output_missing;
+use crate::domain::state::RunState;
+use pdo_pipeline::domain::pipeline::{PipelineDef, PortType};
+
+mod files;
+mod live;
+
+pub use files::*;
+pub use live::*;
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct FileInfo {
+    pub path: String,
+    pub exists: bool,
+    pub size: Option<u64>,
+    /// Sorted by field, so the panel's labels keep their place across reads.
+    #[ts(type = "Record<string, unknown> | null")]
+    pub frontmatter: Option<BTreeMap<String, serde_json::Value>>,
+    /// #796: the file predates the execution whose output it is displayed as.
+    /// An output file that was on disk BEFORE this node's iteration started
+    /// (`IterationInfo::started_at`) was not written by the session shown as
+    /// running: it survived a same-iter re-spawn (ADR-0049) or travelled in
+    /// through git from a previous run of the same pipeline (a child run created
+    /// from a branch that carries `.pdo/artifacts/`). Such a file must never be
+    /// read as the current verdict. Absent from the wire when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inherited: bool,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct PortIO {
+    pub port: String,
+    /// An input that pools several files: fed by a `repeated` edge, or by two
+    /// edges of the same name. Always `false` on an output.
+    pub repeated: bool,
+    pub port_type: PortType,
+    pub files: Vec<FileInfo>,
+    /// An output with nothing on the blackboard yet, by the completion guard's
+    /// own rule (`outputs::output_missing`): an
+    /// inherited file counts as present. Always `false` on an input.
+    pub missing: bool,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct NodeIO {
+    pub inputs: Vec<PortIO>,
+    pub outputs: Vec<PortIO>,
+    /// The live artifacts of the iteration (ADR-0089): the declared ones, then
+    /// the ones the node published freely.
+    pub live: Vec<LiveArtifactIO>,
+}
+
+/// Resolve the input/output file view of `node_id` at `iter` for the inspector
+/// `/io` endpoint.
+///
+/// `run_state` is the run's projection (#353): `repeated`/pooled inputs enumerate
+/// one file per COMPLETED source iteration via [`RunState::completed_iters`], so
+/// the inspector shows the *resolvable* set — not "everything on disk", which
+/// would surface artifacts of failed iterations. Works identically for live and
+/// archived runs (#315): the projection comes from the durable event log, never
+/// purged by archival; only *where files are read* differs.
+pub fn resolve(
+    pipeline: &PipelineDef,
+    artifacts_dir: &Path,
+    node_id: &str,
+    iter: i64,
+    run_state: &RunState,
+) -> NodeIO {
+    let node = pipeline.nodes.iter().find(|n| n.id == node_id);
+    let node = match node {
+        Some(n) => n,
+        None => {
+            return NodeIO {
+                inputs: vec![],
+                outputs: vec![],
+                live: vec![],
+            }
+        }
+    };
+
+    // Inputs are EMERGENT (#149): derived from incoming edges, not declared on
+    // the node. The edge-walk + iteration decision (source's latest-COMPLETED
+    // iter for a single wire, COMPLETED iters for a `repeated` pool) lives in
+    // ONE place — `input_resolution::resolve_consumer_inputs` (#370) — never
+    // re-derived here. This resolver's own job is the projection: add a disk
+    // stat (`FileInfo`) per resolved path, and POOL same-named edges into one
+    // logical list input.
+    let source_iters =
+        crate::domain::input_resolution::resolved_source_iters(pipeline, run_state, node_id, iter);
+    let repeated_iters =
+        crate::domain::input_resolution::resolved_repeated_iters(pipeline, run_state, node_id);
+    let resolved = crate::domain::input_resolution::resolve_consumer_inputs(
+        pipeline,
+        artifacts_dir,
+        node_id,
+        iter,
+        &source_iters,
+        &repeated_iters,
+    );
+
+    let mut inputs: Vec<PortIO> = Vec::new();
+    let mut input_index: HashMap<String, usize> = HashMap::new();
+
+    for input in resolved {
+        // ADR-0082: a convergence consumes only the branches that fired. A
+        // pruned source's branch was not taken: it is no input of this node.
+        if run_state.is_pruned(&input.source_node) {
+            continue;
+        }
+        // A `files` source hands over its folder: list the files in it.
+        let mut files: Vec<FileInfo> = input
+            .paths
+            .iter()
+            .flat_map(|p| {
+                if input.folder {
+                    list_port_files(artifacts_dir, p, |_| true)
+                } else {
+                    vec![file_info_with_frontmatter(artifacts_dir, p)]
+                }
+            })
+            .collect();
+        // #779: a Start-sourced input also exposes the run's non-image
+        // attachments (`_input/<file>`), so the panel shows they arrived. Images
+        // stay on the Start inspector's thumbnails (`input_images`).
+        if input.from_start {
+            files.extend(input_attachment_files(artifacts_dir));
+        }
+
+        match input_index.get(&input.port) {
+            // Two edges sharing a target name make the input a list, whatever
+            // each edge's own `repeated` flag says.
+            Some(&idx) => {
+                let pooled: &mut PortIO = &mut inputs[idx];
+                pooled.repeated = true;
+                pooled.files.extend(files);
+            }
+            None => {
+                input_index.insert(input.port.clone(), inputs.len());
+                inputs.push(PortIO {
+                    port: input.port,
+                    repeated: input.repeated,
+                    port_type: if input.folder {
+                        PortType::Files
+                    } else {
+                        PortType::Markdown
+                    },
+                    files,
+                    missing: false,
+                });
+            }
+        }
+    }
+
+    // Entry-node fallback: a node with no incoming edges that still expects a
+    // `task` reads the run's `_input` (preserves existing single-entry pipelines).
+    if inputs.is_empty() && node.inputs.iter().any(|p| p.name == "task") {
+        let path = crate::domain::blackboard::input_path(artifacts_dir);
+        let mut files = vec![file_info_with_frontmatter(artifacts_dir, &path)];
+        files.extend(input_attachment_files(artifacts_dir));
+        inputs.push(PortIO {
+            port: "task".into(),
+            repeated: false,
+            port_type: PortType::Markdown,
+            files,
+            missing: false,
+        });
+    }
+
+    // #796: the instant this execution started. Anything on disk older than it
+    // is inherited, not produced — flagged, never hidden (ADR-0049 wants the
+    // human to see the partial output a fresh agent builds on).
+    let not_before = execution_started_at(run_state, node_id, iter);
+    // #796: an artifact git can name was checked out with the worktree, not
+    // written by any session of this run (the completion commit never stages
+    // `.pdo/artifacts/`). Inherited regardless of its mtime.
+    let tracked = git_tracked_paths(artifacts_dir, node_id, iter);
+
+    let mut outputs: Vec<PortIO> = Vec::new();
+    for output_port in &node.outputs {
+        let missing = output_missing(output_port, node_id, iter, artifacts_dir);
+        match output_port.port_type {
+            PortType::Image | PortType::ImageList | PortType::Files => {
+                let port_dir = crate::domain::blackboard::port_dir(
+                    artifacts_dir,
+                    node_id,
+                    iter,
+                    &output_port.name,
+                );
+                let mut files = if output_port.port_type == PortType::Files {
+                    list_port_files(artifacts_dir, &port_dir, |_| true)
+                } else {
+                    list_image_files(artifacts_dir, &port_dir)
+                };
+                mark_inherited(artifacts_dir, &mut files, not_before, &tracked);
+                outputs.push(PortIO {
+                    port: output_port.name.clone(),
+                    // An output never accumulates: that belongs to the edge.
+                    repeated: false,
+                    port_type: output_port.port_type,
+                    files,
+                    missing,
+                });
+            }
+            PortType::Markdown => {
+                let path = crate::domain::blackboard::artifact_path(
+                    artifacts_dir,
+                    node_id,
+                    iter,
+                    &output_port.name,
+                );
+                let mut files = vec![file_info_with_frontmatter(artifacts_dir, &path)];
+                mark_inherited(artifacts_dir, &mut files, not_before, &tracked);
+                outputs.push(PortIO {
+                    port: output_port.name.clone(),
+                    // An output never accumulates: that belongs to the edge.
+                    repeated: false,
+                    port_type: output_port.port_type,
+                    files,
+                    missing,
+                });
+            }
+            // Plain `file_info`: html has no frontmatter to parse.
+            PortType::Html => {
+                let path = crate::domain::blackboard::artifact_path_html(
+                    artifacts_dir,
+                    node_id,
+                    iter,
+                    &output_port.name,
+                );
+                let mut files = vec![file_info(artifacts_dir, &path)];
+                mark_inherited(artifacts_dir, &mut files, not_before, &tracked);
+                outputs.push(PortIO {
+                    port: output_port.name.clone(),
+                    // An output never accumulates: that belongs to the edge.
+                    repeated: false,
+                    port_type: output_port.port_type,
+                    files,
+                    missing,
+                });
+            }
+        }
+    }
+
+    let live = resolve_live(node, artifacts_dir, iter, not_before, &tracked);
+
+    NodeIO {
+        inputs,
+        outputs,
+        live,
+    }
+}
+
+/// When the execution of `node_id` at `iter` started (#796): the iteration's
+/// `started_at` — re-posed by every same-iter re-spawn, so it always names the
+/// LATEST session. A node that never started falls back to the run's own start:
+/// a file older than the run itself cannot be this run's work. `None` when
+/// neither is known (no flag is then raised — the wire stays as before).
+pub fn execution_started_at(
+    run_state: &RunState,
+    node_id: &str,
+    iter: i64,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    let iteration_start = run_state
+        .nodes
+        .get(node_id)
+        .and_then(|n| n.iterations.iter().find(|i| i.iter == iter))
+        .and_then(|i| i.started_at.as_deref());
+    let ts = iteration_start.or(run_state.started_at.as_deref())?;
+    chrono::DateTime::parse_from_rfc3339(ts)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
+/// Does `path` predate `not_before`? A missing file or an unreadable mtime is
+/// never inherited — the ordinary "not written yet" state.
+pub fn predates(path: &Path, not_before: chrono::DateTime<chrono::Utc>) -> bool {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .map(chrono::DateTime::<chrono::Utc>::from)
+        .is_some_and(|mtime| mtime < not_before)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::state::IterationInfo;
+    use crate::domain::state::NodeState;
+    use crate::domain::state::NodeStatus;
+    use pdo_pipeline::domain::pipeline::{
+        EdgeDef, EdgeEndpoint, EdgeSource, NodeDef, NodeType, Port, PortType,
+    };
+    use pretty_assertions::assert_eq;
+    use std::fs;
+
+    /// A run projection where a non-repeated wire is resolved — the `iter` arg
+    /// carries the resolution, so `completed_iters` is never consulted.
+    fn empty_run_state() -> RunState {
+        RunState::new("run-1".into(), "test".into())
+    }
+
+    /// A run projection marking `node_id`'s `iters` as the given statuses, so
+    /// `completed_iters` (the #353 authority) resolves a `repeated` pool.
+    fn run_state_with(node_id: &str, iters: &[(i64, NodeStatus)]) -> RunState {
+        let (head_iter, head_status) = iters.last().cloned().unwrap_or((1, NodeStatus::Pending));
+        let node = NodeState {
+            missing_skills: Vec::new(),
+            skipped_skills: Vec::new(),
+            skills: None,
+            isolated_worktree: None,
+            harness: None,
+            cost: None,
+            node_id: node_id.to_string(),
+            status: head_status,
+            iter: head_iter,
+            started_at: None,
+            completed_at: None,
+            failure_reason: None,
+            skip_reason: None,
+            pruned: false,
+            iterations: iters
+                .iter()
+                .map(|(iter, status)| IterationInfo {
+                    iter: *iter,
+                    status: status.clone(),
+                    started_at: None,
+                    completed_at: None,
+                    interactive: false,
+                    completion_released: false,
+                    waited_ms: 0,
+                    open_wait_since: None,
+                })
+                .collect(),
+            frontmatter_retries: 0,
+            frontmatter_violations: Vec::new(),
+            missing_outputs: Vec::new(),
+            delivery: None,
+            awaiting: None,
+        };
+        let mut s = RunState::new("run-1".into(), "test".into());
+        s.nodes.insert(node_id.to_string(), node);
+        s
+    }
+
+    fn simple_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "test".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
+                    skills: Vec::new(),
+                    isolated_worktree: None,
+                    id: "planner".into(),
+                    name: "planner".into(),
+                    node_type: NodeType::Agent,
+                    inputs: vec![Port {
+                        name: "task".into(),
+                        port_type: PortType::Markdown,
+                        frontmatter: None,
+                        when: None,
+                        description: None,
+                        instructions: None,
+                        required: false,
+                    }],
+                    outputs: vec![Port {
+                        name: "plan".into(),
+                        port_type: PortType::Markdown,
+                        frontmatter: None,
+                        when: None,
+                        description: None,
+                        instructions: None,
+                        required: false,
+                    }],
+                    interactive: false,
+                    view: None,
+                    max_iter: None,
+                    over: None,
+                    pin_harness: None,
+                    harnesses: Default::default(),
+                    agent_choice: None,
+                    auto_fail: None,
+                    orchestrator: false,
+                    on_demand: false,
+                },
+                NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
+                    skills: Vec::new(),
+                    isolated_worktree: None,
+                    id: "implementer".into(),
+                    name: "implementer".into(),
+                    node_type: NodeType::Agent,
+                    inputs: vec![Port {
+                        name: "plan".into(),
+                        port_type: PortType::Markdown,
+                        frontmatter: None,
+                        when: None,
+                        description: None,
+                        instructions: None,
+                        required: false,
+                    }],
+                    outputs: vec![Port {
+                        name: "summary".into(),
+                        port_type: PortType::Markdown,
+                        frontmatter: None,
+                        when: None,
+                        description: None,
+                        instructions: None,
+                        required: false,
+                    }],
+                    interactive: false,
+                    view: None,
+                    max_iter: None,
+                    over: None,
+                    pin_harness: None,
+                    harnesses: Default::default(),
+                    agent_choice: None,
+                    auto_fail: None,
+                    orchestrator: false,
+                    on_demand: false,
+                },
+            ],
+            edges: vec![EdgeDef {
+                source: EdgeSource::single("planner", "plan"),
+                target: EdgeEndpoint {
+                    node: "implementer".into(),
+                    port: "plan".into(),
+                },
+                reason: None,
+                when: None,
+                is_else: false,
+                repeated: false,
+                ..Default::default()
+            }],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        }
+    }
+
+    #[test]
+    fn a_files_output_lists_every_file_and_its_consumer_gets_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let dir = artifacts.join("planner/iter-1/plan");
+        fs::create_dir_all(dir.join("nested")).unwrap();
+        fs::write(dir.join("rows.csv"), "a,b\n").unwrap();
+        fs::write(dir.join("report.pdf"), b"%PDF").unwrap();
+        let mut pipeline = simple_pipeline();
+        pipeline.nodes[0].outputs[0].port_type = PortType::Files;
+        let mut state = run_state_with("planner", &[(1, NodeStatus::Completed)]);
+
+        let io = resolve(&pipeline, &artifacts, "planner", 1, &state);
+        assert_eq!(io.outputs[0].port_type, PortType::Files);
+        let paths: Vec<&str> = io.outputs[0]
+            .files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                "planner/iter-1/plan/report.pdf",
+                "planner/iter-1/plan/rows.csv"
+            ]
+        );
+        assert_eq!(io.outputs[0].files[0].size, Some(4));
+
+        state
+            .nodes
+            .extend(run_state_with("implementer", &[(1, NodeStatus::Running)]).nodes);
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &state);
+        assert_eq!(io.inputs[0].port_type, PortType::Files);
+        let paths: Vec<&str> = io.inputs[0].files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "planner/iter-1/plan/report.pdf",
+                "planner/iter-1/plan/rows.csv"
+            ]
+        );
+    }
+
+    #[test]
+    fn simple_wire_resolves_input_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        fs::create_dir_all(&artifacts).unwrap();
+
+        let pipeline = simple_pipeline();
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &empty_run_state());
+
+        assert_eq!(io.inputs.len(), 1);
+        assert_eq!(io.inputs[0].port, "plan");
+        assert!(!io.inputs[0].repeated);
+        assert_eq!(io.inputs[0].files.len(), 1);
+        assert_eq!(io.inputs[0].files[0].path, "planner/iter-1/plan/output.md");
+        assert!(!io.inputs[0].files[0].exists);
+    }
+
+    /// An input file shows its frontmatter like the output it was: the viewer
+    /// strips the fence from the body, so a missing strip would hide the fields.
+    #[test]
+    fn input_file_carries_its_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let dir = artifacts.join("planner/iter-1/plan");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("output.md"), "---\nverdict: pass\n---\n\n# Plan").unwrap();
+
+        let pipeline = simple_pipeline();
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &empty_run_state());
+
+        let fm = io.inputs[0].files[0]
+            .frontmatter
+            .as_ref()
+            .expect("frontmatter");
+        assert_eq!(fm["verdict"], serde_json::json!("pass"));
+    }
+
+    #[test]
+    fn simple_wire_detects_existing_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let dir = artifacts.join("planner/iter-1/plan");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("output.md"), "# My plan\nDo stuff.").unwrap();
+
+        let pipeline = simple_pipeline();
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &empty_run_state());
+
+        assert!(io.inputs[0].files[0].exists);
+        assert!(io.inputs[0].files[0].size.unwrap() > 0);
+    }
+
+    #[test]
+    fn simple_wire_resolves_cross_iteration_to_latest_completed_source() {
+        // #370 regression (RED→GREEN): a consumer reading at iter-2 from a
+        // non-repeated edge whose source only ever COMPLETED at iter-1 (the
+        // textbook external-feeder / loop-member case) must resolve to the
+        // source's latest-completed iteration (iter-1), NOT its own positional
+        // iter-2 — a path that never existed. Before the fix, the simple-wire
+        // branch walked the edge on the consumer's `iter` and reported the input
+        // "missing", the one escapee of the #194/#210/#353 quarantine invariant.
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let dir = artifacts.join("planner/iter-1/plan");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("output.md"), "# Plan\nfrom the feeder's only lap").unwrap();
+
+        let pipeline = simple_pipeline();
+        let run_state = run_state_with("planner", &[(1, NodeStatus::Completed)]);
+        let io = resolve(&pipeline, &artifacts, "implementer", 2, &run_state);
+
+        assert_eq!(io.inputs.len(), 1);
+        assert_eq!(io.inputs[0].port, "plan");
+        assert!(!io.inputs[0].repeated);
+        assert_eq!(io.inputs[0].files.len(), 1);
+        assert_eq!(
+            io.inputs[0].files[0].path, "planner/iter-1/plan/output.md",
+            "resolves to the source's latest-completed iter, not the consumer's iter-2"
+        );
+        assert!(
+            io.inputs[0].files[0].exists,
+            "the feeder's iter-1 artifact exists and must be surfaced, not reported missing"
+        );
+    }
+
+    #[test]
+    fn output_port_returns_path_with_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let dir = artifacts.join("implementer/iter-1/summary");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("output.md"),
+            "---\nverdict: PASS\nscore: 9\n---\n\n## Summary\nAll good.",
+        )
+        .unwrap();
+
+        let pipeline = simple_pipeline();
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &empty_run_state());
+
+        assert_eq!(io.outputs.len(), 1);
+        assert_eq!(io.outputs[0].port, "summary");
+        assert!(io.outputs[0].files[0].exists);
+        let fm = io.outputs[0].files[0].frontmatter.as_ref().unwrap();
+        assert_eq!(fm["verdict"], serde_json::json!("PASS"));
+        assert_eq!(fm["score"], serde_json::json!(9));
+    }
+
+    #[test]
+    fn output_port_missing_file_no_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        fs::create_dir_all(&artifacts).unwrap();
+
+        let pipeline = simple_pipeline();
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &empty_run_state());
+
+        assert_eq!(io.outputs.len(), 1);
+        assert!(!io.outputs[0].files[0].exists);
+        assert!(io.outputs[0].files[0].frontmatter.is_none());
+    }
+
+    fn reviewer_cycle_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "cycle".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
+                    skills: Vec::new(),
+                    isolated_worktree: None,
+                    id: "reviewer".into(),
+                    name: "reviewer".into(),
+                    node_type: NodeType::Agent,
+                    inputs: vec![],
+                    outputs: vec![Port {
+                        name: "review".into(),
+                        port_type: PortType::Markdown,
+                        frontmatter: None,
+                        when: None,
+                        description: None,
+                        instructions: None,
+                        required: false,
+                    }],
+                    interactive: false,
+                    view: None,
+                    max_iter: None,
+                    over: None,
+                    pin_harness: None,
+                    harnesses: Default::default(),
+                    agent_choice: None,
+                    auto_fail: None,
+                    orchestrator: false,
+                    on_demand: false,
+                },
+                NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
+                    skills: Vec::new(),
+                    isolated_worktree: None,
+                    id: "implementer".into(),
+                    name: "implementer".into(),
+                    node_type: NodeType::Agent,
+                    inputs: vec![Port {
+                        name: "reviews".into(),
+                        port_type: PortType::Markdown,
+                        frontmatter: None,
+                        when: None,
+                        description: None,
+                        instructions: None,
+                        required: false,
+                    }],
+                    outputs: vec![Port {
+                        name: "code".into(),
+                        port_type: PortType::Markdown,
+                        frontmatter: None,
+                        when: None,
+                        description: None,
+                        instructions: None,
+                        required: false,
+                    }],
+                    interactive: false,
+                    view: None,
+                    max_iter: None,
+                    over: None,
+                    pin_harness: None,
+                    harnesses: Default::default(),
+                    agent_choice: None,
+                    auto_fail: None,
+                    orchestrator: false,
+                    on_demand: false,
+                },
+            ],
+            edges: vec![EdgeDef {
+                source: EdgeSource::single("reviewer", "review"),
+                target: EdgeEndpoint {
+                    node: "implementer".into(),
+                    port: "reviews".into(),
+                },
+                reason: None,
+                when: None,
+                is_else: false,
+                // `repeated` lives on the edge now (#149), not the input port.
+                repeated: true,
+                ..Default::default()
+            }],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        }
+    }
+
+    #[test]
+    fn repeated_port_glob_expansion() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+
+        for i in 1..=3 {
+            let dir = artifacts.join(format!("reviewer/iter-{i}/review"));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join("output.md"),
+                format!("---\nverdict: FAIL\n---\n\nIter {i} review"),
+            )
+            .unwrap();
+        }
+
+        let pipeline = reviewer_cycle_pipeline();
+        let run_state = run_state_with(
+            "reviewer",
+            &[
+                (1, NodeStatus::Completed),
+                (2, NodeStatus::Completed),
+                (3, NodeStatus::Completed),
+            ],
+        );
+        let io = resolve(&pipeline, &artifacts, "implementer", 4, &run_state);
+
+        assert_eq!(io.inputs.len(), 1);
+        assert!(io.inputs[0].repeated);
+        assert_eq!(io.inputs[0].files.len(), 3);
+        assert_eq!(
+            io.inputs[0].files[0].path,
+            "reviewer/iter-1/review/output.md"
+        );
+        assert_eq!(
+            io.inputs[0].files[1].path,
+            "reviewer/iter-2/review/output.md"
+        );
+        assert_eq!(
+            io.inputs[0].files[2].path,
+            "reviewer/iter-3/review/output.md"
+        );
+    }
+
+    #[test]
+    fn repeated_pool_excludes_a_failed_iteration_on_disk() {
+        // #353 acceptance regression: iter-1, iter-2, iter-3 all wrote an
+        // output.md on disk, but the projection marks iter-2 FAILED. The pool
+        // must be iter-1 + iter-3 only — the failed iter's artifact is
+        // quarantined even though it sits right there on disk. This is the test
+        // that fails before the fix (the raw glob returned all three).
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        for i in 1..=3 {
+            let dir = artifacts.join(format!("reviewer/iter-{i}/review"));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("output.md"), format!("Iter {i} review")).unwrap();
+        }
+
+        let pipeline = reviewer_cycle_pipeline();
+        let run_state = run_state_with(
+            "reviewer",
+            &[
+                (1, NodeStatus::Completed),
+                (2, NodeStatus::Failed),
+                (3, NodeStatus::Completed),
+            ],
+        );
+        let io = resolve(&pipeline, &artifacts, "implementer", 4, &run_state);
+
+        assert_eq!(io.inputs.len(), 1);
+        assert!(io.inputs[0].repeated);
+        assert_eq!(
+            io.inputs[0].files.len(),
+            2,
+            "the failed iter-2 is quarantined despite being on disk"
+        );
+        assert_eq!(
+            io.inputs[0].files[0].path,
+            "reviewer/iter-1/review/output.md"
+        );
+        assert_eq!(
+            io.inputs[0].files[1].path,
+            "reviewer/iter-3/review/output.md"
+        );
+    }
+
+    #[test]
+    fn entry_node_with_no_edges_gets_input_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let input_dir = artifacts.join("_input");
+        fs::create_dir_all(&input_dir).unwrap();
+        fs::write(input_dir.join("output.md"), "Do the thing").unwrap();
+
+        let pipeline = simple_pipeline();
+        let io = resolve(&pipeline, &artifacts, "planner", 1, &empty_run_state());
+
+        assert_eq!(io.inputs.len(), 1);
+        assert_eq!(io.inputs[0].port, "task");
+        assert_eq!(io.inputs[0].files.len(), 1);
+        assert_eq!(io.inputs[0].files[0].path, "_input/output.md");
+        assert!(io.inputs[0].files[0].exists);
+    }
+
+    #[test]
+    fn entry_node_input_exposes_non_image_attachments() {
+        // #779: the files uploaded with the run ride on the entry node's input
+        // port after the prompt; images do not (they have their own surface).
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let input_dir = artifacts.join("_input");
+        fs::create_dir_all(&input_dir).unwrap();
+        fs::write(input_dir.join("output.md"), "Do the thing").unwrap();
+        fs::write(input_dir.join("SPEC-779.md"), "# spec").unwrap();
+        fs::write(input_dir.join("fixtures.json"), "{}").unwrap();
+        fs::write(input_dir.join("proto.png"), b"\x89PNG").unwrap();
+
+        let pipeline = simple_pipeline();
+        let io = resolve(&pipeline, &artifacts, "planner", 1, &empty_run_state());
+
+        let paths: Vec<&str> = io.inputs[0].files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "_input/output.md",
+                "_input/SPEC-779.md",
+                "_input/fixtures.json"
+            ]
+        );
+        assert!(io.inputs[0].files.iter().all(|f| f.exists));
+    }
+
+    #[test]
+    fn multi_fan_in_two_sources_for_one_port() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+
+        let pipeline = PipelineDef {
+            name: "fan-in".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
+                    skills: Vec::new(),
+                    isolated_worktree: None,
+                    id: "a".into(),
+                    name: "a".into(),
+                    node_type: NodeType::Agent,
+                    inputs: vec![],
+                    outputs: vec![Port {
+                        name: "out".into(),
+                        port_type: PortType::Markdown,
+                        frontmatter: None,
+                        when: None,
+                        description: None,
+                        instructions: None,
+                        required: false,
+                    }],
+                    interactive: false,
+                    view: None,
+                    max_iter: None,
+                    over: None,
+                    pin_harness: None,
+                    harnesses: Default::default(),
+                    agent_choice: None,
+                    auto_fail: None,
+                    orchestrator: false,
+                    on_demand: false,
+                },
+                NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
+                    skills: Vec::new(),
+                    isolated_worktree: None,
+                    id: "b".into(),
+                    name: "b".into(),
+                    node_type: NodeType::Agent,
+                    inputs: vec![],
+                    outputs: vec![Port {
+                        name: "out".into(),
+                        port_type: PortType::Markdown,
+                        frontmatter: None,
+                        when: None,
+                        description: None,
+                        instructions: None,
+                        required: false,
+                    }],
+                    interactive: false,
+                    view: None,
+                    max_iter: None,
+                    over: None,
+                    pin_harness: None,
+                    harnesses: Default::default(),
+                    agent_choice: None,
+                    auto_fail: None,
+                    orchestrator: false,
+                    on_demand: false,
+                },
+                NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
+                    skills: Vec::new(),
+                    isolated_worktree: None,
+                    id: "merger".into(),
+                    name: "merger".into(),
+                    node_type: NodeType::Agent,
+                    inputs: vec![Port {
+                        name: "docs".into(),
+                        port_type: PortType::Markdown,
+                        frontmatter: None,
+                        when: None,
+                        description: None,
+                        instructions: None,
+                        required: false,
+                    }],
+                    outputs: vec![],
+                    interactive: false,
+                    view: None,
+                    max_iter: None,
+                    over: None,
+                    pin_harness: None,
+                    harnesses: Default::default(),
+                    agent_choice: None,
+                    auto_fail: None,
+                    orchestrator: false,
+                    on_demand: false,
+                },
+            ],
+            edges: vec![
+                EdgeDef {
+                    source: EdgeSource::single("a", "out"),
+                    target: EdgeEndpoint {
+                        node: "merger".into(),
+                        port: "docs".into(),
+                    },
+                    reason: None,
+                    when: None,
+                    is_else: false,
+                    repeated: false,
+                    ..Default::default()
+                },
+                EdgeDef {
+                    source: EdgeSource::single("b", "out"),
+                    target: EdgeEndpoint {
+                        node: "merger".into(),
+                        port: "docs".into(),
+                    },
+                    reason: None,
+                    when: None,
+                    is_else: false,
+                    repeated: false,
+                    ..Default::default()
+                },
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        for dir_name in ["a", "b"] {
+            let dir = artifacts.join(format!("{dir_name}/iter-1/out"));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("output.md"), format!("from {dir_name}")).unwrap();
+        }
+
+        let io = resolve(&pipeline, &artifacts, "merger", 1, &empty_run_state());
+
+        assert_eq!(io.inputs.len(), 1);
+        assert_eq!(io.inputs[0].port, "docs");
+        assert_eq!(io.inputs[0].files.len(), 2);
+        assert!(io.inputs[0].files.iter().all(|f| f.exists));
+    }
+
+    #[test]
+    fn emergent_input_derived_from_edge_when_node_declares_none() {
+        // #149: inputs are emergent — derived from incoming edges, not declared.
+        // The target node has NO declared inputs; the resolver still surfaces one
+        // input, named after the target endpoint (which inherits the source name).
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let dir = artifacts.join("planner/iter-1/plan");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("output.md"), "# Plan").unwrap();
+
+        let pipeline = PipelineDef {
+            name: "emergent".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
+                    skills: Vec::new(),
+                    isolated_worktree: None,
+                    id: "planner".into(),
+                    name: "planner".into(),
+                    node_type: NodeType::Agent,
+                    inputs: vec![],
+                    outputs: vec![Port {
+                        name: "plan".into(),
+                        port_type: PortType::Markdown,
+                        frontmatter: None,
+                        when: None,
+                        description: None,
+                        instructions: None,
+                        required: false,
+                    }],
+                    interactive: false,
+                    view: None,
+                    max_iter: None,
+                    over: None,
+                    pin_harness: None,
+                    harnesses: Default::default(),
+                    agent_choice: None,
+                    auto_fail: None,
+                    orchestrator: false,
+                    on_demand: false,
+                },
+                NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
+                    skills: Vec::new(),
+                    isolated_worktree: None,
+                    id: "implementer".into(),
+                    name: "implementer".into(),
+                    node_type: NodeType::Agent,
+                    // Declares NO inputs — the input is emergent.
+                    inputs: vec![],
+                    outputs: vec![],
+                    interactive: false,
+                    view: None,
+                    max_iter: None,
+                    over: None,
+                    pin_harness: None,
+                    harnesses: Default::default(),
+                    agent_choice: None,
+                    auto_fail: None,
+                    orchestrator: false,
+                    on_demand: false,
+                },
+            ],
+            edges: vec![EdgeDef {
+                source: EdgeSource::single("planner", "plan"),
+                target: EdgeEndpoint {
+                    node: "implementer".into(),
+                    port: "plan".into(),
+                },
+                reason: None,
+                when: None,
+                is_else: false,
+                repeated: false,
+                ..Default::default()
+            }],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &empty_run_state());
+
+        assert_eq!(io.inputs.len(), 1);
+        assert_eq!(io.inputs[0].port, "plan");
+        assert!(!io.inputs[0].repeated);
+        assert_eq!(io.inputs[0].files.len(), 1);
+        assert_eq!(io.inputs[0].files[0].path, "planner/iter-1/plan/output.md");
+        assert!(io.inputs[0].files[0].exists);
+    }
+
+    #[test]
+    fn same_named_edges_pool_into_one_list_input() {
+        // #149: two incoming edges with the SAME target name pool into a single
+        // logical list input. The target node declares no inputs at all.
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        for src in ["a", "b"] {
+            let dir = artifacts.join(format!("{src}/iter-1/plan"));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("output.md"), format!("plan from {src}")).unwrap();
+        }
+
+        let mk_node = |id: &str, has_out: bool| NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
+            skills: Vec::new(),
+            isolated_worktree: None,
+            id: id.into(),
+            name: id.into(),
+            node_type: NodeType::Agent,
+            inputs: vec![],
+            outputs: if has_out {
+                vec![Port {
+                    name: "plan".into(),
+                    port_type: PortType::Markdown,
+                    frontmatter: None,
+                    when: None,
+                    description: None,
+                    instructions: None,
+                    required: false,
+                }]
+            } else {
+                vec![]
+            },
+            interactive: false,
+            view: None,
+            max_iter: None,
+            over: None,
+            pin_harness: None,
+            harnesses: Default::default(),
+            agent_choice: None,
+            auto_fail: None,
+            orchestrator: false,
+            on_demand: false,
+        };
+        let mk_edge = |src: &str| EdgeDef {
+            source: EdgeSource::single(src, "plan"),
+            target: EdgeEndpoint {
+                node: "sink".into(),
+                port: "plan".into(),
+            },
+            reason: None,
+            when: None,
+            is_else: false,
+            repeated: false,
+            ..Default::default()
+        };
+
+        let pipeline = PipelineDef {
+            name: "pool".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                mk_node("a", true),
+                mk_node("b", true),
+                mk_node("sink", false),
+            ],
+            edges: vec![mk_edge("a"), mk_edge("b")],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let io = resolve(&pipeline, &artifacts, "sink", 1, &empty_run_state());
+
+        assert_eq!(io.inputs.len(), 1);
+        assert_eq!(io.inputs[0].port, "plan");
+        assert!(
+            io.inputs[0].repeated,
+            "pooled same-name edges become a list input"
+        );
+        assert_eq!(io.inputs[0].files.len(), 2);
+        assert!(io.inputs[0].files.iter().all(|f| f.exists));
+    }
+
+    #[test]
+    fn distinct_named_edges_stay_separate_inputs() {
+        // #149: two incoming edges with DISTINCT target names are two separate
+        // emergent inputs (no pooling). Order follows edge declaration order.
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        for (src, port) in [("planner", "plan"), ("designer", "spec")] {
+            let dir = artifacts.join(format!("{src}/iter-1/{port}"));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("output.md"), format!("{port} from {src}")).unwrap();
+        }
+
+        let mk_node = |id: &str, out: Option<&str>| NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
+            skills: Vec::new(),
+            isolated_worktree: None,
+            id: id.into(),
+            name: id.into(),
+            node_type: NodeType::Agent,
+            inputs: vec![],
+            outputs: out
+                .map(|o| {
+                    vec![Port {
+                        name: o.into(),
+                        port_type: PortType::Markdown,
+                        frontmatter: None,
+                        when: None,
+                        description: None,
+                        instructions: None,
+                        required: false,
+                    }]
+                })
+                .unwrap_or_default(),
+            interactive: false,
+            view: None,
+            max_iter: None,
+            over: None,
+            pin_harness: None,
+            harnesses: Default::default(),
+            agent_choice: None,
+            auto_fail: None,
+            orchestrator: false,
+            on_demand: false,
+        };
+        let mk_edge = |src: &str, port: &str| EdgeDef {
+            source: EdgeSource::single(src, port),
+            target: EdgeEndpoint {
+                node: "sink".into(),
+                port: port.into(),
+            },
+            reason: None,
+            when: None,
+            is_else: false,
+            repeated: false,
+            ..Default::default()
+        };
+
+        let pipeline = PipelineDef {
+            name: "distinct".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                mk_node("planner", Some("plan")),
+                mk_node("designer", Some("spec")),
+                mk_node("sink", None),
+            ],
+            edges: vec![mk_edge("planner", "plan"), mk_edge("designer", "spec")],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let io = resolve(&pipeline, &artifacts, "sink", 1, &empty_run_state());
+
+        assert_eq!(io.inputs.len(), 2);
+        assert_eq!(io.inputs[0].port, "plan");
+        assert_eq!(io.inputs[1].port, "spec");
+        assert!(!io.inputs[0].repeated);
+        assert!(!io.inputs[1].repeated);
+        assert_eq!(io.inputs[0].files.len(), 1);
+        assert_eq!(io.inputs[1].files.len(), 1);
+    }
+
+    /// `itemizer` (a `kind: collection` region) and `fallback` (its branch not
+    /// taken) both feed `summarizer`'s `notes` — the convergence of HP-02.
+    const COLLECTION_CONVERGENCE: &str = r#"
+name: collection-convergence
+nodes:
+  - { id: start, name: Start, type: start, outputs: [{ name: user_prompt }] }
+  - { id: itemizer, name: itemizer, type: agent, outputs: [{ name: item_note }] }
+  - { id: fallback, name: fallback, type: agent, outputs: [{ name: note }] }
+  - { id: summarizer, name: summarizer, type: agent, outputs: [{ name: summary }] }
+  - { id: end, name: End, type: end, inputs: [{ name: result }] }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: itemizer, port: task }
+  - source: { node: itemizer, port: item_note }
+    target: { node: summarizer, port: notes }
+  - source: { node: fallback, port: note }
+    target: { node: summarizer, port: notes }
+  - source: { node: summarizer, port: summary }
+    target: { node: end, port: result }
+loops:
+  - { id: topics_fanout, kind: collection, over: topics, members: [itemizer] }
+"#;
+
+    #[test]
+    fn a_collection_hands_every_lap_to_its_convergence_in_item_order() {
+        // CORE-240 F2-2: `notes` held lap 2 only (plus the empty output of the
+        // branch not taken); lap 1 was lost.
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        for (lap, item) in [(1, "alpha"), (2, "beta")] {
+            let dir = artifacts.join(format!("itemizer/iter-{lap}/item_note"));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("output.md"), item).unwrap();
+        }
+        let pipeline = pdo_pipeline::domain::pipeline::parse_pipeline(COLLECTION_CONVERGENCE)
+            .unwrap()
+            .pipeline;
+        let mut run_state = run_state_with(
+            "itemizer",
+            &[(2, NodeStatus::Completed), (1, NodeStatus::Completed)],
+        );
+        let mut fallback = run_state_with("fallback", &[(1, NodeStatus::Skipped)])
+            .nodes
+            .remove("fallback")
+            .unwrap();
+        fallback.pruned = true;
+        run_state.nodes.insert("fallback".into(), fallback);
+
+        let io = resolve(&pipeline, &artifacts, "summarizer", 1, &run_state);
+
+        assert_eq!(io.inputs.len(), 1, "{:?}", io.inputs);
+        assert_eq!(io.inputs[0].port, "notes");
+        assert!(io.inputs[0].repeated, "a grouped input is a list");
+        let paths: Vec<&str> = io.inputs[0].files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "itemizer/iter-1/item_note/output.md",
+                "itemizer/iter-2/item_note/output.md",
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_node_returns_empty_io() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        fs::create_dir_all(&artifacts).unwrap();
+
+        let pipeline = simple_pipeline();
+        let io = resolve(&pipeline, &artifacts, "nonexistent", 1, &empty_run_state());
+
+        assert!(io.inputs.is_empty());
+        assert!(io.outputs.is_empty());
+    }
+
+    fn html_output_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "html-test".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![NodeDef {
+                free_live_artifacts: false,
+                live_artifacts: Vec::new(),
+                skills: Vec::new(),
+                isolated_worktree: None,
+                id: "designer".into(),
+                name: "designer".into(),
+                node_type: NodeType::Agent,
+                inputs: vec![],
+                outputs: vec![Port {
+                    name: "report".into(),
+                    port_type: PortType::Html,
+                    frontmatter: None,
+                    when: None,
+                    description: None,
+                    instructions: None,
+                    required: false,
+                }],
+                interactive: false,
+                view: None,
+                max_iter: None,
+                over: None,
+                pin_harness: None,
+                harnesses: Default::default(),
+                agent_choice: None,
+                auto_fail: None,
+                orchestrator: false,
+                on_demand: false,
+            }],
+            edges: Vec::new(),
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        }
+    }
+
+    #[test]
+    fn html_output_port_lists_output_html_with_html_type() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let dir = artifacts.join("designer/iter-1/report");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("output.html"), "<h1>Report</h1>").unwrap();
+
+        let pipeline = html_output_pipeline();
+        let io = resolve(&pipeline, &artifacts, "designer", 1, &empty_run_state());
+
+        assert_eq!(io.outputs.len(), 1);
+        assert_eq!(io.outputs[0].port, "report");
+        assert_eq!(io.outputs[0].port_type, PortType::Html);
+        assert_eq!(io.outputs[0].files.len(), 1);
+        assert_eq!(
+            io.outputs[0].files[0].path,
+            "designer/iter-1/report/output.html"
+        );
+        assert!(io.outputs[0].files[0].exists);
+        assert!(io.outputs[0].files[0].frontmatter.is_none());
+    }
+
+    #[test]
+    fn html_output_port_missing_file_reports_output_html_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        fs::create_dir_all(&artifacts).unwrap();
+
+        let pipeline = html_output_pipeline();
+        let io = resolve(&pipeline, &artifacts, "designer", 1, &empty_run_state());
+
+        assert_eq!(io.outputs.len(), 1);
+        assert_eq!(
+            io.outputs[0].files[0].path,
+            "designer/iter-1/report/output.html"
+        );
+        assert!(!io.outputs[0].files[0].exists);
+    }
+
+    /// #796: an output file with a `started_at` for `iter` in the past stays
+    /// unflagged (written by THIS execution); the same file with a `started_at`
+    /// in the future is `inherited` — it predates the session it is shown under.
+    #[test]
+    fn output_older_than_the_iteration_start_is_inherited() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let dir = artifacts.join("implementer/iter-1/summary");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("output.md"), "---\nverdict: PASS\n---\n\nold").unwrap();
+        let pipeline = simple_pipeline();
+
+        let mut fresh = run_state_with("implementer", &[(1, NodeStatus::Running)]);
+        fresh.nodes.get_mut("implementer").unwrap().iterations[0].started_at =
+            Some("2000-01-01T00:00:00.000Z".into());
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &fresh);
+        assert!(io.outputs[0].files[0].exists);
+        assert!(!io.outputs[0].files[0].inherited, "written after the start");
+
+        let mut respawned = run_state_with("implementer", &[(1, NodeStatus::Running)]);
+        respawned.nodes.get_mut("implementer").unwrap().iterations[0].started_at =
+            Some("2999-01-01T00:00:00.000Z".into());
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &respawned);
+        assert!(io.outputs[0].files[0].exists);
+        assert!(
+            io.outputs[0].files[0].inherited,
+            "on disk before the session started"
+        );
+        // The frontmatter is still returned — flagged, not hidden.
+        assert!(io.outputs[0].files[0].frontmatter.is_some());
+    }
+
+    /// #796: a node that never started (a fresh child run whose worktree carries a
+    /// previous run's artifacts through git) compares against the RUN's start.
+    #[test]
+    fn output_older_than_the_run_is_inherited_when_the_node_never_started() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let dir = artifacts.join("implementer/iter-1/summary");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("output.md"), "stale").unwrap();
+        let pipeline = simple_pipeline();
+
+        let mut state = empty_run_state();
+        state.started_at = Some("2999-01-01T00:00:00.000Z".into());
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &state);
+        assert!(io.outputs[0].files[0].inherited);
+
+        // No timing at all → no flag, wire unchanged.
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &empty_run_state());
+        assert!(!io.outputs[0].files[0].inherited);
+        let json = serde_json::to_value(&io.outputs[0].files[0]).unwrap();
+        assert!(json.get("inherited").is_none(), "absent when false: {json}");
+    }
+
+    /// #796: a git-tracked artifact came in with the checkout — inherited even
+    /// when its mtime is AFTER every start on record (the checkout happens a few
+    /// ms after the run record starts), and even with no timing at all. An
+    /// untracked sibling written by this session stays unflagged.
+    #[test]
+    fn git_tracked_output_is_inherited_whatever_its_mtime() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(repo)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+        };
+        git(&["init", "-q"]);
+        git(&[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "root",
+        ]);
+        let artifacts = repo.join(".pdo/artifacts");
+        let dir = artifacts.join("implementer/iter-1/summary");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("output.md"),
+            "---\nverdict: PASS\n---\n\nother ticket",
+        )
+        .unwrap();
+        git(&["add", "-f", ".pdo/artifacts"]);
+        git(&[
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "-m",
+            "stale",
+        ]);
+
+        let pipeline = simple_pipeline();
+        // Iteration started AFTER the file was written: the mtime gate alone says
+        // "this execution's work"; git says otherwise.
+        let mut state = run_state_with("implementer", &[(1, NodeStatus::Running)]);
+        state.nodes.get_mut("implementer").unwrap().iterations[0].started_at =
+            Some("2000-01-01T00:00:00.000Z".into());
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &state);
+        assert!(io.outputs[0].files[0].inherited, "tracked ⇒ inherited");
+
+        // No timing at all: git is the only signal, still enough.
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &empty_run_state());
+        assert!(io.outputs[0].files[0].inherited);
+
+        // An untracked image written next to it now is this session's work.
+        let tracked = git_tracked_paths(&artifacts, "implementer", 1);
+        assert_eq!(tracked.len(), 1);
+        assert!(tracked.contains(&dir.join("output.md")));
+        assert!(!is_inherited(&dir.join("fresh.png"), None, &tracked));
+        assert!(git_tracked_paths(&artifacts, "implementer", 2).is_empty());
+
+        // FP1d: THIS execution rewrites the tracked path (every run of a
+        // pipeline reuses the same port path). `ls-files` still names it, but
+        // the working copy is modified: git no longer says "came with the
+        // checkout", and the mtime gate (written after the iteration start)
+        // says "this execution's result".
+        fs::write(
+            dir.join("output.md"),
+            "---\nverdict: PASS\n---\n\nTHIS run's report",
+        )
+        .unwrap();
+        assert!(
+            git_tracked_paths(&artifacts, "implementer", 1).is_empty(),
+            "a modified tracked file is not inherited by construction"
+        );
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &state);
+        assert!(!io.outputs[0].files[0].inherited, "rewritten ⇒ own result");
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &empty_run_state());
+        assert!(
+            !io.outputs[0].files[0].inherited,
+            "no timing, modified ⇒ own"
+        );
+
+        // Deleted by this execution: nothing to flag, nothing to list as tracked.
+        fs::remove_file(dir.join("output.md")).unwrap();
+        assert!(git_tracked_paths(&artifacts, "implementer", 1).is_empty());
+    }
+
+    /// #796: image ports are flagged file by file, and a missing file never is.
+    #[test]
+    fn inherited_images_are_flagged_and_missing_files_are_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let dir = artifacts.join("implementer/iter-1/summary");
+        fs::create_dir_all(&dir).unwrap();
+        let pipeline = simple_pipeline();
+        let mut state = run_state_with("implementer", &[(1, NodeStatus::Running)]);
+        state.nodes.get_mut("implementer").unwrap().iterations[0].started_at =
+            Some("2999-01-01T00:00:00.000Z".into());
+
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &state);
+        assert!(!io.outputs[0].files[0].exists);
+        assert!(!io.outputs[0].files[0].inherited);
+
+        let img_dir = artifacts.join("capturer/iter-1/shots");
+        fs::create_dir_all(&img_dir).unwrap();
+        fs::write(img_dir.join("a.png"), b"png").unwrap();
+        let mut pipeline = simple_pipeline();
+        pipeline.nodes[1].id = "capturer".into();
+        pipeline.nodes[1].outputs[0].name = "shots".into();
+        pipeline.nodes[1].outputs[0].port_type = PortType::ImageList;
+        let mut state = run_state_with("capturer", &[(1, NodeStatus::Running)]);
+        state.nodes.get_mut("capturer").unwrap().iterations[0].started_at =
+            Some("2999-01-01T00:00:00.000Z".into());
+        let io = resolve(&pipeline, &artifacts, "capturer", 1, &state);
+        assert_eq!(io.outputs[0].files.len(), 1);
+        assert!(io.outputs[0].files[0].inherited);
+    }
+}

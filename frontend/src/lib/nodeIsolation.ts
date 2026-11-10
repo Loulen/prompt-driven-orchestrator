@@ -1,4 +1,5 @@
-import type { NodeDef, NodeType } from "../types";
+import type { NodeType } from "../shared/generated/NodeType";
+import type { EditorNodeDef } from "../pipeline/model/pipeline";
 
 /**
  * #653 / ADR-0060 — the one owner of "where does this node work?" on the client.
@@ -19,6 +20,9 @@ import type { NodeDef, NodeType } from "../types";
 const DEFAULT_ISOLATION: Record<NodeType, boolean | null> = {
   agent: true,
   script: false,
+  // Legacy structural types, soft-warned by the daemon: no worktree either.
+  switch: null,
+  loop: null,
   start: null,
   end: null,
 };
@@ -39,14 +43,22 @@ export const WORKSPACE_CHOICES = [
   {
     isolated: true,
     label: "Isolated worktree",
+    /** What its button in the inspector's segmented control reads. */
+    button: "Isolated",
     hint: "a sub-worktree of the Node's own",
   },
   {
     isolated: false,
     label: "Run worktree",
+    button: "Shared",
     hint: "shared with the whole Run",
   },
 ] as const;
+
+/** What the inspector's button for a workspace reads — the word a tour names. */
+export function workspaceButton(isolated: boolean): string {
+  return WORKSPACE_CHOICES.find((c) => c.isolated === isolated)!.button;
+}
 
 /** The label for a workspace, for a surface too small to show both choices. */
 export function workspaceLabel(isolated: boolean): string {
@@ -76,7 +88,7 @@ export function resolveIsolation(
  * A node's isolation as the document states it, falling back to its type's
  * default.
  */
-export function nodeIsolation(node: NodeDef): boolean | null {
+export function nodeIsolation(node: EditorNodeDef): boolean | null {
   return resolveIsolation(node.type, node.isolated_worktree);
 }
 
@@ -84,7 +96,7 @@ export function nodeIsolation(node: NodeDef): boolean | null {
  * Whether a node's NodeRun forks a worktree of its own — the canvas marker's
  * predicate. A type that carries no isolation reads `false`.
  */
-export function isNodeIsolated(node: NodeDef): boolean {
+export function isNodeIsolated(node: EditorNodeDef): boolean {
   return nodeIsolation(node) === true;
 }
 

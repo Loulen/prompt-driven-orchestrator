@@ -1,0 +1,65 @@
+[package]
+# The `run` bounded context (ADR-0079): a Run's events and their projection,
+# the rules a Run follows (graph, loops, routing, conditions, transitions,
+# admission, verdicts, the scheduler's evaluators), the event store behind a
+# port, the scheduler and the node lifecycle, the node routes, the Pipeline
+# Manager's commands and the agent CLI. Hexagonal inside: `domain/`,
+# `application/` (ports + one use case per file), `adapters/`.
+name = "pdo-run"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "PDO's run context: a Run's events, their projection, the rules a Run follows, and its event store"
+publish = false
+autotests = false
+
+[lib]
+name = "pdo_run"
+path = "src/lib.rs"
+
+[dependencies]
+pdo-kernel.workspace = true
+# `ts`: the Actor a Run and a Trigger carry (API 0.8) is part of their DTOs.
+pdo-extension-api = { workspace = true, features = ["ts"] }
+pdo-harness.workspace = true
+pdo-pipeline.workspace = true
+pdo-sandbox.workspace = true
+pdo-session.workspace = true
+pdo-skill.workspace = true
+pdo-workspace.workspace = true
+pdo-platform.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+axum.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+ts-rs.workspace = true
+uuid.workspace = true
+futures-util = "0.3"
+libc = "0.2"
+reqwest.workspace = true
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[[test]]
+name = "use_cases"
+path = "tests/use_cases/main.rs"
+
+[[test]]
+name = "lifecycle"
+path = "tests/lifecycle/main.rs"
+
+[dev-dependencies]
+pdo-extension-api.workspace = true
+pretty_assertions.workspace = true
+tempfile.workspace = true
+filetime = "0.2"
+tower = { version = "0.5", features = ["util"] }
+tokio-tungstenite = "0.26"

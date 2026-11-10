@@ -1,0 +1,194 @@
+import { useState } from "react";
+import type { NodeType } from "../../shared/generated/NodeType";
+import { parseNodeYaml } from "../api/library";
+import { libraryPortToPortDef } from "../model/library";
+import { useEditStore } from "../store/editStore";
+import { generateNodeId } from "../../lib/nanoid";
+import { foldHarnessOntoNode } from "../../harness/model/nodeHarness";
+import type { EditorNodeDef } from "../model/pipeline";
+
+/**
+ * Add a node to the canvas from YAML (#345): paste a node definition OR upload a
+ * `.yaml`, validated by the daemon (`POST /nodes/parse`), then instantiated as a
+ * fresh, disconnected node — a new id, placed at the drop position, selected —
+ * exactly like Duplicate / a library insert. NOT called "import" (that term is
+ * reserved for the lossy foreign-workflow decompiler, ADR-0016).
+ *
+ * Two-channel result idiom, verbatim from `ImportWorkflowModal`: a red `error`
+ * box for hard failures (blocks, modal stays open, NO node created) and an amber
+ * `warnings` list for soft losses (node created, "Done"). The YAML is only ever
+ * rendered inside a `<textarea>` as plain text — no markdown/HTML (ADR-0013/0018).
+ */
+export default function AddNodeFromYamlModal({
+  getDropPosition,
+  onClose,
+}: {
+  getDropPosition: () => { x: number; y: number };
+  onClose: () => void;
+}) {
+  const [yaml, setYaml] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<string[] | null>(null);
+  const addNode = useEditStore((s) => s.addNode);
+  const updatePrompt = useEditStore((s) => s.updatePrompt);
+  const setSelection = useEditStore((s) => s.setSelection);
+
+  async function handleFile(file: File | null) {
+    setError(null);
+    setWarnings(null);
+    if (!file) return;
+    // The `.yaml` is read client-side and its text drops straight into the
+    // textarea — the same single value feeds paste and upload (nothing is sent
+    // until Submit), so the user can review/edit before creating the node.
+    setYaml(await file.text());
+  }
+
+  async function handleSubmit() {
+    if (!yaml.trim() || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    setWarnings(null);
+    try {
+      const result = await parseNodeYaml(yaml);
+      // Mirror LibraryDropdown.handleAdd: fresh id, drop-position, addNode
+      // (snapshots undo in one step), then the prompt sidecar. Cast covers the
+      // legacy `switch`/`loop` the TS union omits (soft-warned by the daemon).
+      const newId = generateNodeId();
+      // #616 (correctif 7): carry the pinned harness and per-harness map, then fold
+      // the resolved harness's entry onto the flat model/effort view — so an
+      // imported node keeps its pin and every harness's settings instead of
+      // re-homing them onto `claude`.
+      const node: EditorNodeDef = foldHarnessOntoNode({
+        id: newId,
+        name: result.spec.name,
+        type: result.spec.type as NodeType,
+        inputs: result.spec.inputs.map((p) => libraryPortToPortDef(p)),
+        outputs: result.spec.outputs.map((p) => libraryPortToPortDef(p)),
+        interactive: result.spec.interactive,
+        // #653/ADR-0060: carry the pasted node's workspace through. Dropping it
+        // would silently fork a sub-worktree for a node that opted out.
+        isolated_worktree: result.spec.isolated_worktree ?? null,
+        // ADR-0086: a pasted on-demand node stays on demand.
+        on_demand: result.spec.on_demand ?? false,
+        // ADR-0089: and its live artifacts.
+        live_artifacts: result.spec.live_artifacts ?? [],
+        free_live_artifacts: result.spec.free_live_artifacts ?? false,
+        pin_harness: result.spec.pin_harness ?? null,
+        harnesses: result.spec.harnesses ?? undefined,
+        // Fallback flat values (a legacy library/export with no `harnesses` map);
+        // `foldHarnessOntoNode` overwrites these when the map carries the resolved
+        // harness's entry.
+        model: result.spec.model ?? null,
+        effort: result.spec.effort ?? null,
+        view: getDropPosition(),
+      });
+      addNode(node);
+      updatePrompt(newId, result.prompt);
+      setSelection({ kind: "node", id: newId });
+
+      const w = result.warnings ?? [];
+      if (w.length > 0) {
+        // Node created, but surface the soft losses (ADR-0001) before closing.
+        setWarnings(w);
+      } else {
+        onClose();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
+      data-testid="add-node-yaml-backdrop"
+      onClick={onClose}
+    >
+      <div
+        className="w-[440px] max-w-[calc(90vw/var(--app-zoom,1))] rounded-lg border border-line bg-surface-2 p-4 text-sm"
+        data-testid="add-node-yaml-modal"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-1 font-medium text-text">Add node from YAML</div>
+        <p className="mb-3 text-text-3 text-xs">
+          Paste a node definition or load a <code>.yaml</code> file. It is
+          validated by the daemon, then added to the canvas with a fresh id and
+          no edges — like a duplicate.
+        </p>
+
+        <label className="mb-1 block text-text-3 text-xs">
+          Node YAML
+        </label>
+        <textarea
+          value={yaml}
+          onChange={(e) => {
+            setYaml(e.target.value);
+            setError(null);
+            setWarnings(null);
+          }}
+          disabled={warnings != null}
+          placeholder={"name: My node\ntype: agent\nisolated_worktree: false\nprompt: |\n  ..."}
+          data-testid="add-node-yaml-textarea"
+          className="mb-2 h-40 w-full resize-y rounded border border-line-strong bg-surface-2 px-2 py-1.5 font-mono text-text outline-none focus:border-primary disabled:opacity-60 text-xs" style={{ lineHeight: "1.5" }}
+        />
+
+        <input
+          type="file"
+          accept=".yaml,.yml"
+          data-testid="add-node-yaml-file"
+          disabled={warnings != null}
+          onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
+          className="mb-3 w-full rounded border border-line-strong bg-surface-2 px-2 py-1.5 text-text outline-none file:mr-2 file:rounded file:border-0 file:bg-surface-2 file:px-2 file:py-0.5 file:text-text-3"
+        />
+
+        {error && (
+          <div
+            className="mb-3 rounded border border-st-failed/40 bg-st-failed/10 px-2 py-1.5 text-st-failed text-xs"
+            data-testid="add-node-yaml-error"
+          >
+            {error}
+          </div>
+        )}
+
+        {warnings && (
+          <div
+            className="mb-3 max-h-40 overflow-y-auto rounded border border-st-await/40 bg-st-await/10 px-2 py-1.5 text-text-2 text-xs"
+            data-testid="add-node-yaml-warnings"
+          >
+            <div className="mb-1 font-medium text-st-await">
+              Node added with {warnings.length} warning
+              {warnings.length === 1 ? "" : "s"}:
+            </div>
+            <ul className="list-disc pl-4">
+              {warnings.map((w, i) => (
+                <li key={i}>{w}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="rounded border border-line-strong bg-surface-2 px-3 py-1 text-text-3 transition-colors hover:text-text"
+          >
+            {warnings ? "Done" : "Cancel"}
+          </button>
+          {!warnings && (
+            <button
+              onClick={handleSubmit}
+              disabled={!yaml.trim() || submitting}
+              data-testid="add-node-yaml-submit"
+              className="rounded bg-primary px-3 py-1 font-medium text-surface-0 transition-colors hover:bg-primary-hi disabled:opacity-50"
+            >
+              {submitting ? "Adding…" : "Add node"}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

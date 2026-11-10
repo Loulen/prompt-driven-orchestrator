@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import * as os from "node:os";
 import { expectNonZeroBBox } from "./assertions";
 import { runMultipart } from "./helpers";
 
@@ -9,15 +9,15 @@ import { runMultipart } from "./helpers";
 // Verifies: selecting the Run start node shows the StartInspector with header,
 // runtime badge, input text inline, and "View as markdown" link opening modal.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-start-node-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
 // Post-refonte the daemon refuses to load (and therefore to run) a pipeline
-// without exactly one start + one end node (crates/pdo-daemon/src/pipeline.rs
+// without exactly one start + one end node (crates/pdo-pipeline/src/domain/pipeline/
 // ~L572). The run's Start pseudo-node is the declared `start` node on the
 // canvas; selecting it opens the StartInspector.
 const SEED_YAML = `name: ${PIPELINE_NAME}
@@ -100,7 +100,7 @@ test("clicking start node shows StartInspector with header and input text", asyn
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -142,7 +142,7 @@ test("clicking start node shows StartInspector with header and input text", asyn
 
 test("view as markdown link opens modal", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 

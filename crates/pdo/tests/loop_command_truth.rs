@@ -1,0 +1,1197 @@
+//! Layer 3a — ADR-0025 / #327: `extend_cycle`, `bump_region`, `end_region` and
+//! `resume_run` tell the truth. Validation happens against the run's pipeline
+//! snapshot BEFORE any event is appended (a rejected command leaves no trace in
+//! the event log), and the 200 body reports the re-scheduling's real effect
+//! (`{ok,spawned:[…]}` or `{ok,noop:true,reason}`), never a blind `{ok:true}`.
+
+use std::process::Command;
+
+use crate::common::TestDaemon;
+
+const LOOP_PIPELINE_NAME: &str = "loop-truth-test";
+const LOOP_PIPELINE_YAML: &str = r#"name: loop-truth-test
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: worker
+    name: worker
+    type: agent
+    isolated_worktree: false
+    inputs:
+      - name: task
+    outputs:
+      - name: result
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: worker, port: task }
+  - source: { node: worker, port: result }
+    target: { node: worker, port: task }
+  - source: { node: worker, port: result }
+    target: { node: end, port: result }
+    when: "iter >= max"
+loops:
+  - id: review_loop
+    kind: bounded
+    members: [worker]
+    max_iter: 3
+"#;
+
+const LEGACY_PIPELINE_NAME: &str = "legacy-truth-test";
+const LEGACY_PIPELINE_YAML: &str = r#"name: legacy-truth-test
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: planner
+    name: planner
+    type: agent
+    isolated_worktree: false
+    inputs:
+      - name: task
+    outputs:
+      - name: plan
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: planner, port: task }
+"#;
+
+/// A bounded region that exhausts after ONE lap with no route out — the shape
+/// of the repo's real `review-loop`, shrunk. Once `rev` finishes lap 1 the
+/// region is `exhausted — unrouted`, the run halts, and the operator's only way
+/// forward is `bump_region`. That command then genuinely RE-SCHEDULES work,
+/// which is the one situation exercising the `spawned:[…]` branch of ADR-0025.
+const EXHAUST_PIPELINE_NAME: &str = "exhaust-truth-test";
+const EXHAUST_PIPELINE_YAML: &str = r#"name: exhaust-truth-test
+version: "1.0"
+variables:
+  max_laps: 1
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: impl
+    name: impl
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: code
+  - id: rev
+    name: rev
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: review
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: impl, port: task }
+  - source: { node: impl, port: code }
+    target: { node: rev, port: code }
+  - source: { node: rev, port: review }
+    target: { node: impl, port: task }
+    else: true
+loops:
+  - id: review_loop
+    kind: bounded
+    members: [rev, impl]
+    max_iter: $max_laps
+"#;
+
+/// A bounded two-member loop capped at $0.50 through a `$var` (ADR draft
+/// plafond-de-cout-de-boucle), with an exhaustion exit at `max_iter`. Its first
+/// lap costs $5 (a planted transcript), so the re-entry that would start lap 2
+/// meets the cap.
+const CAPPED_PIPELINE_NAME: &str = "capped-truth-test";
+const CAPPED_PIPELINE_YAML: &str = r#"name: capped-truth-test
+version: "1.0"
+variables:
+  budget: { type: float, default: 0.5 }
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: impl
+    name: impl
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: code
+  - id: rev
+    name: rev
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: review
+  - id: ship
+    name: ship
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: impl, port: task }
+  - source: { node: impl, port: code }
+    target: { node: rev, port: code }
+  - source: { node: rev, port: review }
+    target: { node: ship, port: review }
+    when: "iter >= max"
+  - source: { node: rev, port: review }
+    target: { node: impl, port: task }
+    else: true
+  - source: { node: ship, port: out }
+    target: { node: end, port: result }
+loops:
+  - id: review_loop
+    kind: bounded
+    members: [rev, impl]
+    max_iter: 5
+    max_cost_usd: $budget
+"#;
+
+fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
+    let pipelines_dir = repo.join(".pdo").join("pipelines");
+    std::fs::create_dir_all(&pipelines_dir)?;
+    for (name, yaml, prompt_node) in [
+        (LOOP_PIPELINE_NAME, LOOP_PIPELINE_YAML, "worker"),
+        (LEGACY_PIPELINE_NAME, LEGACY_PIPELINE_YAML, "planner"),
+        (EXHAUST_PIPELINE_NAME, EXHAUST_PIPELINE_YAML, "impl"),
+        (CAPPED_PIPELINE_NAME, CAPPED_PIPELINE_YAML, "impl"),
+    ] {
+        std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml)?;
+        let prompts_dir = pipelines_dir.join(format!("{name}.prompts"));
+        std::fs::create_dir_all(&prompts_dir)?;
+        std::fs::write(
+            prompts_dir.join(format!("{prompt_node}.md")),
+            "You are a test node.\n",
+        )?;
+    }
+    git_init_with_commit(repo)?;
+    Ok(())
+}
+
+fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
+    let run = |args: &[&str]| -> anyhow::Result<()> {
+        let out = Command::new("git").args(args).current_dir(repo).output()?;
+        if !out.status.success() {
+            anyhow::bail!(
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        Ok(())
+    };
+    run(&["init", "-b", "main"])?;
+    run(&["config", "user.email", "test@test.com"])?;
+    run(&["config", "user.name", "Test"])?;
+    std::fs::write(repo.join("README.md"), "test")?;
+    run(&["add", "."])?;
+    run(&["commit", "-m", "init"])?;
+    Ok(())
+}
+
+async fn create_run(daemon: &TestDaemon, pipeline: &str) -> String {
+    // #470: the target repo is required at the create boundary (ADR-0033).
+    let body = serde_json::json!({
+        "pipeline": pipeline,
+        "input": "test input",
+        "variables": {},
+        "target_repo": daemon.target_repo(),
+    });
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    assert_eq!(status, 201, "POST /runs should succeed, got body: {text}");
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    json["run_id"].as_str().unwrap().to_string()
+}
+
+async fn post_command(
+    daemon_url: &str,
+    run_id: &str,
+    body: serde_json::Value,
+) -> (reqwest::StatusCode, serde_json::Value) {
+    let resp = reqwest::Client::new()
+        .post(format!("{daemon_url}/runs/{run_id}/commands"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
+    (status, json)
+}
+
+async fn command_events(daemon_url: &str, run_id: &str, command: &str) -> Vec<serde_json::Value> {
+    let resp = reqwest::Client::new()
+        .get(format!("{daemon_url}/runs/{run_id}/events"))
+        .send()
+        .await
+        .unwrap();
+    let json: serde_json::Value = resp.json().await.unwrap();
+    json.as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| e["kind"] == "command_issued" && e["payload"]["command"] == command)
+        .collect()
+}
+
+#[tokio::test]
+async fn extend_cycle_unknown_node_is_404_and_leaves_no_trace() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LEGACY_PIPELINE_NAME).await;
+
+    let (status, body) = post_command(
+        &daemon.url(),
+        &run_id,
+        serde_json::json!({ "kind": "extend_cycle", "node_id": "ghost", "additional_iter": 2 }),
+    )
+    .await;
+
+    assert_eq!(status, 404, "unknown node must be rejected, got {body}");
+    assert_eq!(body["error"], "node_not_found", "{body}");
+    assert_eq!(body["node_id"], "ghost", "{body}");
+    // A rejection leaves NO trace: neither the extend_cycle CommandIssued nor
+    // a resume_run lift may have been appended.
+    assert!(
+        command_events(&daemon.url(), &run_id, "extend_cycle")
+            .await
+            .is_empty(),
+        "rejected extend_cycle must not append a CommandIssued"
+    );
+    assert!(
+        command_events(&daemon.url(), &run_id, "resume_run")
+            .await
+            .is_empty(),
+        "rejected extend_cycle must not lift a Halt"
+    );
+}
+
+#[tokio::test]
+async fn extend_cycle_on_region_member_is_409_naming_the_region() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
+
+    // `worker` is both a member AND the entry/head of `review_loop` — the head
+    // is a member like any other, so it must be 409 too (grilling decision 1).
+    let (status, body) = post_command(
+        &daemon.url(),
+        &run_id,
+        serde_json::json!({ "kind": "extend_cycle", "node_id": "worker", "additional_iter": 2 }),
+    )
+    .await;
+
+    assert_eq!(status, 409, "region member must be rejected, got {body}");
+    let msg = body["error"].as_str().unwrap_or_default();
+    assert!(
+        msg.contains("'review_loop'") && msg.contains("bump_region"),
+        "409 must name the region and redirect to bump_region, got: {msg}"
+    );
+    assert!(
+        command_events(&daemon.url(), &run_id, "extend_cycle")
+            .await
+            .is_empty(),
+        "rejected extend_cycle must not append a CommandIssued"
+    );
+}
+
+#[tokio::test]
+async fn extend_cycle_on_legacy_pipeline_is_200_with_truthful_body() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LEGACY_PIPELINE_NAME).await;
+
+    // No `loops:` block → legacy cycles keep working through extend_cycle.
+    let (status, body) = post_command(
+        &daemon.url(),
+        &run_id,
+        serde_json::json!({ "kind": "extend_cycle", "node_id": "planner", "additional_iter": 2 }),
+    )
+    .await;
+
+    assert_eq!(
+        status, 200,
+        "legacy extend_cycle must stay accepted: {body}"
+    );
+    assert_eq!(body["ok"], true);
+    // Truthful body: either something spawned, or an explicit noop with reason —
+    // never a bare `{ok:true}`.
+    let truthful =
+        body["spawned"].is_array() || (body["noop"] == true && body["reason"].is_string());
+    assert!(truthful, "body must report the real effect, got: {body}");
+    // And the command IS recorded this time.
+    assert_eq!(
+        command_events(&daemon.url(), &run_id, "extend_cycle")
+            .await
+            .len(),
+        1,
+        "accepted extend_cycle must append its CommandIssued"
+    );
+}
+
+#[tokio::test]
+async fn bump_region_unknown_region_is_400_and_leaves_no_trace() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
+
+    let (status, body) = post_command(
+        &daemon.url(),
+        &run_id,
+        serde_json::json!({ "kind": "bump_region", "region_id": "ghost", "additional_iter": 2 }),
+    )
+    .await;
+
+    assert_eq!(status, 400, "unknown region must be rejected, got {body}");
+    assert_eq!(body["error"], "region 'ghost' not found in pipeline");
+    assert!(
+        command_events(&daemon.url(), &run_id, "bump_region")
+            .await
+            .is_empty(),
+        "rejected bump_region must not append a CommandIssued"
+    );
+}
+
+#[tokio::test]
+async fn end_region_unknown_region_is_400() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
+
+    let (status, body) = post_command(
+        &daemon.url(),
+        &run_id,
+        serde_json::json!({ "kind": "end_region", "region_id": "ghost" }),
+    )
+    .await;
+
+    assert_eq!(status, 400, "unknown region must be rejected, got {body}");
+    assert_eq!(body["error"], "region 'ghost' not found in pipeline");
+    assert!(
+        command_events(&daemon.url(), &run_id, "end_region")
+            .await
+            .is_empty(),
+        "rejected end_region must not append a CommandIssued"
+    );
+}
+
+#[tokio::test]
+async fn set_region_max_iter_unknown_region_is_400_and_leaves_no_trace() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
+
+    let (status, body) = post_command(
+        &daemon.url(),
+        &run_id,
+        serde_json::json!({ "kind": "set_region_max_iter", "region_id": "ghost", "max_iter": 9 }),
+    )
+    .await;
+
+    assert_eq!(status, 400, "unknown region must be rejected, got {body}");
+    assert_eq!(body["error"], "region 'ghost' not found in pipeline");
+    assert!(
+        command_events(&daemon.url(), &run_id, "set_region_max_iter")
+            .await
+            .is_empty(),
+        "rejected set_region_max_iter must not append a CommandIssued"
+    );
+}
+
+#[tokio::test]
+async fn set_region_max_iter_on_a_known_region_appends_the_command() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
+
+    let (status, body) = post_command(
+        &daemon.url(),
+        &run_id,
+        serde_json::json!({ "kind": "set_region_max_iter", "region_id": "review_loop", "max_iter": 9 }),
+    )
+    .await;
+
+    assert_eq!(status, 200, "known region accepted, got {body}");
+    assert!(
+        !command_events(&daemon.url(), &run_id, "set_region_max_iter")
+            .await
+            .is_empty(),
+        "an accepted set_region_max_iter appends its CommandIssued"
+    );
+}
+
+#[tokio::test]
+async fn force_route_unknown_source_is_400_and_leaves_no_trace() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
+
+    let (status, body) = post_command(
+        &daemon.url(),
+        &run_id,
+        serde_json::json!({ "kind": "force_route", "from": "ghost", "target": "end" }),
+    )
+    .await;
+
+    assert_eq!(status, 400, "unknown source must be rejected, got {body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("neither a node nor a region"),
+        "error names the bad source: {body}"
+    );
+    assert!(
+        command_events(&daemon.url(), &run_id, "force_route")
+            .await
+            .is_empty(),
+        "rejected force_route must not append a CommandIssued"
+    );
+}
+
+#[tokio::test]
+async fn force_route_unknown_target_is_400() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
+
+    let (status, body) = post_command(
+        &daemon.url(),
+        &run_id,
+        serde_json::json!({ "kind": "force_route", "from": "worker", "target": "ghost" }),
+    )
+    .await;
+
+    assert_eq!(status, 400, "unknown target must be rejected, got {body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("not a node"),
+        "error names the bad target: {body}"
+    );
+    assert!(
+        command_events(&daemon.url(), &run_id, "force_route")
+            .await
+            .is_empty(),
+        "rejected force_route must not append a CommandIssued"
+    );
+}
+
+#[tokio::test]
+async fn bump_region_with_live_iteration_is_noop_with_reason() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
+
+    // `worker` iter 1 is live (the harmless sleep session): nothing is eligible
+    // to re-spawn, so the truthful body is an explicit noop with a reason.
+    let (status, body) = post_command(
+        &daemon.url(),
+        &run_id,
+        serde_json::json!({ "kind": "bump_region", "region_id": "review_loop", "additional_iter": 2 }),
+    )
+    .await;
+
+    assert_eq!(status, 200, "valid bump_region must be accepted: {body}");
+    assert_eq!(body["ok"], true);
+    assert_eq!(
+        body["noop"], true,
+        "no spawn is possible while the lap is live, got: {body}"
+    );
+    assert!(
+        body["reason"].as_str().is_some_and(|r| !r.is_empty()),
+        "noop must carry a non-empty reason, got: {body}"
+    );
+    // The command IS recorded (it applies when the lap finishes).
+    assert_eq!(
+        command_events(&daemon.url(), &run_id, "bump_region")
+            .await
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn resume_run_reports_noop_when_nothing_to_spawn() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LEGACY_PIPELINE_NAME).await;
+
+    let (status, body) = post_command(
+        &daemon.url(),
+        &run_id,
+        serde_json::json!({ "kind": "resume_run" }),
+    )
+    .await;
+
+    assert_eq!(status, 200, "resume_run stays accepted: {body}");
+    assert_eq!(body["ok"], true);
+    let truthful =
+        body["spawned"].is_array() || (body["noop"] == true && body["reason"].is_string());
+    assert!(truthful, "body must report the real effect, got: {body}");
+}
+
+async fn started_pairs(daemon_url: &str, run_id: &str) -> Vec<(String, i64)> {
+    let resp = reqwest::Client::new()
+        .get(format!("{daemon_url}/runs/{run_id}/events"))
+        .send()
+        .await
+        .unwrap();
+    let json: serde_json::Value = resp.json().await.unwrap();
+    json.as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|e| e["kind"] == "node_started")
+        .map(|e| {
+            (
+                e["node_id"].as_str().unwrap_or_default().to_string(),
+                e["iter"].as_i64().unwrap_or_default(),
+            )
+        })
+        .collect()
+}
+
+async fn node_started_count(daemon_url: &str, run_id: &str, node_id: &str) -> usize {
+    started_pairs(daemon_url, run_id)
+        .await
+        .into_iter()
+        .filter(|(id, _)| id == node_id)
+        .count()
+}
+
+async fn run_status(daemon_url: &str, run_id: &str) -> String {
+    let resp = reqwest::Client::new()
+        .get(format!("{daemon_url}/runs/{run_id}"))
+        .send()
+        .await
+        .unwrap();
+    let json: serde_json::Value = resp.json().await.unwrap();
+    json["status"].as_str().unwrap_or_default().to_string()
+}
+
+/// Poll until `pred` holds or the budget runs out. Layer 3a drives a real
+/// daemon, so the scheduler's work is asynchronous to the HTTP call.
+async fn wait_until<F, Fut>(what: &str, mut pred: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    for _ in 0..100 {
+        if pred().await {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("timed out waiting for {what}");
+}
+
+#[tokio::test]
+async fn bump_region_that_actually_reschedules_reports_the_spawn() {
+    // The `spawned:[{node_id,iter}]` branch of ADR-0025. Until this test it was
+    // pinned NOWHERE: the three sibling assertions accept the disjunction
+    // `spawned.is_array() || noop`, so a regression that answered `noop`
+    // forever would have kept the whole suite green.
+    //
+    // Getting a real spawn out of a command needs a region whose current lap is
+    // FINISHED and whose next lap only becomes admissible because of the
+    // command. `tight_loop` has `max_iter: 1` and no exit edge, so once worker
+    // iter 1 completes the run halts `exhausted — unrouted` — the operator
+    // situation `bump_region` exists for.
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, EXHAUST_PIPELINE_NAME).await;
+    let url = daemon.url();
+
+    // Entry node `impl` is spawned by run creation, not by a command.
+    wait_until("impl iter 1 to start", || async {
+        node_started_count(&url, &run_id, "impl").await >= 1
+    })
+    .await;
+
+    // Drive lap 1 to its end. `mark_node_done` validates declared outputs, so
+    // write each node's artifact first — through the command surface, not
+    // behind it.
+    for (node_id, port) in [("impl", "code"), ("rev", "review")] {
+        wait_until(&format!("{node_id} iter 1 to start"), || async {
+            node_started_count(&url, &run_id, node_id).await >= 1
+        })
+        .await;
+        let (status, body) = post_command(
+            &url,
+            &run_id,
+            serde_json::json!({
+                "kind": "inject_artifact",
+                "path": format!("{node_id}/iter-1/{port}/output.md"),
+                "content": "# done\n",
+            }),
+        )
+        .await;
+        assert_eq!(status, 200, "inject_artifact for {node_id}: {body}");
+
+        let (status, body) = post_command(
+            &url,
+            &run_id,
+            serde_json::json!({ "kind": "mark_node_done", "node_id": node_id, "iter": 1 }),
+        )
+        .await;
+        assert_eq!(status, 200, "mark_node_done for {node_id}: {body}");
+    }
+
+    // The region is now exhausted with nowhere to route: since résilience
+    // (ADR-0049) an `unrouted` convergence parks the run `AwaitingUser` (a human
+    // routes it), instead of the pre-résilience terminal `halted`.
+    wait_until(
+        "the run to park awaiting-user (exhausted-unrouted)",
+        || async { run_status(&url, &run_id).await == "awaiting_user" },
+    )
+    .await;
+
+    let before = started_pairs(&url, &run_id).await;
+
+    let (status, body) = post_command(
+        &url,
+        &run_id,
+        serde_json::json!({ "kind": "bump_region", "region_id": "review_loop", "additional_iter": 1 }),
+    )
+    .await;
+    assert_eq!(status, 200, "bump_region must be accepted: {body}");
+    assert_eq!(body["ok"], true);
+
+    // THE assertion this test exists for: a real spawn, reported as one.
+    let spawned = body["spawned"]
+        .as_array()
+        .unwrap_or_else(|| panic!("expected spawned:[…], got: {body}"));
+    assert!(!spawned.is_empty(), "spawned must not be empty: {body}");
+    assert!(
+        body.get("noop").is_none(),
+        "a run that spawned is not a noop: {body}"
+    );
+
+    let mut reported: Vec<(String, i64)> = spawned
+        .iter()
+        .map(|e| {
+            (
+                e["node_id"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("each entry carries a node_id: {body}"))
+                    .to_string(),
+                e["iter"]
+                    .as_i64()
+                    .unwrap_or_else(|| panic!("each entry carries an iter: {body}")),
+            )
+        })
+        .collect();
+    reported.sort();
+    // The bump buys lap 2, and lap 2 restarts at the FRONTIER HEAD alone (#626,
+    // shipped in 1.36.1). This assertion used to expect both members at iter 2 at
+    // once, and that expectation was the bug: re-firing every member of a finished
+    // region forked the loop into two branches racing on one worktree. The
+    // freshness guards now let only `impl` resume; `rev` follows turn by turn when
+    // `impl` completes, exactly as it does on a nominal lap.
+    assert_eq!(
+        reported,
+        vec![("impl".to_string(), 2)],
+        "the bump resumes lap 2 at the region's head, one resume point: {body}"
+    );
+
+    // Proof obligation inherited from #108: the body may not claim a spawn the
+    // event log does not show. One `node_started` per reported pair, no more.
+    let after = started_pairs(&url, &run_id).await;
+    let mut fresh: Vec<(String, i64)> = after
+        .iter()
+        .filter(|pair| !before.contains(pair))
+        .cloned()
+        .collect();
+    fresh.sort();
+    assert_eq!(
+        fresh, reported,
+        "event log and response body must agree (before={before:?}, after={after:?}): {body}"
+    );
+    assert_eq!(
+        after.len() - before.len(),
+        spawned.len(),
+        "no unreported spawn either: {body}"
+    );
+
+    // And the Halt was lifted, as the arm promises.
+    assert_eq!(
+        command_events(&url, &run_id, "resume_run").await.len(),
+        1,
+        "routing a halted region lifts the Halt"
+    );
+}
+
+/// Plant a $5 Claude Code transcript (1 MTok of opus input) for the session
+/// the daemon pinned on `node_id`'s latest start, under the tempdir home.
+async fn plant_five_dollars(daemon: &TestDaemon, run_id: &str, node_id: &str) {
+    let session_id = daemon.pinned_session_id(run_id, node_id).await;
+    let worktree = daemon
+        .repo_root()
+        .join(".pdo/runs")
+        .join(run_id)
+        .join("worktree");
+    let enc = pdo_harness::claude_transcript::encode_working_dir(&worktree);
+    let dir = daemon.repo_root().join(".claude/projects").join(enc);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join(format!("{session_id}.jsonl")),
+        "{\"type\":\"assistant\",\"requestId\":\"r1\",\"message\":{\"id\":\"m1\",\
+         \"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":1000000,\"output_tokens\":0}}}\n",
+    )
+    .unwrap();
+}
+
+async fn get_run(daemon_url: &str, run_id: &str) -> serde_json::Value {
+    reqwest::get(format!("{daemon_url}/runs/{run_id}"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+/// Drive lap `lap` of the capped loop to its end through the command surface:
+/// `impl` then `rev` write their output and are marked done.
+async fn finish_lap(url: &str, run_id: &str, lap: i64) {
+    for (node_id, port) in [("impl", "code"), ("rev", "review")] {
+        wait_until(&format!("{node_id} iter {lap} to start"), || async {
+            started_pairs(url, run_id)
+                .await
+                .contains(&(node_id.to_string(), lap))
+        })
+        .await;
+        let (status, body) = post_command(
+            url,
+            run_id,
+            serde_json::json!({
+                "kind": "inject_artifact",
+                "path": format!("{node_id}/iter-{lap}/{port}/output.md"),
+                "content": "# done\n",
+            }),
+        )
+        .await;
+        assert_eq!(status, 200, "inject_artifact for {node_id}: {body}");
+        let (status, body) = post_command(
+            url,
+            run_id,
+            serde_json::json!({ "kind": "mark_node_done", "node_id": node_id, "iter": lap }),
+        )
+        .await;
+        assert_eq!(status, 200, "mark_node_done for {node_id}: {body}");
+    }
+}
+
+#[tokio::test]
+async fn a_loop_at_its_cost_cap_parks_budget_reached_and_never_starts_the_next_lap() {
+    let daemon = TestDaemon::spawn_with_home_override(seed, Some("exec sleep 600".to_string()))
+        .await
+        .unwrap();
+    let run_id = create_run(&daemon, CAPPED_PIPELINE_NAME).await;
+    let url = daemon.url();
+
+    wait_until("impl iter 1 to start", || async {
+        node_started_count(&url, &run_id, "impl").await >= 1
+    })
+    .await;
+    plant_five_dollars(&daemon, &run_id, "impl").await;
+
+    // While lap 1 runs, the read side shows the loop cost and its cap.
+    let run = get_run(&url, &run_id).await;
+    let cost = &run["loop_costs"]["review_loop"];
+    assert!(
+        (cost["usd"].as_f64().unwrap_or_default() - 5.0).abs() < 1e-9,
+        "the loop cost is the members' attributed cost: {cost}"
+    );
+    assert_eq!(cost["cap_usd"], 0.5, "the $var cap is resolved: {cost}");
+    assert_eq!(cost["members"][0]["node_id"], "impl");
+
+    // Drive lap 1 to its end through the command surface.
+    finish_lap(&url, &run_id, 1).await;
+
+    wait_until("the run to park awaiting-user (budget reached)", || async {
+        run_status(&url, &run_id).await == "awaiting_user"
+    })
+    .await;
+    let run = get_run(&url, &run_id).await;
+    assert_eq!(
+        run["awaiting_reason_code"], "region_budget_exhausted",
+        "{run}"
+    );
+    assert_eq!(run["awaiting_region_id"], "review_loop", "{run}");
+    let reason = run["awaiting_reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.starts_with("budget reached")
+            && reason.contains("of $0.50 after")
+            && reason.contains("lap 1/5"),
+        "the reason names the spend, the cap and the lap: {reason}"
+    );
+    let started = started_pairs(&url, &run_id).await;
+    assert_eq!(
+        started.iter().filter(|(n, _)| n == "impl").count(),
+        1,
+        "lap 2 never starts: {started:?}"
+    );
+    assert!(
+        !started.iter().any(|(n, _)| n == "ship"),
+        "the exhaustion exit is not followed: {started:?}"
+    );
+
+    // A plain resume re-parks: the cap still holds at the re-entry.
+    let (status, body) =
+        post_command(&url, &run_id, serde_json::json!({ "kind": "resume_run" })).await;
+    assert_eq!(status, 200, "resume_run: {body}");
+    wait_until("the run to park again", || async {
+        run_status(&url, &run_id).await == "awaiting_user"
+    })
+    .await;
+    let run = get_run(&url, &run_id).await;
+    assert_eq!(
+        run["awaiting_reason_code"], "region_budget_exhausted",
+        "{run}"
+    );
+    assert_eq!(node_started_count(&url, &run_id, "impl").await, 1);
+}
+
+#[tokio::test]
+async fn a_cost_cap_var_that_is_not_a_positive_amount_refuses_the_launch() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs", daemon.url()))
+        .json(&serde_json::json!({
+            "pipeline": CAPPED_PIPELINE_NAME,
+            "input": "x",
+            "variables": { "budget": 0 },
+            "target_repo": daemon.target_repo(),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let error = body["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("'review_loop'")
+            && error.contains("max_cost_usd")
+            && error.contains("$budget"),
+        "names the region, the field and the variable: {body}"
+    );
+}
+
+// ---- `set_region_max_cost`: the Plafond de coût edited in flight ----
+
+#[tokio::test]
+async fn set_region_max_cost_refuses_an_unknown_region_or_a_non_positive_cap_without_a_trace() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
+    let url = daemon.url();
+
+    for (body, error) in [
+        (
+            serde_json::json!({ "kind": "set_region_max_cost", "region_id": "ghost", "max_cost_usd": 5 }),
+            "region 'ghost' not found in pipeline",
+        ),
+        (
+            serde_json::json!({ "kind": "set_region_max_cost", "region_id": "review_loop", "max_cost_usd": 0 }),
+            "max_cost_usd must be a positive amount in dollars",
+        ),
+        (
+            serde_json::json!({ "kind": "set_region_max_cost", "region_id": "review_loop", "max_cost_usd": -3 }),
+            "max_cost_usd must be a positive amount in dollars",
+        ),
+    ] {
+        let (status, answer) = post_command(&url, &run_id, body.clone()).await;
+        assert_eq!(status, 400, "{body} must be refused, got {answer}");
+        assert_eq!(answer["error"], error, "{body}");
+    }
+    assert!(
+        command_events(&url, &run_id, "set_region_max_cost")
+            .await
+            .is_empty(),
+        "a refused set_region_max_cost must not append a CommandIssued"
+    );
+}
+
+#[tokio::test]
+async fn set_region_max_cost_refuses_a_collection_region_without_a_trace() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
+    let url = daemon.url();
+    // The Run's snapshot is what the command validates against: turn its
+    // region into a collection there.
+    let snapshot = daemon
+        .repo_root()
+        .join(".pdo/runs")
+        .join(&run_id)
+        .join("pipeline.yaml");
+    let yaml = std::fs::read_to_string(&snapshot).unwrap();
+    assert!(yaml.contains("kind: bounded"), "{yaml}");
+    std::fs::write(
+        &snapshot,
+        yaml.replace("kind: bounded", "kind: collection\n    over: items")
+            .replace("max_iter: 3", ""),
+    )
+    .unwrap();
+
+    let (status, body) = post_command(
+        &url,
+        &run_id,
+        serde_json::json!({ "kind": "set_region_max_cost", "region_id": "review_loop", "max_cost_usd": 5 }),
+    )
+    .await;
+
+    assert_eq!(status, 400, "a collection is never capped, got {body}");
+    assert_eq!(
+        body["error"],
+        "region 'review_loop' is a collection: cost caps apply to bounded loops only"
+    );
+    assert!(command_events(&url, &run_id, "set_region_max_cost")
+        .await
+        .is_empty());
+}
+
+#[tokio::test]
+async fn set_region_max_cost_null_removes_the_cap_and_the_override_is_on_the_run() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, CAPPED_PIPELINE_NAME).await;
+    let url = daemon.url();
+
+    let (status, body) = post_command(
+        &url,
+        &run_id,
+        serde_json::json!({ "kind": "set_region_max_cost", "region_id": "review_loop", "max_cost_usd": null }),
+    )
+    .await;
+
+    assert_eq!(status, 200, "null removes the cap, got {body}");
+    let events = command_events(&url, &run_id, "set_region_max_cost").await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0]["payload"]["max_cost_usd"],
+        serde_json::Value::Null
+    );
+    let run = get_run(&url, &run_id).await;
+    assert_eq!(
+        run["region_max_cost_overrides"],
+        serde_json::json!({ "review_loop": null }),
+        "{run}"
+    );
+}
+
+#[tokio::test]
+async fn raising_the_cost_cap_of_a_budget_parked_run_starts_the_next_lap_and_lowering_it_stops_the_loop_at_the_next_reentry(
+) {
+    let daemon = TestDaemon::spawn_with_home_override(seed, Some("exec sleep 600".to_string()))
+        .await
+        .unwrap();
+    let run_id = create_run(&daemon, CAPPED_PIPELINE_NAME).await;
+    let url = daemon.url();
+    wait_until("impl iter 1 to start", || async {
+        node_started_count(&url, &run_id, "impl").await >= 1
+    })
+    .await;
+    plant_five_dollars(&daemon, &run_id, "impl").await;
+    finish_lap(&url, &run_id, 1).await;
+    wait_until("the run to park « budget reached »", || async {
+        get_run(&url, &run_id).await["awaiting_reason_code"] == "region_budget_exhausted"
+    })
+    .await;
+
+    // Raise the cap over the $5 spent: the park lifts and lap 2 starts now.
+    let (status, body) = post_command(
+        &url,
+        &run_id,
+        serde_json::json!({ "kind": "set_region_max_cost", "region_id": "review_loop", "max_cost_usd": 8 }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        body["spawned"]
+            .as_array()
+            .is_some_and(|s| s.iter().any(|e| e["node_id"] == "impl" && e["iter"] == 2)),
+        "the raised cap starts lap 2 at once: {body}"
+    );
+    let run = get_run(&url, &run_id).await;
+    assert_eq!(run["status"], "running", "{run}");
+    assert_eq!(
+        run["loop_costs"]["review_loop"]["cap_usd"], 8.0,
+        "the header reads the new cap: {run}"
+    );
+
+    // Lower it under the spend while lap 2 runs: nothing is killed.
+    let (status, body) = post_command(
+        &url,
+        &run_id,
+        serde_json::json!({ "kind": "set_region_max_cost", "region_id": "review_loop", "max_cost_usd": 1 }),
+    )
+    .await;
+    assert_eq!(
+        status, 200,
+        "no floor: a cap under the spend is accepted: {body}"
+    );
+    let run = get_run(&url, &run_id).await;
+    assert_eq!(
+        run["status"], "running",
+        "the lap in progress goes on: {run}"
+    );
+    assert_eq!(run["nodes"]["impl"]["status"], "running", "{run}");
+
+    // The lap finishes; the next one does not start.
+    finish_lap(&url, &run_id, 2).await;
+    wait_until("the run to park again", || async {
+        run_status(&url, &run_id).await == "awaiting_user"
+    })
+    .await;
+    let run = get_run(&url, &run_id).await;
+    assert_eq!(
+        run["awaiting_reason_code"], "region_budget_exhausted",
+        "{run}"
+    );
+    let reason = run["awaiting_reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.contains("of $1 after lap 2/5") && reason.contains("set_region_max_cost"),
+        "{reason}"
+    );
+    assert_eq!(node_started_count(&url, &run_id, "impl").await, 2);
+
+    // The override is the Run's, not the YAML's: a reopen keeps it.
+    let (status, body) =
+        post_command(&url, &run_id, serde_json::json!({ "kind": "reopen_run" })).await;
+    assert_eq!(status, 200, "reopen_run: {body}");
+    wait_until("the reopened run to park again", || async {
+        get_run(&url, &run_id).await["awaiting_reason_code"] == "region_budget_exhausted"
+    })
+    .await;
+    let run = get_run(&url, &run_id).await;
+    assert_eq!(
+        run["region_max_cost_overrides"],
+        serde_json::json!({ "review_loop": 1.0 }),
+        "{run}"
+    );
+    assert_eq!(run["loop_costs"]["review_loop"]["cap_usd"], 1.0, "{run}");
+    assert_eq!(node_started_count(&url, &run_id, "impl").await, 2);
+}
+
+#[tokio::test]
+async fn the_cli_sets_and_removes_a_loops_cost_cap_through_pdo_run_region() {
+    use crate::cli_operator::pdo;
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, CAPPED_PIPELINE_NAME).await;
+    let url = daemon.url();
+
+    assert_eq!(
+        pdo(
+            &daemon,
+            &["run", "region", &run_id, "review_loop", "--max-cost", "8"]
+        )
+        .await
+        .ok(),
+        "review_loop cost capped at $8\n"
+    );
+    let run = get_run(&url, &run_id).await;
+    assert_eq!(
+        run["region_max_cost_overrides"],
+        serde_json::json!({ "review_loop": 8.0 })
+    );
+
+    assert_eq!(
+        pdo(
+            &daemon,
+            &[
+                "run",
+                "region",
+                &run_id,
+                "review_loop",
+                "--max-cost",
+                "none"
+            ]
+        )
+        .await
+        .ok(),
+        "review_loop cost cap removed\n"
+    );
+    let run = get_run(&url, &run_id).await;
+    assert_eq!(
+        run["region_max_cost_overrides"],
+        serde_json::json!({ "review_loop": null })
+    );
+
+    // The daemon's refusal, in its words, exit 1, and nothing recorded.
+    let zero = pdo(
+        &daemon,
+        &["run", "region", &run_id, "review_loop", "--max-cost", "0"],
+    )
+    .await;
+    assert_eq!(zero.code, Some(1), "{}{}", zero.stdout, zero.stderr);
+    assert!(
+        zero.stderr
+            .contains("max_cost_usd must be a positive amount"),
+        "{}",
+        zero.stderr
+    );
+    // Not an amount: clap refuses it before any request.
+    let word = pdo(
+        &daemon,
+        &[
+            "run",
+            "region",
+            &run_id,
+            "review_loop",
+            "--max-cost",
+            "lots",
+        ],
+    )
+    .await;
+    assert_eq!(word.code, Some(2), "{}{}", word.stdout, word.stderr);
+    // `--max-cost` is one gesture: not with `--max`.
+    let both = pdo(
+        &daemon,
+        &[
+            "run",
+            "region",
+            &run_id,
+            "review_loop",
+            "--max",
+            "4",
+            "--max-cost",
+            "8",
+        ],
+    )
+    .await;
+    assert_eq!(both.code, Some(2), "{}{}", both.stdout, both.stderr);
+    assert_eq!(
+        command_events(&url, &run_id, "set_region_max_cost")
+            .await
+            .len(),
+        2
+    );
+}

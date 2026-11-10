@@ -1,0 +1,377 @@
+import { useCallback, useMemo, useState } from "react";
+import type { RunStatus } from "../../shared/generated/RunStatus";
+import { useNodeRun } from "../store/useNodeRun";
+import MarkdownArtifactModal from "./MarkdownArtifactModal";
+import type { ArtifactSource } from "./MarkdownArtifactModal";
+import { nodeReviewTarget } from "../model/runRefs";
+import {
+  childrenOfNode,
+  countChildren,
+  useRunChildren,
+} from "../model/orchestration";
+import NodeDetailHeader, { NodeProvisioning } from "./nodeDetail/NodeDetailHeader";
+import NodeControls, { ActionVerdictBanner } from "./nodeDetail/NodeControls";
+import NodeBanners from "./nodeDetail/NodeBanners";
+import NodeVerdicts from "./nodeDetail/NodeVerdicts";
+import { createPortal } from "react-dom";
+import { useInspectorBarSlot } from "../../pipeline/components/inspectorBarSlot";
+import { reviewUrl } from "../model/runRefs";
+import "./inspector.css";
+import DetailsPane from "./nodeDetail/DetailsPane";
+import TerminalSection from "./nodeDetail/TerminalSection";
+import RetryConfirmDialog from "./nodeDetail/RetryConfirmDialog";
+import ApproveButton from "./nodeDetail/ApproveButton";
+import { approveShown } from "../model/approve";
+import { useShowApprove } from "./nodeDetail/useShowApprove";
+import { isMarkCompletable, nodeSessionEnded } from "../model/nodeStatus";
+import type { ModalState, NodeDetailPanelProps as Props, TerminalView } from "./nodeDetail/types";
+import { useNodeGestureRefusals } from "../store/useNodeGestureRefusals";
+import { useFocusTab } from "../store/runSearchStore";
+import { useOrchestrationFocusTab } from "../store/orchestrationFocus";
+import { useNodeLinkIter } from "../store/nodeLinkFocus";
+
+/** A node's detail, its own for each Run: two Runs of one pipeline share their
+ *  node ids, and what the panel seeds at mount (its folded terminal, the chosen
+ *  iteration) belongs to one Run's node. */
+export default function NodeDetailPanel(props: Props) {
+  return <NodeDetailPanelOfRun key={`${props.runId}/${props.node.node_id}`} {...props} />;
+}
+
+function NodeDetailPanelOfRun({
+  node,
+  runId,
+  runName = null,
+  isArchived,
+  runStatus,
+  nodeName,
+  initialTerminalExpanded,
+  provisioningRepository = "",
+  inheritedProvisioning,
+  provisioningGitRef = "HEAD",
+  isOrchestratorNode = false,
+  onOpenChildRun,
+  initialDetailTab = "io",
+  isOnDemand = false,
+  runTreeCost = null,
+}: Props) {
+  const [modal, setModal] = useState<ModalState | null>(null);
+  // #588: whether the inline terminal has a live PTY socket (the banner's hint
+  // depends on it). `null` before the terminal reported — read as live, so the
+  // frozen hint never flashes while the socket is still connecting.
+  const [terminalLive, setTerminalLive] = useState<boolean | null>(null);
+  // #870: whether this browser only watches the inline terminal.
+  const [terminalSpectating, setTerminalSpectating] = useState(false);
+  // #723: `io` (default, per mounted node), `transcript`, `orchestration`, or
+  // the key of an extension's `node/detail` tab.
+  const [detailTab, setDetailTab] = useState<string>(initialDetailTab);
+  // Read for ANY node (ADR-0064), open tab or not: the pastilles count from it.
+  const childrenData = useRunChildren(runId, true);
+  const nodeChildren = childrenOfNode(childrenData, runId, node.node_id);
+  const childCounts = countChildren(nodeChildren);
+  // The tab shows on a first child (quietly) or from the start on the toggle.
+  const showOrchestration = isOrchestratorNode || nodeChildren.length > 0;
+  const failedChild = nodeChildren.find((child) => child.status === "failed") ?? null;
+  // #749: what the Review shortcut opens, if anything.
+  const reviewTarget = nodeReviewTarget(node);
+  // Seed at mount only (no reactive effect on status): the issue trigger is
+  // "clicking the node" (= selection / mount), not a live transition. A node
+  // is `key`-ed by node_id at both mount sites, so selecting another terminated
+  // node remounts → re-seeds → minimized; a node that settles under the user's
+  // eyes is NOT folded reactively (that would be jarring — cf. #270 "agrandir =
+  // explicit gesture"). Retry clears `minimized` explicitly (session revives).
+  const [terminalView, setTerminalView] = useState<TerminalView>(() => {
+    if (initialTerminalExpanded) return "expanded"; // seam #270/#129 (dead in prod)
+    return nodeSessionEnded(node.status, isArchived) ? "minimized" : "split";
+  });
+  const [userSelectedIter, setUserSelectedIter] = useState<{
+    nodeId: string;
+    iter: number;
+  } | null>(null);
+
+  const selectedIter =
+    userSelectedIter?.nodeId === node.node_id
+      ? userSelectedIter.iter
+      : node.iter;
+
+  const setSelectedIter = useCallback((iter: number) => setUserSelectedIter({ nodeId: node.node_id, iter }), [node.node_id]);
+
+  // A hit chosen in the Run's search opens this node's Transcript at its
+  // iteration.
+  const focusTranscript = useCallback(
+    (iter: number) => {
+      setDetailTab("transcript");
+      setSelectedIter(iter);
+    },
+    [setSelectedIter],
+  );
+  useFocusTab(runId, node.node_id, focusTranscript);
+  // A deep link toward this node at an iteration it ran shows that iteration.
+  useNodeLinkIter(runId, node, setSelectedIter);
+  // The « N runs » row of the card opens the Orchestration tab.
+  const focusOrchestration = useCallback(() => setDetailTab("orchestration"), []);
+  useOrchestrationFocusTab(runId, node.node_id, focusOrchestration);
+
+  // The retry handlers used to call `setTerminalView("split")` inline. The mode
+  // stays presentational state here; it travels into `useNodeRun` as a *stable*
+  // callback (`useCallback` on the setter, which never changes), so the retry
+  // callbacks keep the identity they had.
+  const showTerminalSplit = useCallback(() => setTerminalView("split"), [setTerminalView]);
+
+  // Every read and command of this panel is iter-scoped, so the resolved
+  // `selectedIter` is an argument: the panel owns the IterSelector's state and the
+  // hook owns the orchestration. One owner, no second copy to keep in sync.
+  const {
+    promptText,
+    inputs,
+    outputs,
+    outputsIter,
+    live,
+    markVerdict,
+    releaseVerdict,
+    actionVerdict,
+    retryConfirm,
+    stop,
+    retry,
+    confirmRetry,
+    cancelRetry,
+    start,
+    markComplete,
+    releaseCompletion,
+    killStale,
+    restartIteration,
+  } = useNodeRun(runId, node, selectedIter, {
+    isArchived,
+    onRetryStarted: showTerminalSplit,
+  });
+
+  // CORE-42, CORE-205: the gestures the caller may not make here, greyed with why.
+  const refused = useNodeGestureRefusals(runId, node.node_id);
+  // The daemon would complete the node: the command field offers it on the same condition (paletteItems.ts).
+  const effectiveRunStatus: RunStatus = isArchived ? "archived" : (runStatus ?? "running");
+  const markCompletable = isMarkCompletable(node.status, effectiveRunStatus);
+
+  const sessionName = `pdo-${runId}-${node.node_id}-iter-${selectedIter}`;
+  const hasMultipleIters = (node.iterations?.length ?? 0) > 1;
+  const showTerminal = node.status !== "pending";
+
+  // The status of the iteration **on screen**, not the node's rollup (#617). They
+  // agree on the latest iteration; they part when the IterSelector sits on an older
+  // one, whose session was reaped long ago even though the node is running again.
+  // The terminal reads this to decide whether to attach or to read the frozen pane.
+  const selectedIterStatus =
+    node.iterations?.find((i) => i.iter === selectedIter)?.status ?? node.status;
+  const selectedIteration = node.iterations?.find((i) => i.iter === selectedIter);
+  const completionReleased = selectedIteration?.completion_released === true;
+  // The latest iteration awaits whenever the node rollup says so and carries
+  // the `awaiting` info — even if the iteration row itself still reads
+  // `running` (a derived child wait, FP #793 finding 1).
+  const nodeAwaitsOnLatestIter =
+    selectedIter === node.iter && node.status === "awaiting_user" && node.awaiting != null;
+  const awaitsApproval =
+    nodeAwaitsOnLatestIter && node.awaiting?.cause === "completion_not_released";
+
+  const { approveRef, approveRinged, showApprove } = useShowApprove(node.iter, awaitsApproval, setTerminalView);
+  // Approve ▾ reads the same in the panel and in the enlarged terminal.
+  const approveProps = {
+    node,
+    selectedIter,
+    runStatus: effectiveRunStatus,
+    outputs: outputsIter === selectedIter ? outputs : null,
+    refused,
+    markVerdict,
+    releaseVerdict,
+  };
+  // #369: the I/O poll (`setInputs`/`setOutputs`) re-renders this panel every
+  // tick (1s live, 5s settled). Building the modal's `source` prop as an inline
+  // object literal handed the child a fresh reference on every one of those
+  // re-renders; the modal keyed a fetch effect on that reference, so it re-ran
+  // `fetchNodeIO` + `setFiles(new array)` + `setFileIndex(0)` on every tick,
+  // which momentarily emptied the body and unmounted/remounted the rendered
+  // markdown (mermaid diagram → back to its empty `aria-busy` state → flicker).
+  // Memoize on the structural keys so the reference stays stable across ticks
+  // and only changes when the underlying identity actually does.
+  const modalSource = useMemo<ArtifactSource | null>(() => {
+    if (!modal) return null;
+    return node.iterations && node.iterations.length > 1
+      ? {
+          kind: "iter-nav",
+          nodeId: node.node_id,
+          portKind: modal.portKind,
+          iterations: node.iterations,
+          initialIter: selectedIter,
+        }
+      : { kind: "static", files: modal.files };
+  }, [modal, node.iterations, node.node_id, selectedIter]);
+
+  // #369: a stable `onClose` (setModal is a stable useState setter, so no deps).
+  // The panel re-renders on every I/O poll tick; an inline `() => setModal(null)`
+  // handed the modal a fresh prop each tick, re-rendering it needlessly. A constant
+  // identity lets the modal's memoised markdown props do their job (no diagram
+  // remount, no flicker).
+  const closeModal = useCallback(() => setModal(null), []);
+
+  const controls = !isArchived ? (
+    <NodeControls
+      node={node}
+      stop={stop}
+      restartIteration={restartIteration}
+      start={start}
+      retry={retry}
+      refused={refused}
+      review={reviewTarget ? { href: reviewUrl(runId, reviewTarget.pair), label: reviewTarget.label } : null}
+    />
+  ) : null;
+  // Under the Run / Config tabs, the controls sit at the right of the tab bar
+  // while the Run tab is on screen; elsewhere at the end of the header line.
+  const barSlot = useInspectorBarSlot();
+
+  return (
+    <aside className="ri" data-testid="node-detail-panel">
+      <NodeDetailHeader
+        node={node}
+        nodeName={nodeName}
+        hasMultipleIters={hasMultipleIters}
+        selectedIter={selectedIter}
+        onSelectIter={setSelectedIter}
+        statusLabel={isOnDemand && node.status === "pending" ? "On demand" : undefined}
+        trailing={barSlot ? null : controls}
+      />
+      {barSlot?.element && barSlot.runActive && controls && createPortal(controls, barSlot.element)}
+
+      <NodeProvisioning
+        node={node}
+        provisioningRepository={provisioningRepository}
+        inheritedProvisioning={inheritedProvisioning}
+        provisioningGitRef={provisioningGitRef}
+      />
+
+      <div className="ri-banners">
+        {/* #487: the refusal of a Retry/Play or Start click, rendered AT the
+            gesture. Before this the daemon's 409 was swallowed, so the click
+            looked like it did nothing. */}
+        {!isArchived && actionVerdict && <ActionVerdictBanner actionVerdict={actionVerdict} />}
+        {!isArchived && (
+          <NodeVerdicts
+            status={node.status}
+            selectedIter={selectedIter}
+            releaseVerdict={releaseVerdict}
+            markVerdict={markVerdict}
+          />
+        )}
+        <NodeBanners
+          node={node}
+          isArchived={isArchived}
+          selectedIter={selectedIter}
+          selectedIterStatus={selectedIterStatus}
+          completionReleased={completionReleased}
+          nodeAwaitsOnLatestIter={nodeAwaitsOnLatestIter}
+          terminalLive={terminalLive}
+          terminalSpectating={terminalSpectating}
+          onShowApprove={awaitsApproval && markCompletable ? showApprove : undefined}
+          onOpenChildRun={onOpenChildRun}
+          onOpenOrchestration={showOrchestration ? focusOrchestration : undefined}
+          failedChildren={childCounts.failed}
+          failedChildId={failedChild?.run_id ?? null}
+          killStale={killStale}
+          restartIteration={restartIteration}
+          retry={retry}
+          refused={refused}
+        />
+      </div>
+
+      <TerminalSection
+        node={node}
+        nodeName={nodeName}
+        runId={runId}
+        isArchived={isArchived}
+        selectedIter={selectedIter}
+        selectedIterStatus={selectedIterStatus}
+        sessionName={sessionName}
+        showTerminal={showTerminal}
+        terminalView={terminalView}
+        setTerminalView={setTerminalView}
+        setTerminalLive={setTerminalLive}
+        setTerminalSpectating={setTerminalSpectating}
+        terminalSpectating={terminalSpectating}
+        // #44, CORE-212: the enlarged terminal carries the panel's Approve ▾, in the normal size.
+        completion={{
+          show: approveShown(node, selectedIter, effectiveRunStatus),
+          released: completionReleased,
+          releaseVerdict,
+          markVerdict,
+          renderApprove: (onGesture) => (
+            <ApproveButton
+              {...approveProps}
+              size="md"
+              testIdBase="term-approve"
+              markComplete={() => {
+                onGesture("mark");
+                markComplete();
+              }}
+              release={() => {
+                onGesture("release");
+                releaseCompletion();
+              }}
+            />
+          ),
+        }}
+        detailsPane={
+          <DetailsPane
+            node={node}
+            runId={runId}
+            isArchived={isArchived}
+            showOrchestration={showOrchestration}
+            nodeName={nodeName ?? null}
+            detailTab={detailTab}
+            onSelectTab={setDetailTab}
+            childCounts={childCounts}
+            nodeChildren={nodeChildren}
+            onOpenChildRun={onOpenChildRun}
+            runTreeCost={runTreeCost}
+            inputs={inputs}
+            outputs={outputs}
+            live={live}
+            promptText={promptText}
+            onOpenFile={(portKind, portName, files, portType) =>
+              setModal({ portName, files, portKind, portType })
+            }
+            selectedIter={selectedIter}
+            onSelectIter={setSelectedIter}
+            iterLive={
+              !isArchived &&
+              (selectedIterStatus === "running" || selectedIterStatus === "awaiting_user")
+            }
+            barEnd={
+              <ApproveButton
+                ref={approveRef}
+                {...approveProps}
+                markComplete={markComplete}
+                release={releaseCompletion}
+                ringed={approveRinged}
+              />
+            }
+          />
+        }
+      />
+
+      {modal && modalSource && (
+        <MarkdownArtifactModal
+          runId={runId}
+          runName={runName}
+          portName={modal.portName}
+          portType={modal.portType}
+          source={modalSource}
+          onClose={closeModal}
+        />
+      )}
+
+      {retryConfirm && (
+        <RetryConfirmDialog
+          retryConfirm={retryConfirm}
+          confirmRetry={confirmRetry}
+          cancelRetry={cancelRetry}
+        />
+      )}
+    </aside>
+  );
+}

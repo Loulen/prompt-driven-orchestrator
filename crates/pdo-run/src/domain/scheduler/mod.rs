@@ -1,0 +1,5974 @@
+//! The scheduler's evaluators (ADR-0009, layer 1): pure functions from a
+//! pipeline and a Run's state to the [`SchedulerAction`]s that advance it. The
+//! application's interpreter executes those actions; nothing here does I/O.
+//!
+//! - [`edges`]: what a completed node's outgoing edges ask for.
+//! - [`regions`], [`loops`], [`collections`]: the loop regions, the legacy
+//!   `loop` node, the collection fan-out and its barrier.
+//! - [`diagnostics`]: why a convergence went `unrouted`.
+//! - [`liveness`]: the nodes the Run can no longer reach.
+//! - [`end_wait`]: the end of a Run whose started nodes are still alive
+//!   (ADR-0086).
+//! - [`dispatcher`]: the nodes ready to spawn, and the ones the session cap
+//!   holds `waiting`.
+
+mod collections;
+#[cfg(test)]
+mod convergence_tests;
+mod diagnostics;
+pub mod dispatcher;
+mod edges;
+mod end_wait;
+mod forward;
+mod liveness;
+#[cfg(test)]
+mod loop_exit_tests;
+mod loops;
+mod regions;
+
+pub use collections::*;
+use diagnostics::*;
+pub use edges::*;
+pub use end_wait::*;
+use forward::*;
+pub use liveness::*;
+pub use loops::*;
+pub use regions::*;
+
+use std::collections::{HashMap, HashSet};
+
+use crate::domain::condition;
+use crate::domain::edge_router;
+use crate::domain::graph_resolver;
+use crate::domain::state::RunState;
+use crate::domain::switch_router;
+use pdo_pipeline::domain::pipeline::{NodeType, PipelineDef};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchedulerAction {
+    Spawn {
+        node_id: String,
+        iter: i64,
+    },
+    /// A **deliberate** halt: an edge to `End` carried a `reason:`. Terminal-but-
+    /// resumable (`RunHalted`) — the pipeline author's decision, not a runtime
+    /// give-up.
+    Halt {
+        message: String,
+    },
+    /// An **`unrouted`** convergence (ADR-0049): the runtime cannot drive the run
+    /// forward but did not fail it — it parks `AwaitingUser` (`RunInterrupted`) so
+    /// a human routes it. Distinct from [`SchedulerAction::Halt`], which stays a
+    /// deliberate terminal halt.
+    Interrupt {
+        /// Stable machine slug so the manager/UI branch on a code instead of
+        /// string-matching the prose (e.g. `unrouted`, `region_exhausted`).
+        reason_code: String,
+        message: String,
+        /// The loop region the park is about, when it is one
+        /// (`region_exhausted`, `region_ended_unrouted`,
+        /// `region_budget_exhausted`), so the canvas marks THAT region without
+        /// parsing the prose.
+        region_id: Option<String>,
+    },
+    Complete,
+    SwitchRouted {
+        node_id: String,
+        chosen_branch: String,
+    },
+    LoopIterStarted {
+        loop_node_id: String,
+        iter: i64,
+        max_iter: i64,
+    },
+    LoopBreakReceived {
+        loop_node_id: String,
+    },
+    LoopMaxReached {
+        loop_node_id: String,
+        max_iter: i64,
+    },
+    LoopDone {
+        loop_node_id: String,
+    },
+    /// A `kind: collection` region resolved its `over` list and fans its entry
+    /// out, one lap per item (ADR-0011). The caller deposits `items` so each lap
+    /// reads its own item.
+    CollectionStarted {
+        region_id: String,
+        entry: String,
+        /// Projected into `CollectionState` so the transition guard can recognise
+        /// a parallel item lap without reading the pipeline file.
+        members: Vec<String>,
+        total_items: i64,
+        items: Vec<serde_yaml::Value>,
+    },
+    /// The region's `over` list resolved empty: the barrier fires immediately.
+    CollectionEmpty {
+        region_id: String,
+    },
+    /// Every item lap completed — the collection barrier fired.
+    CollectionDone {
+        region_id: String,
+    },
+}
+
+/// The `collection_started` event payload for a [`SchedulerAction::CollectionStarted`].
+///
+/// Don't inline this wire shape in the emitter: the seam test that replays the
+/// fan-out would then hand-roll its own copy, drift from production, and stay
+/// green while the projection broke.
+///
+/// Returns `None` for any other action.
+pub fn collection_started_payload(action: &SchedulerAction) -> Option<serde_json::Value> {
+    match action {
+        SchedulerAction::CollectionStarted {
+            region_id,
+            entry,
+            members,
+            total_items,
+            ..
+        } => Some(serde_json::json!({
+            "region_id": region_id,
+            "entry": entry,
+            "members": members,
+            "total_items": total_items,
+        })),
+        _ => None,
+    }
+}
+
+/// Bootstraps Loop nodes whose `in` port is fed by a Start node (or a node
+/// already completed) but whose first iteration has not yet been started.
+///
+/// Closes the gap between [`ready_nodes`] (which deliberately skips Loop nodes —
+/// they are not spawnable as tmux sessions) and [`evaluate_outgoing_edges_with_context`]
+/// (which never fires when the loop is the first node downstream of `Start`,
+/// because `Start` never "completes" in the scheduler's eyes).
+pub fn seed_pending_loops(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    resolved_vars: &HashMap<String, serde_yaml::Value>,
+) -> Vec<SchedulerAction> {
+    let mut actions = Vec::new();
+
+    for loop_node in pipeline
+        .nodes
+        .iter()
+        .filter(|n| n.node_type == NodeType::Loop)
+    {
+        if run_state.loop_states.contains_key(&loop_node.id) {
+            continue;
+        }
+
+        let in_edges: Vec<_> = pipeline
+            .edges
+            .iter()
+            .filter(|e| e.target.node == loop_node.id && e.target.port == "in")
+            .collect();
+        if in_edges.is_empty() {
+            continue;
+        }
+
+        let any_satisfied = in_edges.iter().any(|edge| {
+            let src = &edge.source.node;
+            let is_start = pipeline
+                .nodes
+                .iter()
+                .any(|n| n.id == *src && n.node_type == NodeType::Start);
+            if is_start {
+                return true;
+            }
+            run_state
+                .nodes
+                .get(src.as_str())
+                .is_some_and(|ns| ns.status.is_settled_complete())
+        });
+        if !any_satisfied {
+            continue;
+        }
+
+        actions.push(SchedulerAction::LoopIterStarted {
+            loop_node_id: loop_node.id.clone(),
+            iter: 1,
+            max_iter: resolve_max_iter(loop_node, resolved_vars),
+        });
+        for edge in &pipeline.edges {
+            if edge.source.node == loop_node.id && edge.source.carries("body") {
+                actions.push(SchedulerAction::Spawn {
+                    node_id: edge.target.node.clone(),
+                    iter: 1,
+                });
+            }
+        }
+    }
+
+    actions
+}
+
+#[cfg(test)]
+pub(crate) fn evaluate_outgoing_edges(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    completed_node_id: &str,
+) -> Vec<SchedulerAction> {
+    evaluate_outgoing_edges_with_context(
+        pipeline,
+        run_state,
+        completed_node_id,
+        &HashMap::new(),
+        &HashMap::new(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::graph_resolver::ready_nodes;
+    use crate::domain::state::NodeState;
+    use crate::domain::state::NodeStatus;
+    use pdo_pipeline::domain::pipeline::{
+        EdgeDef, EdgeEndpoint, EdgeSource, NodeDef, NodeType, Port, PortType,
+    };
+    use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
+
+    fn make_node(id: &str, inputs: &[&str], outputs: &[&str]) -> NodeDef {
+        NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
+            skills: Vec::new(),
+            isolated_worktree: None,
+            id: id.into(),
+            name: id.into(),
+            node_type: NodeType::Agent,
+            inputs: inputs
+                .iter()
+                .map(|n| Port {
+                    name: (*n).into(),
+                    port_type: PortType::Markdown,
+                    frontmatter: None,
+                    when: None,
+                    description: None,
+                    instructions: None,
+                    required: false,
+                })
+                .collect(),
+            outputs: outputs
+                .iter()
+                .map(|n| Port {
+                    name: (*n).into(),
+                    port_type: PortType::Markdown,
+                    frontmatter: None,
+                    when: None,
+                    description: None,
+                    instructions: None,
+                    required: false,
+                })
+                .collect(),
+            interactive: false,
+            view: None,
+            max_iter: None,
+            over: None,
+            pin_harness: None,
+            harnesses: Default::default(),
+            agent_choice: None,
+            auto_fail: None,
+            orchestrator: false,
+            on_demand: false,
+        }
+    }
+
+    fn make_end_node() -> NodeDef {
+        NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
+            skills: Vec::new(),
+            isolated_worktree: None,
+            id: "end".into(),
+            name: "End".into(),
+            node_type: NodeType::End,
+            inputs: vec![Port {
+                name: "result".into(),
+                port_type: PortType::Markdown,
+                frontmatter: None,
+                when: None,
+                description: None,
+                instructions: None,
+                required: false,
+            }],
+            outputs: vec![],
+            interactive: false,
+            view: None,
+            max_iter: None,
+            over: None,
+            pin_harness: None,
+            harnesses: Default::default(),
+            agent_choice: None,
+            auto_fail: None,
+            orchestrator: false,
+            on_demand: false,
+        }
+    }
+
+    fn make_edge(src_node: &str, src_port: &str, tgt_node: &str, tgt_port: &str) -> EdgeDef {
+        EdgeDef {
+            source: EdgeSource::single(src_node, src_port),
+            target: EdgeEndpoint {
+                node: tgt_node.into(),
+                port: tgt_port.into(),
+            },
+            reason: None,
+            when: None,
+            is_else: false,
+            repeated: false,
+            ..Default::default()
+        }
+    }
+
+    fn make_cond_edge(
+        src_node: &str,
+        src_port: &str,
+        tgt_node: &str,
+        tgt_port: &str,
+        when: Option<&str>,
+        is_else: bool,
+    ) -> EdgeDef {
+        EdgeDef {
+            source: EdgeSource::single(src_node, src_port),
+            target: EdgeEndpoint {
+                node: tgt_node.into(),
+                port: tgt_port.into(),
+            },
+            reason: None,
+            when: when.map(|s| serde_yaml::from_str(s).unwrap()),
+            is_else,
+            repeated: false,
+            ..Default::default()
+        }
+    }
+
+    fn make_end_edge(src_node: &str, src_port: &str, reason: &str) -> EdgeDef {
+        EdgeDef {
+            source: EdgeSource::single(src_node, src_port),
+            target: EdgeEndpoint {
+                node: "end".into(),
+                port: "result".into(),
+            },
+            reason: Some(reason.into()),
+            when: None,
+            is_else: false,
+            repeated: false,
+            ..Default::default()
+        }
+    }
+
+    fn empty_run_state() -> RunState {
+        RunState::new("run-1".into(), "test".into())
+    }
+
+    fn completed_node(id: &str) -> NodeState {
+        NodeState {
+            missing_skills: Vec::new(),
+            skipped_skills: Vec::new(),
+            skills: None,
+            isolated_worktree: None,
+            harness: None,
+            cost: None,
+            node_id: id.into(),
+            status: NodeStatus::Completed,
+            iter: 1,
+            started_at: Some("t0".into()),
+            completed_at: Some("t1".into()),
+            failure_reason: None,
+            skip_reason: None,
+            pruned: false,
+            iterations: Vec::new(),
+            frontmatter_retries: 0,
+            frontmatter_violations: Vec::new(),
+            missing_outputs: Vec::new(),
+            delivery: None,
+            awaiting: None,
+        }
+    }
+
+    fn completed_node_iter(id: &str, iter: i64) -> NodeState {
+        NodeState {
+            missing_skills: Vec::new(),
+            skipped_skills: Vec::new(),
+            skills: None,
+            isolated_worktree: None,
+            harness: None,
+            cost: None,
+            node_id: id.into(),
+            status: NodeStatus::Completed,
+            iter,
+            started_at: Some("t0".into()),
+            completed_at: Some("t1".into()),
+            failure_reason: None,
+            skip_reason: None,
+            pruned: false,
+            iterations: Vec::new(),
+            frontmatter_retries: 0,
+            frontmatter_violations: Vec::new(),
+            missing_outputs: Vec::new(),
+            delivery: None,
+            awaiting: None,
+        }
+    }
+
+    fn running_node(id: &str) -> NodeState {
+        NodeState {
+            missing_skills: Vec::new(),
+            skipped_skills: Vec::new(),
+            skills: None,
+            isolated_worktree: None,
+            harness: None,
+            cost: None,
+            node_id: id.into(),
+            status: NodeStatus::Running,
+            iter: 1,
+            started_at: Some("t0".into()),
+            completed_at: None,
+            failure_reason: None,
+            skip_reason: None,
+            pruned: false,
+            iterations: Vec::new(),
+            frontmatter_retries: 0,
+            frontmatter_violations: Vec::new(),
+            missing_outputs: Vec::new(),
+            delivery: None,
+            awaiting: None,
+        }
+    }
+
+    // --- ready_nodes ---
+
+    #[test]
+    fn linear_chain_first_node_ready() {
+        let pipeline = PipelineDef {
+            name: "linear".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("planner", &["task"], &["plan"]),
+                make_node("implementer", &["plan"], &["summary"]),
+                make_node("reviewer", &["summary"], &["review"]),
+            ],
+            edges: vec![
+                make_edge("planner", "plan", "implementer", "plan"),
+                make_edge("implementer", "summary", "reviewer", "summary"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let state = empty_run_state();
+        let ready = ready_nodes(&pipeline, &state);
+        assert_eq!(ready, vec!["planner"]);
+    }
+
+    #[test]
+    fn linear_chain_second_node_ready_after_first_completes() {
+        let pipeline = PipelineDef {
+            name: "linear".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("planner", &["task"], &["plan"]),
+                make_node("implementer", &["plan"], &["summary"]),
+                make_node("reviewer", &["summary"], &["review"]),
+            ],
+            edges: vec![
+                make_edge("planner", "plan", "implementer", "plan"),
+                make_edge("implementer", "summary", "reviewer", "summary"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("planner".into(), completed_node("planner"));
+        let ready = ready_nodes(&pipeline, &state);
+        assert_eq!(ready, vec!["implementer"]);
+    }
+
+    #[test]
+    fn linear_chain_no_ready_while_running() {
+        let pipeline = PipelineDef {
+            name: "linear".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("planner", &["task"], &["plan"]),
+                make_node("implementer", &["plan"], &["summary"]),
+            ],
+            edges: vec![make_edge("planner", "plan", "implementer", "plan")],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("planner".into(), running_node("planner"));
+        let ready = ready_nodes(&pipeline, &state);
+        assert!(ready.is_empty());
+    }
+
+    #[test]
+    fn fan_out_both_children_ready() {
+        let pipeline = PipelineDef {
+            name: "fan-out".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("planner", &["task"], &["plan"]),
+                make_node("impl-a", &["plan"], &["summary"]),
+                make_node("impl-b", &["plan"], &["summary"]),
+            ],
+            edges: vec![
+                make_edge("planner", "plan", "impl-a", "plan"),
+                make_edge("planner", "plan", "impl-b", "plan"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("planner".into(), completed_node("planner"));
+        let mut ready = ready_nodes(&pipeline, &state);
+        ready.sort();
+        assert_eq!(ready, vec!["impl-a", "impl-b"]);
+    }
+
+    #[test]
+    fn fan_in_waits_for_all_parents() {
+        let pipeline = PipelineDef {
+            name: "fan-in".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("impl-a", &["task"], &["summary"]),
+                make_node("impl-b", &["task"], &["summary"]),
+                make_node("merger", &["summary-a", "summary-b"], &["merged"]),
+            ],
+            edges: vec![
+                make_edge("impl-a", "summary", "merger", "summary-a"),
+                make_edge("impl-b", "summary", "merger", "summary-b"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("impl-a".into(), completed_node("impl-a"));
+        state.nodes.insert("impl-b".into(), running_node("impl-b"));
+        let ready = ready_nodes(&pipeline, &state);
+        assert!(ready.is_empty());
+
+        state
+            .nodes
+            .insert("impl-b".into(), completed_node("impl-b"));
+        let ready = ready_nodes(&pipeline, &state);
+        assert_eq!(ready, vec!["merger"]);
+    }
+
+    #[test]
+    fn partial_completion_next_ready_set() {
+        let pipeline = PipelineDef {
+            name: "diamond".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("a", &["task"], &["out"]),
+                make_node("b", &["in"], &["out"]),
+                make_node("c", &["in"], &["out"]),
+                make_node("d", &["in-b", "in-c"], &["result"]),
+            ],
+            edges: vec![
+                make_edge("a", "out", "b", "in"),
+                make_edge("a", "out", "c", "in"),
+                make_edge("b", "out", "d", "in-b"),
+                make_edge("c", "out", "d", "in-c"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state.nodes.insert("a".into(), completed_node("a"));
+        state.nodes.insert("b".into(), running_node("b"));
+
+        let ready = ready_nodes(&pipeline, &state);
+        assert_eq!(ready, vec!["c"]);
+    }
+
+    #[test]
+    fn all_completed_returns_empty() {
+        let pipeline = PipelineDef {
+            name: "linear".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("a", &["task"], &["out"]),
+                make_node("b", &["in"], &["out"]),
+            ],
+            edges: vec![make_edge("a", "out", "b", "in")],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state.nodes.insert("a".into(), completed_node("a"));
+        state.nodes.insert("b".into(), completed_node("b"));
+
+        let ready = ready_nodes(&pipeline, &state);
+        assert!(ready.is_empty());
+    }
+
+    #[test]
+    fn unconditional_edge_spawns_target() {
+        let pipeline = PipelineDef {
+            name: "linear".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("a", &["task"], &["out"]),
+                make_node("b", &["in"], &["out"]),
+            ],
+            edges: vec![make_edge("a", "out", "b", "in")],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state.nodes.insert("a".into(), completed_node("a"));
+
+        let actions = evaluate_outgoing_edges(&pipeline, &state, "a");
+        assert_eq!(
+            actions,
+            vec![SchedulerAction::Spawn {
+                node_id: "b".into(),
+                iter: 1,
+            }]
+        );
+    }
+
+    #[test]
+    fn end_edge_produces_halt_action() {
+        let pipeline = PipelineDef {
+            name: "halt-test".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("reviewer", &["code"], &["review"]),
+                make_end_node(),
+            ],
+            edges: vec![make_end_edge(
+                "reviewer",
+                "review",
+                "Blocked after {iter} iterations on {node-id}",
+            )],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("reviewer".into(), completed_node_iter("reviewer", 3));
+
+        let actions = evaluate_outgoing_edges(&pipeline, &state, "reviewer");
+        assert_eq!(
+            actions,
+            vec![SchedulerAction::Halt {
+                message: "Blocked after 3 iterations on reviewer".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn end_edge_without_reason_produces_complete() {
+        let pipeline = PipelineDef {
+            name: "complete-test".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("implementer", &["task"], &["summary"]),
+                make_end_node(),
+            ],
+            edges: vec![EdgeDef {
+                source: EdgeSource::single("implementer", "summary"),
+                target: EdgeEndpoint {
+                    node: "end".into(),
+                    port: "result".into(),
+                },
+                reason: None,
+                when: None,
+                is_else: false,
+                repeated: false,
+                ..Default::default()
+            }],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("implementer".into(), completed_node("implementer"));
+
+        let actions = evaluate_outgoing_edges(&pipeline, &state, "implementer");
+        assert_eq!(actions, vec![SchedulerAction::Complete]);
+    }
+
+    /// `End` is a convergence barrier, not first-past-the-post: two parallel
+    /// branches converge on `End` and the fast one completing must NOT complete the
+    /// run, which stranded the sibling `running` forever.
+    #[test]
+    fn parallel_fanout_to_end_waits_for_the_slow_sibling() {
+        let pipeline = PipelineDef {
+            name: "parallel-end".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("a", &["in"], &["out"]),
+                make_node("b", &["in"], &["out"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("a", "out", "end", "result"),
+                make_edge("b", "out", "end", "result"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        // Fast branch `a` completes while `b` is still running.
+        let mut state = empty_run_state();
+        state.nodes.insert("a".into(), completed_node("a"));
+        state.nodes.insert("b".into(), running_node("b"));
+
+        let actions = evaluate_outgoing_edges(&pipeline, &state, "a");
+        assert!(
+            actions.is_empty(),
+            "first branch to End must neither complete nor halt while the sibling \
+             still runs: {actions:?}"
+        );
+
+        // Slow branch `b` finishes: every inbound edge to End is now resolved.
+        state.nodes.insert("b".into(), completed_node("b"));
+        let actions = evaluate_outgoing_edges(&pipeline, &state, "b");
+        assert_eq!(
+            actions,
+            vec![SchedulerAction::Complete],
+            "the last branch to reach End completes the run",
+        );
+    }
+
+    /// #394 companion: a suppressed (dead) sibling branch must NOT block End's
+    /// convergence. `classifier` fans out to `hotfix` (guard matches) and `dead`
+    /// (guard fails → never spawns); both would feed `End`, but only `hotfix`
+    /// runs. When `hotfix` reaches `End`, the dead branch is resolved-by-death, so
+    /// the run completes rather than stalling on a branch that will never arrive.
+    #[test]
+    fn parallel_fanout_to_end_completes_past_a_dead_sibling() {
+        let pipeline = PipelineDef {
+            name: "parallel-end-dead".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("classifier", &["task"], &["triage"]),
+                make_node("hotfix", &["triage"], &["patch"]),
+                make_node("dead", &["triage"], &["note"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "hotfix",
+                    "triage",
+                    Some("severity: { eq: high }"),
+                    false,
+                ),
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "dead",
+                    "triage",
+                    Some("severity: { eq: low }"),
+                    false,
+                ),
+                make_edge("hotfix", "patch", "end", "result"),
+                make_edge("dead", "note", "end", "result"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        // classifier + hotfix completed; `dead` never spawned (its guard failed).
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+        state
+            .nodes
+            .insert("hotfix".into(), completed_node("hotfix"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("severity".into(), serde_yaml::Value::String("high".into()))]
+                .into_iter()
+                .collect();
+        let fm_by_node: HashMap<String, HashMap<String, serde_yaml::Value>> =
+            [("classifier".to_string(), fm)].into_iter().collect();
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "hotfix",
+            &HashMap::new(),
+            &HashMap::new(),
+            &fm_by_node,
+        );
+        assert!(
+            actions.contains(&SchedulerAction::Complete),
+            "a dead sibling branch must not block End's convergence: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn cycle_back_edge_increments_iter() {
+        // reviewer completes at iter 2 → the back-edge of the emergent
+        // implementer<->reviewer cycle fires → implementer already at iter 2,
+        // so next spawn is iter 3. (#210: the forward edge implementer->
+        // reviewer is part of the graph — only a real emergent cycle may
+        // re-run a completed node; a forward-only feeder never is.)
+        let pipeline = PipelineDef {
+            name: "cycle".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("implementer", &["review"], &["code"]),
+                make_node("reviewer", &["code"], &["review"]),
+            ],
+            edges: vec![
+                make_edge("implementer", "code", "reviewer", "code"),
+                make_edge("reviewer", "review", "implementer", "review"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("reviewer".into(), completed_node_iter("reviewer", 2));
+        state
+            .nodes
+            .insert("implementer".into(), completed_node_iter("implementer", 2));
+
+        let actions = evaluate_outgoing_edges(&pipeline, &state, "reviewer");
+        assert_eq!(
+            actions,
+            vec![SchedulerAction::Spawn {
+                node_id: "implementer".into(),
+                iter: 3,
+            }]
+        );
+    }
+
+    #[test]
+    fn multiple_outgoing_edges_can_fire_in_parallel() {
+        let pipeline = PipelineDef {
+            name: "fan-out".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("a", &["task"], &["out"]),
+                make_node("b", &["in"], &["out"]),
+                make_node("c", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("a", "out", "b", "in"),
+                make_edge("a", "out", "c", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state.nodes.insert("a".into(), completed_node("a"));
+
+        let actions = evaluate_outgoing_edges(&pipeline, &state, "a");
+        assert_eq!(actions.len(), 2);
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "b".into(),
+            iter: 1,
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "c".into(),
+            iter: 1,
+        }));
+    }
+
+    /// #785: a producer whose TWO fired edges both land on the same target
+    /// (two output ports wired to one input, `in · repeated` in the UI) produces
+    /// ONE `Spawn` — never two spawns of the same `(node, iter)`.
+    #[test]
+    fn two_edges_to_the_same_target_spawn_it_once() {
+        let pipeline = PipelineDef {
+            name: "double-wire".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("prototype", &["task"], &["out", "chosen"]),
+                make_node("implementer", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("prototype", "out", "implementer", "in"),
+                make_edge("prototype", "chosen", "implementer", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("prototype".into(), completed_node("prototype"));
+
+        let actions = evaluate_outgoing_edges(&pipeline, &state, "prototype");
+        assert_eq!(
+            actions,
+            vec![SchedulerAction::Spawn {
+                node_id: "implementer".into(),
+                iter: 1,
+            }],
+            "two edges to one target must not double-spawn it"
+        );
+    }
+
+    #[test]
+    fn conditional_edges_multi_match_spawn_all_satisfied_targets() {
+        // ADR-0011: a producer fans out to ALL guarded edges whose `when:` is
+        // satisfied; the `else` edge is suppressed because a sibling matched.
+        let pipeline = PipelineDef {
+            name: "cond-fanout".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("classifier", &["task"], &["triage"]),
+                make_node("hotfix", &["triage"], &["patch"]),
+                make_node("security", &["triage"], &["review"]),
+                make_node("backlog", &["triage"], &["note"]),
+            ],
+            edges: vec![
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "hotfix",
+                    "triage",
+                    Some("severity: { eq: high }"),
+                    false,
+                ),
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "security",
+                    "triage",
+                    Some("security: { eq: true }"),
+                    false,
+                ),
+                make_cond_edge("classifier", "triage", "backlog", "triage", None, true),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+
+        let fm: HashMap<String, serde_yaml::Value> = [
+            ("severity".into(), serde_yaml::Value::String("high".into())),
+            ("security".into(), serde_yaml::Value::Bool(true)),
+        ]
+        .into_iter()
+        .collect();
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "classifier",
+            &HashMap::new(),
+            &fm,
+        );
+
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "hotfix".into(),
+            iter: 1,
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "security".into(),
+            iter: 1,
+        }));
+        assert!(
+            !actions.contains(&SchedulerAction::Spawn {
+                node_id: "backlog".into(),
+                iter: 1,
+            }),
+            "else edge must be suppressed when a sibling matched: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn conditional_edges_else_fires_when_none_match() {
+        let pipeline = PipelineDef {
+            name: "cond-else".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("classifier", &["task"], &["triage"]),
+                make_node("hotfix", &["triage"], &["patch"]),
+                make_node("backlog", &["triage"], &["note"]),
+            ],
+            edges: vec![
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "hotfix",
+                    "triage",
+                    Some("severity: { eq: high }"),
+                    false,
+                ),
+                make_cond_edge("classifier", "triage", "backlog", "triage", None, true),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("severity".into(), serde_yaml::Value::String("low".into()))]
+                .into_iter()
+                .collect();
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "classifier",
+            &HashMap::new(),
+            &fm,
+        );
+
+        assert!(
+            !actions.contains(&SchedulerAction::Spawn {
+                node_id: "hotfix".into(),
+                iter: 1,
+            }),
+            "unmatched guarded edge must not fire: {actions:?}"
+        );
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "backlog".into(),
+                iter: 1,
+            }),
+            "else edge must fire when no sibling matched: {actions:?}"
+        );
+    }
+
+    /// A convergence node (ADR-0082): an ordinary `agent` fed by several
+    /// edges. It keeps the legacy `branches` / `merged` port names on purpose —
+    /// a converted `type: merge` looks exactly like this.
+    fn make_convergence_node(id: &str) -> NodeDef {
+        make_node(id, &["branches"], &["merged"])
+    }
+
+    /// Regression for the L5 `conditional-edge-routing` stall (ADR-0011, #144):
+    /// a convergence node fed by three unconditional edges (hotfix, security-review,
+    /// backlog) must NOT wait forever on `backlog`, which is permanently
+    /// suppressed because its inbound `else` edge from `classifier` did not fire
+    /// (a guarded sibling matched). "jamais de stall silencieux."
+    fn fanout_convergence_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "cond-convergence".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("classifier", &["task"], &["triage"]),
+                make_node("hotfix", &["triage"], &["patch"]),
+                make_node("security", &["triage"], &["review"]),
+                make_node("backlog", &["triage"], &["note"]),
+                make_convergence_node("gather"),
+            ],
+            edges: vec![
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "hotfix",
+                    "triage",
+                    Some("severity: { eq: high }"),
+                    false,
+                ),
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "security",
+                    "triage",
+                    Some("security: { eq: true }"),
+                    false,
+                ),
+                make_cond_edge("classifier", "triage", "backlog", "triage", None, true),
+                make_edge("hotfix", "patch", "gather", "branches"),
+                make_edge("security", "review", "gather", "branches"),
+                make_edge("backlog", "note", "gather", "branches"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        }
+    }
+
+    fn classifier_high_security_fm() -> HashMap<String, HashMap<String, serde_yaml::Value>> {
+        let fm: HashMap<String, serde_yaml::Value> = [
+            ("severity".into(), serde_yaml::Value::String("high".into())),
+            ("security".into(), serde_yaml::Value::Bool(true)),
+        ]
+        .into_iter()
+        .collect();
+        [("classifier".to_string(), fm)].into_iter().collect()
+    }
+
+    #[test]
+    fn convergence_spawns_when_suppressed_else_branch_never_runs() {
+        let pipeline = fanout_convergence_pipeline();
+
+        // classifier + the two matched branches completed; backlog never spawned
+        // (its `else` edge was suppressed). The second branch (security) is the
+        // node we're processing as "just completed".
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+        state
+            .nodes
+            .insert("hotfix".into(), completed_node("hotfix"));
+        state
+            .nodes
+            .insert("security".into(), completed_node("security"));
+
+        let fm_by_node = classifier_high_security_fm();
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "security",
+            &HashMap::new(),
+            &HashMap::new(),
+            &fm_by_node,
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "gather".into(),
+                iter: 1,
+            }),
+            "the convergence node must spawn once both fired branches completed, ignoring the \
+             permanently-suppressed backlog branch: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn convergence_still_waits_for_a_fired_branch_that_is_not_yet_done() {
+        // The suppression relief must NOT let a convergence fire early: while a branch
+        // that DID fire (hotfix) is still running, the convergence must keep waiting.
+        let pipeline = fanout_convergence_pipeline();
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+        state.nodes.insert("hotfix".into(), running_node("hotfix"));
+        state
+            .nodes
+            .insert("security".into(), completed_node("security"));
+
+        let fm_by_node = classifier_high_security_fm();
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "security",
+            &HashMap::new(),
+            &HashMap::new(),
+            &fm_by_node,
+        );
+
+        assert!(
+            !actions.contains(&SchedulerAction::Spawn {
+                node_id: "gather".into(),
+                iter: 1,
+            }),
+            "the convergence node must NOT spawn while a fired branch (hotfix) is still running: {actions:?}"
+        );
+    }
+
+    /// Edge case (c) — non-regression: a classic all-unconditional fan-in still
+    /// converges. Two unconditional branches into a convergence node, both completed,
+    /// must spawn it. (The edge-resolution barrier must not break the simple,
+    /// pre-conditional case.)
+    fn unconditional_fanin_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "uncond-fanin".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("a", &["task"], &["out"]),
+                make_node("b", &["task"], &["out"]),
+                make_convergence_node("gather"),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("a", "out", "gather", "branches"),
+                make_edge("b", "out", "gather", "branches"),
+                make_end_edge("gather", "merged", "done"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        }
+    }
+
+    #[test]
+    fn unconditional_fanin_still_converges() {
+        let pipeline = unconditional_fanin_pipeline();
+        let mut state = empty_run_state();
+        state.nodes.insert("a".into(), completed_node("a"));
+        state.nodes.insert("b".into(), completed_node("b"));
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "b",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "gather".into(),
+                iter: 1,
+            }),
+            "classic unconditional fan-in must still converge on gather: {actions:?}"
+        );
+    }
+
+    /// Edge case (d) — death propagation over >=2 levels. `mid` is fed by a
+    /// single guarded edge from `classifier` that did not fire (its sibling
+    /// guard matched), so `mid` is dead; `gather` is fed by `mid` (2nd-level
+    /// dead branch) and by `hotfix` (live, completed). The convergence must spawn on
+    /// the single live branch, treating the transitively-dead `mid` branch as
+    /// resolved.
+    fn two_level_death_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "two-level-death".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("classifier", &["task"], &["triage"]),
+                make_node("hotfix", &["triage"], &["patch"]),
+                make_node("mid", &["triage"], &["out"]),
+                make_convergence_node("gather"),
+                make_end_node(),
+            ],
+            edges: vec![
+                // hotfix branch fires (severity=high), mid branch does not.
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "hotfix",
+                    "triage",
+                    Some("severity: { eq: high }"),
+                    false,
+                ),
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "mid",
+                    "triage",
+                    Some("severity: { eq: low }"),
+                    false,
+                ),
+                make_edge("hotfix", "patch", "gather", "branches"),
+                make_edge("mid", "out", "gather", "branches"),
+                make_end_edge("gather", "merged", "done"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        }
+    }
+
+    #[test]
+    fn convergence_spawns_past_two_level_dead_branch() {
+        let pipeline = two_level_death_pipeline();
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+        state
+            .nodes
+            .insert("hotfix".into(), completed_node("hotfix"));
+        // `mid` never spawned: its inbound guarded edge did not fire.
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("severity".into(), serde_yaml::Value::String("high".into()))]
+                .into_iter()
+                .collect();
+        let fm_by_node: HashMap<String, HashMap<String, serde_yaml::Value>> =
+            [("classifier".to_string(), fm)].into_iter().collect();
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "hotfix",
+            &HashMap::new(),
+            &HashMap::new(),
+            &fm_by_node,
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "gather".into(),
+                iter: 1,
+            }),
+            "the convergence node must spawn past a transitively-dead (2-level) branch: {actions:?}"
+        );
+    }
+
+    /// Edge case (a) — an all-dead convergence is SKIPPED when End stays reachable.
+    /// Both branches into `gather` are guarded and neither matched, so `gather`
+    /// has zero fired branches and is itself dead. A separate unconditional path
+    /// `classifier -> end` keeps End reachable, so the run must reach End rather
+    /// than stall waiting on the dead `gather`.
+    fn all_dead_convergence_with_alt_end_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "all-dead-convergence".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("classifier", &["task"], &["triage"]),
+                make_node("hotfix", &["triage"], &["patch"]),
+                make_node("security", &["triage"], &["review"]),
+                make_convergence_node("gather"),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "hotfix",
+                    "triage",
+                    Some("severity: { eq: high }"),
+                    false,
+                ),
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "security",
+                    "triage",
+                    Some("security: { eq: true }"),
+                    false,
+                ),
+                make_edge("hotfix", "patch", "gather", "branches"),
+                make_edge("security", "review", "gather", "branches"),
+                // gather -> end, AND a direct classifier -> end keeping End reachable.
+                make_end_edge("gather", "merged", "merged-done"),
+                make_end_edge("classifier", "triage", "direct-done"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        }
+    }
+
+    #[test]
+    fn all_dead_convergence_is_skipped_when_end_reachable() {
+        let pipeline = all_dead_convergence_with_alt_end_pipeline();
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+
+        // Artifact matches NEITHER guard: both hotfix and security branches die,
+        // so gather has zero fired branches.
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("severity".into(), serde_yaml::Value::String("low".into()))]
+                .into_iter()
+                .collect();
+        let fm_by_node: HashMap<String, HashMap<String, serde_yaml::Value>> =
+            [("classifier".to_string(), fm.clone())]
+                .into_iter()
+                .collect();
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "classifier",
+            &HashMap::new(),
+            &fm,
+            &fm_by_node,
+        );
+
+        // The direct edge fires End; the run must not stall on the dead gather.
+        assert!(
+            actions.contains(&SchedulerAction::Complete)
+                || actions
+                    .iter()
+                    .any(|a| matches!(a, SchedulerAction::Halt { .. })),
+            "an all-dead convergence must not silently stall the run: {actions:?}"
+        );
+        assert!(
+            !actions.contains(&SchedulerAction::Spawn {
+                node_id: "gather".into(),
+                iter: 1,
+            }),
+            "an all-dead convergence must NOT spawn: {actions:?}"
+        );
+        // ADR-0082: the convergence is an ordinary node, so an all-dead one is
+        // auto-skipped (the retired Merge was the one type exempt from it).
+        let dead = unreachable_nodes(&pipeline, &state, &fm_by_node, &HashMap::new());
+        assert!(
+            dead.iter().any(|(id, _)| id == "gather"),
+            "an all-dead convergence must be skipped: {dead:?}"
+        );
+    }
+
+    /// Edge case (b) — death cascade reaches End: explicit halt, never a silent
+    /// stall. The ONLY path to End is via `gather`; both branches into `gather`
+    /// are guarded and neither matched, so `gather` is all-dead and End becomes
+    /// unreachable. Per ADR-0011 ("jamais de stall silencieux") the scheduler
+    /// must emit an explicit Halt rather than leaving the run Running forever.
+    fn all_dead_convergence_only_end_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "all-dead-only-end".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("classifier", &["task"], &["triage"]),
+                make_node("hotfix", &["triage"], &["patch"]),
+                make_node("security", &["triage"], &["review"]),
+                make_convergence_node("gather"),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "hotfix",
+                    "triage",
+                    Some("severity: { eq: high }"),
+                    false,
+                ),
+                make_cond_edge(
+                    "classifier",
+                    "triage",
+                    "security",
+                    "triage",
+                    Some("security: { eq: true }"),
+                    false,
+                ),
+                make_edge("hotfix", "patch", "gather", "branches"),
+                make_edge("security", "review", "gather", "branches"),
+                make_end_edge("gather", "merged", "done"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        }
+    }
+
+    #[test]
+    fn death_cascade_to_unreachable_end_halts_explicitly() {
+        let pipeline = all_dead_convergence_only_end_pipeline();
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+
+        // Artifact matches neither guard: both branches die, gather is all-dead,
+        // and End (reachable only through gather) becomes unreachable.
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("severity".into(), serde_yaml::Value::String("low".into()))]
+                .into_iter()
+                .collect();
+        let fm_by_node: HashMap<String, HashMap<String, serde_yaml::Value>> =
+            [("classifier".to_string(), fm.clone())]
+                .into_iter()
+                .collect();
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "classifier",
+            &HashMap::new(),
+            &fm,
+            &fm_by_node,
+        );
+
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::Interrupt { .. })),
+            "a death cascade rendering End unreachable must halt explicitly, \
+             never stall silently: {actions:?}"
+        );
+    }
+
+    /// Guard against a false-positive halt: while a branch that DID fire is
+    /// still running, End is still reachable through it, so the unrouted-halt
+    /// detector must stay its hand. The convergence keeps waiting; no Halt is emitted.
+    #[test]
+    fn no_halt_while_a_fired_branch_is_still_running() {
+        // Same shape as all_dead_convergence_only_end, but the artifact matches a guard
+        // (severity=high), so `hotfix` fired and is running; `security` died.
+        let pipeline = all_dead_convergence_only_end_pipeline();
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("classifier".into(), completed_node("classifier"));
+        state.nodes.insert("hotfix".into(), running_node("hotfix"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("severity".into(), serde_yaml::Value::String("high".into()))]
+                .into_iter()
+                .collect();
+        let fm_by_node: HashMap<String, HashMap<String, serde_yaml::Value>> =
+            [("classifier".to_string(), fm.clone())]
+                .into_iter()
+                .collect();
+
+        // Re-evaluate the classifier (e.g. on a later tick): hotfix already
+        // spawned (running), security dead. End reachable through hotfix->gather.
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "classifier",
+            &HashMap::new(),
+            &fm,
+            &fm_by_node,
+        );
+
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::Halt { .. })),
+            "must NOT halt while a fired branch (hotfix) is still running and \
+             End stays reachable through it: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn end_edge_always_fires() {
+        let pipeline = PipelineDef {
+            name: "halt-test".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("reviewer", &["code"], &["review"]),
+                make_end_node(),
+            ],
+            edges: vec![make_end_edge("reviewer", "review", "Run halted")],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("reviewer".into(), completed_node("reviewer"));
+
+        let actions = evaluate_outgoing_edges(&pipeline, &state, "reviewer");
+        assert_eq!(
+            actions,
+            vec![SchedulerAction::Halt {
+                message: "Run halted".into(),
+            }]
+        );
+    }
+
+    fn make_switch_node(id: &str, branch_outputs: Vec<Port>) -> NodeDef {
+        NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
+            skills: Vec::new(),
+            isolated_worktree: None,
+            id: id.into(),
+            name: id.into(),
+            node_type: NodeType::Switch,
+            inputs: vec![Port {
+                name: "in".into(),
+                port_type: PortType::Markdown,
+                frontmatter: None,
+                when: None,
+                description: None,
+                instructions: None,
+                required: false,
+            }],
+            outputs: branch_outputs,
+            interactive: false,
+            view: None,
+            max_iter: None,
+            over: None,
+            pin_harness: None,
+            harnesses: Default::default(),
+            agent_choice: None,
+            auto_fail: None,
+            orchestrator: false,
+            on_demand: false,
+        }
+    }
+
+    fn switch_port(name: &str, when_yaml: &str) -> Port {
+        Port {
+            name: name.into(),
+            port_type: PortType::Markdown,
+            frontmatter: None,
+            when: Some(serde_yaml::from_str(when_yaml).unwrap()),
+            description: None,
+            instructions: None,
+            required: false,
+        }
+    }
+
+    fn switch_default_port() -> Port {
+        Port {
+            name: "default".into(),
+            port_type: PortType::Markdown,
+            frontmatter: None,
+            when: None,
+            description: None,
+            instructions: None,
+            required: false,
+        }
+    }
+
+    #[test]
+    fn switch_routes_to_matched_branch_only() {
+        let pipeline = PipelineDef {
+            name: "switch-test".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_switch_node(
+                    "sw",
+                    vec![
+                        switch_port("pass", "verdict: { in: [PASS, APPROVED] }"),
+                        switch_default_port(),
+                    ],
+                ),
+                make_node("b-pass", &["in"], &["out"]),
+                make_node("c-default", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("sw", "pass", "b-pass", "in"),
+                make_edge("sw", "default", "c-default", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state.nodes.insert("sw".into(), completed_node("sw"));
+
+        let mut fm = HashMap::new();
+        fm.insert("verdict".into(), serde_yaml::Value::String("PASS".into()));
+
+        let actions =
+            evaluate_outgoing_edges_with_context(&pipeline, &state, "sw", &HashMap::new(), &fm);
+
+        assert!(actions.contains(&SchedulerAction::SwitchRouted {
+            node_id: "sw".into(),
+            chosen_branch: "pass".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "b-pass".into(),
+            iter: 1,
+        }));
+        assert!(!actions.iter().any(|a| matches!(a,
+            SchedulerAction::Spawn { node_id, .. } if node_id == "c-default"
+        )));
+    }
+
+    #[test]
+    fn switch_falls_through_to_default() {
+        let pipeline = PipelineDef {
+            name: "switch-default".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_switch_node(
+                    "sw",
+                    vec![
+                        switch_port("pass", "verdict: { eq: PASS }"),
+                        switch_default_port(),
+                    ],
+                ),
+                make_node("b-pass", &["in"], &["out"]),
+                make_node("c-default", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("sw", "pass", "b-pass", "in"),
+                make_edge("sw", "default", "c-default", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state.nodes.insert("sw".into(), completed_node("sw"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("verdict".into(), serde_yaml::Value::String("FAIL".into()))]
+                .into_iter()
+                .collect();
+
+        let actions =
+            evaluate_outgoing_edges_with_context(&pipeline, &state, "sw", &HashMap::new(), &fm);
+
+        assert!(actions.contains(&SchedulerAction::SwitchRouted {
+            node_id: "sw".into(),
+            chosen_branch: "default".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "c-default".into(),
+            iter: 1,
+        }));
+        assert!(!actions.iter().any(|a| matches!(a,
+            SchedulerAction::Spawn { node_id, .. } if node_id == "b-pass"
+        )));
+    }
+
+    #[test]
+    fn switch_routed_event_is_emitted() {
+        let pipeline = PipelineDef {
+            name: "switch-event".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_switch_node(
+                    "sw",
+                    vec![
+                        switch_port("pass", "verdict: { eq: PASS }"),
+                        switch_default_port(),
+                    ],
+                ),
+                make_node("downstream", &["in"], &["out"]),
+            ],
+            edges: vec![make_edge("sw", "pass", "downstream", "in")],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state.nodes.insert("sw".into(), completed_node("sw"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("verdict".into(), serde_yaml::Value::String("PASS".into()))]
+                .into_iter()
+                .collect();
+
+        let actions =
+            evaluate_outgoing_edges_with_context(&pipeline, &state, "sw", &HashMap::new(), &fm);
+
+        let switch_routed_actions: Vec<_> = actions
+            .iter()
+            .filter(|a| matches!(a, SchedulerAction::SwitchRouted { .. }))
+            .collect();
+        assert_eq!(switch_routed_actions.len(), 1);
+        assert_eq!(
+            switch_routed_actions[0],
+            &SchedulerAction::SwitchRouted {
+                node_id: "sw".into(),
+                chosen_branch: "pass".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn upstream_completion_evaluates_switch_inline() {
+        // upstream → sw → downstream
+        // When upstream completes, the scheduler should evaluate the Switch
+        // inline and spawn downstream directly — no Spawn for "sw".
+        let pipeline = PipelineDef {
+            name: "inline-switch".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["task"], &["out"]),
+                make_switch_node(
+                    "sw",
+                    vec![
+                        switch_port("pass", "verdict: { eq: PASS }"),
+                        switch_default_port(),
+                    ],
+                ),
+                make_node("pass-handler", &["in"], &["out"]),
+                make_node("default-handler", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "sw", "in"),
+                make_edge("sw", "pass", "pass-handler", "in"),
+                make_edge("sw", "default", "default-handler", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("verdict".into(), serde_yaml::Value::String("PASS".into()))]
+                .into_iter()
+                .collect();
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &fm,
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::SwitchRouted {
+                node_id: "sw".into(),
+                chosen_branch: "pass".into(),
+            }),
+            "expected SwitchRouted, got {actions:?}"
+        );
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "pass-handler".into(),
+                iter: 1,
+            }),
+            "expected Spawn pass-handler, got {actions:?}"
+        );
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "sw")),
+            "Switch must NOT be spawned, got {actions:?}"
+        );
+        assert!(
+            !actions.iter().any(
+                |a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "default-handler")
+            ),
+            "default-handler must NOT be spawned, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn inline_switch_default_fallthrough() {
+        let pipeline = PipelineDef {
+            name: "inline-switch-default".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["task"], &["out"]),
+                make_switch_node(
+                    "sw",
+                    vec![
+                        switch_port("pass", "verdict: { eq: PASS }"),
+                        switch_default_port(),
+                    ],
+                ),
+                make_node("pass-handler", &["in"], &["out"]),
+                make_node("default-handler", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "sw", "in"),
+                make_edge("sw", "pass", "pass-handler", "in"),
+                make_edge("sw", "default", "default-handler", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("verdict".into(), serde_yaml::Value::String("FAIL".into()))]
+                .into_iter()
+                .collect();
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &fm,
+        );
+
+        assert!(actions.contains(&SchedulerAction::SwitchRouted {
+            node_id: "sw".into(),
+            chosen_branch: "default".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "default-handler".into(),
+            iter: 1,
+        }));
+        assert!(!actions.iter().any(
+            |a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "pass-handler")
+        ),);
+    }
+
+    #[test]
+    fn inline_switch_to_end_produces_complete() {
+        // upstream → sw → end (via pass branch)
+        let pipeline = PipelineDef {
+            name: "inline-switch-end".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["task"], &["out"]),
+                make_switch_node(
+                    "sw",
+                    vec![
+                        switch_port("pass", "verdict: { eq: PASS }"),
+                        switch_default_port(),
+                    ],
+                ),
+                make_node("rework", &["in"], &["out"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "sw", "in"),
+                make_edge("sw", "pass", "end", "result"),
+                make_edge("sw", "default", "rework", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("verdict".into(), serde_yaml::Value::String("PASS".into()))]
+                .into_iter()
+                .collect();
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &fm,
+        );
+
+        assert!(actions.contains(&SchedulerAction::SwitchRouted {
+            node_id: "sw".into(),
+            chosen_branch: "pass".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::Complete));
+    }
+
+    #[test]
+    fn inline_switch_to_loop_fires_loop_iter() {
+        // upstream → sw(pass) → loop.break
+        let pipeline = PipelineDef {
+            name: "inline-switch-to-loop".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["task"], &["out"]),
+                make_switch_node(
+                    "sw",
+                    vec![
+                        switch_port("pass", "verdict: { eq: PASS }"),
+                        switch_default_port(),
+                    ],
+                ),
+                make_loop_node("loop1", 5),
+                make_node("rework", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "sw", "in"),
+                make_edge("sw", "pass", "loop1", "break"),
+                make_edge("sw", "default", "rework", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+        state.loop_states.insert(
+            "loop1".into(),
+            crate::domain::state::LoopState {
+                loop_node_id: "loop1".into(),
+                current_iter: 1,
+                max_iter: 5,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("verdict".into(), serde_yaml::Value::String("PASS".into()))]
+                .into_iter()
+                .collect();
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &fm,
+        );
+
+        assert!(actions.contains(&SchedulerAction::SwitchRouted {
+            node_id: "sw".into(),
+            chosen_branch: "pass".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::LoopBreakReceived {
+            loop_node_id: "loop1".into(),
+        }));
+    }
+
+    #[test]
+    fn inline_switch_first_match_wins_ordering() {
+        let pipeline = PipelineDef {
+            name: "first-match".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["task"], &["out"]),
+                make_switch_node(
+                    "sw",
+                    vec![
+                        switch_port("first", "verdict: { eq: PASS }"),
+                        switch_port("second", "verdict: { eq: PASS }"),
+                        switch_default_port(),
+                    ],
+                ),
+                make_node("first-handler", &["in"], &["out"]),
+                make_node("second-handler", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "sw", "in"),
+                make_edge("sw", "first", "first-handler", "in"),
+                make_edge("sw", "second", "second-handler", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("verdict".into(), serde_yaml::Value::String("PASS".into()))]
+                .into_iter()
+                .collect();
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &fm,
+        );
+
+        assert!(actions.contains(&SchedulerAction::SwitchRouted {
+            node_id: "sw".into(),
+            chosen_branch: "first".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "first-handler".into(),
+            iter: 1,
+        }));
+        assert!(!actions.iter().any(
+            |a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "second-handler")
+        ),);
+    }
+
+    #[test]
+    fn inline_switch_with_variable_resolution() {
+        let pipeline = PipelineDef {
+            name: "var-switch".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["task"], &["out"]),
+                make_switch_node(
+                    "sw",
+                    vec![
+                        switch_port("high", "score: { gte: \"$threshold\" }"),
+                        switch_default_port(),
+                    ],
+                ),
+                make_node("high-handler", &["in"], &["out"]),
+                make_node("default-handler", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "sw", "in"),
+                make_edge("sw", "high", "high-handler", "in"),
+                make_edge("sw", "default", "default-handler", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+
+        let fm: HashMap<String, serde_yaml::Value> = [(
+            "score".into(),
+            serde_yaml::Value::Number(serde_yaml::Number::from(8)),
+        )]
+        .into_iter()
+        .collect();
+        let vars: HashMap<String, serde_yaml::Value> = [(
+            "threshold".into(),
+            serde_yaml::Value::Number(serde_yaml::Number::from(7)),
+        )]
+        .into_iter()
+        .collect();
+
+        let actions =
+            evaluate_outgoing_edges_with_context(&pipeline, &state, "upstream", &vars, &fm);
+
+        assert!(actions.contains(&SchedulerAction::SwitchRouted {
+            node_id: "sw".into(),
+            chosen_branch: "high".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "high-handler".into(),
+            iter: 1,
+        }));
+    }
+
+    #[test]
+    fn inline_switch_waits_for_all_upstream() {
+        // Two nodes feed the Switch. Only one is complete — Switch must NOT evaluate yet.
+        let pipeline = PipelineDef {
+            name: "fan-in-switch".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("a", &["task"], &["out"]),
+                make_node("b", &["task"], &["out"]),
+                make_switch_node(
+                    "sw",
+                    vec![
+                        switch_port("pass", "verdict: { eq: PASS }"),
+                        switch_default_port(),
+                    ],
+                ),
+                make_node("downstream", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("a", "out", "sw", "in"),
+                make_edge("b", "out", "sw", "in"),
+                make_edge("sw", "pass", "downstream", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state.nodes.insert("a".into(), completed_node("a"));
+        state.nodes.insert("b".into(), running_node("b"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("verdict".into(), serde_yaml::Value::String("PASS".into()))]
+                .into_iter()
+                .collect();
+
+        let actions =
+            evaluate_outgoing_edges_with_context(&pipeline, &state, "a", &HashMap::new(), &fm);
+
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::SwitchRouted { .. })),
+            "Switch must not evaluate until all upstream complete, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn inline_switch_mid_run_clause_edit_changes_routing() {
+        let make_pipeline_with_clause = |clause: &str| PipelineDef {
+            name: "mid-run-edit".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["task"], &["out"]),
+                make_switch_node(
+                    "sw",
+                    vec![switch_port("pass", clause), switch_default_port()],
+                ),
+                make_node("pass-handler", &["in"], &["out"]),
+                make_node("default-handler", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "sw", "in"),
+                make_edge("sw", "pass", "pass-handler", "in"),
+                make_edge("sw", "default", "default-handler", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+
+        let fm: HashMap<String, serde_yaml::Value> =
+            [("verdict".into(), serde_yaml::Value::String("PASS".into()))]
+                .into_iter()
+                .collect();
+
+        let pipeline_v1 = make_pipeline_with_clause("verdict: { eq: PASS }");
+        let actions_v1 = evaluate_outgoing_edges_with_context(
+            &pipeline_v1,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &fm,
+        );
+        assert!(
+            actions_v1.contains(&SchedulerAction::SwitchRouted {
+                node_id: "sw".into(),
+                chosen_branch: "pass".into(),
+            }),
+            "v1 should route to pass"
+        );
+
+        // Mid-run edit: change the clause so it no longer matches → routes to "default"
+        let pipeline_v2 = make_pipeline_with_clause("verdict: { eq: APPROVED }");
+        let actions_v2 = evaluate_outgoing_edges_with_context(
+            &pipeline_v2,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &fm,
+        );
+        assert!(
+            actions_v2.contains(&SchedulerAction::SwitchRouted {
+                node_id: "sw".into(),
+                chosen_branch: "default".into(),
+            }),
+            "v2 (edited clause) should route to default"
+        );
+    }
+
+    fn make_loop_node(id: &str, max_iter: i64) -> NodeDef {
+        NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
+            skills: Vec::new(),
+            isolated_worktree: None,
+            id: id.into(),
+            name: id.into(),
+            node_type: NodeType::Loop,
+            inputs: vec![
+                Port {
+                    name: "in".into(),
+                    port_type: PortType::Markdown,
+                    frontmatter: None,
+                    when: None,
+                    description: None,
+                    instructions: None,
+                    required: false,
+                },
+                Port {
+                    name: "break".into(),
+                    port_type: PortType::Markdown,
+                    frontmatter: None,
+                    when: None,
+                    description: None,
+                    instructions: None,
+                    required: false,
+                },
+            ],
+            outputs: vec![
+                Port {
+                    name: "body".into(),
+                    port_type: PortType::Markdown,
+                    frontmatter: None,
+                    when: None,
+                    description: None,
+                    instructions: None,
+                    required: false,
+                },
+                Port {
+                    name: "done".into(),
+                    port_type: PortType::Markdown,
+                    frontmatter: None,
+                    when: None,
+                    description: None,
+                    instructions: None,
+                    required: false,
+                },
+            ],
+            interactive: false,
+            view: None,
+            max_iter: Some(serde_yaml::Value::Number(serde_yaml::Number::from(
+                max_iter,
+            ))),
+            over: None,
+            pin_harness: None,
+            harnesses: Default::default(),
+            agent_choice: None,
+            auto_fail: None,
+            orchestrator: false,
+            on_demand: false,
+        }
+    }
+
+    #[test]
+    fn loop_node_skipped_in_ready_nodes() {
+        // Loop nodes are never listed as ready — they are control-flow constructs.
+        // Body nodes downstream of a Loop are also not ready (they wait for Loop to fire).
+        let pipeline = PipelineDef {
+            name: "loop-test".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_loop_node("loop1", 5),
+                make_node("worker", &["in"], &["out"]),
+                make_node("entry", &["task"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("entry", "out", "loop1", "in"),
+                make_edge("loop1", "body", "worker", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let state = empty_run_state();
+        let ready = ready_nodes(&pipeline, &state);
+        assert_eq!(ready, vec!["entry"]);
+    }
+
+    #[test]
+    fn edge_to_loop_in_fires_body() {
+        let pipeline = PipelineDef {
+            name: "loop-in".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["task"], &["out"]),
+                make_loop_node("loop1", 5),
+                make_node("impl", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "loop1", "in"),
+                make_edge("loop1", "body", "impl", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+
+        let actions = evaluate_outgoing_edges(&pipeline, &state, "upstream");
+
+        assert!(actions.contains(&SchedulerAction::LoopIterStarted {
+            loop_node_id: "loop1".into(),
+            iter: 1,
+            max_iter: 5,
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "impl".into(),
+            iter: 1,
+        }));
+    }
+
+    #[test]
+    fn edge_to_loop_break_emits_break_received() {
+        let pipeline = PipelineDef {
+            name: "loop-break".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_loop_node("loop1", 5),
+                make_node("impl", &["in"], &["out"]),
+                make_node("sw", &["in"], &["pass"]),
+            ],
+            edges: vec![
+                make_edge("loop1", "body", "impl", "in"),
+                make_edge("impl", "out", "sw", "in"),
+                make_edge("sw", "pass", "loop1", "break"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state.nodes.insert("sw".into(), completed_node("sw"));
+
+        let actions = evaluate_outgoing_edges(&pipeline, &state, "sw");
+
+        assert!(actions.contains(&SchedulerAction::LoopBreakReceived {
+            loop_node_id: "loop1".into(),
+        }));
+    }
+
+    #[test]
+    fn loop_body_completion_advances_iter() {
+        // Loop.body → impl → sw → Loop.break
+        // Iter 1 body done, no break, iter < max → advance to iter 2
+        let pipeline = PipelineDef {
+            name: "loop-advance".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_loop_node("loop1", 5),
+                make_node("impl", &["in"], &["out"]),
+                make_node("sw", &["in"], &["pass", "default"]),
+            ],
+            edges: vec![
+                make_edge("loop1", "body", "impl", "in"),
+                make_edge("impl", "out", "sw", "in"),
+                make_edge("sw", "pass", "loop1", "break"),
+                make_edge("sw", "default", "impl", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state.loop_states.insert(
+            "loop1".into(),
+            crate::domain::state::LoopState {
+                loop_node_id: "loop1".into(),
+                current_iter: 1,
+                max_iter: 5,
+                break_received: false,
+                done: false,
+            },
+        );
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 1));
+        state
+            .nodes
+            .insert("sw".into(), completed_node_iter("sw", 1));
+
+        let actions = evaluate_loop_body_completion(&pipeline, &state, "loop1", &HashMap::new());
+
+        assert!(actions.contains(&SchedulerAction::LoopIterStarted {
+            loop_node_id: "loop1".into(),
+            iter: 2,
+            max_iter: 5,
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "impl".into(),
+            iter: 2,
+        }));
+        assert!(!actions
+            .iter()
+            .any(|a| matches!(a, SchedulerAction::LoopDone { .. })));
+    }
+
+    #[test]
+    fn loop_body_completion_with_break_fires_done() {
+        let pipeline = PipelineDef {
+            name: "loop-break-done".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_loop_node("loop1", 5),
+                make_node("impl", &["in"], &["out"]),
+                make_node("sw", &["in"], &["pass", "default"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("loop1", "body", "impl", "in"),
+                make_edge("impl", "out", "sw", "in"),
+                make_edge("sw", "pass", "loop1", "break"),
+                make_edge("loop1", "done", "end", "result"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state.loop_states.insert(
+            "loop1".into(),
+            crate::domain::state::LoopState {
+                loop_node_id: "loop1".into(),
+                current_iter: 3,
+                max_iter: 5,
+                break_received: true,
+                done: false,
+            },
+        );
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 3));
+        state
+            .nodes
+            .insert("sw".into(), completed_node_iter("sw", 3));
+
+        let actions = evaluate_loop_body_completion(&pipeline, &state, "loop1", &HashMap::new());
+
+        assert!(actions.contains(&SchedulerAction::LoopDone {
+            loop_node_id: "loop1".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::Complete));
+        assert!(!actions
+            .iter()
+            .any(|a| matches!(a, SchedulerAction::LoopMaxReached { .. })));
+    }
+
+    #[test]
+    fn loop_max_iter_reached_fires_done() {
+        let pipeline = PipelineDef {
+            name: "loop-max".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_loop_node("loop1", 3),
+                make_node("impl", &["in"], &["out"]),
+                make_node("downstream", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("loop1", "body", "impl", "in"),
+                make_edge("impl", "out", "loop1", "break"),
+                make_edge("loop1", "done", "downstream", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state.loop_states.insert(
+            "loop1".into(),
+            crate::domain::state::LoopState {
+                loop_node_id: "loop1".into(),
+                current_iter: 3,
+                max_iter: 3,
+                break_received: false,
+                done: false,
+            },
+        );
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 3));
+
+        let actions = evaluate_loop_body_completion(&pipeline, &state, "loop1", &HashMap::new());
+
+        assert!(actions.contains(&SchedulerAction::LoopMaxReached {
+            loop_node_id: "loop1".into(),
+            max_iter: 3,
+        }));
+        assert!(actions.contains(&SchedulerAction::LoopDone {
+            loop_node_id: "loop1".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "downstream".into(),
+            iter: 1,
+        }));
+    }
+
+    #[test]
+    fn body_to_break_edge_stops_loop_at_iter_1_when_state_is_refreshed() {
+        // Loop.body → impl → Loop.break. `handle_node_completion` runs two passes
+        // against the same RunState; when it re-projects between them, pass 2 sees
+        // break_received=true and emits LoopDone, not LoopIterStarted{2}.
+        let pipeline = PipelineDef {
+            name: "body-to-break".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_loop_node("loop1", 3),
+                make_node("impl", &["in"], &["out"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("loop1", "body", "impl", "in"),
+                make_edge("impl", "out", "loop1", "break"),
+                make_edge("loop1", "done", "end", "result"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state.loop_states.insert(
+            "loop1".into(),
+            crate::domain::state::LoopState {
+                loop_node_id: "loop1".into(),
+                current_iter: 1,
+                max_iter: 3,
+                break_received: false,
+                done: false,
+            },
+        );
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 1));
+
+        let pass1 = evaluate_outgoing_edges(&pipeline, &state, "impl");
+        assert!(
+            pass1.contains(&SchedulerAction::LoopBreakReceived {
+                loop_node_id: "loop1".into(),
+            }),
+            "expected LoopBreakReceived in pass 1, got {pass1:?}"
+        );
+
+        // Mirror the projection of LoopBreakReceived; production does this by
+        // calling reload_run_state between passes.
+        for action in &pass1 {
+            if let SchedulerAction::LoopBreakReceived { loop_node_id } = action {
+                if let Some(ls) = state.loop_states.get_mut(loop_node_id) {
+                    ls.break_received = true;
+                }
+            }
+        }
+
+        let pass2 = evaluate_loop_body_completion(&pipeline, &state, "loop1", &HashMap::new());
+        assert!(
+            pass2.contains(&SchedulerAction::LoopDone {
+                loop_node_id: "loop1".into(),
+            }),
+            "expected LoopDone after break received, got {pass2:?}"
+        );
+        assert!(
+            !pass2
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::LoopIterStarted { iter: 2, .. })),
+            "must NOT advance to iter 2 once break_received=true, got {pass2:?}"
+        );
+    }
+
+    #[test]
+    fn body_to_break_with_stale_state_wrongly_advances_iter() {
+        // The bug shape the reload_run_state fix prevents: without a refresh
+        // between passes, break_received stays false and the loop wrongly advances.
+        let pipeline = PipelineDef {
+            name: "body-to-break-stale".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_loop_node("loop1", 3),
+                make_node("impl", &["in"], &["out"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("loop1", "body", "impl", "in"),
+                make_edge("impl", "out", "loop1", "break"),
+                make_edge("loop1", "done", "end", "result"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state.loop_states.insert(
+            "loop1".into(),
+            crate::domain::state::LoopState {
+                loop_node_id: "loop1".into(),
+                current_iter: 1,
+                max_iter: 3,
+                break_received: false,
+                done: false,
+            },
+        );
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 1));
+
+        // Pass 1 emits LoopBreakReceived (intentionally NOT applied to state).
+        let _pass1 = evaluate_outgoing_edges(&pipeline, &state, "impl");
+
+        // Pass 2 against the same stale state — this is the buggy path.
+        let pass2 = evaluate_loop_body_completion(&pipeline, &state, "loop1", &HashMap::new());
+        assert!(
+            pass2
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::LoopIterStarted { iter: 2, .. })),
+            "stale state must produce the bug — i.e. iter 2 spawn — to keep \
+             reload_run_state honest. Got {pass2:?}"
+        );
+    }
+
+    #[test]
+    fn loop_body_not_complete_no_action() {
+        let pipeline = PipelineDef {
+            name: "loop-partial".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_loop_node("loop1", 5),
+                make_node("impl", &["in"], &["out"]),
+                make_node("reviewer", &["in"], &["review"]),
+            ],
+            edges: vec![
+                make_edge("loop1", "body", "impl", "in"),
+                make_edge("impl", "out", "reviewer", "in"),
+                make_edge("reviewer", "review", "loop1", "break"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state.loop_states.insert(
+            "loop1".into(),
+            crate::domain::state::LoopState {
+                loop_node_id: "loop1".into(),
+                current_iter: 1,
+                max_iter: 5,
+                break_received: false,
+                done: false,
+            },
+        );
+        state.nodes.insert("impl".into(), completed_node("impl"));
+        state
+            .nodes
+            .insert("reviewer".into(), running_node("reviewer"));
+
+        let actions = evaluate_loop_body_completion(&pipeline, &state, "loop1", &HashMap::new());
+
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn break_received_fires_done_even_with_incomplete_body() {
+        // After node invalidation, body nodes may be missing from run_state.
+        // A break must fire done unconditionally — it never waits for body
+        // completion.
+        let pipeline = PipelineDef {
+            name: "loop-break-incomplete".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_loop_node("loop1", 5),
+                make_node("impl", &["in"], &["out"]),
+                make_node("tester", &["in"], &["out"]),
+                make_node("downstream", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("loop1", "body", "impl", "in"),
+                make_edge("impl", "out", "tester", "in"),
+                make_edge("tester", "out", "loop1", "break"),
+                make_edge("loop1", "done", "downstream", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state.loop_states.insert(
+            "loop1".into(),
+            crate::domain::state::LoopState {
+                loop_node_id: "loop1".into(),
+                current_iter: 1,
+                max_iter: 5,
+                break_received: true,
+                done: false,
+            },
+        );
+        // impl was invalidated — NOT in run_state.nodes
+        // tester completed (it fired the break)
+        state
+            .nodes
+            .insert("tester".into(), completed_node_iter("tester", 1));
+
+        let actions = evaluate_loop_body_completion(&pipeline, &state, "loop1", &HashMap::new());
+
+        assert!(
+            actions.contains(&SchedulerAction::LoopDone {
+                loop_node_id: "loop1".into(),
+            }),
+            "break_received must fire LoopDone regardless of body state, got {actions:?}"
+        );
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "downstream".into(),
+                iter: 1,
+            }),
+            "break_received must fire done port to spawn downstream, got {actions:?}"
+        );
+    }
+
+    fn make_start_node(id: &str) -> NodeDef {
+        NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
+            skills: Vec::new(),
+            isolated_worktree: None,
+            id: id.into(),
+            name: id.into(),
+            node_type: NodeType::Start,
+            inputs: vec![],
+            outputs: vec![Port {
+                name: "user_prompt".into(),
+                port_type: PortType::Markdown,
+                frontmatter: None,
+                when: None,
+                description: None,
+                instructions: None,
+                required: false,
+            }],
+            interactive: false,
+            view: None,
+            max_iter: None,
+            over: None,
+            pin_harness: None,
+            harnesses: Default::default(),
+            agent_choice: None,
+            auto_fail: None,
+            orchestrator: false,
+            on_demand: false,
+        }
+    }
+
+    #[test]
+    fn seed_pending_loops_emits_iter_started_when_start_feeds_loop() {
+        // Start → loop1.in   loop1.body → impl
+        // At run start, seed_pending_loops must emit LoopIterStarted{1} +
+        // Spawn{impl, 1}, otherwise the run is stuck.
+        let pipeline = PipelineDef {
+            name: "start-loop".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_start_node("start"),
+                make_loop_node("loop1", 5),
+                make_node("impl", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "loop1", "in"),
+                make_edge("loop1", "body", "impl", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+        let state = empty_run_state();
+
+        let actions = seed_pending_loops(&pipeline, &state, &HashMap::new());
+
+        assert!(actions.contains(&SchedulerAction::LoopIterStarted {
+            loop_node_id: "loop1".into(),
+            iter: 1,
+            max_iter: 5,
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "impl".into(),
+            iter: 1,
+        }));
+    }
+
+    #[test]
+    fn seed_pending_loops_propagates_max_iter_from_loop_node_spec() {
+        // Regression: previously LoopIterStarted defaulted to max_iter=5 in
+        // loop_states, even when the spec said 3. Now it must reflect the spec.
+        let pipeline = PipelineDef {
+            name: "max-iter-3".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_start_node("start"),
+                make_loop_node("loop1", 3),
+                make_node("impl", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "loop1", "in"),
+                make_edge("loop1", "body", "impl", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+        let state = empty_run_state();
+
+        let actions = seed_pending_loops(&pipeline, &state, &HashMap::new());
+
+        assert!(actions.contains(&SchedulerAction::LoopIterStarted {
+            loop_node_id: "loop1".into(),
+            iter: 1,
+            max_iter: 3,
+        }));
+    }
+
+    #[test]
+    fn seed_pending_loops_idempotent_after_iter_started() {
+        // Once the loop has a loop_state, seed must not re-emit.
+        let pipeline = PipelineDef {
+            name: "start-loop".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_start_node("start"),
+                make_loop_node("loop1", 5),
+                make_node("impl", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "loop1", "in"),
+                make_edge("loop1", "body", "impl", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+        let mut state = empty_run_state();
+        state.loop_states.insert(
+            "loop1".into(),
+            crate::domain::state::LoopState {
+                loop_node_id: "loop1".into(),
+                current_iter: 1,
+                max_iter: 5,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let actions = seed_pending_loops(&pipeline, &state, &HashMap::new());
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn seed_pending_loops_skipped_when_in_edge_missing() {
+        // Loop has no edge feeding `in` — cannot bootstrap.
+        let pipeline = PipelineDef {
+            name: "loop-no-in".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![make_start_node("start"), make_loop_node("loop1", 5)],
+            edges: vec![],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+        let state = empty_run_state();
+
+        let actions = seed_pending_loops(&pipeline, &state, &HashMap::new());
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn seed_pending_loops_waits_when_upstream_non_start_not_completed() {
+        // upstream(running) → loop1.in. Don't seed yet.
+        let pipeline = PipelineDef {
+            name: "loop-waiting".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["x"], &["out"]),
+                make_loop_node("loop1", 5),
+                make_node("impl", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "loop1", "in"),
+                make_edge("loop1", "body", "impl", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), running_node("upstream"));
+
+        let actions = seed_pending_loops(&pipeline, &state, &HashMap::new());
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn seed_pending_loops_fires_for_all_body_targets() {
+        // loop.body fan-outs to two targets — both should be spawned at iter 1.
+        let pipeline = PipelineDef {
+            name: "fanout".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_start_node("start"),
+                make_loop_node("loop1", 3),
+                make_node("a", &["in"], &["out"]),
+                make_node("b", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "loop1", "in"),
+                make_edge("loop1", "body", "a", "in"),
+                make_edge("loop1", "body", "b", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+        let state = empty_run_state();
+
+        let actions = seed_pending_loops(&pipeline, &state, &HashMap::new());
+
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "a".into(),
+            iter: 1,
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "b".into(),
+            iter: 1,
+        }));
+    }
+
+    fn collection_region(
+        id: &str,
+        members: &[&str],
+        over: &str,
+    ) -> pdo_pipeline::domain::pipeline::LoopRegion {
+        pdo_pipeline::domain::pipeline::LoopRegion {
+            max_cost_usd: None,
+            id: id.into(),
+            kind: pdo_pipeline::domain::pipeline::LoopKind::Collection,
+            members: members.iter().map(|m| m.to_string()).collect(),
+            max_iter: None,
+            over: Some(over.into()),
+        }
+    }
+
+    /// upstream → worker (collection member, over: items) → sink → end
+    fn collection_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "collection".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("upstream", &["in"], &["out"]),
+                make_node("worker", &["in"], &["out"]),
+                make_node("sink", &["in"], &["out"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("upstream", "out", "worker", "in"),
+                make_edge("worker", "out", "sink", "in"),
+                make_edge("sink", "out", "end", "result"),
+            ],
+            loops: vec![collection_region("fan", &["worker"], "items")],
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        }
+    }
+
+    fn items_frontmatter(n: usize) -> HashMap<String, serde_yaml::Value> {
+        let mut fm = HashMap::new();
+        fm.insert(
+            "items".into(),
+            serde_yaml::Value::Sequence(
+                (1..=n)
+                    .map(|i| serde_yaml::Value::String(format!("item-{i}")))
+                    .collect(),
+            ),
+        );
+        fm
+    }
+
+    fn worker_with_completed_laps(laps: &[i64]) -> NodeState {
+        let mut ns = completed_node("worker");
+        ns.iter = laps.iter().copied().max().unwrap_or(1);
+        ns.iterations = laps
+            .iter()
+            .map(|&i| crate::domain::state::IterationInfo {
+                iter: i,
+                status: NodeStatus::Completed,
+                started_at: Some("t0".into()),
+                completed_at: Some("t1".into()),
+                interactive: false,
+                completion_released: false,
+                waited_ms: 0,
+                open_wait_since: None,
+            })
+            .collect();
+        ns
+    }
+
+    #[test]
+    fn collection_entry_fans_out_one_lap_per_item() {
+        let pipeline = collection_pipeline();
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &items_frontmatter(3),
+        );
+
+        assert!(actions.contains(&SchedulerAction::CollectionStarted {
+            region_id: "fan".into(),
+            entry: "worker".into(),
+            members: vec!["worker".into()],
+            total_items: 3,
+            items: vec![
+                serde_yaml::Value::String("item-1".into()),
+                serde_yaml::Value::String("item-2".into()),
+                serde_yaml::Value::String("item-3".into()),
+            ],
+        }));
+        for i in 1..=3 {
+            assert!(
+                actions.contains(&SchedulerAction::Spawn {
+                    node_id: "worker".into(),
+                    iter: i,
+                }),
+                "should spawn worker lap {i}"
+            );
+        }
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "sink")),
+            "the barrier target must not spawn at fan-out time"
+        );
+    }
+
+    #[test]
+    fn collection_empty_list_fires_barrier_immediately() {
+        let pipeline = collection_pipeline();
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &items_frontmatter(0),
+        );
+
+        assert!(actions.contains(&SchedulerAction::CollectionEmpty {
+            region_id: "fan".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::CollectionDone {
+            region_id: "fan".into(),
+        }));
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "sink".into(),
+                iter: 1,
+            }),
+            "an empty collection fires the barrier target immediately"
+        );
+        assert!(
+            !actions.iter().any(
+                |a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "worker")
+            ),
+            "an empty collection spawns no laps"
+        );
+    }
+
+    #[test]
+    fn collection_entry_is_idempotent_once_state_exists() {
+        // A second inbound edge re-firing must not double the laps.
+        let pipeline = collection_pipeline();
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+        state.collection_states.insert(
+            "fan".into(),
+            crate::domain::state::CollectionState {
+                region_id: "fan".into(),
+                total_items: 3,
+                entry: String::new(),
+                members: Vec::new(),
+                done: false,
+            },
+        );
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "upstream",
+            &HashMap::new(),
+            &items_frontmatter(3),
+        );
+
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::Spawn { .. })
+                    || matches!(a, SchedulerAction::CollectionStarted { .. })),
+            "fan-out already happened — no re-spawn, no re-start: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn collection_member_completion_suppresses_exit_edges_per_lap() {
+        // worker finished lap 1 of 3: its worker→sink edge is a BARRIER exit
+        // and must not fire per-lap.
+        let pipeline = collection_pipeline();
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+        state.collection_states.insert(
+            "fan".into(),
+            crate::domain::state::CollectionState {
+                region_id: "fan".into(),
+                total_items: 3,
+                entry: String::new(),
+                members: Vec::new(),
+                done: false,
+            },
+        );
+        state
+            .nodes
+            .insert("worker".into(), worker_with_completed_laps(&[1]));
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "worker",
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "sink")),
+            "member→non-member edges fire on the barrier only"
+        );
+        assert!(
+            !actions.contains(&SchedulerAction::Complete),
+            "a per-lap completion must never complete the run"
+        );
+    }
+
+    #[test]
+    fn collection_member_to_end_edge_is_suppressed_per_lap() {
+        // Region exits straight to End: a per-lap completion must not Complete.
+        let mut pipeline = collection_pipeline();
+        pipeline.edges = vec![
+            make_edge("upstream", "out", "worker", "in"),
+            make_edge("worker", "out", "end", "result"),
+        ];
+        let mut state = empty_run_state();
+        state.collection_states.insert(
+            "fan".into(),
+            crate::domain::state::CollectionState {
+                region_id: "fan".into(),
+                total_items: 3,
+                entry: String::new(),
+                members: Vec::new(),
+                done: false,
+            },
+        );
+        state
+            .nodes
+            .insert("worker".into(), worker_with_completed_laps(&[1]));
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "worker",
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        assert!(
+            !actions.contains(&SchedulerAction::Complete),
+            "lap 1 of 3 completing must not complete the run: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn collection_barrier_fires_after_all_laps() {
+        let pipeline = collection_pipeline();
+        let mut state = empty_run_state();
+        state.collection_states.insert(
+            "fan".into(),
+            crate::domain::state::CollectionState {
+                region_id: "fan".into(),
+                total_items: 3,
+                entry: String::new(),
+                members: Vec::new(),
+                done: false,
+            },
+        );
+        state
+            .nodes
+            .insert("worker".into(), worker_with_completed_laps(&[1, 2, 3]));
+
+        let region = &pipeline.loops[0];
+        let actions = evaluate_collection_barrier(
+            &pipeline,
+            &state,
+            region,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(actions.contains(&SchedulerAction::CollectionDone {
+            region_id: "fan".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "sink".into(),
+            iter: 1,
+        }));
+    }
+
+    #[test]
+    fn collection_barrier_waits_on_a_missing_lap() {
+        let pipeline = collection_pipeline();
+        let mut state = empty_run_state();
+        state.collection_states.insert(
+            "fan".into(),
+            crate::domain::state::CollectionState {
+                region_id: "fan".into(),
+                total_items: 3,
+                entry: String::new(),
+                members: Vec::new(),
+                done: false,
+            },
+        );
+        state
+            .nodes
+            .insert("worker".into(), worker_with_completed_laps(&[1, 3]));
+
+        let region = &pipeline.loops[0];
+        let actions = evaluate_collection_barrier(
+            &pipeline,
+            &state,
+            region,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        assert!(actions.is_empty(), "lap 2 missing — barrier must wait");
+    }
+
+    #[test]
+    fn collection_barrier_is_inert_once_done() {
+        let pipeline = collection_pipeline();
+        let mut state = empty_run_state();
+        state.collection_states.insert(
+            "fan".into(),
+            crate::domain::state::CollectionState {
+                region_id: "fan".into(),
+                total_items: 3,
+                entry: String::new(),
+                members: Vec::new(),
+                done: true,
+            },
+        );
+        state
+            .nodes
+            .insert("worker".into(), worker_with_completed_laps(&[1, 2, 3]));
+
+        let region = &pipeline.loops[0];
+        let actions = evaluate_collection_barrier(
+            &pipeline,
+            &state,
+            region,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        assert!(actions.is_empty(), "a fired barrier never re-fires");
+    }
+
+    #[test]
+    fn collection_barrier_to_end_completes_the_run() {
+        let mut pipeline = collection_pipeline();
+        pipeline.edges = vec![
+            make_edge("upstream", "out", "worker", "in"),
+            make_edge("worker", "out", "end", "result"),
+        ];
+        let mut state = empty_run_state();
+        state.collection_states.insert(
+            "fan".into(),
+            crate::domain::state::CollectionState {
+                region_id: "fan".into(),
+                total_items: 2,
+                entry: String::new(),
+                members: Vec::new(),
+                done: false,
+            },
+        );
+        state
+            .nodes
+            .insert("worker".into(), worker_with_completed_laps(&[1, 2]));
+
+        let region = &pipeline.loops[0];
+        let actions = evaluate_collection_barrier(
+            &pipeline,
+            &state,
+            region,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        assert!(actions.contains(&SchedulerAction::CollectionDone {
+            region_id: "fan".into(),
+        }));
+        assert!(actions.contains(&SchedulerAction::Complete));
+    }
+
+    #[test]
+    fn collection_member_skipped_by_ready_nodes_when_fed_by_producer() {
+        let pipeline = collection_pipeline();
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+
+        let ready = ready_nodes(&pipeline, &state);
+        assert!(
+            !ready.contains(&"worker".to_string()),
+            "a collection member is spawned by the fan-out, not the sweep"
+        );
+    }
+
+    #[test]
+    fn collection_barrier_target_not_ready_until_region_done() {
+        // worker projects Completed after lap 1 while laps 2-3 still run: the
+        // readiness sweep must not spawn `sink` off that transient status.
+        let pipeline = collection_pipeline();
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("upstream".into(), completed_node("upstream"));
+        state.collection_states.insert(
+            "fan".into(),
+            crate::domain::state::CollectionState {
+                region_id: "fan".into(),
+                total_items: 3,
+                entry: String::new(),
+                members: Vec::new(),
+                done: false,
+            },
+        );
+        state
+            .nodes
+            .insert("worker".into(), worker_with_completed_laps(&[1]));
+
+        let ready = ready_nodes(&pipeline, &state);
+        assert!(
+            !ready.contains(&"sink".to_string()),
+            "barrier target must wait for CollectionDone"
+        );
+
+        // Once the region is done, the barrier sweep (not ready_nodes) spawns
+        // sink — but if it were already spawned it would be filtered anyway;
+        // assert ready_nodes now permits it (region gate open).
+        state.collection_states.get_mut("fan").unwrap().done = true;
+        let ready = ready_nodes(&pipeline, &state);
+        assert!(ready.contains(&"sink".to_string()));
+    }
+
+    // Integration: parse a `loops: {kind: collection}` YAML, then drive the live
+    // dispatch end-to-end (fan-out on a typed upstream / empty on a missing `over`).
+
+    #[test]
+    fn integration_collection_over_issues_with_typed_upstream() {
+        let yaml = r#"
+name: collection-integration
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: ab000001
+    name: lister
+    type: agent
+    isolated_worktree: false
+    inputs:
+      - name: task
+    outputs:
+      - name: plan
+        frontmatter:
+          issues:
+            type: list
+  - id: ab000003
+    name: worker
+    type: agent
+    isolated_worktree: true
+    inputs:
+      - name: in
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: ab000001, port: task }
+  - source: { node: ab000001, port: plan }
+    target: { node: ab000003, port: in }
+  - source: { node: ab000003, port: out }
+    target: { node: end, port: result }
+loops:
+  - id: per-issue
+    kind: collection
+    over: issues
+    members: [ab000003]
+"#;
+        let result = pdo_pipeline::domain::pipeline::parse_pipeline(yaml).unwrap();
+        let pipeline = result.pipeline;
+
+        assert_eq!(pipeline.loops.len(), 1);
+        assert_eq!(pipeline.loops[0].over.as_deref(), Some("issues"));
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("ab000001".into(), completed_node("ab000001"));
+
+        let mut frontmatter = HashMap::new();
+        frontmatter.insert(
+            "issues".into(),
+            serde_yaml::Value::Sequence(vec![
+                serde_yaml::Value::String("a".into()),
+                serde_yaml::Value::String("b".into()),
+                serde_yaml::Value::String("c".into()),
+            ]),
+        );
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "ab000001",
+            &HashMap::new(),
+            &frontmatter,
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::CollectionStarted {
+                region_id: "per-issue".into(),
+                entry: "ab000003".into(),
+                members: vec!["ab000003".into()],
+                total_items: 3,
+                items: vec![
+                    serde_yaml::Value::String("a".into()),
+                    serde_yaml::Value::String("b".into()),
+                    serde_yaml::Value::String("c".into()),
+                ],
+            }),
+            "3 issues should produce CollectionStarted with total_items=3"
+        );
+        for i in 1..=3 {
+            assert!(
+                actions.contains(&SchedulerAction::Spawn {
+                    node_id: "ab000003".into(),
+                    iter: i,
+                }),
+                "should spawn worker lap {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn integration_collection_over_missing_field_fires_empty() {
+        let yaml = r#"
+name: collection-missing
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: ab000001
+    name: lister
+    type: agent
+    isolated_worktree: false
+    inputs:
+      - name: task
+    outputs:
+      - name: plan
+  - id: ab000003
+    name: worker
+    type: agent
+    isolated_worktree: true
+    inputs:
+      - name: in
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: ab000001, port: task }
+  - source: { node: ab000001, port: plan }
+    target: { node: ab000003, port: in }
+  - source: { node: ab000003, port: out }
+    target: { node: end, port: result }
+loops:
+  - id: per-issue
+    kind: collection
+    over: nonexistent
+    members: [ab000003]
+"#;
+        let result = pdo_pipeline::domain::pipeline::parse_pipeline(yaml).unwrap();
+        let pipeline = result.pipeline;
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("ab000001".into(), completed_node("ab000001"));
+
+        let frontmatter: HashMap<String, serde_yaml::Value> = [(
+            "items".into(),
+            serde_yaml::Value::Sequence(vec![serde_yaml::Value::String("a".into())]),
+        )]
+        .into_iter()
+        .collect();
+
+        let actions = evaluate_outgoing_edges_with_context(
+            &pipeline,
+            &state,
+            "ab000001",
+            &HashMap::new(),
+            &frontmatter,
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::CollectionEmpty {
+                region_id: "per-issue".into(),
+            }),
+            "over: nonexistent should resolve to empty and fire CollectionEmpty"
+        );
+        assert!(
+            actions.contains(&SchedulerAction::CollectionDone {
+                region_id: "per-issue".into(),
+            }),
+            "an empty collection fires done immediately"
+        );
+        assert!(
+            actions.contains(&SchedulerAction::Complete),
+            "the barrier target End completes the run immediately"
+        );
+    }
+
+    // Bounded-region review loop: body is the `loops:` region [impl, rev], routing
+    // lives on the edges (rev -> end WHEN verdict in [PASS], rev -> impl ELSE).
+
+    fn migrated_review_loop_pipeline(max_iter: i64) -> PipelineDef {
+        PipelineDef {
+            name: "manager-unstick-loop".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("start", &[], &["user_prompt"]),
+                make_node("impl", &["task", "review"], &["code"]),
+                make_node("rev", &["code"], &["review"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "impl", "task"),
+                make_edge("impl", "code", "rev", "code"),
+                make_cond_edge(
+                    "rev",
+                    "review",
+                    "end",
+                    "result",
+                    Some("verdict: { in: [PASS, APPROVED] }"),
+                    false,
+                ),
+                make_cond_edge("rev", "review", "impl", "task", None, true),
+            ],
+            loops: vec![pdo_pipeline::domain::pipeline::LoopRegion {
+                max_cost_usd: None,
+                id: "review_loop".into(),
+                kind: pdo_pipeline::domain::pipeline::LoopKind::Bounded,
+                members: vec!["impl".into(), "rev".into()],
+                max_iter: Some(serde_yaml::Value::Number(max_iter.into())),
+                over: None,
+            }],
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        }
+    }
+
+    fn fail_fm() -> HashMap<String, HashMap<String, serde_yaml::Value>> {
+        let mut rev_fm = HashMap::new();
+        rev_fm.insert(
+            "verdict".to_string(),
+            serde_yaml::Value::String("FAIL".to_string()),
+        );
+        let mut by_node = HashMap::new();
+        by_node.insert("rev".to_string(), rev_fm);
+        by_node
+    }
+
+    #[test]
+    fn region_back_edge_reenters_the_entry_at_the_next_lap() {
+        // rev completes FAIL at lap 1 → the `else` back-edge rev->impl fires and
+        // the region must re-enter: impl re-spawns at iter 2 (the next lap),
+        // NOT halt "unrouted". Regression: the back-edge produced no re-entry
+        // spawn because the region iteration was never tracked at runtime.
+        let pipeline = migrated_review_loop_pipeline(2);
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 1));
+        state
+            .nodes
+            .insert("rev".into(), completed_node_iter("rev", 1));
+        // Region tracked at lap 1.
+        state.loop_states.insert(
+            "review_loop".into(),
+            crate::domain::state::LoopState {
+                loop_node_id: "review_loop".into(),
+                current_iter: 1,
+                max_iter: 2,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let by_node = fail_fm();
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "rev",
+            &HashMap::new(),
+            by_node.get("rev").unwrap(),
+            &by_node,
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "impl".into(),
+                iter: 2,
+            }),
+            "FAIL at lap 1 must re-enter impl at iter 2, got {actions:?}"
+        );
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::Halt { .. })),
+            "must not halt at lap 1, got {actions:?}"
+        );
+    }
+
+    // Reopen must not double-spawn both members. `re_evaluate_after_command_inner`
+    // re-fires EVERY settled-complete member's edges in one pass; the tests below
+    // drive that sequence and assert the loop resumes at ONE alternation point,
+    // never two branches racing over the same worktree.
+
+    /// Re-fire every settled-complete member's edges, as the reopen re-drive does.
+    fn reopen_spawns(pipeline: &PipelineDef, state: &RunState) -> Vec<(String, i64)> {
+        let by_node = fail_fm();
+        let mut spawns = Vec::new();
+        let mut members: Vec<&str> = pipeline.loops[0]
+            .members
+            .iter()
+            .map(|m| m.as_str())
+            .collect();
+        members.sort_unstable(); // deterministic order, independent of HashMap iteration
+        for member in members {
+            if !state
+                .nodes
+                .get(member)
+                .is_some_and(|n| n.status.is_settled_complete())
+            {
+                continue;
+            }
+            let fm = by_node.get(member).cloned().unwrap_or_default();
+            for action in evaluate_outgoing_edges_full(
+                pipeline,
+                state,
+                member,
+                &HashMap::new(),
+                &fm,
+                &by_node,
+            ) {
+                if let SchedulerAction::Spawn { node_id, iter } = action {
+                    spawns.push((node_id, iter));
+                }
+            }
+        }
+        spawns
+    }
+
+    #[test]
+    fn reopen_bounded_loop_head_ahead_resumes_one_spawn() {
+        // The observed #626 state: the head (`impl`) completed iter 2 — its output
+        // never consumed — while the tail (`rev`) is a lap behind at iter 1 (FAIL,
+        // back-edge armed); region counter at lap 2. Reopen must spawn ONLY
+        // `rev` iter 2 (consume the head's un-read output); the tail's back-edge is
+        // stale (lap 2 already taken → `impl` iter 2 exists) and must not re-enter
+        // `impl` at iter 3.
+        let pipeline = migrated_review_loop_pipeline(5);
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 2));
+        state
+            .nodes
+            .insert("rev".into(), completed_node_iter("rev", 1));
+        state.loop_states.insert(
+            "review_loop".into(),
+            crate::domain::state::LoopState {
+                loop_node_id: "review_loop".into(),
+                current_iter: 2,
+                max_iter: 5,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let spawns = reopen_spawns(&pipeline, &state);
+        assert_eq!(
+            spawns,
+            vec![("rev".to_string(), 2)],
+            "reopen must resume at one point (rev iter 2), not double-spawn, got {spawns:?}"
+        );
+    }
+
+    #[test]
+    fn reopen_bounded_loop_tail_at_head_lap_resumes_one_spawn() {
+        // Symmetric #626 state: both members completed at the SAME lap (impl iter 1,
+        // rev iter 1 FAIL), region counter at lap 1, and the run went terminal
+        // before the back-edge advanced. Reopen must re-enter ONLY `impl` iter 2
+        // (the tail's FAIL drives the next lap); the head's forward edge is stale
+        // (`rev` already ran at the head's lap) and must not re-spawn `rev` iter 2.
+        let pipeline = migrated_review_loop_pipeline(5);
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 1));
+        state
+            .nodes
+            .insert("rev".into(), completed_node_iter("rev", 1));
+        state.loop_states.insert(
+            "review_loop".into(),
+            crate::domain::state::LoopState {
+                loop_node_id: "review_loop".into(),
+                current_iter: 1,
+                max_iter: 5,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let spawns = reopen_spawns(&pipeline, &state);
+        assert_eq!(
+            spawns,
+            vec![("impl".to_string(), 2)],
+            "reopen must re-enter one point (impl iter 2), not double-spawn, got {spawns:?}"
+        );
+    }
+
+    #[test]
+    fn region_blocks_exhausted_unrouted_at_max_iter() {
+        // rev completes FAIL at lap 2 == max_iter with no `iter >= max` exit edge
+        // wired: the region must block the explicit "exhausted — unrouted" halt,
+        // NOT re-enter (no iter-3 spawn) and NOT a generic unrouted message.
+        let pipeline = migrated_review_loop_pipeline(2);
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 2));
+        state
+            .nodes
+            .insert("rev".into(), completed_node_iter("rev", 2));
+        state.loop_states.insert(
+            "review_loop".into(),
+            crate::domain::state::LoopState {
+                loop_node_id: "review_loop".into(),
+                current_iter: 2,
+                max_iter: 2,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let by_node = fail_fm();
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "rev",
+            &HashMap::new(),
+            by_node.get("rev").unwrap(),
+            &by_node,
+        );
+
+        assert!(
+            !actions.iter().any(|a| matches!(
+                a,
+                SchedulerAction::Spawn {
+                    node_id,
+                    iter: 3,
+                } if node_id == "impl"
+            )),
+            "must not re-enter past max_iter, got {actions:?}"
+        );
+        let halt = actions.iter().find_map(|a| match a {
+            SchedulerAction::Interrupt { message, .. } => Some(message.clone()),
+            _ => None,
+        });
+        let Some(halt) = halt else {
+            panic!("expected an exhausted-unrouted interrupt, got {actions:?}");
+        };
+        assert!(
+            halt.contains("exhausted") && halt.contains("unrouted"),
+            "halt must be the region exhausted-unrouted reason, got {halt:?}"
+        );
+    }
+
+    #[test]
+    fn region_exits_early_on_pass_edge() {
+        // rev PASSes at lap 1 → the guarded rev->end edge fires; the run
+        // completes, leaving the region before max_iter. (No regression here;
+        // pins the early-exit path stays intact alongside the re-entry fix.)
+        let pipeline = migrated_review_loop_pipeline(2);
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 1));
+        state
+            .nodes
+            .insert("rev".into(), completed_node_iter("rev", 1));
+        state.loop_states.insert(
+            "review_loop".into(),
+            crate::domain::state::LoopState {
+                loop_node_id: "review_loop".into(),
+                current_iter: 1,
+                max_iter: 2,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let mut rev_fm = HashMap::new();
+        rev_fm.insert(
+            "verdict".to_string(),
+            serde_yaml::Value::String("PASS".to_string()),
+        );
+        let mut by_node = HashMap::new();
+        by_node.insert("rev".to_string(), rev_fm.clone());
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "rev",
+            &HashMap::new(),
+            &rev_fm,
+            &by_node,
+        );
+        assert!(
+            actions.contains(&SchedulerAction::Complete),
+            "PASS must complete via rev->end, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn region_member_re_enters_then_forwards_to_next_member_at_the_new_lap() {
+        // After the re-entry spawns impl at iter 2, impl completing must forward
+        // (unconditional impl->rev) to spawn rev at iter 2 — the intra-body edge
+        // is NOT a region re-entry, so it takes the generic forward path. This is
+        // what stamps both members at the region iter, which the run overlay
+        // reads to render the exhausted-unrouted affordance.
+        let pipeline = migrated_review_loop_pipeline(2);
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        // impl has re-entered and completed at lap 2; rev is still at lap 1.
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 2));
+        state
+            .nodes
+            .insert("rev".into(), completed_node_iter("rev", 1));
+        state.loop_states.insert(
+            "review_loop".into(),
+            crate::domain::state::LoopState {
+                loop_node_id: "review_loop".into(),
+                current_iter: 2,
+                max_iter: 2,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "impl",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "rev".into(),
+                iter: 2,
+            }),
+            "impl@2 must forward to rev@2 on the new lap, got {actions:?}"
+        );
+    }
+
+    // A forward spawn's preconditions consider only *forward* edges. Counting a
+    // self-edge or a region back-edge as an upstream blocker reproduces the
+    // forensic stall: zero events, run sits Running forever.
+
+    #[test]
+    fn self_edge_is_not_an_upstream_precondition() {
+        // Forensic self-edge (ecbJixkS.screens-fixed -> ecbJixkS.in) drawn
+        // outside any region: when the real upstream completes, the node must
+        // spawn — never a silent stall on its own output.
+        let pipeline = PipelineDef {
+            name: "self-edge".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("griller", &["task"], &["agentic_test"]),
+                make_node("tester", &["test", "screens"], &["screens_fixed"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("griller", "agentic_test", "tester", "test"),
+                make_edge("tester", "screens_fixed", "tester", "screens"),
+                make_end_edge("tester", "screens_fixed", "done"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("griller".into(), completed_node("griller"));
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "griller",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "tester".into(),
+                iter: 1,
+            }),
+            "tester must spawn when its real upstream completed; the self-edge \
+             is not a precondition, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn region_entry_join_spawns_on_external_feeder_completion() {
+        // The region entry (impl) is fed by an external feeder AND by the
+        // rev->impl back-edge. When the feeder completes, the entry spawns at
+        // lap 1: the back-edge is the region engine's concern, not a forward
+        // precondition (#194 loop-entry join stall).
+        let pipeline = migrated_review_loop_pipeline(3);
+
+        let mut state = empty_run_state();
+        state.nodes.insert("start".into(), completed_node("start"));
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "start",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "impl".into(),
+                iter: 1,
+            }),
+            "region entry must spawn on feeder completion without waiting on \
+             its back-edge, got {actions:?}"
+        );
+    }
+
+    fn region_state(
+        current_iter: i64,
+        max_iter: i64,
+        done: bool,
+    ) -> crate::domain::state::LoopState {
+        crate::domain::state::LoopState {
+            loop_node_id: "review_loop".into(),
+            current_iter,
+            max_iter,
+            break_received: false,
+            done,
+        }
+    }
+
+    #[test]
+    fn ended_region_closes_instead_of_starting_a_phantom_lap() {
+        // #199 forensic: `end_region` on an active bounded region started a
+        // new lap (entry re-spawned at iter 4 > max_iter 3). An ended region
+        // must route its exit (or halt unrouted) at the current iter — never
+        // re-spawn the entry, never bump the counter.
+        let pipeline = migrated_review_loop_pipeline(3);
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 1));
+        state
+            .nodes
+            .insert("rev".into(), completed_node_iter("rev", 1));
+        // end_region projected: region closed at lap 1 (< max 3).
+        state
+            .loop_states
+            .insert("review_loop".into(), region_state(1, 3, true));
+
+        let by_node = fail_fm();
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "rev",
+            &HashMap::new(),
+            by_node.get("rev").unwrap(),
+            &by_node,
+        );
+
+        assert!(
+            !actions.iter().any(|a| matches!(
+                a,
+                SchedulerAction::Spawn { node_id, .. } if node_id == "impl"
+            )),
+            "an ended region must never re-spawn its entry, got {actions:?}"
+        );
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::LoopIterStarted { .. })),
+            "an ended region must not advance its lap counter, got {actions:?}"
+        );
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::Interrupt { .. })),
+            "ended with no matching exit edge: explicit interrupt, never a silent \
+             stall, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn forward_reevaluation_never_spawns_a_member_past_max_iter() {
+        // #199 forensic: after end_region, re-evaluation replayed the feeder's
+        // forward edge into the region entry and spawned it at iter 4 with
+        // max_iter 3. No code path may push a member past the region bound.
+        let pipeline = migrated_review_loop_pipeline(3);
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 3));
+        state
+            .nodes
+            .insert("rev".into(), completed_node_iter("rev", 3));
+        state
+            .loop_states
+            .insert("review_loop".into(), region_state(3, 3, true));
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "start",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            !actions.iter().any(|a| matches!(
+                a,
+                SchedulerAction::Spawn { node_id, iter } if node_id == "impl" && *iter > 3
+            )),
+            "a member must never spawn past max_iter, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn completed_non_member_is_never_respawned_by_forward_reevaluation() {
+        // #199 / #195 forensic: the griller — NOT a member of the region — was
+        // re-spawned at iter 4 by the lap bump. A completed node reached only
+        // by forward edges must never be re-run by re-evaluation; only a
+        // back-edge (emergent cycle) or a region lap may re-run a node.
+        let pipeline = PipelineDef {
+            name: "feeder-chain".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("start", &[], &["user_prompt"]),
+                make_node("griller", &["task"], &["plan"]),
+                make_node("impl", &["plan"], &["code"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "griller", "task"),
+                make_edge("griller", "plan", "impl", "plan"),
+                make_end_edge("impl", "code", "done"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("griller".into(), completed_node_iter("griller", 1));
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "start",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            !actions.iter().any(|a| matches!(
+                a,
+                SchedulerAction::Spawn { node_id, .. } if node_id == "griller"
+            )),
+            "a completed non-member must never be re-spawned by forward \
+             re-evaluation, got {actions:?}"
+        );
+    }
+
+    // ── #172: entering a bounded region from outside ──────────────────────────
+    //
+    // Topology that the default `bugfix` pipeline exhibits and that deadlocked
+    // silently before the fix:
+    //
+    //   dbg ──(verdict eq Bug)──▶ impl ⇄ tst
+    //   dbg ──(repro, context)──▶ tst        impl ──▶ tst (forward)
+    //                                        tst  ──▶ impl (back-edge / else)
+    //                                        tst  ──(verdict eq Pass)──▶ end
+    //
+    // Bounded region [impl, tst]; entry = impl (first member with an external
+    // incoming edge). The back-edge tst->impl is a region re-entry edge: it must
+    // NOT count as an upstream precondition for impl's first spawn, or impl never
+    // starts — its only other producer, tst, sits downstream of impl in the cycle
+    // and can never complete first. ADR-0011: no silent stall.
+    fn external_entry_into_loop_pipeline(max_iter: i64) -> PipelineDef {
+        PipelineDef {
+            name: "external-entry-loop".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("dbg", &["task"], &["verdict", "repro"]),
+                make_node("impl", &["task", "review"], &["code"]),
+                make_node("tst", &["code", "repro"], &["verdict"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                // External forward edge into the loop entry, guarded.
+                make_cond_edge(
+                    "dbg",
+                    "verdict",
+                    "impl",
+                    "task",
+                    Some("verdict: { eq: Bug }"),
+                    false,
+                ),
+                // External context edge into the *other* member (not the entry).
+                make_edge("dbg", "repro", "tst", "repro"),
+                // Intra-body forward edge.
+                make_edge("impl", "code", "tst", "code"),
+                // Region exit (guarded) and back-edge (else) — both off `tst`.
+                make_cond_edge(
+                    "tst",
+                    "verdict",
+                    "end",
+                    "result",
+                    Some("verdict: { eq: Pass }"),
+                    false,
+                ),
+                make_cond_edge("tst", "verdict", "impl", "review", None, true),
+            ],
+            loops: vec![pdo_pipeline::domain::pipeline::LoopRegion {
+                max_cost_usd: None,
+                id: "fix_loop".into(),
+                kind: pdo_pipeline::domain::pipeline::LoopKind::Bounded,
+                members: vec!["impl".into(), "tst".into()],
+                max_iter: Some(serde_yaml::Value::Number(max_iter.into())),
+                over: None,
+            }],
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        }
+    }
+
+    #[test]
+    fn external_forward_edge_spawns_bounded_loop_entry() {
+        // dbg completes with verdict=Bug → the guarded entry edge dbg->impl fires.
+        // impl is the region entry and also the target of the back-edge tst->impl.
+        // The back-edge must be excluded from impl's upstream join, so impl spawns
+        // at iter 1 on dbg's completion alone. (Before the fix: no spawn, no halt,
+        // run stuck `running` forever — #172.)
+        let pipeline = external_entry_into_loop_pipeline(3);
+        let mut state = empty_run_state();
+        state.nodes.insert("dbg".into(), completed_node("dbg"));
+
+        let mut dbg_fm = HashMap::new();
+        dbg_fm.insert(
+            "verdict".to_string(),
+            serde_yaml::Value::String("Bug".to_string()),
+        );
+        let mut by_node = HashMap::new();
+        by_node.insert("dbg".to_string(), dbg_fm.clone());
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "dbg",
+            &HashMap::new(),
+            &dbg_fm,
+            &by_node,
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "impl".into(),
+                iter: 1,
+            }),
+            "entering the loop from dbg must spawn the entry impl@1, got {actions:?}"
+        );
+        // The context edge fired too, but tst must wait for impl (its forward
+        // producer), so it does NOT spawn yet — and nothing halts silently.
+        assert!(
+            !actions.iter().any(|a| matches!(
+                a,
+                SchedulerAction::Spawn { node_id, .. } if node_id == "tst"
+            )),
+            "tst must wait for impl, not spawn on dbg's completion, got {actions:?}"
+        );
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::Halt { .. })),
+            "entering a bounded loop must not halt, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn bounded_region_gets_a_loop_state_from_lap_one() {
+        // #601: entering a bounded region from outside emits LoopIterStarted{1} in
+        // the same batch that spawns the entry, so `loop_states` carries an entry
+        // from lap 1 — "no entry" then means "no loop", never "first lap"
+        // (ADR-0025 §4). The legacy `Loop` node already had this via
+        // `seed_pending_loops`; the region path did not.
+        let pipeline = external_entry_into_loop_pipeline(3);
+        let mut state = empty_run_state();
+        state.nodes.insert("dbg".into(), completed_node("dbg"));
+
+        let mut dbg_fm = HashMap::new();
+        dbg_fm.insert(
+            "verdict".to_string(),
+            serde_yaml::Value::String("Bug".to_string()),
+        );
+        let mut by_node = HashMap::new();
+        by_node.insert("dbg".to_string(), dbg_fm.clone());
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "dbg",
+            &HashMap::new(),
+            &dbg_fm,
+            &by_node,
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::LoopIterStarted {
+                loop_node_id: "fix_loop".into(),
+                iter: 1,
+                max_iter: 3,
+            }),
+            "entering a bounded region must seed loop_states at lap 1, got {actions:?}"
+        );
+        // Ordered before the entry spawn, so a driver applies the loop event first.
+        let li = actions
+            .iter()
+            .position(|a| matches!(a, SchedulerAction::LoopIterStarted { .. }));
+        let sp = actions
+            .iter()
+            .position(|a| matches!(a, SchedulerAction::Spawn { node_id, .. } if node_id == "impl"));
+        assert!(
+            li < sp,
+            "LoopIterStarted must precede the entry Spawn: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn bounded_region_lap_one_seed_is_idempotent_once_the_state_exists() {
+        // Re-evaluating the producer once the region already has a loop_states
+        // entry must NOT emit a second LoopIterStarted{1} — the seed is guarded on
+        // the absent key.
+        let pipeline = external_entry_into_loop_pipeline(3);
+        let mut state = empty_run_state();
+        state.nodes.insert("dbg".into(), completed_node("dbg"));
+        state.loop_states.insert(
+            "fix_loop".into(),
+            crate::domain::state::LoopState {
+                loop_node_id: "fix_loop".into(),
+                current_iter: 1,
+                max_iter: 3,
+                break_received: false,
+                done: false,
+            },
+        );
+
+        let mut dbg_fm = HashMap::new();
+        dbg_fm.insert(
+            "verdict".to_string(),
+            serde_yaml::Value::String("Bug".to_string()),
+        );
+        let mut by_node = HashMap::new();
+        by_node.insert("dbg".to_string(), dbg_fm.clone());
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "dbg",
+            &HashMap::new(),
+            &dbg_fm,
+            &by_node,
+        );
+
+        assert!(
+            !actions
+                .iter()
+                .any(|a| matches!(a, SchedulerAction::LoopIterStarted { .. })),
+            "no re-seed when loop_states already carries the region, got {actions:?}"
+        );
+    }
+
+    #[test]
+    fn bounded_loop_entry_then_forwards_to_second_member() {
+        // After impl spawns and completes its first lap, its forward edge
+        // impl->tst must spawn tst@1: tst's upstream is {dbg (done), impl (just
+        // completed)} — the back-edge is excluded, so the join resolves.
+        let pipeline = external_entry_into_loop_pipeline(3);
+        let mut state = empty_run_state();
+        state.nodes.insert("dbg".into(), completed_node("dbg"));
+        state.nodes.insert("impl".into(), completed_node("impl"));
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "impl",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "tst".into(),
+                iter: 1,
+            }),
+            "impl completing must forward to spawn tst@1, got {actions:?}"
+        );
+    }
+
+    fn region(
+        id: &str,
+        members: &[&str],
+        max_iter: i64,
+    ) -> pdo_pipeline::domain::pipeline::LoopRegion {
+        pdo_pipeline::domain::pipeline::LoopRegion {
+            max_cost_usd: None,
+            id: id.into(),
+            kind: pdo_pipeline::domain::pipeline::LoopKind::Bounded,
+            members: members.iter().map(|m| (*m).into()).collect(),
+            max_iter: Some(serde_yaml::Value::Number(max_iter.into())),
+            over: None,
+        }
+    }
+
+    #[test]
+    fn effective_region_max_iter_prefers_the_live_override() {
+        // #600 / FP #1: a `set_region_max_iter` override replaces the declared cap
+        // — uniformly, here over a literal 3.
+        let r = region("R", &["impl", "rev"], 3);
+        let mut rs = empty_run_state();
+        assert_eq!(effective_region_max_iter(&rs, &r, &HashMap::new()), 3);
+        rs.region_max_iter_overrides.insert("R".into(), 9);
+        assert_eq!(
+            effective_region_max_iter(&rs, &r, &HashMap::new()),
+            9,
+            "the live override wins over the declared literal cap"
+        );
+    }
+
+    #[test]
+    fn effective_region_max_iter_override_beats_a_var_cap_too() {
+        // FP #1 "uniforme littéral et $var": the override replaces a `$var` cap the
+        // same way, without touching the variable.
+        let mut r = region("R", &["w"], 5);
+        r.max_iter = Some(serde_yaml::Value::String("$laps".into()));
+        let mut vars = HashMap::new();
+        vars.insert("laps".to_string(), serde_yaml::Value::Number(4.into()));
+        let mut rs = empty_run_state();
+        assert_eq!(effective_region_max_iter(&rs, &r, &vars), 4);
+        rs.region_max_iter_overrides.insert("R".into(), 12);
+        assert_eq!(effective_region_max_iter(&rs, &r, &vars), 12);
+    }
+
+    #[test]
+    fn force_route_to_end_completes_the_run() {
+        // #600 / FP #3: a `force_route` on a completed node short-circuits its
+        // `when:` edges — routed to End, it completes the run.
+        let pipeline = PipelineDef {
+            name: "fr".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("start", &[], &["user_prompt"]),
+                make_node("rev", &["code"], &["review"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "rev", "code"),
+                // A `when: verdict in [PASS]` exit that would NOT fire on this verdict.
+                make_cond_edge(
+                    "rev",
+                    "review",
+                    "end",
+                    "result",
+                    Some("verdict: {in: [PASS]}"),
+                    false,
+                ),
+            ],
+            loops: vec![],
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+        let mut rs = empty_run_state();
+        rs.nodes.insert("rev".into(), completed_node("rev"));
+        rs.forced_routes.insert("rev".into(), "end".into());
+        // verdict is minor_changes — the `when:` would suppress every path, but the
+        // forced route ignores it.
+        let mut fields = HashMap::new();
+        fields.insert(
+            "verdict".to_string(),
+            serde_yaml::Value::String("minor_changes".into()),
+        );
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &rs,
+            "rev",
+            &HashMap::new(),
+            &fields,
+            &HashMap::new(),
+        );
+        assert_eq!(
+            actions,
+            vec![SchedulerAction::Complete],
+            "force_route rev -> end completes the run despite the unmatched when:"
+        );
+    }
+
+    #[test]
+    fn force_route_to_a_node_spawns_it() {
+        let pipeline = PipelineDef {
+            name: "fr".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("rev", &["code"], &["review"]),
+                make_node("finalize", &["review"], &["done"]),
+                make_end_node(),
+            ],
+            edges: vec![make_cond_edge(
+                "rev",
+                "review",
+                "end",
+                "result",
+                Some("verdict: {in: [PASS]}"),
+                false,
+            )],
+            loops: vec![],
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+        let mut rs = empty_run_state();
+        rs.nodes.insert("rev".into(), completed_node("rev"));
+        rs.forced_routes.insert("rev".into(), "finalize".into());
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &rs,
+            "rev",
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        assert_eq!(
+            actions,
+            vec![SchedulerAction::Spawn {
+                node_id: "finalize".into(),
+                iter: 1
+            }]
+        );
+    }
+
+    /// start -> A; A -> B when x; A -> C else. A completed with x true → C is the
+    /// not-taken branch and is structurally unreachable.
+    fn either_or_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "eo".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("start", &[], &["user_prompt"]),
+                make_node("a", &["task"], &["v"]),
+                make_node("b", &["v"], &["out"]),
+                make_node("c", &["v"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "a", "task"),
+                make_cond_edge("a", "v", "b", "v", Some("verdict: {in: [X]}"), false),
+                make_cond_edge("a", "v", "c", "v", None, true),
+            ],
+            loops: vec![],
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        }
+    }
+
+    #[test]
+    fn unreachable_nodes_auto_skips_the_not_taken_branch() {
+        // #600 / #589 / FP #6: A fired A->B (verdict X), so A->C is dead and C can
+        // never spawn — it is returned for auto-skip, while B (edge fired) is not.
+        let pipeline = either_or_pipeline();
+        let mut rs = empty_run_state();
+        rs.nodes.insert("a".into(), completed_node("a"));
+        let mut fm_by_node = HashMap::new();
+        let mut a_fm = HashMap::new();
+        a_fm.insert("verdict".to_string(), serde_yaml::Value::String("X".into()));
+        fm_by_node.insert("a".to_string(), a_fm);
+
+        let skips = unreachable_nodes(&pipeline, &rs, &fm_by_node, &HashMap::new());
+        let ids: Vec<&str> = skips.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, vec!["c"], "only the not-taken branch C is unreachable");
+        assert!(
+            skips[0].1.contains("unreachable"),
+            "reason names the unreachability: {}",
+            skips[0].1
+        );
+    }
+
+    #[test]
+    fn unreachable_nodes_leaves_a_still_undecided_branch_alone() {
+        // Before A completes, neither branch is dead (the outcome is undecided), so
+        // nothing is auto-skipped — the sweep is conservative.
+        let pipeline = either_or_pipeline();
+        let rs = empty_run_state(); // A not completed
+        let skips = unreachable_nodes(&pipeline, &rs, &HashMap::new(), &HashMap::new());
+        assert!(skips.is_empty());
+    }
+
+    #[test]
+    fn unrouted_message_lists_candidate_edges_and_read_values() {
+        // #600 / AC4: the enriched diagnostic names the producer's candidate edges,
+        // their guard, whether each fired, and the value actually read.
+        let pipeline = PipelineDef {
+            name: "u".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![make_node("rev", &["code"], &["review"]), make_end_node()],
+            edges: vec![make_cond_edge(
+                "rev",
+                "review",
+                "end",
+                "result",
+                Some("verdict: {in: [PASS]}"),
+                false,
+            )],
+            loops: vec![],
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+        let mut rs = empty_run_state();
+        rs.nodes.insert("rev".into(), completed_node("rev"));
+        let mut fields = HashMap::new();
+        fields.insert(
+            "verdict".to_string(),
+            serde_yaml::Value::String("minor_changes".into()),
+        );
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &rs,
+            "rev",
+            &HashMap::new(),
+            &fields,
+            &HashMap::new(),
+        );
+        let msg = match actions.as_slice() {
+            [SchedulerAction::Interrupt { message, .. }] => message.clone(),
+            other => panic!("expected a single Interrupt, got {other:?}"),
+        };
+        assert!(
+            msg.contains("rev.review -> end"),
+            "names the candidate edge: {msg}"
+        );
+        assert!(
+            msg.contains("not fired"),
+            "says the edge did not fire: {msg}"
+        );
+        assert!(
+            msg.contains("verdict=minor_changes"),
+            "names the value actually read: {msg}"
+        );
+        assert!(
+            msg.contains("force_route"),
+            "points at the recovery lever: {msg}"
+        );
+    }
+
+    // A not-yet-reached node off a LIVE bounded loop is not "unreachable": `ship`
+    // hangs off the loop's exit, and when lap 1 fails the loop re-enters. The
+    // resilience sweep must leave it alone; auto-skipping it (empty output)
+    // completed the run with a lap in flight.
+
+    /// start -> implementer; implementer -> tester; tester -> ship WHEN Verdict in
+    /// [Pass] (loop exit); tester -> implementer ELSE (back-edge). One bounded
+    /// region `{implementer, tester}`, entry `implementer`.
+    fn review_loop_with_ship(max_iter: i64) -> PipelineDef {
+        PipelineDef {
+            name: "simple-bugfix".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("start", &[], &["user_prompt"]),
+                make_node("implementer", &["task", "review"], &["code"]),
+                make_node("tester", &["code"], &["review"]),
+                make_node("ship", &["review"], &["out"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "implementer", "task"),
+                make_edge("implementer", "code", "tester", "code"),
+                make_cond_edge(
+                    "tester",
+                    "review",
+                    "ship",
+                    "review",
+                    Some("Verdict: {in: [Pass]}"),
+                    false,
+                ),
+                make_cond_edge("tester", "review", "implementer", "task", None, true),
+                make_edge("ship", "out", "end", "result"),
+            ],
+            loops: vec![region("review_loop", &["implementer", "tester"], max_iter)],
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        }
+    }
+
+    fn tester_verdict(v: &str) -> HashMap<String, HashMap<String, serde_yaml::Value>> {
+        let mut fm_by_node = HashMap::new();
+        let mut fm = HashMap::new();
+        fm.insert("Verdict".to_string(), serde_yaml::Value::String(v.into()));
+        fm_by_node.insert("tester".to_string(), fm);
+        fm_by_node
+    }
+
+    #[test]
+    fn live_loop_exit_target_is_not_auto_skipped() {
+        // #620 core: lap 1 fails, so `tester -> implementer` (else) fires and the
+        // loop re-enters. `ship` (off the unfired `Verdict == Pass` exit) is
+        // not-yet-reached, NOT unreachable — the sweep must return it empty-handed.
+        let pipeline = review_loop_with_ship(5);
+        let mut rs = empty_run_state();
+        rs.nodes
+            .insert("implementer".into(), completed_node_iter("implementer", 1));
+        rs.nodes
+            .insert("tester".into(), completed_node_iter("tester", 1));
+
+        let skips = unreachable_nodes(&pipeline, &rs, &tester_verdict("Fail"), &HashMap::new());
+        assert!(
+            skips.is_empty(),
+            "a node off a live loop's exit is not-yet-reached, never auto-skipped: {skips:?}"
+        );
+    }
+
+    #[test]
+    fn live_loop_end_is_not_dead_so_the_run_does_not_complete_early() {
+        // The completion-guard twin of the above: while the loop iterates, `End`
+        // (reachable only through `ship`, past the unfired loop exit) must not read
+        // as dead — otherwise the unrouted-convergence path would misfire and the
+        // run could finish with a lap still running.
+        let pipeline = review_loop_with_ship(5);
+        let mut rs = empty_run_state();
+        rs.nodes
+            .insert("implementer".into(), completed_node_iter("implementer", 1));
+        rs.nodes
+            .insert("tester".into(), completed_node_iter("tester", 1));
+
+        let mut visiting = HashSet::new();
+        let end_dead = is_node_dead(
+            &pipeline,
+            &rs,
+            "end",
+            &tester_verdict("Fail"),
+            &HashMap::new(),
+            &mut visiting,
+        );
+        assert!(!end_dead, "End stays live while the bounded loop iterates");
+    }
+
+    #[test]
+    fn dead_sibling_exit_is_still_auto_skipped_on_a_clean_loop_exit() {
+        // The loop EXITS this lap (Verdict == Pass fires `tester -> ship`, no
+        // back-edge fires), so a genuinely not-taken sibling exit is settled and
+        // must still be pruned — otherwise the run would hang waiting on a node
+        // that can never spawn. Here `abort` (a `Verdict == Reject` sibling exit)
+        // is that dead branch; `ship` (the taken exit) is left alone.
+        let mut pipeline = review_loop_with_ship(5);
+        pipeline
+            .nodes
+            .push(make_node("abort", &["review"], &["out"]));
+        pipeline.edges.push(make_cond_edge(
+            "tester",
+            "review",
+            "abort",
+            "review",
+            Some("Verdict: {in: [Reject]}"),
+            false,
+        ));
+        let mut rs = empty_run_state();
+        rs.nodes
+            .insert("implementer".into(), completed_node_iter("implementer", 3));
+        rs.nodes
+            .insert("tester".into(), completed_node_iter("tester", 3));
+
+        let skips = unreachable_nodes(&pipeline, &rs, &tester_verdict("Pass"), &HashMap::new());
+        let ids: Vec<&str> = skips.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["abort"],
+            "only the not-taken sibling exit is unreachable once the loop exits"
+        );
+    }
+
+    #[test]
+    fn exhausted_loop_exit_target_is_auto_skipped() {
+        // At `max_iter` with the exit still unfired (Verdict never passed), the
+        // region is exhausted: `handle_region_reentry` owns the terminal routing,
+        // and the exit is genuinely settled. `ship` is then unreachable and the
+        // sweep may prune it — the `iter < max_iter` half of the #620 guard.
+        let pipeline = review_loop_with_ship(3);
+        let mut rs = empty_run_state();
+        rs.nodes
+            .insert("implementer".into(), completed_node_iter("implementer", 3));
+        rs.nodes
+            .insert("tester".into(), completed_node_iter("tester", 3));
+
+        let skips = unreachable_nodes(&pipeline, &rs, &tester_verdict("Fail"), &HashMap::new());
+        let ids: Vec<&str> = skips.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["ship"],
+            "an exhausted loop's unfired exit is settled — its target is unreachable"
+        );
+    }
+
+    // ---- The Plafond de coût, checked at re-entry (ADR draft
+    // plafond-de-cout-de-boucle) ----
+
+    /// `review_loop_with_ship(max_iter)` capped at `cap`, both members
+    /// completed at `lap`, the region counter on `lap`, and the Coût de boucle
+    /// the interpreter would fold in (`spent`, `partial`).
+    fn capped_loop_at_lap(
+        max_iter: i64,
+        cap: serde_yaml::Value,
+        lap: i64,
+        spent: Option<f64>,
+        partial: bool,
+    ) -> (PipelineDef, RunState) {
+        let mut pipeline = review_loop_with_ship(max_iter);
+        pipeline.loops[0].max_cost_usd = Some(cap);
+        let mut rs = empty_run_state();
+        rs.nodes.insert(
+            "implementer".into(),
+            completed_node_iter("implementer", lap),
+        );
+        rs.nodes
+            .insert("tester".into(), completed_node_iter("tester", lap));
+        rs.loop_states.insert(
+            "review_loop".into(),
+            crate::domain::state::LoopState {
+                loop_node_id: "review_loop".into(),
+                current_iter: lap,
+                max_iter,
+                break_received: false,
+                done: false,
+            },
+        );
+        rs.loop_costs.insert(
+            "review_loop".into(),
+            crate::domain::state::LoopCost {
+                usd: spent,
+                estimated: true,
+                partial,
+                unpriced_models: Vec::new(),
+                unavailable_reasons: Vec::new(),
+                executions: 2 * lap,
+                readable_executions: if partial { lap } else { 2 * lap },
+                members: Vec::new(),
+                cap_usd: None,
+            },
+        );
+        (pipeline, rs)
+    }
+
+    fn usd(v: f64) -> serde_yaml::Value {
+        serde_yaml::to_value(v).unwrap()
+    }
+
+    fn reenter(
+        pipeline: &PipelineDef,
+        rs: &RunState,
+        vars: &HashMap<String, serde_yaml::Value>,
+    ) -> Vec<SchedulerAction> {
+        let fm = tester_verdict("Fail");
+        evaluate_outgoing_edges_full(pipeline, rs, "tester", vars, &fm["tester"], &fm)
+    }
+
+    fn budget_park(actions: &[SchedulerAction]) -> Option<(String, Option<String>)> {
+        actions.iter().find_map(|a| match a {
+            SchedulerAction::Interrupt {
+                reason_code,
+                message,
+                region_id,
+            } if reason_code == "region_budget_exhausted" => {
+                Some((message.clone(), region_id.clone()))
+            }
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn under_the_cost_cap_the_next_lap_starts() {
+        let (pipeline, rs) = capped_loop_at_lap(5, usd(5.0), 2, Some(4.99), false);
+        let actions = reenter(&pipeline, &rs, &HashMap::new());
+        assert!(budget_park(&actions).is_none(), "{actions:?}");
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "implementer".into(),
+                iter: 3
+            }),
+            "under the cap the loop takes lap 3: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn reaching_the_cost_cap_parks_the_run_and_never_follows_the_exit() {
+        let (pipeline, rs) = capped_loop_at_lap(5, usd(5.0), 4, Some(5.12), false);
+        let actions = reenter(&pipeline, &rs, &HashMap::new());
+        let (message, region_id) = budget_park(&actions).expect("budget park");
+        assert_eq!(region_id.as_deref(), Some("review_loop"));
+        assert!(
+            !actions.iter().any(|a| matches!(
+                a,
+                SchedulerAction::Spawn { .. }
+                    | SchedulerAction::LoopIterStarted { .. }
+                    | SchedulerAction::Complete
+                    | SchedulerAction::Halt { .. }
+            )),
+            "no lap, no exit, no terminal action: {actions:?}"
+        );
+        for needle in [
+            "budget reached",
+            "review_loop",
+            "~$5.12",
+            "of $5 after",
+            "lap 4/5",
+            "force_route",
+            "end_region",
+            "max_cost_usd",
+        ] {
+            assert!(
+                message.contains(needle),
+                "message names {needle}: {message}"
+            );
+        }
+        assert!(!message.contains("partial"), "{message}");
+    }
+
+    #[test]
+    fn exactly_at_the_cap_counts_as_reached() {
+        let (pipeline, rs) = capped_loop_at_lap(5, usd(1.0), 1, Some(1.0), false);
+        assert!(budget_park(&reenter(&pipeline, &rs, &HashMap::new())).is_some());
+    }
+
+    #[test]
+    fn the_wired_exhaustion_exit_is_not_followed_on_budget() {
+        let (mut pipeline, rs) = capped_loop_at_lap(5, usd(0.5), 2, Some(0.75), false);
+        pipeline.edges.push(make_cond_edge(
+            "tester",
+            "review",
+            "ship",
+            "review",
+            Some("iter: {gte: 5}"),
+            false,
+        ));
+        let actions = reenter(&pipeline, &rs, &HashMap::new());
+        assert!(budget_park(&actions).is_some(), "{actions:?}");
+        assert!(
+            !actions.contains(&SchedulerAction::Spawn {
+                node_id: "ship".into(),
+                iter: 1
+            }),
+            "the exhaustion exit is not followed: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn max_iter_wins_when_both_bounds_are_reached_together() {
+        let (pipeline, rs) = capped_loop_at_lap(3, usd(1.0), 3, Some(9.0), false);
+        let actions = reenter(&pipeline, &rs, &HashMap::new());
+        assert!(budget_park(&actions).is_none(), "{actions:?}");
+        assert!(
+            actions.iter().any(|a| matches!(
+                a,
+                SchedulerAction::Interrupt { reason_code, region_id, .. }
+                    if reason_code == "region_exhausted"
+                        && region_id.as_deref() == Some("review_loop")
+            )),
+            "max_iter exhaustion (unrouted here) owns the decision: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn a_partial_cost_counts_its_known_part_and_says_so() {
+        let (pipeline, rs) = capped_loop_at_lap(5, usd(2.0), 2, Some(2.5), true);
+        let (message, _) = budget_park(&reenter(&pipeline, &rs, &HashMap::new()))
+            .expect("the known part reaches the cap");
+        assert!(message.contains("partial cost"), "{message}");
+    }
+
+    #[test]
+    fn an_unknown_cost_never_blocks_the_loop() {
+        let (pipeline, rs) = capped_loop_at_lap(5, usd(0.01), 2, None, true);
+        let actions = reenter(&pipeline, &rs, &HashMap::new());
+        assert!(budget_park(&actions).is_none(), "{actions:?}");
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "implementer".into(),
+            iter: 3
+        }));
+    }
+
+    #[test]
+    fn no_loop_cost_input_never_parks() {
+        let (pipeline, mut rs) = capped_loop_at_lap(5, usd(0.01), 2, Some(9.0), false);
+        rs.loop_costs.clear();
+        assert!(budget_park(&reenter(&pipeline, &rs, &HashMap::new())).is_none());
+    }
+
+    #[test]
+    fn a_var_cost_cap_reads_the_runs_variables() {
+        let (pipeline, rs) = capped_loop_at_lap(
+            5,
+            serde_yaml::Value::String("$budget".into()),
+            2,
+            Some(3.0),
+            false,
+        );
+        let mut vars = HashMap::new();
+        vars.insert("budget".to_string(), usd(4.0));
+        assert!(budget_park(&reenter(&pipeline, &rs, &vars)).is_none());
+        vars.insert("budget".to_string(), usd(2.5));
+        assert!(budget_park(&reenter(&pipeline, &rs, &vars)).is_some());
+    }
+
+    #[test]
+    fn an_uncapped_loop_ignores_its_cost() {
+        let (mut pipeline, rs) = capped_loop_at_lap(5, usd(1.0), 2, Some(99.0), false);
+        pipeline.loops[0].max_cost_usd = None;
+        assert!(budget_park(&reenter(&pipeline, &rs, &HashMap::new())).is_none());
+    }
+
+    #[test]
+    fn an_ended_region_routes_its_exit_even_over_budget() {
+        // `end_region` on a budget-parked loop is the documented way out: the
+        // ended region exits, the cap is not consulted.
+        let (mut pipeline, mut rs) = capped_loop_at_lap(5, usd(1.0), 2, Some(3.0), false);
+        pipeline.edges.push(make_cond_edge(
+            "tester",
+            "review",
+            "ship",
+            "review",
+            Some("iter: {gte: 5}"),
+            false,
+        ));
+        rs.loop_states.get_mut("review_loop").unwrap().done = true;
+        let actions = reenter(&pipeline, &rs, &HashMap::new());
+        assert!(budget_park(&actions).is_none(), "{actions:?}");
+    }
+
+    // ---- the live `set_region_max_cost` override ----
+
+    #[test]
+    fn a_raised_cost_override_lets_the_next_lap_start() {
+        // Parked « budget reached » at $5.12 of $5; the operator raises the
+        // cap to $8: the re-entry takes lap 5.
+        let (pipeline, mut rs) = capped_loop_at_lap(5, usd(5.0), 4, Some(5.12), false);
+        assert!(budget_park(&reenter(&pipeline, &rs, &HashMap::new())).is_some());
+        rs.region_max_cost_overrides
+            .insert("review_loop".into(), Some(8.0));
+        let actions = reenter(&pipeline, &rs, &HashMap::new());
+        assert!(budget_park(&actions).is_none(), "{actions:?}");
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "implementer".into(),
+                iter: 5
+            }),
+            "the raised cap lets lap 5 start: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn a_cost_override_under_the_spend_parks_at_the_next_reentry() {
+        // No floor: a cap lowered under what the loop already spent is legal,
+        // the loop stops at its next re-entry and the message names that cap.
+        let (pipeline, mut rs) = capped_loop_at_lap(5, usd(10.0), 2, Some(5.12), false);
+        assert!(budget_park(&reenter(&pipeline, &rs, &HashMap::new())).is_none());
+        rs.region_max_cost_overrides
+            .insert("review_loop".into(), Some(4.0));
+        let (message, _) =
+            budget_park(&reenter(&pipeline, &rs, &HashMap::new())).expect("the lowered cap parks");
+        assert!(message.contains("of $4 after lap 2/5"), "{message}");
+        assert!(message.contains("set_region_max_cost"), "{message}");
+    }
+
+    #[test]
+    fn a_removed_cost_cap_override_uncaps_a_capped_loop() {
+        let (pipeline, mut rs) = capped_loop_at_lap(5, usd(1.0), 2, Some(3.0), false);
+        rs.region_max_cost_overrides
+            .insert("review_loop".into(), None);
+        assert!(budget_park(&reenter(&pipeline, &rs, &HashMap::new())).is_none());
+    }
+
+    #[test]
+    fn a_cost_override_caps_a_loop_whose_yaml_declares_none() {
+        let (mut pipeline, mut rs) = capped_loop_at_lap(5, usd(1.0), 2, Some(3.0), false);
+        pipeline.loops[0].max_cost_usd = None;
+        rs.region_max_cost_overrides
+            .insert("review_loop".into(), Some(2.0));
+        assert!(budget_park(&reenter(&pipeline, &rs, &HashMap::new())).is_some());
+    }
+
+    #[test]
+    fn a_cost_override_beats_a_var_cap() {
+        let (pipeline, mut rs) = capped_loop_at_lap(
+            5,
+            serde_yaml::Value::String("$budget".into()),
+            2,
+            Some(3.0),
+            false,
+        );
+        let vars: HashMap<String, serde_yaml::Value> =
+            [("budget".to_string(), usd(2.0))].into_iter().collect();
+        assert!(budget_park(&reenter(&pipeline, &rs, &vars)).is_some());
+        rs.region_max_cost_overrides
+            .insert("review_loop".into(), Some(10.0));
+        assert!(budget_park(&reenter(&pipeline, &rs, &vars)).is_none());
+    }
+
+    #[test]
+    fn a_collection_is_never_capped_whatever_the_log_says() {
+        let (mut pipeline, mut rs) = capped_loop_at_lap(5, usd(1.0), 2, Some(3.0), false);
+        pipeline.loops[0].kind = pdo_pipeline::domain::pipeline::LoopKind::Collection;
+        rs.region_max_cost_overrides
+            .insert("review_loop".into(), Some(1.0));
+        assert_eq!(
+            regions::effective_region_max_cost(&rs, &pipeline.loops[0], &HashMap::new()),
+            None
+        );
+    }
+
+    // --- Pruned nodes (ADR-0082): a node settled because its branch was not
+    // taken is dead for routing — it fires nothing, its consumers do not read it,
+    // and an `End` reachable only through it stays unreached. ---
+
+    /// A node the reachability sweep settled: `Skipped`, never ran, pruned.
+    fn pruned_node(id: &str) -> NodeState {
+        NodeState {
+            status: NodeStatus::Skipped,
+            started_at: None,
+            skip_reason: Some("structurally unreachable".into()),
+            pruned: true,
+            ..completed_node(id)
+        }
+    }
+
+    /// A node the operator skipped (`pdo node skip`) without it ever running:
+    /// `Skipped` too, but not pruned — it feeds downstream as if it had run.
+    fn operator_skipped_node(id: &str) -> NodeState {
+        NodeState {
+            pruned: false,
+            skip_reason: Some("skipped locally by operator".into()),
+            ..pruned_node(id)
+        }
+    }
+
+    fn verdict(value: &str) -> HashMap<String, serde_yaml::Value> {
+        [(
+            "verdict".to_string(),
+            serde_yaml::Value::String(value.to_string()),
+        )]
+        .into_iter()
+        .collect()
+    }
+
+    /// `gen → okn (when verdict = pass) → End`: the only path to `End` is
+    /// guarded.
+    fn guarded_only_path_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "unrouted-lab".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("gen", &["task"], &["out"]),
+                make_node("okn", &["in"], &["out"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_cond_edge(
+                    "gen",
+                    "out",
+                    "okn",
+                    "in",
+                    Some("verdict: { eq: pass }"),
+                    false,
+                ),
+                make_edge("okn", "out", "end", "result"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        }
+    }
+
+    #[test]
+    fn a_pruned_node_fires_none_of_its_edges_so_an_unrouted_end_stays_unreached() {
+        let pipeline = guarded_only_path_pipeline();
+        let mut state = empty_run_state();
+        state.nodes.insert("gen".into(), completed_node("gen"));
+        state.nodes.insert("okn".into(), pruned_node("okn"));
+        let fm_by_node: HashMap<_, _> = [("gen".to_string(), verdict("other"))]
+            .into_iter()
+            .collect();
+
+        let from_pruned = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "okn",
+            &HashMap::new(),
+            &HashMap::new(),
+            &fm_by_node,
+        );
+        assert_eq!(from_pruned, Vec::new(), "a pruned node routes nothing");
+
+        // The producer's own routing still sees `End` dead through the pruned
+        // node: the Run stays parked `unrouted`, it never completes.
+        let from_gen = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "gen",
+            &HashMap::new(),
+            &verdict("other"),
+            &fm_by_node,
+        );
+        assert!(
+            matches!(
+                from_gen.as_slice(),
+                [SchedulerAction::Interrupt { reason_code, .. }] if reason_code == "unrouted"
+            ),
+            "{from_gen:?}"
+        );
+        // Parked by that routing, the sweep releases nothing and does not park it twice.
+        state.status = crate::domain::state::RunStatus::AwaitingUser;
+        state.awaiting_reason_code = Some("unrouted".into());
+        assert_eq!(
+            released_by_pruning(
+                &pipeline,
+                &state,
+                &["okn".to_string()],
+                &fm_by_node,
+                &HashMap::new()
+            ),
+            Vec::new(),
+            "no live producer reaches End: nothing is released"
+        );
+        assert_eq!(
+            end_reached_action(&pipeline, &state, &fm_by_node, &HashMap::new()),
+            None
+        );
+    }
+
+    #[test]
+    fn a_node_the_operator_skipped_still_feeds_downstream() {
+        let pipeline = guarded_only_path_pipeline();
+        let mut state = empty_run_state();
+        state.nodes.insert("gen".into(), completed_node("gen"));
+        state
+            .nodes
+            .insert("okn".into(), operator_skipped_node("okn"));
+        let fm_by_node: HashMap<_, _> = [("gen".to_string(), verdict("other"))]
+            .into_iter()
+            .collect();
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "okn",
+            &HashMap::new(),
+            &HashMap::new(),
+            &fm_by_node,
+        );
+        assert_eq!(actions, vec![SchedulerAction::Complete]);
+    }
+
+    #[test]
+    fn death_cascades_through_a_pruned_node() {
+        // `elsen` is pruned; `e2`, fed only by it, is dead in turn — it is not
+        // launched by the pruned node's edge.
+        let pipeline = PipelineDef {
+            name: "cascade".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("gen", &["task"], &["out"]),
+                make_node("elsen", &["in"], &["out"]),
+                make_node("e2", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_cond_edge("gen", "out", "elsen", "in", None, true),
+                make_edge("elsen", "out", "e2", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+        let mut state = empty_run_state();
+        state.nodes.insert("gen".into(), completed_node("gen"));
+        state.nodes.insert("elsen".into(), pruned_node("elsen"));
+
+        let dead = unreachable_nodes(&pipeline, &state, &HashMap::new(), &HashMap::new());
+        assert_eq!(
+            dead.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            vec!["e2"]
+        );
+        assert!(
+            !ready_nodes(&pipeline, &state).contains(&"e2".to_string()),
+            "readiness never launches a node whose only feeder is pruned"
+        );
+    }
+
+    /// `x → End` and `y → z (when go) → End`: `End` waits on both branches.
+    fn late_prune_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "late-prune".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("x", &["task"], &["out"]),
+                make_node("y", &["task"], &["out"]),
+                make_node("z", &["in"], &["out"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("x", "out", "end", "result"),
+                make_cond_edge("y", "out", "z", "in", Some("verdict: { eq: go }"), false),
+                make_edge("z", "out", "end", "result"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        }
+    }
+
+    #[test]
+    fn pruning_the_last_awaited_branch_releases_end_through_its_live_producer() {
+        // `x` reached `End` first while `z` was undecided; `y` then did not take
+        // `z`, which is pruned. `End` is reached through `x`, not through `z`.
+        let pipeline = late_prune_pipeline();
+        let mut state = empty_run_state();
+        state.nodes.insert("x".into(), completed_node("x"));
+        state.nodes.insert("y".into(), completed_node("y"));
+        state.nodes.insert("z".into(), pruned_node("z"));
+        let fm_by_node: HashMap<_, _> = [("y".to_string(), verdict("stop"))].into_iter().collect();
+
+        let released = released_by_pruning(
+            &pipeline,
+            &state,
+            &["z".to_string()],
+            &fm_by_node,
+            &HashMap::new(),
+        );
+        assert_eq!(released, vec![SchedulerAction::Complete]);
+    }
+
+    #[test]
+    fn pruning_releases_nothing_while_a_sibling_branch_is_still_running() {
+        let pipeline = late_prune_pipeline();
+        let mut state = empty_run_state();
+        state.nodes.insert("x".into(), running_node("x"));
+        state.nodes.insert("y".into(), completed_node("y"));
+        state.nodes.insert("z".into(), pruned_node("z"));
+        let fm_by_node: HashMap<_, _> = [("y".to_string(), verdict("stop"))].into_iter().collect();
+
+        let released = released_by_pruning(
+            &pipeline,
+            &state,
+            &["z".to_string()],
+            &fm_by_node,
+            &HashMap::new(),
+        );
+        assert_eq!(released, Vec::new());
+    }
+
+    #[test]
+    fn pruning_releases_a_convergence_its_fired_conditional_edge_waited_for() {
+        // `a → join (when ok)` fired while `p` was undecided; once `p` is
+        // pruned, `join` is launched by `a`'s routing — readiness alone, which
+        // reads only unconditional edges, would not launch it.
+        let pipeline = PipelineDef {
+            name: "conditional-join".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("a", &["task"], &["out"]),
+                make_node("b", &["task"], &["out"]),
+                make_node("p", &["in"], &["out"]),
+                make_convergence_node("join"),
+            ],
+            edges: vec![
+                make_cond_edge(
+                    "a",
+                    "out",
+                    "join",
+                    "branches",
+                    Some("verdict: { eq: ok }"),
+                    false,
+                ),
+                make_cond_edge("b", "out", "p", "in", Some("verdict: { eq: go }"), false),
+                make_edge("p", "out", "join", "branches"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+        let mut state = empty_run_state();
+        state.nodes.insert("a".into(), completed_node("a"));
+        state.nodes.insert("b".into(), completed_node("b"));
+        state.nodes.insert("p".into(), pruned_node("p"));
+        let fm_by_node: HashMap<_, _> = [
+            ("a".to_string(), verdict("ok")),
+            ("b".to_string(), verdict("stop")),
+        ]
+        .into_iter()
+        .collect();
+
+        assert!(!ready_nodes(&pipeline, &state).contains(&"join".to_string()));
+        let released = released_by_pruning(
+            &pipeline,
+            &state,
+            &["p".to_string()],
+            &fm_by_node,
+            &HashMap::new(),
+        );
+        assert_eq!(
+            released,
+            vec![SchedulerAction::Spawn {
+                node_id: "join".into(),
+                iter: 1,
+            }]
+        );
+    }
+
+    #[test]
+    fn an_exhausted_region_whose_exit_is_pruned_does_not_complete_the_run() {
+        // The review loop exits through `done` (when PASS); at max_iter the
+        // verdict is still FAIL, so the region parks « exhausted — unrouted »
+        // and `done` is pruned. The pruned exit must not reach `End`.
+        let mut pipeline = migrated_review_loop_pipeline(2);
+        pipeline.nodes.push(make_node("done", &["in"], &["out"]));
+        pipeline.edges.retain(|e| e.target.node != "end");
+        pipeline.edges.push(make_cond_edge(
+            "rev",
+            "review",
+            "done",
+            "in",
+            Some("verdict: { in: [PASS, APPROVED] }"),
+            false,
+        ));
+        pipeline
+            .edges
+            .push(make_edge("done", "out", "end", "result"));
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 2));
+        state
+            .nodes
+            .insert("rev".into(), completed_node_iter("rev", 2));
+        state
+            .loop_states
+            .insert("review_loop".into(), region_state(2, 2, false));
+        let by_node = fail_fm();
+
+        let at_exhaustion = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "rev",
+            &HashMap::new(),
+            by_node.get("rev").unwrap(),
+            &by_node,
+        );
+        assert!(
+            at_exhaustion.iter().any(|a| matches!(
+                a,
+                SchedulerAction::Interrupt { reason_code, .. } if reason_code == "region_exhausted"
+            )),
+            "{at_exhaustion:?}"
+        );
+        let dead = unreachable_nodes(&pipeline, &state, &by_node, &HashMap::new());
+        assert_eq!(
+            dead.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            vec!["done"]
+        );
+
+        state.nodes.insert("done".into(), pruned_node("done"));
+        state.status = crate::domain::state::RunStatus::AwaitingUser;
+        state.awaiting_reason_code = Some("region_exhausted".into());
+        let from_done = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "done",
+            &HashMap::new(),
+            &HashMap::new(),
+            &by_node,
+        );
+        assert_eq!(from_done, Vec::new());
+        assert_eq!(
+            released_by_pruning(
+                &pipeline,
+                &state,
+                &["done".to_string()],
+                &by_node,
+                &HashMap::new()
+            ),
+            Vec::new()
+        );
+    }
+
+    #[test]
+    fn a_node_fed_by_start_and_a_pruned_node_is_still_launched_by_readiness() {
+        // `Start → fix` fires; only the other feeder of `fix` is pruned.
+        let pipeline = PipelineDef {
+            name: "start-and-pruned".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_start_node("start"),
+                make_node("gen", &["task"], &["out"]),
+                make_node("okn", &["in"], &["out"]),
+                make_node("fix", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "gen", "task"),
+                make_edge("start", "user_prompt", "fix", "in"),
+                make_cond_edge(
+                    "gen",
+                    "out",
+                    "okn",
+                    "in",
+                    Some("verdict: { eq: pass }"),
+                    false,
+                ),
+                make_edge("okn", "out", "fix", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+        let mut state = empty_run_state();
+        state.nodes.insert("gen".into(), completed_node("gen"));
+        state.nodes.insert("okn".into(), pruned_node("okn"));
+
+        assert_eq!(ready_nodes(&pipeline, &state), vec!["fix".to_string()]);
+    }
+
+    #[test]
+    fn pruning_releases_a_region_entry_with_its_first_lap() {
+        // The review loop's entry `impl` is fed by `a` (fired) and by `p`,
+        // pruned after `a` settled: releasing `impl` starts the region's lap,
+        // not a bare spawn with no lap recorded.
+        let mut pipeline = migrated_review_loop_pipeline(2);
+        pipeline.edges.retain(|e| e.source.node != "start");
+        pipeline.nodes.push(make_node("a", &["task"], &["out"]));
+        pipeline.nodes.push(make_node("b", &["task"], &["out"]));
+        pipeline.nodes.push(make_node("p", &["in"], &["out"]));
+        pipeline.edges.push(make_edge("a", "out", "impl", "task"));
+        pipeline.edges.push(make_cond_edge(
+            "b",
+            "out",
+            "p",
+            "in",
+            Some("verdict: { eq: go }"),
+            false,
+        ));
+        pipeline.edges.push(make_edge("p", "out", "impl", "task"));
+        let mut state = empty_run_state();
+        state.nodes.insert("a".into(), completed_node("a"));
+        state.nodes.insert("b".into(), completed_node("b"));
+        state.nodes.insert("p".into(), pruned_node("p"));
+        let fm_by_node: HashMap<_, _> = [("b".to_string(), verdict("stop"))].into_iter().collect();
+
+        let released = released_by_pruning(
+            &pipeline,
+            &state,
+            &["p".to_string()],
+            &fm_by_node,
+            &HashMap::new(),
+        );
+        assert_eq!(
+            released,
+            vec![
+                SchedulerAction::LoopIterStarted {
+                    loop_node_id: "review_loop".into(),
+                    iter: 1,
+                    max_iter: 2,
+                },
+                SchedulerAction::Spawn {
+                    node_id: "impl".into(),
+                    iter: 1,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_pruning_that_leaves_end_with_no_live_branch_parks_the_run_unrouted() {
+        // `n` needs its `req` input, whose only feeder did not fire, while `x`
+        // still runs: `n` is pruned (its required input is dead), and it was
+        // the only way to `End`.
+        let mut gate = make_node("n", &["req", "other"], &["out"]);
+        gate.inputs[0].required = true;
+        let pipeline = PipelineDef {
+            name: "required-dead".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("gen", &["task"], &["out"]),
+                make_node("x", &["task"], &["out"]),
+                gate,
+                make_end_node(),
+            ],
+            edges: vec![
+                make_cond_edge(
+                    "gen",
+                    "out",
+                    "n",
+                    "req",
+                    Some("verdict: { eq: pass }"),
+                    false,
+                ),
+                make_edge("x", "out", "n", "other"),
+                make_edge("n", "out", "end", "result"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+        let mut state = empty_run_state();
+        state.nodes.insert("gen".into(), completed_node("gen"));
+        state.nodes.insert("x".into(), running_node("x"));
+        let fm_by_node: HashMap<_, _> = [("gen".to_string(), verdict("other"))]
+            .into_iter()
+            .collect();
+        let dead = unreachable_nodes(&pipeline, &state, &fm_by_node, &HashMap::new());
+        assert_eq!(
+            dead.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            vec!["n"]
+        );
+
+        state.nodes.insert("n".into(), pruned_node("n"));
+        let released = released_by_pruning(
+            &pipeline,
+            &state,
+            &["n".to_string()],
+            &fm_by_node,
+            &HashMap::new(),
+        );
+        assert!(
+            matches!(
+                released.as_slice(),
+                [SchedulerAction::Interrupt { reason_code, .. }] if reason_code == "unrouted"
+            ),
+            "{released:?}"
+        );
+
+        // Already parked: no second park.
+        state.status = crate::domain::state::RunStatus::AwaitingUser;
+        state.awaiting_reason_code = Some("unrouted".into());
+        assert_eq!(
+            released_by_pruning(
+                &pipeline,
+                &state,
+                &["n".to_string()],
+                &fm_by_node,
+                &HashMap::new()
+            ),
+            Vec::new()
+        );
+    }
+}

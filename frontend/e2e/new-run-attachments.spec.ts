@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { E2E_TARGET_REPO, pickPipeline } from "./helpers";
 
 // Layer 3b — « New run » attachments (#779).
@@ -9,10 +9,10 @@ import { E2E_TARGET_REPO, pickPipeline } from "./helpers";
 // a chip with the running counter, sends images in `images` and the rest in
 // `files`, and the created Run carries both in `start_node`.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-attachments-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 // Start → End only: nothing spawns, the run completes on its own.
@@ -50,9 +50,9 @@ test("a dropped file becomes a chip and reaches the run as `files`", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  await page.getByRole("button", { name: "New Run" }).click();
+  await page.getByTestId("new-run-button").click();
   await expect(page.getByTestId("target-repo-input")).toBeVisible();
   await page.getByTestId("target-repo-input").fill(E2E_TARGET_REPO);
   await pickPipeline(page, PIPELINE_NAME);
@@ -61,11 +61,11 @@ test("a dropped file becomes a chip and reaches the run as `files`", async ({
   // Empty state: the helper names the budget the daemon enforces.
   const zone = page.getByTestId("image-drop-zone");
   await expect(zone).toBeVisible();
-  await expect(page.getByText(/up to .* MB per run/i)).toBeVisible();
+  await expect(page.getByText("Files", { exact: true })).toHaveAttribute("title", /MB per run/);
 
   // The hidden <input type=file> has no accept filter any more — any file goes.
   const input = page.getByTestId("image-file-input");
-  await expect(input).toHaveAttribute("accept", "");
+  await expect(input).not.toHaveAttribute("accept");
   await input.setInputFiles([
     {
       name: "SPEC-779.md",
@@ -96,18 +96,19 @@ test("a dropped file becomes a chip and reaches the run as `files`", async ({
     page.waitForRequest((r) => r.url().endsWith("/runs") && r.method() === "POST"),
     page.getByTestId("launch-button").click(),
   ]);
-  const body = request.postData() ?? "";
+  // The browser streams a `FormData` holding files, so Playwright sees no body
+  // (`postData()` is empty): the split by MIME is read on the daemon's side,
+  // below, where each part landed.
   expect(request.headers()["content-type"]).toContain("multipart/form-data");
-  expect(body).toContain('name="images"; filename="proto.png"');
-  expect(body).toContain('name="files"; filename="SPEC-779.md"');
 
-  // The daemon wrote both into `_input/` and lists them on the Start node.
+  // The daemon wrote both into `_input/` and lists them on the Start node — the
+  // PNG as an image, the Markdown as a file.
   await expect
     .poll(
       async () => {
         const resp = await page.request.get(`${baseURL}/runs`);
-        const runs = (await resp.json()) as Array<{ run_id: string; pipeline: string }>;
-        const mine = runs.find((r) => r.pipeline === PIPELINE_NAME);
+        const runs = (await resp.json()) as Array<{ run_id: string; pipeline_name: string }>;
+        const mine = runs.find((r) => r.pipeline_name === PIPELINE_NAME);
         if (!mine) return null;
         const detail = await (await page.request.get(`${baseURL}/runs/${mine.run_id}`)).json();
         return {

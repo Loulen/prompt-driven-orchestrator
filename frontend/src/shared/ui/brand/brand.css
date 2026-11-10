@@ -1,0 +1,28 @@
+/* The logo keeps its colours in every Theme (ADR-0093): its triangle stays the
+   ruby of Acogni, in the mode of the page, where the Classic Theme turns the
+   accent emerald. The values are those of `--color-accent` under Acogni
+   (`/shared/tokens.css`); `designSystem.guards.test.ts` holds them together. */
+[data-theme="classic"] .acogni-brand {
+  --primary: oklch(64% 0.16 8);
+}
+[data-theme="classic"][data-mode="light"] .acogni-brand,
+[data-theme="classic"] [data-mode="light"] .acogni-brand {
+  --primary: oklch(43.6% 0.155 5);
+}
+[data-theme="classic"] [data-mode="dark"] .acogni-brand {
+  --primary: oklch(64% 0.16 8);
+}
+
+/* « by Acogni » (`BySignature`): the gear and the publisher's name, in the
+   quiet text of the page. */
+.by-acogni {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--g-2);
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+.by-acogni > svg {
+  flex: none;
+}

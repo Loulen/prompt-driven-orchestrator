@@ -17,6 +17,56 @@ export function pathToSvg(points: Point[]): string {
   return `${head} ${tail}`;
 }
 
+/** A coordinate as SVG writes it: two decimals at most, no trailing zero. */
+const num = (n: number) => String(Math.round(n * 100) / 100);
+
+/**
+ * Like {@link pathToSvg}, each bend rounded by a quadratic curve of `radius`,
+ * shrunk to half the shorter neighbouring segment so two close bends never
+ * overlap. The canvas draws its edges this way: right angles, rounded corners.
+ */
+export function roundedPathToSvg(points: Point[], radius: number): string {
+  if (points.length < 2) return "";
+  const parts = [`M ${num(points[0].x)},${num(points[0].y)}`];
+  for (let i = 1; i < points.length - 1; i++) {
+    const [a, b, c] = [points[i - 1], points[i], points[i + 1]];
+    const inLen = Math.abs(b.x - a.x) + Math.abs(b.y - a.y);
+    const outLen = Math.abs(c.x - b.x) + Math.abs(c.y - b.y);
+    const r = Math.min(radius, inLen / 2, outLen / 2);
+    if (r <= 0) {
+      parts.push(`L ${num(b.x)},${num(b.y)}`);
+      continue;
+    }
+    const before = { x: b.x - (Math.sign(b.x - a.x) * r), y: b.y - (Math.sign(b.y - a.y) * r) };
+    const after = { x: b.x + (Math.sign(c.x - b.x) * r), y: b.y + (Math.sign(c.y - b.y) * r) };
+    parts.push(`L ${num(before.x)},${num(before.y)}`, `Q ${num(b.x)},${num(b.y)} ${num(after.x)},${num(after.y)}`);
+  }
+  const last = points[points.length - 1];
+  parts.push(`L ${num(last.x)},${num(last.y)}`);
+  return parts.join(" ");
+}
+
+/**
+ * The open chevron at the end of an edge, as SVG `points`: its tip on the
+ * path's last point, its arms opening back along the last segment.
+ */
+export function arrowChevron(points: Point[], length = 5, halfWidth = 3.5): string {
+  if (points.length < 2) return "";
+  const tip = points[points.length - 1];
+  // The last segment of non-zero length gives the direction.
+  let from = points[points.length - 2];
+  for (let i = points.length - 2; i >= 0 && from.x === tip.x && from.y === tip.y; i--) from = points[i];
+  const len = Math.hypot(tip.x - from.x, tip.y - from.y) || 1;
+  const d = { x: (tip.x - from.x) / len, y: (tip.y - from.y) / len };
+  const base = { x: tip.x - d.x * length, y: tip.y - d.y * length };
+  const arms = [
+    { x: base.x - d.y * halfWidth, y: base.y + d.x * halfWidth },
+    tip,
+    { x: base.x + d.y * halfWidth, y: base.y - d.x * halfWidth },
+  ];
+  return arms.map((p) => `${num(p.x)},${num(p.y)}`).join(" ");
+}
+
 /**
  * SVG `d` for the live drag-connection preview (#169): a right-angle path from
  * `source` to `target` so the dangling wire matches the orthogonal final edge
@@ -37,6 +87,14 @@ export function connectionPreviewPath(source: Point, target: Point): string {
  * caller can pick its own fallback.
  */
 export function pathMidpoint(points: Point[]): Point | null {
+  return pathPointAt(points, 0.5);
+}
+
+/**
+ * The point at `fraction` (0 to 1) of the polyline's total arc length, or null
+ * for a degenerate path (< 2 points).
+ */
+export function pathPointAt(points: Point[], fraction: number): Point | null {
   if (points.length < 2) return null;
 
   let totalLength = 0;
@@ -48,14 +106,14 @@ export function pathMidpoint(points: Point[]): Point | null {
   // All segments zero-length (endpoints coincide): any vertex is the midpoint.
   if (totalLength === 0) return { ...points[0] };
 
-  let remaining = totalLength / 2;
+  let remaining = totalLength * fraction;
   for (let i = 0; i < points.length - 1; i++) {
     const a = points[i];
     const b = points[i + 1];
     // Orthogonal segments: length is the Manhattan distance (one axis is 0).
     const segLength = Math.abs(b.x - a.x) + Math.abs(b.y - a.y);
     if (remaining <= segLength) {
-      const t = remaining / segLength;
+      const t = segLength === 0 ? 0 : remaining / segLength;
       return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
     }
     remaining -= segLength;

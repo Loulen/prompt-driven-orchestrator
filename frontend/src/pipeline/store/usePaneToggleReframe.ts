@@ -1,0 +1,135 @@
+/**
+ * Re-frame the canvas when App's right pane folds or unfolds (#949).
+ */
+
+import type { ReactFlowInstance } from "@xyflow/react";
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { CARD_HEIGHT, CARD_WIDTH } from "../../lib/nodePlacement";
+import { paneResizeAction, reframeOnPaneResize } from "../../lib/paneResizeViewport";
+import { useEditStore } from "./editStore";
+import { uiZoom } from "../../lib/uiScale";
+
+/**
+ * #825 (FP iteration 2): never magnify. A two-marker pipeline fit-views to zoom 2
+ * by default (a card 360px wide, barely two across the canvas). Cards at the size
+ * they were drawn; a small graph sits in the middle.
+ *
+ * The canvas leaves the UI scale's CSS zoom and carries the scale in its own
+ * viewport zoom (`lib/uiScale.ts`): "the size they were drawn" is the scale.
+ */
+export function canvasFitViewOptions(): CanvasFitViewOptions {
+  return { maxZoom: uiZoom(), padding: CANVAS_FIT_PADDING };
+}
+
+/**
+ * The room a fitted graph leaves around itself: at the top, the floating
+ * toolbar's (8 px from the edge, 28 px tall) and the corner chrome's, so no
+ * card lands under them; 24 px on the other sides.
+ */
+export const CANVAS_FIT_PADDING = { top: "48px", right: "24px", bottom: "24px", left: "24px" } as const;
+
+export interface CanvasFitViewOptions {
+  maxZoom: number;
+  padding: typeof CANVAS_FIT_PADDING;
+}
+
+/** The farthest the canvas dezooms (CORE-88): 25 %. xyflow's own floor is 50 %. */
+export const CANVAS_MIN_ZOOM = 0.25;
+
+/** The closest it zooms: xyflow's own ceiling, 200 %. */
+export const CANVAS_MAX_ZOOM = 2;
+
+export function usePaneToggleReframe(
+  reactFlowRef: React.RefObject<HTMLDivElement | null>,
+  reactFlow: ReactFlowInstance,
+  hasCanvas: boolean,
+  rightPaneCollapsed: boolean,
+  tabId?: string,
+) {
+  // F3-4: the viewport the last automatic fit left, while the reader has not
+  // moved it. A fit nobody moved is the canvas's opening frame: a pane toggle
+  // fits it again (the same zoom cannot hold a graph fitted on a wider canvas).
+  const fittedRef = useRef<{ x: number; y: number; zoom: number } | null>(null);
+  const fit = useCallback(() => {
+    void reactFlow.fitView(canvasFitViewOptions()).then(() => {
+      fittedRef.current = reactFlow.getViewport();
+    });
+  }, [reactFlow]);
+  // When the canvas opened: its mount, or a tab it shows for the first time.
+  const openedAtRef = useRef(0);
+  // F3-4: the canvas outlives its tabs, and React Flow fits only on its mount:
+  // a tab shown for the first time (a fresh Run) is fitted, and its opening
+  // window lets the pane unfolding with it fit it again.
+  const framedTabsRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (!tabId || framedTabsRef.current.has(tabId)) return;
+    const first = framedTabsRef.current.size === 0;
+    framedTabsRef.current.add(tabId);
+    openedAtRef.current = performance.now();
+    if (!first) fit();
+  }, [tabId, fit]);
+
+  // #949 (FP iteration 1): the right pane folding or unfolding resizes the
+  // canvas from the right; without this, a graph fit-viewed on the full-width
+  // canvas slides under the unfolded pane, clicked card included. The toggle
+  // arms a one-shot flag (child layout effects run before App's, which resizes
+  // the pane); the ResizeObserver, which fires before paint, consumes it on the
+  // width change it causes. A drag of the handle or a window resize never arms
+  // it, so they keep React Flow's own top-left anchoring. The flag disarms
+  // itself if no resize follows, so a later unrelated resize cannot consume it.
+  // #43 (FP iteration 1): a width change right after the canvas mounts (a run
+  // opened with no tab open, its pane unfolding in the same commit) fits the
+  // view again — React Flow's initial fit may have measured the full width.
+  // #43 (FP iteration 2): so does the observer's first measure, the only one
+  // seen when the pane unfolded before this effect started observing.
+  const lastCanvasWidthRef = useRef<number | null>(null);
+  const paneToggledRef = useRef(false);
+  const prevRightCollapsedRef = useRef(rightPaneCollapsed);
+  useLayoutEffect(() => {
+    if (prevRightCollapsedRef.current === rightPaneCollapsed) return;
+    prevRightCollapsedRef.current = rightPaneCollapsed;
+    paneToggledRef.current = true;
+    const disarm = setTimeout(() => {
+      paneToggledRef.current = false;
+    }, 200);
+    return () => clearTimeout(disarm);
+  }, [rightPaneCollapsed]);
+  useEffect(() => {
+    const wrapper = reactFlowRef.current;
+    if (!hasCanvas || !wrapper || typeof ResizeObserver === "undefined") return;
+    lastCanvasWidthRef.current = null;
+    openedAtRef.current = performance.now();
+    const observer = new ResizeObserver(() => {
+      const { width, height } = wrapper.getBoundingClientRect();
+      const prevWidth = lastCanvasWidthRef.current;
+      lastCanvasWidthRef.current = width;
+      const msSinceMount = performance.now() - openedAtRef.current;
+      const fitted = fittedRef.current;
+      const now = reactFlow.getViewport();
+      const viewFitted = fitted != null && fitted.x === now.x && fitted.y === now.y && fitted.zoom === now.zoom;
+      const action = paneResizeAction({ prevWidth, width, msSinceMount, paneToggled: paneToggledRef.current, viewFitted });
+      if (action == null) return;
+      paneToggledRef.current = false;
+      if (action === "fit" || prevWidth == null) {
+        // Queued by React Flow until the nodes are measured; this observer was
+        // created after React Flow's own, so its width is already current.
+        fit();
+        return;
+      }
+      const selection = useEditStore.getState().selection;
+      const node = selection.kind === "node" && selection.id ? reactFlow.getInternalNode(selection.id) : undefined;
+      const selected = node
+        ? {
+            ...node.internals.positionAbsolute,
+            width: node.measured.width ?? CARD_WIDTH,
+            height: node.measured.height ?? CARD_HEIGHT,
+          }
+        : null;
+      const nodes = reactFlow.getNodes();
+      const graph = nodes.length > 0 ? reactFlow.getNodesBounds(nodes) : null;
+      reactFlow.setViewport(reframeOnPaneResize(reactFlow.getViewport(), prevWidth, width, height, selected, graph));
+    });
+    observer.observe(wrapper);
+    return () => observer.disconnect();
+  }, [hasCanvas, reactFlow, reactFlowRef, fit]);
+}

@@ -11,20 +11,13 @@
 // advanced as a side effect of rendering would walk two cells per pointer move,
 // visibly and only in development.
 
-import type { EdgeAnchor, NodeType, PortSide } from "../types";
+import type { EdgeAnchor } from "../shared/generated/EdgeAnchor";
+import type { NodeType } from "../shared/generated/NodeType";
+import type { PortSide } from "../shared/generated/PortSide";
 import type { Point } from "./orthogonalRouter";
-import {
-  anchorFromPoint,
-  anchorPoint,
-  approachPoint,
-  clipOutside,
-  landingConnector,
-  landingLeg,
-  dropAnchor,
-  handlePin,
-  landsByDrop,
-  type AnchorRect,
-} from "./anchorSide";
+import { anchorFromPoint, anchorPoint, dropAnchor, handlePin, landsByDrop, type AnchorRect } from "./anchorSide";
+import { approachPoint, landingConnector, landingLeg } from "./anchorLanding";
+import { clipOutside } from "./polylineCleanup";
 import {
   advanceTrace,
   freeContinuation,
@@ -94,6 +87,9 @@ export function startGesture(from: Point, side: PortSide | null, step: number): 
  *     and if Shift has JUST been released, the freehand run is first committed
  *     verbatim and the lattice re-originated on its tip, so the cells that follow
  *     line up with what was drawn rather than with where the gesture began.
+ *
+ * `step` is the lattice the cursor snaps to — the pipeline's step or, zoomed out,
+ * a multiple of it (`snapStepAtZoom`, CORE-88).
  */
 export function advanceGesture(
   gesture: WiringGesture,
@@ -298,10 +294,16 @@ export function droppedPath(
   toHandle: HoveredHandle | null,
   fromNodeId: string | null,
   step: number,
+  snapStep: number = step,
 ): Point[] {
   const landing = hoverLanding(drop, toNode, toHandle, fromNodeId);
   // The gesture may not even know the pointer is over the target yet (see
   // above); advancing it with `overTarget` only records the release point.
-  const next = advanceGesture(gesture, { cursor: drop, shift: gesture.shift, overTarget: landing != null, step });
+  const next = advanceGesture(gesture, {
+    cursor: drop,
+    shift: gesture.shift,
+    overTarget: landing != null,
+    step: snapStep,
+  });
   return gesturePath(next, landing, step);
 }

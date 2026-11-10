@@ -37,7 +37,7 @@ export function saveTabsDisabled(v: boolean): void {
 
 /**
  * #783 — whether a parent row's child runs are expanded when the run list
- * loads (Settings › General › Interface, « Child runs »). Same nature as the
+ * loads (Settings › Appearance › Interface, « Child runs »). Same nature as the
  * theme: per-browser, saved at the change. Absent / unparseable → `true`
  * (« déplié par défaut », CONTEXT.md). Per-row toggles and the expand/collapse-all
  * button are session-only and never write here.
@@ -65,7 +65,7 @@ export function saveChildRunsExpanded(v: boolean): void {
 
 /**
  * #844 — how the wiring grid shows itself WHILE an edge is being drawn (Settings ›
- * General › Interface, « Wiring grid »). A reading aid, per browser, saved at the
+ * Appearance › Interface, « Wiring grid »). A reading aid, per browser, saved at the
  * change.
  *
  * The grid's STEP is a separate setting (`loadWiringGridSize` below, #877).
@@ -96,7 +96,7 @@ export function saveWiringGridFeedback(v: WiringGridFeedback): void {
 
 /**
  * #877 / ADR-0076 — the wiring-grid SIZE a pipeline draws with when it has no
- * `grid_size` of its own (Settings › General › Interface, « Wiring grid size »).
+ * `grid_size` of its own (Settings › Appearance › Interface, « Wiring grid size »).
  * Per browser, saved at the change, like the feedback above. A pipeline that
  * chose a size in its detail pane carries it in its file and ignores this one —
  * that is what keeps a shared pipeline's routes identical on every instance.
@@ -124,10 +124,10 @@ export function saveWiringGridSize(v: GridSize): void {
 }
 
 /**
- * #980 — the Mode de durée the node panel shows (`total` or `active`). One
- * global choice, toggled by clicking the duration on the panel's meta line: it
- * follows the user from node to node and survives a reload. Absent /
- * unparseable → `total`.
+ * The Mode de durée the node panel shows (`total` or `active`). One global
+ * choice, toggled by clicking the duration on the panel's meta line: it follows
+ * the user from node to node and survives a reload. Absent / unparseable →
+ * `total`.
  */
 export type NodeDurationMode = "total" | "active";
 
@@ -155,6 +155,63 @@ export function saveNodeDurationMode(v: NodeDurationMode): void {
 /**
  * Stats keeps **no** per-browser preference (#819). The box-plot zoom and the
  * axis mode used to live here under `pdo.stats.*`; they are now ephemeral like
- * every other Stats setting — see `lib/statsFilters.ts`. Stale keys from an
+ * every other Stats setting — see `stats/model/statsFilters.ts`. Stale keys from an
  * older build are left alone: never read, never written, never cleaned up.
  */
+
+/**
+ * The Projet groups of the Runs list the user folded: their group keys
+ * (`project:<id>`, or the repo path of a group in no Projet). Per browser,
+ * saved at the toggle, so a fold survives a reload and a new tab. Absent /
+ * unparseable → none folded.
+ */
+const COLLAPSED_RUN_GROUPS_KEY = "pdo.ui.collapsedRunGroups";
+
+export function loadCollapsedRunGroups(): string[] {
+  try {
+    const raw = localStorage.getItem(COLLAPSED_RUN_GROUPS_KEY);
+    if (raw == null) return [];
+    const v: unknown = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((k): k is string => typeof k === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveCollapsedRunGroups(keys: string[]): void {
+  try {
+    localStorage.setItem(COLLAPSED_RUN_GROUPS_KEY, JSON.stringify(keys));
+  } catch {
+    // quota / disabled / private mode → in-memory only for this session
+  }
+}
+
+/**
+ * The order the Transcript tab reads in: the newest entries first (the
+ * default: the reader sees what just happened) or the oldest first. One global
+ * choice, toggled from the tab's bar: it follows the user from node to node
+ * and from Run to Run, and survives a reload. Absent / unparseable →
+ * `newest-first`.
+ */
+export type TranscriptOrder = "newest-first" | "oldest-first";
+
+const TRANSCRIPT_ORDER_KEY = "pdo.ui.transcriptOrder";
+
+export function loadTranscriptOrder(): TranscriptOrder {
+  try {
+    const raw = localStorage.getItem(TRANSCRIPT_ORDER_KEY);
+    if (raw == null) return "newest-first";
+    const v: unknown = JSON.parse(raw);
+    return v === "oldest-first" ? "oldest-first" : "newest-first";
+  } catch {
+    return "newest-first";
+  }
+}
+
+export function saveTranscriptOrder(v: TranscriptOrder): void {
+  try {
+    localStorage.setItem(TRANSCRIPT_ORDER_KEY, JSON.stringify(v));
+  } catch {
+    // quota / disabled / private mode → in-memory only for this session
+  }
+}

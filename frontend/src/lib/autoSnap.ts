@@ -1,6 +1,6 @@
-import type { SelectionKind } from "../stores/editStore";
-import type { RunStatus } from "../types";
-import { isNodeActiveRun } from "../types";
+import type { SelectionKind } from "../pipeline/store/editState";
+import type { RunStatus } from "../shared/generated/RunStatus";
+import { isNodeActiveRun } from "../run/model/runStatus";
 
 /**
  * Decide whether the App should auto-snap the canvas selection to the run's

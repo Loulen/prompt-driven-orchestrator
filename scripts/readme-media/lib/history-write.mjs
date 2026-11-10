@@ -6,8 +6,27 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { readTarget, withName } from "./targets.mjs";
+
+/** What a real run leaves in its target repo for the run view to open
+ *  (`GET /runs/<id>/pipeline`): `.pdo/runs/<run>/pipeline.yaml` and its
+ *  `pipeline.prompts/`, the run's target pipeline under its demo name. Without
+ *  them, a mocked run clicked in the rail opens nothing. */
+export function writeRunPipelines(plan) {
+  const targets = new Map();
+  for (const { run_id: runId, kind, payload } of plan.events) {
+    if (kind !== "run_started") continue;
+    if (!targets.has(payload.pipeline_id)) targets.set(payload.pipeline_id, readTarget(payload.pipeline_id));
+    const { yaml, prompts } = targets.get(payload.pipeline_id);
+    const dir = path.join(payload.target_repo, ".pdo", "runs", runId);
+    fs.mkdirSync(path.join(dir, "pipeline.prompts"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "pipeline.yaml"), withName(yaml, payload.pipeline_name));
+    for (const [node, content] of Object.entries(prompts)) fs.writeFileSync(path.join(dir, "pipeline.prompts", `${node}.md`), content);
+  }
+}
 
 export function writeHistory(plan, { home, dbPath, triggerId }) {
+  writeRunPipelines(plan);
   for (const file of plan.files) {
     const target = path.join(home, file.path);
     fs.mkdirSync(path.dirname(target), { recursive: true });

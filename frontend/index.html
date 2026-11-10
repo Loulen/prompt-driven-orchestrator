@@ -1,51 +1,52 @@
 <!doctype html>
-<html lang="en">
+<!-- The Marque of the binary (ADR draft « la Marque est déclarée par le binaire
+     à la compilation »): the page ships as PDO's; a daemon declaring another
+     rewrites the title and `data-brand` (`crates/pdo/src/brand.rs`), and serves
+     its logos under /shared/brand/, so no wrong name ever flashes. The front
+     reads `data-brand` (`src/shared/ui/brand/brand.ts`). -->
+<html lang="en" data-brand="pdo">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Prompt Driven Orchestrator</title>
-    <!-- Theme guard (#759): stamps the resolved theme on <html> before the
-         bundle loads, so the page never paints one theme and flips to the
-         other. Since #1005 it also stamps the colour-blind status palette
-         when this browser opted in. Deliberately duplicates the rules in
-         `src/lib/theme.ts` and `src/lib/statusPalette.ts` — a module import
-         would be too late; `src/noFlashTheme.test.ts` and
-         `src/noFlashStatusPalette.test.ts` run THIS script and assert they
-         agree. Keep it dependency-free and total: a throwing store must not
-         blank the page. -->
+    <title>PDO</title>
+    <link rel="icon" type="image/svg+xml" href="/shared/brand/favicon.svg" />
+    <!-- The theme script (ADR-0093): stamps the Theme and the mode on <html>
+         before the bundle loads, so the page never paints one look and flips
+         to the other. The same file a page an extension serves outside the
+         interface loads; `src/noFlashTheme.test.ts` runs it against
+         `src/lib/theme.ts`. -->
+    <script src="/shared/theme.js"></script>
+    <!-- The UI scale, stamped before the bundle loads for the same reason.
+         Keep it dependency-free and total: a throwing store must not blank
+         the page. -->
     <script>
+      // Same rule as lib/uiScale.ts: a stored 100, 110 or 120, else 120.
       try {
-        var stored = null;
+        var scale = null;
         try {
-          stored = localStorage.getItem("pdo.ui.theme");
+          scale = Number(localStorage.getItem("pdo.ui.scale"));
         } catch (e) {}
-        var osDark = true;
-        try {
-          osDark = matchMedia("(prefers-color-scheme: dark)").matches;
-        } catch (e) {}
-        // Same rule as lib/theme.ts (#781): a stored light/dark/system is
-        // honoured (system resolves against the OS); anything else — nothing
-        // stored, unknown value — falls back to DARK, the look PDO has always
-        // had, whatever the OS asks for.
-        var theme =
-          stored === "light" || stored === "dark"
-            ? stored
-            : stored === "system"
-              ? osDark
-                ? "dark"
-                : "light"
-              : "dark";
-        document.documentElement.setAttribute("data-theme", theme);
-        document.documentElement.style.colorScheme = theme;
+        if (scale !== 100 && scale !== 110 && scale !== 120) scale = 120;
+        document.documentElement.style.setProperty("--app-zoom", String(scale / 100));
       } catch (e) {}
-      // Colour-blind status palette (#1005): same rule as
-      // src/lib/statusPalette.ts — only a stored "true" stamps the attribute;
-      // nothing stored, anything else, or a throwing store leaves the default.
-      try {
-        if (localStorage.getItem("pdo.ui.colourBlindStatus") === "true") {
-          document.documentElement.setAttribute("data-status-palette", "colour-blind");
+    </script>
+    <!-- The React the extensions' UI bundles import (ADR-0081): the front's own,
+         shared through these shims (public/shared/), never a second copy. A
+         bundle declaring another React major is not loaded at all
+         (src/shared/extensions/). `@pdo/extension-ui` is the shared module that
+         renders the locations an extension hosts (amendment #32), checked by
+         major the same way. yjs is the front's own too (API 0.20): a bundle
+         that edits a shared document never loads a second copy. -->
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "/shared/react.js",
+          "react/jsx-runtime": "/shared/react-jsx-runtime.js",
+          "react-dom": "/shared/react-dom.js",
+          "@pdo/extension-ui": "/shared/pdo-extension-ui.js",
+          "yjs": "/shared/yjs.js"
         }
-      } catch (e) {}
+      }
     </script>
   </head>
   <body>

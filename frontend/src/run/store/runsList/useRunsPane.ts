@@ -1,0 +1,187 @@
+import { useCallback, useMemo, useState } from "react";
+import { isLiveRun } from "../../model/runStatus";
+import type { RunListEntry } from "../../../shared/generated/RunListEntry";
+import type { DeletedProject } from "../../../shared/generated/DeletedProject";
+import type { Project } from "../../../workspace/model/project";
+import { useSelectionStore } from "../../../stores/selectionStore";
+import { type BulkItem, type BulkOutcome } from "../../../lib/bulk";
+import { groupByProject } from "../../../lib/groupByRepo";
+import { cascadeImpact, flattenAll, flattenVisible, type RunTreeNode } from "../../model/runTree";
+import { projectsEntryOf, type ProjectsEntry } from "../../../workspace/model/projectsSettings";
+import { RETRYABLE } from "../../components/runsList/runsListTables";
+import { useRunRowActions } from "./useRunRowActions";
+import { useRunTreeView } from "./useRunTreeView";
+import { useGestureRightsStore, useListedRunGestures } from "../gestureRightsStore";
+import { whyNotOnRun, type RunGesture } from "../../model/runGestures";
+import { loadCollapsedRunGroups, saveCollapsedRunGroups } from "../../../lib/uiPrefs";
+
+/**
+ * All the state of the Runs tab. It lives in `UnifiedLeftPanel` (not in the
+ * pane) so the list's filters, expansion and pending confirms survive a tab
+ * switch, as they always did.
+ */
+export function useRunsPane({
+  runs,
+  selectedRunId,
+  onSelectRun,
+  projects,
+  deletedProjects,
+  onOpenProjectSettings,
+}: {
+  runs: RunListEntry[];
+  selectedRunId: string | null;
+  onSelectRun: (runId: string) => void;
+  projects: Project[];
+  /** The deleted Projets the Runs still name (CORE-96). */
+  deletedProjects?: DeletedProject[];
+  /** CORE-96: the group-header pencil opens Settings › Projects there. */
+  onOpenProjectSettings?: (entry?: ProjectsEntry) => void;
+}) {
+  const actions = useRunRowActions(onSelectRun);
+
+  // #577 — multi-select. The per-tab sets live in the shared store (so a tab's
+  // count survives a switch as its badge); the pending bulk action is local.
+  const runSelIds = useSelectionStore((s) => s.runs);
+  const toggleSel = useSelectionStore((s) => s.toggle);
+  const selectRange = useSelectionStore((s) => s.selectRange);
+  const selectVisible = useSelectionStore((s) => s.selectVisible);
+  const selectGroup = useSelectionStore((s) => s.selectGroup);
+  const deselect = useSelectionStore((s) => s.deselect);
+  const clearSel = useSelectionStore((s) => s.clear);
+  const runSel = useMemo(() => new Set(runSelIds), [runSelIds]);
+  const [runBulkKind, setRunBulkKind] = useState<"cleanup" | "retry" | "pause" | null>(null);
+
+  const view = useRunTreeView(runs, selectedRunId, projects, deletedProjects);
+
+  // CORE-42: the gestures of each row the caller may make, asked once per
+  // Run; CORE-205: a refused one stays on the row, its menu and the bulk bar,
+  // greyed, with the refusal's sentence.
+  const runIds = useMemo(() => runs.map((r) => r.run_id), [runs]);
+  useListedRunGestures(runIds);
+  const gestureRights = useGestureRightsStore((s) => s.rights);
+  const whyNotOnRow = useCallback(
+    (runId: string, gesture: RunGesture) => whyNotOnRun(gestureRights, runId, gesture),
+    [gestureRights],
+  );
+  const { activeTree, archivedTree, filteredRuns, isExpanded, archivedOpen } = view;
+
+  // Group the active Runs list by the Projet each Run was launched in (#552,
+  // ADR-0087), falling back to the #258 per-path grouping for a Run in no
+  // Projet; `null` ⇒ the flat list. #783: the grouping key is the ROOT's — a
+  // child follows its parent whatever its own repo.
+  const { projectOfRun } = view;
+  const runGroups = groupByProject(
+    activeTree,
+    (n) => n.run.effective_repo,
+    (n) => projectOfRun(n.run.project_id),
+  );
+  // The Projet groups folded by their header's chevron: per browser, kept in
+  // the local storage, so a fold survives a reload and a new tab.
+  const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(
+    () => new Set(loadCollapsedRunGroups()),
+  );
+  const isGroupCollapsed = useCallback((key: string) => collapsedGroups.has(key), [collapsedGroups]);
+  // Re-read the stored folds first: another tab may have changed them.
+  const setGroupCollapsed = useCallback((key: string, collapsed: boolean) => {
+    const next = new Set(loadCollapsedRunGroups());
+    if (collapsed) next.add(key);
+    else next.delete(key);
+    saveCollapsedRunGroups([...next]);
+    setCollapsedGroups(next);
+  }, []);
+  const toggleGroup = useCallback(
+    (key: string) => setGroupCollapsed(key, !collapsedGroups.has(key)),
+    [collapsedGroups, setGroupCollapsed],
+  );
+  // A Run selected from elsewhere (URL, notification, Orchestration tab) in a
+  // folded group unfolds it, so its row shows: once per change of selection,
+  // React's reset-on-prop pattern, so a later fold sticks.
+  const [prevSelectedForGroup, setPrevSelectedForGroup] = useState(selectedRunId);
+  if (prevSelectedForGroup !== selectedRunId) {
+    setPrevSelectedForGroup(selectedRunId);
+    const folded = runGroups?.find(
+      (g) =>
+        collapsedGroups.has(g.key) && flattenAll(g.items).some((r) => r.run_id === selectedRunId),
+    );
+    if (folded) setGroupCollapsed(folded.key, false);
+  }
+  // A folded group's rows are not visible: out of a shift-range and of
+  // select-all-visible.
+  const orderedActive: RunTreeNode[] =
+    runGroups === null
+      ? activeTree
+      : runGroups.filter((g) => !collapsedGroups.has(g.key)).flatMap((g) => g.items);
+
+  // #577 — Runs multi-select derivations. `visibleRunIds` is the flattened visible
+  // order (grouped active list, then the archived section only when expanded),
+  // collapsed subtrees excluded (#783) — the basis for a shift-range and for
+  // select-all-visible.
+  const visibleRunIds = [
+    ...flattenVisible(orderedActive, isExpanded).map((n) => n.run.run_id),
+    ...(archivedOpen ? flattenVisible(archivedTree, isExpanded).map((n) => n.run.run_id) : []),
+  ];
+  const selectedRuns = filteredRuns.filter((r) => runSel.has(r.run_id));
+  const asRunItem = (r: RunListEntry): BulkItem => ({ id: r.run_id, label: r.name || r.run_id });
+  // Each bulk action targets the subset of the selection it is valid for (mirror
+  // of the per-row gates); an action whose subset is empty is disabled.
+  // CORE-42: and only the Runs where the caller may make it; CORE-205: an
+  // action no selected Run allows is greyed with the refusal's sentence
+  // (`bulkRefused`).
+  const allowing = (gesture: RunGesture) => selectedRuns.filter((r) => !whyNotOnRow(r.run_id, gesture));
+  const cleanupItems = allowing("cleanup_run").filter((r) => r.status !== "archived").map(asRunItem);
+  const retryItems = allowing("retry_all").filter((r) => RETRYABLE.includes(r.status)).map(asRunItem);
+  const pauseItems = allowing("pause_run")
+    .filter((r) => r.status === "running" || r.status === "awaiting_user")
+    .map(asRunItem);
+  const refusedToAll = (gesture: RunGesture) =>
+    selectedRuns.length > 0 && allowing(gesture).length === 0 ? whyNotOnRow(selectedRuns[0].run_id, gesture) : undefined;
+  const bulkRefused = {
+    cleanup: refusedToAll("cleanup_run"),
+    retry: refusedToAll("retry_all"),
+    pause: refusedToAll("pause_run"),
+  };
+  // Live runs the cleanup would stop (running/awaiting/paused) — the bar's caveat.
+  const runningWillStop = selectedRuns.filter((r) => isLiveRun(r.status)).length;
+  // #815 — the daemon's cleanup cascades to terminated descendants and refuses
+  // a parent whose subtree still has a live run; the dialog says so upfront.
+  const cleanupCascade = cascadeImpact(runs, cleanupItems.map((i) => i.id));
+  const handleRunsSettled = useCallback(
+    (o: BulkOutcome) => deselect("runs", o.succeeded.map((r) => r.id)),
+    [deselect],
+  );
+
+  // The pencil on a group header (#552): Settings › Projects on its Projet, or
+  // on a new one holding the group's repository (CORE-96).
+  const openProjectSettings = (group?: Parameters<typeof projectsEntryOf>[0]) =>
+    onOpenProjectSettings?.(group && projectsEntryOf(group));
+
+  return {
+    ...actions,
+    ...view,
+    openProjectSettings,
+    canOpenProjectSettings: onOpenProjectSettings !== undefined,
+    runSelIds,
+    runSel,
+    toggleSel,
+    selectRange,
+    selectVisible,
+    selectGroup,
+    clearSel,
+    runBulkKind,
+    setRunBulkKind,
+    runGroups,
+    isGroupCollapsed,
+    toggleGroup,
+    visibleRunIds,
+    cleanupItems,
+    retryItems,
+    pauseItems,
+    bulkRefused,
+    whyNotOnRow,
+    runningWillStop,
+    cleanupCascade,
+    handleRunsSettled,
+  };
+}
+
+export type RunsPaneState = ReturnType<typeof useRunsPane>;

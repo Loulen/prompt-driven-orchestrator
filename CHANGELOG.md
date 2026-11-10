@@ -1,2300 +1,4683 @@
 # Changelog
 
-Ce fichier ne consigne que les changements **cassants** et les notes de version qui ne se
-déduisent pas d'un titre de commit. L'historique complet vit dans le git log et dans les
-[Releases GitHub](https://github.com/Loulen/prompt-driven-orchestrator/releases), générées
-depuis les commits.
-
-Le projet suit le versionnement sémantique. Il n'a **aucun objectif de compatibilité
-ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant des champs
-morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
-archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
-
-## 1.130.0
-**Plafond de coût d'une boucle : édition à chaud et reprise** (#1017, spec #1014, story pdo-issues#5,
-ADR-0083).
-
-- Nouvelle commande de Run `set_region_max_cost` (`max_cost_usd` en dollars, ou `null` pour retirer
-le plafond), sœur de `set_region_max_iter`. L'override est porté par l'event log et prime sur le YAML
-(littéral ou `$var`) ; il survit à une réouverture. Aucun plancher : un plafond sous le coût déjà
-dépensé est accepté et arrête la boucle à la re-entry suivante, sans tuer le lap en cours. Refusée
-(400, sans trace) sur une `collection`, pour une valeur ≤ 0 ou une région inconnue. Sur un Run arrêté
-« budget reached », la commande lève l'arrêt et relance la re-entry : un plafond relevé démarre le lap
-suivant. Documentée dans les outils du Pipeline Manager.
-- Front : en « Edit for this run », sauver un `max_cost_usd` modifié passe par la commande (et reprend
-le Run). L'inspecteur montre l'encart « Budget reached · Run awaiting you », une note ambre si la
-valeur est sous le coût déjà dépensé, et un bouton `end region`. Le bouton `raise cap` ouvre
-l'inspecteur en « Edit for this run » avec le champ focalisé. Le header affiche le plafond effectif.
-- Correctif : « exhausted — unrouted » ne s'affiche plus pendant le dernier lap ni après une sortie
-normale ; il suit l'arrêt `region_exhausted` de la région.
-- Additif sur l'API : `region_max_cost_overrides` sur le Run.
-
-**Plafond de coût d'une boucle** (#1016, spec #1014, story pdo-issues#5, ADR-0083).
-
-- Une boucle `bounded` accepte `max_cost_usd` (nombre ou `$var`, pas de défaut, sérialisé seulement
-s'il est posé). Il est refusé s'il est ≤ 0, non numérique, ou posé sur une `collection`. Une `$var`
-est résolue au lancement du Run. Le plafond se vérifie à la re-entry : une fois le coût de boucle au
-plafond, le lap suivant ne démarre pas. Le Run passe en attente utilisateur avec la raison
-`region_budget_exhausted` (`awaiting_region_id` nomme la région), et la sortie d'épuisement n'est pas
-suivie. Le Run n'est jamais marqué en échec. Si `max_iter` est atteint au même moment, l'épuisement
-`max_iter` l'emporte.
-- Le header affiche `~$1.20 / $5` (`≤ $5` sur un template), avec un texte ambre dès 80 % du plafond.
-L'état « budget reached » est ambre, avec la chip `raise cap` / `end region`, et reste distinct de
-« exhausted ». L'inspecteur de région porte le champ et prévient quand un membre n'a pas de source de
-coût. Il montre aussi une section « Loop cost » sur un Run. Le panneau du Run explique l'arrêt.
-- Additif sur l'API : `loop_costs[id].cap_usd`, `awaiting_region_id` sur le Run, `can_cost` sur les
-harnais de `GET /settings`.
-
-**Coût de boucle dans le header de région** (#1015, spec #1014, story pdo-issues#5).
-
-- Le header de chaque région de boucle affiche le coût cumulé de ses nœuds membres depuis l'entrée
-dans la boucle (`↻ 3/5 · ~$1.20`, `⇉ 2/4 items · ~$0.8400`, aussi sur le badge d'une région à un
-membre), au format du coût du Run : `~` estimation, `†` borne basse, `—` inconnu. Le tooltip
-détaille la part de chaque membre. Additif sur l'API : `GET /runs/{id}` gagne `loop_costs`.
-
-## 1.126.0
-**Tours jouables à plusieurs sur une instance partagée** (#986, #987, story PDO-20), validé en
-recette.
-
-- **First run et First pipeline jouables à plusieurs** (#987) : chaque navigateur nomme son Run
-(`my-first-run-<id>`) et sa pipeline (`tutorial-implement-test-<id>`) avec son identité de tour.
-« Find your Run » et « Keep it, or delete it » désignent la ligne de ce navigateur, et le
-lancement ou la suppression faits par un autre joueur ne font plus avancer le tour.
-
-- Identité de tour, Overview jouable à plusieurs (#986) : chaque navigateur tire une
-identité de tour (`[0-9a-z]{4}`), et le tour *Overview* prépare et range son propre Run
-(`tour-overview-<id>`) et son propre Trigger (`tutorial-example-trigger-<id>`), sans toucher
-à ceux des autres. Le Trigger hérité sans suffixe est rangé ; le Run hérité reste en place.
-
-## 1.125.0
-**Pipeline validé pour tous et mis en tête pour des Projets** (#992, spec #989, story PDO-15),
-validé en recette.
-
-- La validation `all` accepte une liste optionnelle de Projets (`{"kind":"all","project_ids":[…]}`,
-  absente = vide), sans migration. Ces Projets voient le Pipeline en tête, dans « Project
-  pipelines », plutôt qu'en « Global pipelines ». Supprimer un Projet laisse un `all` en `all`.
-- Modale « Validate » : cases des Projets actives sous « All projects », Projets triés par nom.
-  Indicateur globe + « All +N ».
-- L'événement `project_changed` est relayé au front : la suppression ou la création d'un Projet
-  se reflète sans rechargement.
-- Menu des Pipelines : plus de colonne « instance ».
-
-## 1.124.0
-**Status icon lisible sans la couleur, palette daltonienne en option** (specs #996 et #1004,
-story PDO-22), validé en recette.
-
-- Status icon (#997, #999, #1000) : la forme du glyphe porte le statut dans les listes de Runs et
-de Triggers, les panneaux de Run et de nœud (Run info, terminal, sélecteur d'itération, enfants
-d'un orchestrateur), sur les nœuds du canvas et dans l'étape « The status icon » du tour Overview.
-- Sélection ronde (#1005) : le contrôle de sélection des listes reste rond (anneau de la couleur
-du statut au survol, rond d'accent coché une fois sélectionné).
-- Palette daltonienne en option (#998, #1005) : la palette par défaut reste celle de la 1.119.1
-(interrupted et stale distincts d'awaiting). La palette lisible en deutan/protan, avec une
-variante sombre, est l'option « Colour-blind friendly status colours » de Settings › General ›
-Accessibility, stockée dans le navigateur et appliquée avant le premier rendu.
-
-## 1.123.1
-Feedback de survol uniforme sur les actions des profils agentiques et de staging (#994, spec
-#984, story PDO-5), validé en recette : « + New profile » en bouton secondaire bordé, curseur main et teinte au survol sur
-Edit, Delete, la modale et la confirmation ; aucun survol sur un bouton désactivé.
-
-## 1.123.0
-**Ports nettoyés** (spec #981, story PDO-17), validé en recette.
-
-**Plus de côté (L/T/R/B) sur les ports** (#991, spec #981). Le routage appartient à l'edge : au
-chargement, l'ancien `side` d'un output devient une `source_anchor` sans offset (milieu du côté),
-et celui du `result` d'un End un `target_side`. Le fichier n'est réécrit qu'à la sauvegarde ;
-lancer `pdo migrate` sur `~/.pdo/pipelines` et `~/.pdo/library` pour convertir le reste.
-
-**Plus de « rpt » sur les ports de sortie** (#993, spec #981). Un output n'a plus de flag
-d'accumulation : le toggle disparaît de l'inspecteur et le panneau de run affiche toujours un
-output comme un document unique. L'accumulation reste portée par l'edge (`repeated` sur l'edge,
-badge `rpt` sur l'input poolé). Au chargement, le `repeated` d'un output est ignoré ; le fichier
-n'est réécrit qu'à la sauvegarde, lancer `pdo migrate` pour convertir le reste.
-
-## 1.122.0
-**Panneau de node : durée de l'itération, bascule Total / Active** (spec #978, story PDO-16),
-validé en recette.
-
-- Bascule Total / Active (#980) : un clic (ou Entrée / Espace) sur la durée de la ligne méta bascule entre `total` et `active` ;
-le choix est mémorisé (`pdo.ui.nodeDurationMode`) et s'applique aussi au menu des itérations.
-Active se fige pendant une attente déclarée (point ambre). Le tooltip ventile Total / Active /
-Waiting, avec une somme exacte à la seconde affichée ; Active peut de ce fait différer d'1 s de
-Stats -> Performance, qui arrondit chaque valeur séparément (écart accepté en recette).
-
-- Durée Total (#979) : la ligne méta affiche `iter N · <durée> total · <coût>` à la place de `started … · ended …` ;
-la durée défile tant que l'itération tourne. Début et fin passent dans un tooltip (survol ou
-focus clavier). La ligne suit l'itération choisie dans le sélecteur, dont le menu affiche une
-durée par itération.
-
-## 1.121.0
-**Update et What's new depuis Settings** (#983, story PDO-14) : dans Settings › Version &
-update, Update et What's new ferment d'abord Settings (via la garde de brouillon), puis affichent
-la confirmation de mise à jour ou le Changelog seuls à l'écran. Les fermer ramène sur l'app sans
-rouvrir Settings.
-
-## 1.120.0
-Carte Start du canvas d'un Run sans images d'input (#977, PDO-18) : les miniatures et la
-lightbox restent dans l'inspecteur du Start.
-
-## 1.119.1
-Retours du test humain de la spec #970 : indicateur de validation d'un Pipeline sous les
-icônes de survol, bouton d'édition d'un Run réduit au crayon, menus Éditer / Save et modale
-d'import allégés (plus de confirmation après « Copy & send to terminal »).
-
-## 1.119.0
-**Interface à jour après une absence** (#972, spec #970).
-
-- Flux temps réel `/ws` : reconnexion avec backoff, watchdog de heartbeat (un socket muet est
-  rouvert), relecture complète de l'état à chaque reconnexion et à chaque retour sur l'onglet.
-  Le daemon envoie `resync` à un client qui a perdu des événements ; le client relit tout.
-- Terminal d'un nœud : voile « Terminal connection closed » + **Reconnect** quand sa connexion
-  tombe (fermeture, passage hors ligne, ou 30 s sans battement) ; reprise automatique avec
-  backoff et au retour sur l'onglet. Le daemon envoie un battement toutes les 10 s sur le socket
-  du terminal, pour qu'aucun proxy ne le coupe pour inactivité.
-- `docs/reference/reverse-proxy.md` : configuration qui laisse passer les WebSockets.
-- Skill seedé `pdo-interactive` : la bannière de `pdo wait-user` est une notification ; la
-  question ou le résultat complet est écrit dans la conversation avant l'appel.
-- **Limite connue** : un nœud terminé pendant que son terminal était voilé peut afficher l'erreur
-  tmux `can't find session` au lieu de `[exited]` après la reprise automatique (statut du nœud
-  juste).
-
-## 1.118.0
-**Pipelines validés par Projet** (#974, spec #970).
-
-- Bouton **Validate** (onglet d'un Pipeline) : le Pipeline est proposé à tous les Projets
-  (actuels et futurs), à une liste de Projets, ou à aucun (Pipeline de test). Un indicateur
-  (globe « All », dossiers + nombre, fiole 0) le résume sur l'onglet et dans l'onglet Pipelines.
-- Formulaires New Run et Trigger en sections : « Project pipelines · <Projet> », « Global
-  pipelines », puis « Show test pipelines ». Un Pipeline validé pour un autre Projet n'est pas
-  proposé. La présélection automatique prend le premier Pipeline du Projet, sinon le premier
-  global ; un choix explicite est conservé (#386).
-- **À noter** : les Pipelines existants restent proposés partout (aucune ligne = tous les
-  Projets), mais les Pipelines créés, dupliqués ou importés après la mise à jour sont des
-  Pipelines de test tant qu'ils ne sont pas validés. Supprimer un Projet le retire des
-  validations ; un Pipeline validé pour ce seul Projet devient un Pipeline de test.
-- API : `GET /pipelines` expose `validation`, nouvel endpoint `PUT /pipelines/{id}/validation`.
-- Tutoriels : étape Validate dans *First pipeline* ; *First run* valide `tutorial-interactive`
-  pour un Projet « Tutorial ».
-
-## 1.117.0
-**Pilotage d'un Run en lecture seule, Edit for this run, Overwrite default pipeline** (#973, spec #970, ADR-0080).
-
-- Un onglet de Run s'ouvre en pilotage : canvas verrouillé (ni déplacement, ni câblage, ni menu
-  d'édition), `+`, Library, script et undo/redo masqués, pas de bouton Save. L'onglet Edit de
-  l'inspecteur devient **Config**, en lecture seule (prompt et skills). Un Run archivé l'indique.
-- Menu **Edit** : « Edit for this run » rouvre l'édition à chaud sur le snapshot du Run ;
-  « Edit source pipeline » ouvre l'onglet du Pipeline. « Finish editing » reverrouille, avec
-  confirmation s'il reste des modifications non enregistrées.
-- En édition de Run, « Save for this run » n'écrit que le snapshot (le Pipeline partagé n'est
-  plus synchronisé). « Overwrite default pipeline… » avertit (futurs Runs, Triggers concernés,
-  Pipeline partagé modifié depuis le lancement) puis copie le snapshot complet (YAML + prompts).
-- L'onglet d'un Pipeline hors Run s'édite et s'enregistre comme avant.
-
-## 1.116.0
-**Importer un fichier dans un nœud à session vive, depuis son terminal** (#971, spec #970).
-
-- Glisser-déposer sur le terminal du nœud, ou icône « Import » dans sa barre : une modale
-  dépose le(s) fichier(s) sous `.pdo/artifacts/_attachments/<node-id>/` (jamais commités,
-  supprimés avec le Run ; un nom déjà pris est suffixé `-1`, `-2`…).
-- La modale donne ensuite un texte avec le chemin relatif au worktree, à copier ou à écrire
-  dans la saisie de l'agent sans Entrée. Fonctionne aussi depuis un navigateur distant en http.
-- Refus motivé, sans rien écrire : nœud sans session vive (409), import au-delà de
-  `max_attachments_mb` (413).
-
-## 1.115.0
-**Terminal de nœud agrandi en overlay quasi plein écran** (#968, spec #967).
-
-- Le bouton Expand du terminal de nœud ouvre un overlay quasi plein écran (marge de 16 px, fond
-  assombri), cadré à la couleur du statut, avec une barre nom + itération + statut. Le terminal
-  n'est pas remonté : aucune nouvelle WebSocket, la saisie en cours est conservée.
-- Fermeture par clic sur le fond ou Échap (hors du terminal ; Échap dans le terminal part à
-  l'agent). En `awaiting_user`, la barre porte les gestes compacts (libérer, marquer terminé)
-  par le même chemin que le panneau. L'agrandi n'est jamais persisté.
-
-## 1.114.0
-**Copier le contenu brut d'un output en un clic** (#965, story Notion PDO-12).
-
-- Un bouton de copie apparaît sur la ligne de port (section Outputs du panneau de détail, au
-  survol ou au focus clavier) et dans le header de la modale d'artefact. Il copie le fichier
-  brut de l'iter affichée, octet pour octet : frontmatter comprise, markdown non rendu, source
-  pour le html. Il marche aussi sur un Run archivé.
-- Retour « Copied! » ou « Copy failed » (raison en infobulle). Aucun bouton sur les outputs
-  image.
-
-## 1.113.1
-**Terminal : fin du saut de ligne à chaque changement de node** (#946, spec #945, story Notion #1).
-
-- Se détacher d'un terminal (changer de node, fermer le Shell de run, recharger la page)
-  n'écrit plus `\n` + `^D` dans la pane. La saisie de Claude Code ne gagne plus une ligne vide
-  à chaque aller-retour, et un shell hébergé (Shell de run, bash, REPL) survit au détachement.
-- Cause : la libération du writer de `portable-pty` écrit « newline + EOF » dans le PTY ; le
-  pont la faisait avant de tuer le client `tmux attach`, qui la relayait. Le pont ne libère
-  désormais le writer qu'une fois le client tué et récupéré. Aucun changement côté front ni
-  dans le protocole WebSocket.
-
-## 1.113.0 — Le nœud Merge est retiré (#942, spec #941, ADR-0079)
-
-- Le type de nœud `merge` disparaît de l'éditeur, du modèle et du runtime. La convergence est
-  portée par **tout nœud** : reliez plusieurs arêtes à un `agent`, il attend que chaque branche
-  ait firé ou soit morte, ne reçoit que les branches firées et trouve leur code sur la branche du
-  Run. La barre d'outils n'a plus de bouton Merge.
-- Un YAML qui contient encore `type: merge` se charge : le nœud devient un `agent` isolé, avec le
-  warning ordinaire « unknown node type », et garde ses ports `branches` / `merged`. Ni alias, ni
-  règle `pdo migrate`.
-- Seul écart de comportement : un nœud de convergence dont toutes les branches sont mortes est
-  désormais sauté (l'ancien Merge était exclu de l'auto-skip).
-- Le résolveur de merge automatique, mort en production depuis ADR-0006, est supprimé (prompt
-  `merge-resolver`, refus `merge_resolution_failed` / `merge_resolver_*`, lint « fan-out sans
-  Merge », conseil Merge de l'importeur). Les événements `MergeResolver*` des anciens Runs restent
-  lisibles : ces Runs se rouvrent, se chiffrent et gardent leur ligne Infrastructure dans Stats.
-- Un conflit de merge-back met le nœud en Interrupted ; sa bannière dit désormais « Merge-back
-  conflict » au lieu de « Session died ».
-- Canvas : une arête auto qui sort à droite vers une cible située en arrière (typiquement la
-  sortie sans `side` d'un ancien Merge, au-dessus de son End) ne traverse plus sa carte source.
-  Elle part par une patte du côté de sortie et contourne la carte.
-
-## 1.112.1
-**Modales bornées à la hauteur de la fenêtre** (#940, spec #939, story Notion PDO-8).
-
-- Edit project / Name project, profil agentique, destruction de loops et fermeture d'onglets
-  non sauvegardés tiennent dans 85 % de la fenêtre : titre et actions restent visibles, seul le
-  corps défile (modèle : New Run).
-
-## 1.112.0
-**Le panneau de droite se replie quand il n'a rien à montrer** (#949, spec #947, story Notion #6).
-
-- Template sans sélection, écran d'accueil, fermeture de Pipeline info (✕ ou bouton (i) de la barre d'outils) sans
-  sélection : le panneau de droite se replie et le canvas prend toute la largeur.
-- Il se déplie, sans animation, à la dernière largeur choisie dès qu'un contenu le réclame :
-  sélection de nœud, d'edge, de région ou de note, Pipeline info, Assistant, Trigger. La
-  largeur choisie survit au rechargement ; le repli ne l'écrase jamais.
-- Pas de repli manuel : la poignée disparaît pendant le repli, et on ne peut pas réduire le
-  panneau sous sa taille minimale en le glissant.
-- Un Run à sélection vide garde son panneau Run ; un Run archivé garde « Run archived ».
-- Le canvas se recadre au dépliage comme au repli : il garde son centre visuel, et le nœud
-  sélectionné reste entièrement visible au lieu de glisser sous le panneau. Au dépliage, le
-  décalage s'arrête là où le bord gauche du graphe rejoint celui du canvas : un graphe déplacé
-  vers la gauche ne passe pas sous la barre latérale. Un glissement de la poignée ou un
-  redimensionnement de la fenêtre ne recadre pas.
-
-## 1.111.0
-**Pipeline info, seule surface des métadonnées d'un pipeline** (#948, spec #947, story Notion #6).
-
-- L'onglet Info de Pipeline info (bouton `i`) porte, sous l'en-tête : Identity (nom, version,
-  Prompt required), Variables (ajout, renommage, type, défaut, suppression), Canvas (grille de
-  câblage Global / S / M / L) et les stats du graphe. Éditable sur une template comme toute
-  édition (onglet dirty, undo, Save) ; en lecture seule sur un Run, actif ou archivé.
-- Le Pipeline Inspector disparaît, avec le bloc « Description » : sur une template, une
-  sélection vide n'affiche plus rien à droite, seul `i` ouvre les réglages du pipeline.
-- L'onglet YAML montre une édition non enregistrée ; Copy et Download exportent toujours le
-  dernier document enregistré.
-- Renommer une variable se tape au clavier : la ligne garde le focus et sa place. Un nom vide
-  ou déjà pris reste local (signalé en rouge) et revient au dernier nom valide à la sortie
-  du champ ; un Undo restaure le nom d'origine.
-- Une variable dont le défaut ne porte pas le type (un `float` qui vaut `3`) s'écrit sous la
-  forme explicite `{ type, default }` : son type survit au rechargement.
-- Un Save qui renomme le pipeline laisse Pipeline info ouvert (même onglet, nouvel id).
-- Sur un Run actif, la note de l'onglet Info précise que les réglages sont en lecture seule.
-## 1.111.0
-**Provisioning replié par défaut, expliqué et diagnosticable** (#951, spec #950, story Notion
-PDO Dojo n° 7, contrat ADR-0061 inchangé).
-
-- Le bloc Provisioning est un disclosure replié à l'ouverture de New Run, de l'édition de
-  Projet, de l'inspecteur de node isolé et du détail de node ; Settings › Sandbox & worktrees le
-  garde déplié. Aucun état ouvert/fermé n'est mémorisé.
-- Replié, l'en-tête résume `Provisioning · N inherited · M at this level` (ou `· none`) et un
-  sous-titre explique à quoi sert le provisioning. L'aperçu tourne même replié.
-- Infobulles (Radix, atteignables au clavier) sur Copy, Hardlink, Symlink et sur la bande de
-  niveaux (héritage Instance → Project → Run → Node).
-- Un conflit de modes ou une erreur d'aperçu ouvre le bloc tout seul et le garde ouvert (un
-  clic sur l'en-tête pendant le blocage est ignoré, il ne replie pas le bloc après correction).
-  En cas d'erreur d'aperçu, le résumé dit `M at this level · inherited unknown` plutôt que
-  `none`.
-- Dans New Run, le bouton Launch grisé en donne la raison (« Provisioning has a mode
-  conflict » / erreur d'aperçu) dans une infobulle Radix, au survol comme au clavier (le focus
-  va sur un wrapper, le bouton désactivé n'étant pas focalisable).
-- Disparition du bouton « Configure worktree provisioning… » (Projet) et de la bascule
-  « Configure / Hide provisioning » (inspecteur) ; « Resolve against » vit dans le corps déplié
-  (le rappel « Resolve against … » de l'en-tête s'efface alors, et se tronque au lieu de couper
-  le résumé).
-
-## 1.110.3
-**Toolbar : boutons Assistant et Info mutuellement exclusifs** (#938, spec #937, story PDO-3).
-
-- Le glyphe « agent » et le bouton Pipeline info reflètent l'onglet affiché du panneau droit :
-  Assistant allume « agent », Info/YAML (et les onglets du Run) allument `i`, jamais les deux.
-- Cliquer le bouton de l'onglet affiché ferme le panneau ; cliquer l'autre bascule d'onglet.
-
-## 1.110.2
-**Canvas : une edge naît uniquement d'un drag, bord de node à 4,5 px** (#936, spec #935, story #934).
-
-- Dans l'éditeur de pipeline, cliquer un bord de node puis un autre node ne crée plus d'edge :
-  seul le glisser d'un bord vers un node en crée une.
-- La zone sensible du bord de node passe de 9 px à 4,5 px.
-
-## 1.110.1
-**Coquille : le panneau secondaire se ferme par ✕, Échap ou bascule** (#944, spec #943, story Notion #4).
-
-- Stats › Cost › *Pricing details* s'ouvre sous le header, qui reste accessible, dans le même
-  cadre que la Banque de skills : bouton ✕ et indication « Esc returns to Stats ».
-- Le panneau se ferme par ✕, par Échap (un second Échap ferme Stats) ou en recliquant sur
-  *Pricing details*, dont le style reflète l'état ouvert. Le focus revient au déclencheur.
-- La Banque de skills (Settings › Skills) partage ce comportement.
-
-## 1.110.0
-**Onboarding : tour *Overview*** (#911, spec #910, story #909, ADR-0071 §4).
-
-- Nouveau tour préface, premier dans la Modale de bienvenue et dans Settings › Tutorials ; le
-  full tour enchaîne *Overview* → *First run* → *First pipeline*. Il marche sans harnais
-  configuré.
-- La carte d'intro prépare un dépôt d'entraînement, la pipeline `tutorial-overview` (mise en
-  page d'`implement-review`, nodes `script`), un Trigger d'exemple dont le guard refuse
-  toujours, et un Run attendu jusqu'à `completed` ; *Start* reste inactif jusque-là. Rejouer
-  reprend le dernier Run terminé non archivé.
-- Visite en 18 étapes, dont 9 gestes qui n'avancent que sur l'état observé : Run, implementer,
-  ouvrir puis fermer un output, terminal figé, edge reviewer → End, Start, archivage
-  (skippable), Triggers, Pipelines. Settings et Stats sont éclairés, pas ouverts.
-- Un panneau ouvert par un geste reste éclairé et explorable (onglets, scroll) mais en lecture
-  seule : aucune valeur ne se modifie pendant le tour. Des bulles annexes, sans Next, montrent
-  le prompt du Run, l'input `task` d'implementer et la condition de l'edge.
-- L'étape de la pastille de statut vise une cible stable au survol (plus de clignotement) et
-  illustre les trois statuts : orange, bleu, vert.
-- Le Trigger d'exemple est supprimé à toute sortie du tour ; la pipeline et le Run restent.
-
-## 1.109.0 — Stats : absorption des Pipelines, Nodes, Modèles, efforts et couples (story #888)
-
-Les tickets #890, #891, #892 et #906 de la story #888 (ADR-0077, ADR-0078), livrés ensemble.
-
-**Stats : absorber les efforts d'un modèle et les couples d'un Node** (#906, story #888,
-ADR-0078).
-
-- Sur l'axe « By model » de Cost et de Performance, sélectionner des efforts d'un même modèle
-  (`not set` + `high`) puis « Combine » : une ligne d'effort, pastille `[⧉ N]` et modale des
-  membres. Une sélection sur deux modèles est refusée, dans l'UI et par l'API (400).
-- Les absorptions globales (Modèles, efforts) réunissent aussi les couples modèle × effort de
-  chaque Node, dans les arbres Pipeline et Projet. Le couple touché porte une pastille grisée
-  « Global absorption » : modale en lecture seule, lien vers l'axe « By model ».
-- Dans le détail d'un Node, deux couples quelconques se combinent en une ligne. L'absorption
-  est locale au Node, n'apparaît jamais sur « By model », et s'applique après le global.
-- Portée figée : une absorption d'efforts ou de couples couvre les clés brutes présentes à la
-  pose ; un membre absorbé plus tard n'est pas couvert.
-- Settings › Stats absorptions liste les entrées « Effort · <modèle> » et « Couple · <Node> ».
-
-**Stats : absorber des Nodes et des Modèles** (#892, story #888, ADR-0077).
-
-- Sous un même Pipeline, sélectionner deux lignes Node (Ctrl/Maj-clic dans le détail) puis
-  « Combine » : un Node renommé d'une version à l'autre (`review` → `code-review`) se lit sur
-  une seule ligne dans Sessions, Cost (arbres Pipeline, Projet et Modèle) et Performance.
-  La sélection refuse, visiblement, de mélanger Pipelines et Nodes, ou des Nodes de deux
-  Pipelines ; l'API refuse aussi ce dernier cas.
-- Retirer un Pipeline absorbé fait sortir ses Nodes de l'absorption de Nodes de son ancien
-  absorbant : ils retrouvent leur ligne sous leur Pipeline.
-- Sur l'axe « By model » de Cost et de Performance, deux lignes Modèle (un alias épinglé et
-  son id observé) se combinent ; l'absorbant garde son id verbatim, leurs efforts se
-  réunissent par effort, et la liste des membres dit si chaque id a été observé ou demandé.
-  L'axe Pipeline n'est pas touché.
-- Settings › Stats absorptions liste les Nodes (avec leur Pipeline) et les Modèles.
-- Correctif : la barre « Combine » et ses modales manquaient dans l'onglet Performance.
-
-**Stats : absorption au renommage, liste des absorptions, interrupteur Uncombined** (#891,
-story #888, ADR-0077).
-
-- Renommer un Pipeline dans la bibliothèque (id changé) crée l'absorption ancien → nouveau,
-  d'origine `rename`. Une chaîne A → B → C donne C absorbant de A et de B ; un renommage
-  d'affichage qui garde l'id ne crée rien.
-- Settings › General › *Stats absorptions* (`saves as you go`) liste toutes les absorptions,
-  leur absorbant, leurs absorbés et leur origine ; la croix retire un absorbé aussitôt.
-- Un interrupteur *Uncombined* sur Sessions, Cost, Performance et Triggers montre les
-  chiffres bruts (`uncombined=true`) ; il revient à son défaut à chaque ouverture de Stats.
-
-**Stats : absorber des Pipelines** (#890, story #888, ADR-0077).
-
-- Dans Stats › Sessions, sélectionner plusieurs Pipelines (Ctrl/Maj-clic) puis « Combine » :
-  une seule ligne, au nom de l'absorbant, cumule leurs Runs dans Sessions, Cost, Performance
-  et Triggers. La pastille `[⧉ N]` ouvre la liste des membres, d'où l'on retire un absorbé.
-- L'absorption est stockée dans `pdo.db` et appliquée à la lecture : le log d'événements
-  n'est jamais réécrit, et `uncombined=true` sur les routes Stats rend les chiffres bruts.
+One entry per version, newest first: what changes on screen, the new seams for extensions and the
+breaking changes, each marked **Breaking**. The binary embeds this file: "What's new" shows its
+latest entries. The full history lives in the git log and in the
+[GitHub Releases](https://github.com/Loulen/prompt-driven-orchestrator/releases), generated from
+the commits. The history of PDO 1.x, up to 1.132.0, is archived in
+[docs/CHANGELOG-v1.md](docs/CHANGELOG-v1.md).
+
+Work not released yet sits under `## Unreleased`, the first entry; "What's new" does not show it.
+`make release-bump` turns it into the version's entry when a story merges into `main`.
+
+The project follows semantic versioning. It has **no backward-compatibility goal**: a break is
+announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
+data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
+
+## 2.76.0
+
+### Upgrading from 1.x
+
+This is the first 2.x release published in this repository: it replaces PDO 1.x in place.
+
+- Your data is kept. 2.x reads the `~/.pdo` folder of 1.x as it is: pipelines, Runs, Projects,
+  settings and the database open without a migration step.
+- The service is kept. The same unit starts the daemon at boot, now on the 2.x binary.
+- To upgrade, run `brew upgrade pdo` (or `brew update && brew upgrade Loulen/tap/pdo`), or re-run
+  the install script of the latest release. The Update button of a 1.x install does the same.
+- Going back to 1.x afterwards is not guaranteed: 2.x adds tables and columns 1.x does not know.
+- From this version on, PDO is licensed under the Apache License 2.0, with a `NOTICE` file. Versions
+  up to 1.132.0 stay under the MIT License; their changelog is in `docs/CHANGELOG-v1.md`.
+
+### The Happy Paths describe the core alone
+
+- The three Happy Paths in `docs/test-scenarios/` are rewritten on today's core with no extension:
+  the Pipelines tab, the shared draft, the "Save…" window and pipeline versions; the New Run form
+  with its Project, Files, Agent and Sandbox rows, Approve, the Info tab's Stats and the
+  four-harness choice through the node's Agent control; the full tour as shipped, now an active
+  journey. The inventory says how the suite is played on the vanilla core and that no journey
+  asserts the product's name or logo.
+- *First run*'s "Name the Run" card asks to untick "Auto", the checkbox's actual label, instead of
+  "Auto-generated by manager".
+- *First pipeline*'s Save step lights the Save window once it opens, instead of leaving it unlit
+  over the dimmed screen.
+- *Overview*'s terminal step no longer draws a dashed outline across an enlarged terminal.
+- *First run*'s recap shows the whole Run name, wrapped, instead of cutting it short.
+- The welcome modal's "Later" tooltip and the "Tour closed" notice point at Settings › General ›
+  Tutorials, where the tours actually are.
+- A `copilot` node launches with the effort chosen in its Agent control (`--effort <level>`, posed
+  again on resume). The picker offered copilot's seven stops but the launch dropped them; an unset
+  effort still leaves copilot on its own default.
+- `docs/reference/harnesses.md` › Prerequisites says that the autonomy flags do not cover a
+  harness's "trust this folder" dialog.
+- `make demo-daemon-resync PORT=<p>` copies the host's harness logins into a running demo daemon
+  again, for when the host refreshed its `claude` login during a journey and the demo's nodes read
+  "Login expired".
+- The journeys say why `claude` asks to trust a Run's worktree under `/tmp` anyway: in a git
+  worktree it checks trust on the repository's root only.
+
+### Fixes found by replaying the Happy Paths
+
+Pipeline editor:
+
+- A pipeline output field typed `boolean`, `integer` or `array` is read as `bool`, `int` or `list`,
+  and the lint flags an unknown field type instead of showing it as a string.
+- The edge panel names the inputs an edge with several outputs actually lands under on its target.
+- Box-selecting cards with Shift and drag no longer selects text on the page.
+- Reshaping an edge segment reads "Undo reshape edge", and moving an edge label reads "Undo move
+  edge label".
+- An output field of an unknown type shows that type, marked "(unknown)", in the schema editor,
+  and editing another field no longer rewrites it as `string`. Its closed type selector is outlined
+  in red, wide enough to read the type, and names it in its tooltip.
+- Undo after drawing an edge reads "Undo add edge", not "Undo reshape edge".
+- Deleting the open pipeline no longer leaves its tab's reloads failing with 404s in the console.
+- A new output field's placeholder name is selected, so typing its real name replaces it instead
+  of giving `fieldverdict`.
+- A node added with `+` no longer lands inside a loop region, under its corner counter.
+- A collection or loop badge on a card no longer clips "⇉ 2/2 items".
+- Saving a pipeline whose edges were drawn by hand leaves its draft at zero changes: an edge's
+  sub-pixel anchor offsets are read back exactly, so the saved file and the draft agree.
+
+Runs and nodes:
+
+- A cost that no model price could cover shows "—" instead of an estimated zero.
+- A node's cost reported by copilot is marked as an estimate, as the Run's breakdown already did.
+- A long cost line in the Run's stats ends with an ellipsis and shows the whole line in its tooltip.
+- An edge into End reads fired once the Run reaches End.
+- A newly opened Run tab fits its whole graph beside the right pane, End included.
+- A node that finishes while its terminal is open shows its saved pane instead of a disconnected
+  terminal ending on "[exited]".
+- A node's terminal reconnects by itself when the node's session comes back after a restart or a
+  recovery.
+- Opening a node's terminal no longer counts the terminal's automatic replies as typing.
+- Reading the terminal of an interrupted node no longer relaunches the agent: it shows the node's
+  last saved screen, or nothing when none was saved.
+- A completion refused for missing outputs no longer commits the node's work or records it as
+  delivered.
+- Approving or marking a node done closes its terminal session, sandboxed nodes included.
+- Recovering a node whose conversation was never written restarts it and says why, instead of
+  failing on a resume.
+- A sandboxed Run whose container cannot reach the daemon fails its preparation with a message
+  saying where the daemon must listen, instead of leaving its node running forever.
+- The copilot and pi catalogues are read even when their CLI takes several seconds to start, and
+  the settings page no longer waits for a harness version check.
+- A node whose session dies within 30 seconds of its start says how long it lived and to check
+  that its harness is logged in and knows the node's model. The time runs to the moment tmux
+  closed the session, not to the liveness check that noticed it, even when the check comes 30
+  seconds later. tmux records that moment to the second, so the hint gives a bound rounded up
+  ("within N s of its start") and never reads "0 s".
+- A sandboxed completion no longer logs a failed targeted kill when the session was already gone.
+- An agent that ran `pdo complete` before its interactive node was released no longer waits for
+  somebody to type in its terminal: the release writes it a `[pdo-runtime]` line telling it to
+  complete now.
+- Every `[pdo-runtime]` line PDO writes to an agent (the release above, the frontmatter retry) is
+  now pasted, then submitted by a separate Enter. Typed with its Enter in one go, Claude Code took
+  the line for a paste and left it unsent in its input.
+- A `pdo node` gesture the daemon ignores (`skip` or `done` on a duplicate completion, `restart`
+  of a node already running…) prints `<node> not skipped: <the daemon's reason>` instead of
+  claiming it was done.
+- `+` › Node no longer drops a card under the right pane when the narrowed canvas has no free slot
+  on its grid: the card goes flush against a visible edge first.
+- *First pipeline*, "Declare the verdict field": the tour lights the "+ field" button alone,
+  then the schema editor once the field exists.
+- A "Session died" banner gives its reason whole, under its line, so the early-death hint is no
+  longer cut. The Run's Stats strip wraps instead of cutting the cost by harness.
+- An output field's type select is as wide as its widest option: `string` no longer reads `strin`.
+- An open Expected content field folds when the click outside it is released, not when it is
+  pressed: the "+ field" button under it no longer moves away before the release, so the first
+  click adds the field.
+- `+` › Node numbers its card's name when a card of the canvas already wears it (`implementer-2`).
+- A wire drawn with its first bend closer to the card than one leg no longer runs out to the leg's
+  end and back before it turns: the bend moves out to the leg's end.
+- Marking done or skipping a node that is already completed on a finished Run leaves the Run
+  Completed. It used to reopen the Run, ignore the duplicate, and leave it running with every node
+  done.
+- A restart or a recovery refused on a finished Run (the node's iteration is already completed)
+  leaves the Run as it was. The refusal used to come after the Run was reopened, which left it
+  running with no node live and its duration running on.
+- `pdo node kill` on a node that is already finished prints `<node> not killed: <the daemon's
+  reason>`: the daemon's answer says it killed nothing.
+- A Run's duration reads the same in the Runs list and in its Info tab: both drop the part of a
+  second, where the list used to round it up.
+- The Info tab gives a failed or interrupted Run's reason whole, under its banner's line, instead
+  of cutting it with an ellipsis.
+- A node's terminal no longer shows tmux's status line, which took its last row when the home
+  directory had no `.tmux.conf`.
+
+New Run, Settings and the folder explorer:
+
+- The folder explorer sorts a whole folder before applying its 1000-folder limit and never drops a
+  git repository, so a repository in a crowded `/tmp` is always listed.
+- New Run's default sandbox label changes as soon as the setting is saved in Settings.
+- A staging profile's hidden Delete button waits at the end of its row, so a click sent to it no
+  longer selects the row instead.
+- The editor tells the assistant which pipeline is open once per change, not on every view switch.
+- Closing a dialog no longer leaves the opening button's tooltip on screen; a focus moved to another
+  control right after still opens that control's tooltip.
+- Scrolled to the bottom of a Settings page, the section column lights the section that fills the
+  view, not a short last one under it.
+
+Tours:
+
+- Moving to the next step closes the folder explorer or skills picker the previous step left open,
+  so the skills picker folds back to its count.
+- *First run*'s first card tells you to click the Runs tab when that tab is what is lit.
+- "Name the Run" lights the whole Auto checkbox, label included, so the card no longer covers it.
+- Pressing Next right after pasting into a field is no longer lost.
+- A step scrolls its target into view when it is cut off at a side of the window or by its panel.
+- With the terminal enlarged, the wait step outlines the enlarged terminal instead of drawing
+  across it.
+- During *First run*, Reopen on an interrupted node stays clickable on the steps about that node.
+- *Open the output* on *First run*, with the terminal still enlarged, first lights its Collapse
+  terminal button and says the `out` row is under it, instead of lighting a row nobody can reach.
+- Copy on a tour card keeps the focus in the field the step before left open, and an open
+  Expected content field stays open on a press of the card's buttons: the card no longer moves
+  from under the click.
+- A control that shows only on hover, such as a section's "Add output" `+`, is visible while a
+  tour step lights it.
+- *First pipeline* names the worktree buttons as they read (Shared and Isolated), and wires Start
+  to the implementer: without that edge, a Run of the pipeline it builds would never start.
+
+Agentic tests:
+
+- `make demo-daemon BIND_ALL=1` is short for `BIND=0.0.0.0`: the demo daemon listens on all
+  interfaces, so a sandboxed Run's container reaches it. The demo daemon also stages copilot's
+  logged-in user and trusts `/tmp` for claude and copilot.
+- The Happy Paths and the driving playbook say how to answer claude's trust dialog (its cursor
+  starts on "No, exit"), which harness logins a journey needs, that the undo history does not
+  survive a reload, and where Pipeline info and the Node sessions stat are.
+- The Happy Paths say that "You pilot" and one `node_taken_over` on the first attach are
+  expected, where to seed pipelines (the instance library, not the target repo), what the library
+  assistant's 20-second focus heartbeat looks like, and which input a new edge lands on.
+### README: the PDO logo, an Enterprise section and media of today's UI
+
+- The README (English and French) opens on the PDO logo, in light and dark, and ends with a short
+  "Enterprise: Acogni Driver" section. Its GIFs and posters are recorded again on the vanilla
+  binary, default Theme.
+- `docs/features.md` says how the in-app update really goes (the status-bar version, "What's new",
+  **Update** › **Update now**) and which node can be Interactive or Orchestrator.
+- `make readme-media` films today's UI again: a scene's pane widths apply (the recorder stores the
+  window width the layout was saved for), the target pipelines are redrawn for the 208 px cards,
+  the canvas gestures aim where the canvas draws a node under a card with several outputs, the
+  Save dialog, the "You pilot" terminal, the full-window Stats, the run's read-only Config tab and
+  the two-row Review toolbar are followed, and the agents filmed write in English. A mocked-history
+  run opens from the rail (its `pipeline.yaml` is written in the fixture repo).
+
+### A pipeline whose Start leads nowhere says so, and its Run fails at once
+
+- The *First pipeline* tour now has you connect **Start to implementer** before wiring the loop. The
+  pipeline it used to end on had no edge out of Start, and its Runs stayed `running` forever without
+  starting a node.
+- A pipeline that nothing starts (Start connected to no node, no node without an incoming edge, no
+  on-demand node) shows a warning in the banner above the canvas: "Start is connected to no node,
+  and no node starts on its own, so a Run of this pipeline would start nothing". A Run launched on
+  it fails at once with that reason, instead of staying `running` with nothing live.
+- The banner above the canvas is read again after every Save, so a warning that a save brings
+  shows up at once, not only after a reload.
+
+### Sandbox, harnesses, worktrees, multi-repo and live sessions: fixes from the vanilla acceptance tour
+
+- A declared wait is lifted by a person's answer only. What the browser's terminal answers by itself
+  when the agent queries it (its colours, its version) no longer counts as typed text, so a bare
+  Enter no longer lifts the wait, and a node's log no longer gains a `node_typed` nobody typed.
+  Attaching to an iteration that already ended records no `node_taken_over`.
+- A node waiting for its user (`pdo wait-user`, an unreleased completion) whose session dies turns
+  `Interrupted` with "session died", as a running one does, instead of waiting forever.
+- Leaving a finished node for the node of the same id in another Run opens its live terminal,
+  instead of keeping it folded and marked "ended".
+- The terminal of a node not started yet, and the Run pane before any node is live, say "Not
+  started yet".
+- Every "Inherit" picker (New Run, node inspector, Project, Settings › Agents) shows what it
+  would really inherit: the instance's choice, else its default harness, else the Default profile
+  as you edited it, instead of always "claude · — · —". In the node inspector, a node's own
+  legacy entries count: a `harnesses: { claude: … }` entry or a `pin_harness` names the model and
+  effort the node runs.
+- A pending tool call of an iteration that ended reads "no result" in the Transcript tab instead
+  of "running" forever.
+- Settings › Diagnostics and the model pickers follow a harness probed again by a later read (a
+  `copilot` whose `--version` was too slow at boot no longer reads "probe failed" until a reload).
+- A node with `harnesses: { claude: { model: … } }` and no pin runs on that model again on the
+  Default profile's harness, as it did before agent profiles; the profile fills what the entry
+  leaves out.
+- The delivery commit of a node no longer carries `.pdo/prompts/` (the prompt and the turn-end hook
+  PDO writes beside the session) into the Run branch of a repository whose `.gitignore` does not
+  cover `.pdo/`.
+- `POST /runs` refuses a `target_repos` whose first entry is not the `target_repo` (400 naming both):
+  the list is the primary first, then the secondaries; its first secondary used to be dropped
+  without a word. `pdo run create --target-repos` says so in its help.
+- A node that changed a tracked file of a read-only secondary repository is told it is still its
+  turn (`pdo complete` exits 3, `recoverable: true`): it reverts and completes again. It used to
+  read "already ruled" (exit 4) while nothing was recorded, and a `script` node ended "session
+  died"; a `script` node now fails with the refusal's cause in its reason, without the
+  instructions `pdo complete` prints for an agent ("still your turn", "Do NOT run `pdo fail`").
+- `pdo run repos --remove <path>` removes the secondary repository it names; `PATCH /runs/<run>/repos`
+  takes a repository's path in `remove` as well as its alias. `--remove <alias>` works from any
+  directory, and a repository the Run does not have is refused (exit 4) with the Run's secondaries,
+  instead of "repositories updated".
+- `make demo-daemon … BIND=0.0.0.0` lets a sandboxed Run's containers reach the demo daemon; the docs
+  of `pdo daemon --bind` and of the sandbox say a loopback daemon leaves a sandboxed node unable to
+  call `pdo complete`.
+
+### Convergence: a node waits for a loop's exit and reads every lap of a collection
+
+- A node fed by a bounded loop's guarded exit (a `review` edge on `verdict = PASS`) and by other
+  branches waits for the loop to exit, on its guard or exhausted. It no longer starts when a
+  collection or another branch finishes while the loop is still turning, with its preamble saying
+  "not available yet" of the loop's output.
+- A collection's barrier starts the node downstream only once its other branches are resolved too;
+  the branch that resolves last starts it.
+- The node downstream of a collection receives the output of every lap, in the order of the items,
+  in its I/O, its preamble and `PDO_INPUT_<PORT>`. It used to receive the last lap only.
+
+### Routing: a branch not taken stays dead downstream
+
+- A run whose only path to End goes through a branch that was not taken stays "awaiting you"
+  with the reason "unrouted" until you force a route, instead of finishing green with End
+  "reached". The same holds for a bounded loop that runs out of laps while its exit goes through
+  a branch not taken: the run stays "exhausted".
+- A node where branches converge receives only the branches that fired. An input whose branch was
+  not taken is no longer listed in the node's I/O; its preamble says "not taken", and a `script`
+  gets an empty `PDO_INPUT_<PORT>` (an input of the same name that did fire keeps its path).
+- A node you skip yourself (`pdo node skip`, with or without `--output`) still feeds what comes
+  after it, as if it had run. The ▶ of a skipped node is unchanged.
+- The run state marks a node skipped because its branch was not taken with `pruned: true`.
+
+### Review: comments never lost on their way to the manager
+
+- "Send to manager" no longer loses comments on a repository the manager's agent never trusted.
+  A manager the send starts reads the comments at the end of its launch prompt, instead of having
+  them typed into its folder-trust prompt (where the Enter chose "No, exit"). Into a manager
+  already running, the comments are typed only once its screen can take them.
+- While the manager's agent asks whether to trust the folder, the comment's thread says the
+  comments are held and how to go on: answer the prompt in the run's Manager tab. They go out once
+  it is answered. PDO never answers it for you nor writes the trust into your home.
+- A manager that exits before answering is said on the thread ("The manager exited before
+  answering", "Manager exited" in the footer) instead of "Awaiting manager reply" for ever, and
+  **Send again** hands every unanswered comment to a new manager, as written. The same holds when
+  no manager runs any more after a daemon restart.
+- New seams: `POST /runs/<id>/review/comments/resend` (`{"ids": [...]}`, the send's right) and
+  `pdo review resend <id>...`; the Run event `review_comment_delivery` (`ids`, `state`: `awaiting`,
+  `blocked` or `exited`, `reason`), folded onto each comment's `delivery`.
+
+### Authoring: fixes from the vanilla acceptance tour
+
+- Importing a Claude Code workflow lists what it could not map in English, in the import modal and
+  on `pdo pipeline library import`, and the placeholder it writes into a node's prompt is English
+  too ("⟨TODO: prompt built at run time — write this node's role⟩").
+- Deleting an agent profile something still names says "1 reference moves to the next tier", and
+  "2 references move" from two on.
+- The Undo tooltip names a note or a loop added or deleted ("Undo add note", "Undo delete loop"),
+  as it already did for nodes and edges; "edit note" is left for a note whose text changed. The
+  Redo tooltip names the change it replays the same way ("Redo delete note").
+- A "changed outside" or library-assistant line above the canvas goes away once you save the draft
+  it changed as a version: that version holds the change, and "See v2" no longer points at a
+  version older than the one you just saved. A line that arrives while the save is under way stays,
+  and so do the lines in the other participants' tabs.
+- A node whose agent profile was deleted names the profile as you knew it ("Agent profile Reviewer
+  fast no longer exists"), in the warning above the canvas, on the node card's tooltip and in the
+  inspector, wherever this browser listed the profile before; elsewhere it still shows the id.
+- The import window's second tab reads "Claude Code workflow".
+- A double-click on a pipeline in the library opens one tab, not two tabs on the same pipeline that
+  each kept their own Undo history. A second open that answers late leaves the open tab and its
+  edits alone.
+- Add › Note places the new note clear of the notes already on the canvas, as it already did for
+  nodes, instead of on top of the last one. A new node keeps clear of the notes too.
+- `pdo skill export --skill` takes a skill's name as well as its id, as every other `pdo skill`
+  command does.
+- `pdo settings agent-profile delete --help` says what the daemon does: it deletes a profile even
+  while something names it, and each of those falls back to the next tier.
+
+### Platform: fixes from the vanilla acceptance tour
+
+- Triggers: the Input field of a Trigger no longer suggests a `{{guard.stdout}}` template (the
+  guard's output replaces the input, it is never interpolated), and the guard example exits
+  non-zero when there is nothing to do (`gh issue list --label ready | grep .`). The guard's
+  tooltip points at Settings › General for its timeout instead of saying "60 s".
+- Run now is greyed on a disabled Trigger, row and panel, with "Disabled: enable it first":
+  the daemon refused it with a 409 the toast showed with the raw id.
+- Deleting a Trigger from its row asks first, as the bulk delete does: its schedule and fire
+  history go. A refused delete or enable/disable says why in a toast instead of doing nothing.
+- A Trigger a missing pipeline or repository put to sleep resumes its schedule when Run now
+  fires it once they are back; its row and panel say "Not scheduled" and what wakes it.
+- The status icon's tooltip names the last outcome in words, a tick's or a manual fire's, and
+  the last fire apart ("Last outcome: Skipped, overlap · Last fired Nov 9, 10:25 UTC"), instead
+  of pairing a skip with the time of an older fire. "Next fire in now" reads "Next fire now".
+- Stats › Triggers counts in "X of Y enabled triggers fired" only the Triggers still enabled: a
+  Trigger disabled since it fired no longer makes "2 of 2" while an enabled one never fired.
+- The "Last fired" switch of Settings › Appearance shows the element at every panel width.
+- A raw cron reads in mono in the Trigger panel (`* * * * *`, not `*****`), and Run info names
+  the Trigger that fired the Run instead of its id.
+- Test guard shows the stderr of a guard that passes too. A prompt-required pipeline whose
+  guard printed nothing is refused with "the guard printed nothing and there is no input
+  template", not "add a guard".
+- The pipeline menu of New Run names its hidden section "Test pipelines · not validated", as
+  its toggle says.
+- `pdo trigger list` says `disabled` for a disabled Trigger ("paused" is the global switch,
+  which standard error now mentions); `pdo trigger disable|enable` are aliases of
+  `pause|resume`; `pdo trigger fire` exits 1 on an error outcome. `pdo audit` prints what a
+  short change changed to (`{"paused":true}`).
+- Settings: a search finds the switches of Settings › Appearance ("iteration", "cost"…), not
+  only their section title, and names their block ("Runs list · Cost", "Run canvas · Cost"). It
+  finds a tour of Settings › Tutorials by its name ("Full tour", "Overview"), shows its row and
+  counts the tours it shows. A section named like its category (Appearance, Projects) is named
+  once under a search, not "Appearance › Appearance". A page left open follows a change made
+  elsewhere (`pdo settings set`, another browser, the harness warm-up) on the fields it is not
+  editing, and the status bar's session gauge follows a session cap set from the CLI.
+- Settings › Notifications drops its sentences of explanation; the rows' tooltips carry them.
+- The default model row reads "Default model · claude": its models are claude's.
+- The skill bank says "built in" for a seeded skill and counts the tiers that select a skill
+  (it always said 0). Provisioning patterns are not spell-checked; a Project's provisioning
+  preview reads its default primary repository. The Edit project dialog has no invisible tab
+  stop, and its effort radios are not announced "Effort Effort".
+- `pdo settings appearance` says `default` for a choice left at its default.
+- `pdo update check` no longer says "can update now" on an install that is up to date, and
+  says why there is no latest version when there is none. `pdo update log <id>` names the attempt
+  it has no log for.
+- Settings › Version & update says "up to date" for a build ahead of the latest release, keeps
+  What's new (the changelog of this build) while the check is off or has not answered, and names
+  the source before the first check.
+- Tours: the conditions read `verdict = pass`, as the canvas draws them; *First pipeline* says
+  "Pick Shared, under Worktree" (the button's name) and calls the unsaved work a draft, not
+  something "only in this browser tab"; its Save step lights the Save dialog once it opens.
+  *First run* says "Open the Runs tab, then click New Run" when it lights the tab, "Untick
+  Auto" as the box reads, and tells you to say to an agent waiting for the release that it can
+  finish. Settings › Tutorials ticks the full tour once its three tours are done.
+- An edge into End reads "fired" once its End port fired, instead of "not fired" always.
+- A `script` node keeps its terminal once it ends: its shell exits as soon as `pdo complete` or
+  `pdo fail` answers, and the pane was often gone before it was frozen, so the Overview tour's
+  "frozen on the lines the script printed" showed "Session no longer available". The frozen
+  pane opens on those lines, at its top: the empty rows under them no longer push them into the
+  scrollback of a folded terminal, which showed black.
+- The training repository of the tours is reused only when it belongs to you: one another user
+  left under `/tmp` is refused by name.
+- The node inspector no longer says "NodeRun" in its tooltips.
+- Settings › Telemetry › "Include the Actor" warns about the law where you work, with France as
+  the example, instead of French law alone.
+- The CLI help speaks English throughout (Project, hosted session, skill bank, Appearance),
+  describes PDO for every harness, not Claude Code alone, and cites no ADR or issue number.
+
+### Updates come from the public repository
+
+- Settings › Version & update checks the latest release of `Loulen/prompt-driven-orchestrator`,
+  and the tooltip of "GitHub Releases" next to the check date shows that repository's releases page. The
+  Homebrew command is `brew update && brew upgrade Loulen/tap/pdo` (the `pdo` formula, no longer
+  `pdo-v2`), and the script command re-runs that repository's installer.
+
+### Review and observation: fixes from the vanilla acceptance tour
+
+- Review: a node that runs in the Run's worktree (not isolated) and commits its own work now has a
+  before → after pair that holds those commits. Before, its delivery started where the node stopped,
+  so the pair read "No changes". `NodeStarted` of such a node carries `run_head_sha`, the Run
+  worktree's HEAD when it started; a node started before this version keeps the old pair.
+- Stats › Cost and Run info: a Run that started no Pipeline Manager and no merge resolver no longer
+  counts an "Infrastructure" execution of unknown cost. Before, every Run read "without computable
+  cost", the Cost headline median stayed "—", and a script-only Run counted a `claude` execution.
+- `pdo stats` reads 30 days when `--period` is not given, the period Stats opens on (it read 7).
+- `pdo review diff --from/--to` with a revision git does not know answers `unknown ref: <ref>` and
+  lists the Run ref spellings, instead of "run branch not found"; `--help` lists them too.
+- `pdo complete` refused for a frontmatter mismatch says the agent has one retry left (it said the
+  retry was spent). A Run parked by a node's `pdo fail` names the node ("node make failed (awaiting
+  your confirmation)") instead of saying "agent pdo fail", which read wrong for a script node.
+- Stats › Performance: the wait coverage reads "1 execution of 4" and capitalises its second
+  sentence.
+### The interface takes the Marque of its binary: PDO, or Acogni Driver
+
+- The vanilla binary now calls itself **PDO** everywhere it names the product: the browser tab
+  (title and favicon, written into the page by the daemon so no other name flashes on load), the
+  mark at the left of the top bar, the welcome modal ("Welcome to PDO", the PDO lockup), the tours,
+  the import of a pipeline ("PDO pipeline"), the notifications, and Settings › Version & update,
+  whose Installed row reads `PDO 2.76.0` after the mark. A distribution that declares Acogni
+  Driver shows "Acogni Driver" and its logo instead, and `Acogni Driver 1.4.0 (core PDO 2.76.0)`.
+- New PDO logo: three steps of a Run (done, running in ruby, to come) joined by two edges. Acogni
+  Driver's mark is the A of Acogni, its hollow in ruby. Both keep their ruby under the Classic
+  Theme, in dark and light.
+- The gear of Acogni is the Settings icon now, in the top bar and in the Settings header; it no
+  longer stands for the product, so the top bar never shows two gears. It signs "by Acogni" under
+  the PDO lockup of the welcome modal and after the title of Settings › Version & update.
+- The Acogni wordmark of the Acogni Driver lockup is no longer clipped under its "g".
+- New seam for distributions: `Config::with_brand(pdo::Brand::AcogniDriver)`, next to
+  `with_release_channel`; without it a binary is PDO. Neither an environment variable, a setting
+  nor an extension changes it. The daemon serves the logos of its Marque under `/shared/brand/`
+  (`mark.svg`, `lockup.svg`, `favicon.svg`) for the pages an extension serves outside the
+  interface; `/shared/favicon.svg` now answers the Marque's favicon.
+### Runs: a pause keeps the work in flight, a reopen relaunches stopped nodes
+
+- A node that finishes while its Run is paused now completes. Before, its completion was refused
+  ("resume the run first"): a `script` node, which completes once as its bash exits, lost its work,
+  and after Resume it read "session died" and had to run again. What the finished node would launch
+  still waits for Resume.
+- Reopening a Run (the Play button, `pdo run reopen`) runs again the nodes that were stopped, as it
+  already did for interrupted ones. A cancelled Run (`pdo run cancel`) used to park "run_stalled …
+  blocked behind" its stopped nodes as soon as it was reopened. A stopped lap of a collection
+  fan-out stays stopped, with the laps already done, until its node is retried.
+- A `script` lap of a collection fan-out gets its item in `$PDO_ITEM` and the number of laps in
+  `$PDO_ITEM_TOTAL`, as an agent lap reads them in its preamble.
+
+## 2.75.0
+
+### Tours: Previous replays the step before, and the arrow keys drive the card
+
+- From step 2 on, a tour card shows "‹ Previous" on the left of its footer, before Skip. It
+  replays the step before as an ordinary step: shown again and waiting for Next when what it asked
+  for is already done, or live on its target when the gesture has to be made again. When that
+  step's screen is gone (a dialog, a menu or a viewer closed since), Previous is greyed out and its
+  tooltip says "This step's screen is gone: it can't be replayed"; the tour reopens and undoes
+  nothing. There is no Previous on a tour's first step, on its intro, stop and end cards, nor from
+  one leg of the full tour back into the one before.
+- ← presses Previous and → presses Next, each only when the card shows it live, and only while no
+  field, terminal, canvas, list, menu or viewer has the focus or is open. Next's tooltip reads
+  "Next (→)".
+- *First pipeline*: a condition step replayed while another edge is selected lights its own edge and
+  says when its condition is already set; "Create it" says "Already created" however the
+  pipeline was created, and Save and Validate replayed say they are done; the last step notices the
+  pipeline is deleted even when its tab closed with it. *First run*: Launch replayed after the
+  launch says what the click did.
+### Cost cap of a loop changed while the run goes on
+
+- "raise cap", on a loop region that reached its cost cap or in Run info's "Budget reached"
+  banner, opens Edit › Edit for this run with the region inspector on `max_cost_usd`, focused. The
+  inspector takes an amber outline and an "Editing for this run" pill; its header reads the cap the
+  run applies. A cap given as a `$variable` shows the amount the run resolved (`$ 5`); the YAML
+  keeps the variable until you type another cap.
+- A run open in "Edit for this run" follows a cap changed outside it (the CLI, an extension, another
+  browser): an untouched cap takes the new value, and Save only sends a cap you changed, so it
+  never puts the old one back. A cap you already typed keeps your draft.
+- While editing a run, the cap field says "Applies live. Saving resumes the Run at the next lap."
+  A cap under what the loop already spent is allowed, with an amber note: the loop stops at its
+  next re-entry and the lap in progress always finishes. ✕ removes the cap. On a run waiting
+  "budget reached", a note says how to go on, with "end region" at the bottom.
+- Save applies each changed cap to the run: raised over the spend, the next lap starts at once.
+- New run command `set_region_max_cost` (`max_cost_usd`: dollars, or `null` to remove the cap),
+  sister of `set_region_max_iter`: the change is kept by the run (`region_max_cost_overrides` on a
+  run read, kept across a reopen) and beats the pipeline's `max_cost_usd`, a `$variable`
+  included. Refused with a 400, nothing recorded, on a collection, an unknown region or a value
+  at or below 0. Extensions see it as the Run Operation `set_region_max_cost`, granted like
+  `set_region_max_iter`; the Pipeline Manager's guide documents both.
+- `pdo run region <run> <region> --max-cost <usd|none>` sets or removes the cost cap from a shell.
+- The "budget reached" reason now names `set_region_max_cost` as the way to raise the cap.
+- The "budget reached" and "exhausted · unrouted" blocks of a loop region stay clickable when an
+  exit edge's condition label sits on them. An edge whose `when` is a bare string shows that
+  string, no longer "0 and 1 and 2 …", and renaming a port no longer rewrites it.
+
+### Waiting alerts: a notification and a sound when a node starts waiting for you
+
+- Settings has a new Notifications category (after Appearance) with a "Waiting alerts" section,
+  kept by this browser and saved at once, outside the Save of the instance settings. "Browser
+  notification" and "Sound" are two switches, off by default, each with a Test button. Turning the
+  notification on asks the browser for its permission; the line under the switch says where it
+  stands, and on http through a local network address it says notifications need https or
+  localhost, while the sound still works.
+- "Alert me for" chooses which Runs alert this browser: "Runs I launched" (the default, with the
+  Runs they launched), "Projects" (the Runs launched in the Projects you check) or "All I can see".
+  It only narrows what your rights already show.
+- When a node of such a Run starts waiting for you (a question, a completion to approve, a Run
+  paused on an incident) and no tab of the app is in view, one tab shows a notification
+  paused on an incident) and no tab of the interface is in view, one tab shows a notification
+  (the node's name, then "is waiting for you" or "is done, waiting for your go"; "Run paused on an
+  incident") and plays a chime of its reason, at most one chime every 10 s. Clicking the
+  notification brings the tab back on the Run with the node selected. A wait already there when
+  the page loads, or caught up after a reconnection, alerts nothing; neither does a parent node
+  waiting on its child runs.
+- `GET /runs` gives each child Run its `root_run_id`, the Run at the top of its chain of parents.
+- While an alert switch is on, a hidden tab of the app reopens its event stream after a drop (a daemon restart,
+- While an alert switch is on, a hidden tab of the interface reopens its event stream after a drop (a daemon restart,
+- While an alert switch is on, a hidden interface tab reopens its event stream after a drop (a daemon restart,
+  a network change) instead of waiting to be shown; `openProbedSocket` takes a `whileHidden` option.
+### Tree cost: what an orchestration really cost
+
+- A Run that launched child runs shows its tree cost in Run info: the "Est. cost" cell reads the
+  Run's own cost plus every descendant's (archived ones included), followed by "⑂ N", the number
+  of descendants. Its tooltip breaks it into "Parent run" and "Child runs (N)", and into each
+  depth when the tree is deeper than one level. A descendant whose cost cannot be computed turns
+  the total into "—" and says how many runs are missing, the known parts kept; a lower-bound
+  descendant makes the tree a lower bound (†). A Run without child runs shows its cost as before.
+- The Orchestration tab shows each child's tree cost, with a "⑂ N" chip on a child that has
+  child runs of its own; Σ sums the children's tree costs, and a "Tree cost" line under it gives
+  the Run's total, parent run plus child runs.
+- `GET /runs/{id}` carries an additive `tree_cost` (total, parent, children, descendants,
+  by depth) for a Run that has descendants, and each entry of `GET /runs/{id}/children` its own.
+  For extensions, `RunCost` gains `tree` (`RunTreeCost`: total, parent, children, descendants,
+  by depth), read by `Host::run_cost`.
+### Stats › Cost: roll up child runs under their root's pipeline
+
+- The Cost band has a new "roll up child runs" chip, after a divider, off each time Stats opens;
+  its (i) says the rule. Ticked, every child run counts under the pipeline, the project and the
+  period of its root run: a pipeline's cost then includes everything it orchestrated, and a child
+  pipeline keeps only the runs nobody orchestrated. A child started after the period comes in
+  with its root, and "completed runs only" judges the root. The cohort line turns amber and says
+  the totals per pipeline and project differ from the default view.
+- A root pipeline that orchestrated child runs shows "⑂ N" in the ranking. Opened, it splits into
+  "Parent run" (this run's own nodes) and "Child runs" (N runs · K levels), which unfold in place
+  by depth, then child pipeline, then nodes; each level also opens in the breadcrumb.
+- "By model" does not take the setting: the chip and its divider leave the band, and come back as
+  they were on "By pipeline" and "By project".
+- `GET /stats/cost` takes `roll_up_children=true`; each root pipeline row then carries an additive
+  `roll_up` (`parent`, `children`, `levels`, `depths` with their pipelines). Without the parameter
+  the response is unchanged.
+### Any node that creates a child run waits for it
+
+- A node that creates a child run (`pdo run create`) waits for it, with or without the
+  Orchestrator toggle, agent or script: `pdo complete`, the end-of-turn auto-completion and the end
+  of a script are refused (`children_pending`) while a child is still live, and the node completes
+  by itself once every child has ended without failing. A failed child parks it awaiting you.
+- The refusal tells the agent to wait with `pdo run wait --all`; it no longer says
+  "orchestrator", and `pdo complete` never claims the held node failed. A script whose
+  `pdo complete` is refused this way is no longer failed by its own tail.
+- On the canvas, the card of any node with child runs shows "N runs" and the counters; its panel
+  adds the Orchestration tab next to I/O and Transcript as soon as the first child appears, live,
+  leaving I/O open. With the toggle, the tab shows from the start, on "No child run yet".
+- The "Waiting on child runs" banner gets an "Open Orchestration" button; once a child failed, it
+  turns into "N child run(s) failed" with "Open", toward that child (the Orchestration tab no
+  longer repeats it).
+- The Orchestrator toggle's tooltip says what it still does: it adds the `pdo-orchestrate` skill
+  and shows the Orchestration tab from the start. The Stats keep reading the Orchestrator node kind
+  on the toggle.
+- A node held by its child runs is no longer marked interrupted when the daemon restarts without
+  its session: it keeps waiting on its children and completes once they end.
+### Finishing touches: Start card, Settings guard, round selection, colour-blind palette
+
+- The Start card of a Run's canvas no longer shows the input images; their thumbnails and the
+  lightbox stay in the Start inspector.
+- Update and What's new in Settings › Version & update leave Settings through its draft guard:
+  with a modified form, "Close settings?" asks first (Keep editing leaves Settings open). Once
+  Settings is closed, the update confirmation or the changelog shows alone, and closing it goes
+  back to the app, not to Settings.
+- The select control of the Runs, Triggers and Pipelines lists is round: hovering a row shows a
+  ring in the colour of its status, a ticked row a full accent round with its check. The
+  "select all" of a group header is round too.
+- "Colour-blind friendly status colours" in Settings › Appearance › Theme, off by default, part
+  of your Apparence: saved to your account, found on every device you sign in from and applied
+  before the first paint. It swaps the awaiting, done, failed and blocked colours for yellow,
+  teal, rose and beige in Acogni and Classic, light and dark; status shapes do not change.
+- Seams: the Apparence document takes an optional `colour_blind_status` (`PUT
+  /actors/me/appearance`, `pdo settings appearance`); `/shared/theme.js` stamps
+  `data-status-palette="colour-blind"` on `<html>`, and `/shared/tokens.css` swaps the
+  `--color-st-*` tokens under it, so an extension page follows without a change.
+### Loop cost and cost cap of a bounded loop
+
+- The corner of every loop region shows its loop cost after the counter, in the run cost's format
+  (`3/5 · ~$1.20`, `2/4 items · ~$0.84`, `~` an estimate, `†` a lower bound, `—` unknown), counted
+  since the loop was entered; its tooltip gives each member's share. A one-member loop shows it on
+  its card's badge.
+- A bounded loop takes a cost cap, `max_cost_usd` (a dollar amount or a `$variable` resolved at
+  launch), set in the region inspector: `$` prefix, "no cap" when empty, ✕ to remove it. A value
+  at or below 0, a value that is not a number, and a cap on a collection are refused with a
+  reason; a `$variable` that does not resolve to a positive amount refuses the launch.
+- The corner reads `~$1.20 / $5` on a run (`max 5 · ≤ $5` on a pipeline), and its cost turns
+  amber from 80 % of the cap. Once the loop's cost reaches the cap, the lap in progress finishes
+  and the next one does not start: the run waits "budget reached" (code `region_budget_exhausted`,
+  the region in `awaiting_region_id`), never failed, and the loop's exhaustion exit is not
+  followed. `max_iter` wins when both bounds fall on the same lap. The region turns amber with a
+  wallet and a "budget reached" block under its cards, with "raise cap" and "end region". Run info
+  explains the stop (spend, cap, lap); the region it names, and its "raise cap", open the region
+  inspector in place of the panel. A member running on a harness with no cost source is flagged in
+  the inspector ("Cap may be overshot").
+- An open live run is read again every 30 s, so its node costs and loop costs climb while an agent
+  works, not only when a node starts or ends.
+- The region inspector shows a "Loop cost" section on a run: the spend against the cap, its share,
+  and each member's cost.
+- "exhausted · unrouted" no longer shows during a loop's last lap nor after it left by its exit:
+  only while the run waits on that region.
+- New fields for extensions and the API: `max_cost_usd` on a loop region, `loop_costs` (with
+  `cap_usd`) and `awaiting_region_id` on a run, `can_cost` on each harness of `GET /settings`.
+### Tours playable by several people on one instance, and the Status icon in the Overview tour
+
+- Each browser draws a tour identity (four characters, `[0-9a-z]`) once and keeps it. The Runs,
+  pipelines and Triggers the tours prepare or have you paste carry it as a suffix:
+  `tour-overview-k3x9`, `tutorial-example-trigger-k3x9`, `my-first-run-k3x9`,
+  `tutorial-implement-test-k3x9`. A tour only points at, advances on and tidies up what carries its
+  identity: someone else's Launch or deletion no longer moves your tour on, and Overview never
+  reuses another person's Run. The example Trigger left without a suffix is removed; the Overview Run
+  left without one stays.
+- "Find your Run" names your row ("Your Run, `my-first-run-k3x9`, is lit in the list on the
+  left…") instead of calling it the top row, and the First run recap names the Run this browser
+  launched. The step cards set the names a tour prepared in bold monospace.
+- The Overview step about status is now "The status icon": it explains the shapes (a check, a
+  turning circle, a question mark, a cross) and draws the four Status icons instead of coloured dots.
+  It moves on when you hover the status icon of your Run, as its footer says, or with Skip.
+
+## 2.74.0
+
+### Approve ▾ beyond the node panel: enlarged terminal, command field, tour
+
+- The enlarged terminal carries the same Approve ▾ as the panel, in the normal size, in place of
+  its two compact icons. It shows whenever the node would complete (running too, not only
+  awaiting you), waits in a lighter ruby while an output is missing, and its "Auto-approve when
+  ready" entry stays checked when you collapse back to the panel. A refusal opens under the bar.
+- The terminal bar says who drives the session with a ruby chip instead of capital letters: the
+  pilot reads "You pilot" and how many browsers watch ("2 watching"); a spectator reads
+  "Watching" and takes control from "Take control" in the chip, which replaces the lone hand icon.
+- The command field offers "Approve" (formerly "Mark complete") and "Auto-approve when ready" on
+  the selected node, on the same conditions as the button: Approve greyed with the missing
+  outputs, the entry checked once armed, a refusal of your rights greyed with its sentence.
+- The First run tour points at Approve ▾ and its "Auto-approve when ready" entry. The completion
+  verdicts speak the same words ("Approving…", "Arming auto-approve…", "Auto-approve refused").
+
+### One Approve ▾ in the node panel, waiting for the missing outputs
+
+- The node panel has one completion gesture, Approve ▾, at the right of the I/O / Transcript tabs,
+  away from Stop. Approve completes the node now; its menu holds "Auto-approve when ready" (the
+  former "Mark ready for completion"), offered on an interactive iteration whose session is live.
+  The header keeps Review, Retry, Start, Restart and Stop: the "Mark ready for completion" and
+  "Mark complete" icons and the "Mark ready" button are gone.
+- Approve says what is missing before the click: while a declared output is not written, it is
+  inert, in a lighter ruby, and its tooltip lists the missing outputs. It turns clickable within
+  seconds once the agent writes them. A refusal of your rights still greys it, with its sentence.
+  Each output card the guard still waits for reads "missing" next to its type, at rest (it
+  replaces the "not produced yet" shown on hover).
+- When the user has not released an interactive node, the refused `pdo complete` tells the agent
+  to ask for "Auto-approve when ready" in the Approve menu, or Approve; the seeded
+  `pdo-interactive` skill (version 3) says the same.
+- Once "Auto-approve when ready" is armed, its entry is checked and a blue dot sits on the chevron.
+  No banner says "Completion released" or "Approved" any more; a refusal is still shown.
+- "Done, awaiting approval" loses its buttons: its "Show Approve" brings Approve ▾ to the screen
+  with an amber ring. The tabs scroll in a narrow panel; Approve ▾ stays pinned and keeps its
+  label.
+- New seams: `missing` on each output of a node's I/O read (`GET /runs/:id/nodes/:node/io`, the
+  `PortIO` type), by the completion guard's own rule (an inherited file counts as present); the
+  kit's `SplitButton`.
+
+## 2.73.0
+
+### A refused gesture is greyed, with a sentence that says why
+
+- A gesture you may not make stays on screen, greyed, instead of disappearing: Stop, Retry, Mark
+  complete and the other gestures of a Run and its nodes, a row of the Runs list and its menu, the
+  bulk bar, the canvas, the command field, the extensions' actions, New Run, Projects, Settings,
+  Agent profiles, staging profiles, the Skills bank, Triggers, Review comments, Stats absorptions
+  and the Pipelines list. Its tooltip says what you cannot do and whom to ask; in a menu, one line
+  at the menu's foot says it, with a lock. Nothing is greyed without an extension that restricts.
+- A refusal from the daemon reads as that sentence, never as the extension's technical reason. Without a
+  sentence from the extension, it reads "You don't have the rights to do this.". `pdo` prints the
+  sentence followed by the technical cause in parentheses.
+- New seams (extension API 0.23): `Authorization::deny(reason).saying(sentence)`,
+  `Denied::new(reason).saying(sentence)`, `Denied::sentence()`, `Denied::for_an_agent()`,
+  `Denied::from_body()` and `GENERIC_REFUSAL`; `POST /authorize` and the `403` `operation_refused`
+  body carry `sentence` beside `reason`. In `@pdo/extension-ui`, `disabledReason` on `Button`,
+  `IconButton`, a `Menu` entry (the menu shows it at its foot) and a `Segmented` item; a `Segmented`
+  item's `title` and `description` show in the kit's `Tooltip`. An action guarded by an Operation
+  is greyed when refused, no longer left out.
+- **Breaking for extensions** (`pdo-extension-api` 0.23, Rust API): `Authorization::Deny` and
+  `Denied` gain the field `sentence`. Match
+  `Authorization::Deny { reason, .. }`, build `Denied::new(reason)` and `Authorization::deny(reason)`.
+
+### A session's variables out of the process list
+
+- The variables of a session (a Node's, those an extension adds through `node_env` or
+  `session_env`, the core's) no longer sit in the argv of any process, where any local user read
+  them with `ps` while the session lived. The session's script reaches `bash` through a `0600`
+  file in the user's private folder, deleted before the harness starts; `tmux` only sees its path.
+  In a sandbox, the `docker exec` forwards the variables by name (`-e NAME`), their values
+  exported on the host just before. Every launch is covered: a Node, its Retry and its resume, a
+  hosted session, the Pipeline Manager, the library assistant.
+
+### A Presence falls within seconds, behind a proxy too
+
+- A person who leaves a Run, closes a tab or loses the network no longer stays on the Run's row:
+  behind a proxy or a tunnel, a connection the browser lost could stay open on the daemon's side
+  and keep the person on the previous Run until a reload. Each tab now names itself on `/ws`
+  (`/ws?tab=<id>`): its new connection replaces the old one, whose Presence falls at once. The
+  daemon pings every connection of `/ws` and drops one that answered nothing for 10 s.
+- Extension API: the life of a `/ws` connection (`tab`, the close code `4000` of a replaced
+  connection, Ping and the 10 s delay), see the reference's Presences.
+
+### Who made each gesture on a Run
+
+- The events of a gesture on a Run name the Actor who made it, as `payload.actor` (the shape
+  `node_resumed` already used): a command of the operator or the Pipeline Manager (mark done, force
+  route, skip…), a retry, a stop, a skip, a completion, a fail, a release, starting or stopping the
+  Pipeline Manager, and the events of that Run these cause while they are handled (the stop and
+  the respawn of a retry, a downstream node a mark done starts). What the scheduler does on its own
+  names nobody. Events written before keep reading as they are.
+- Two new events on a node's terminal: `node_taken_over` when an Actor takes the hand (attaches
+  first, takes control from the pilot, or an extension answers on its behalf; nothing more when the
+  same Actor attaches again), and
+  `node_typed` for a turn of speech, the first input after a take-over or a wait, never one per
+  keystroke. Answering a wait stays the one `node_resumed` line.
+- `pdo run events <run>` adds a last column, who made the event: its display name (`POST
+  /actors/display`), else its id; empty when no Actor did. `--json` gives `payload.actor`.
+
+### A page mounted from a node is judged in the Projet of its Run
+
+- New seam (extension API, a minor): when a node session mounts a page (`pdo page mount`,
+  `POST /pages`), its `page_mount` Operation is in the Projet of the session's Run; the unmount of a
+  page a Run mounted is in the Projet of that Run, whoever asks. An extension that grants writing in
+  that Projet now lets an agent publish a page without any instance-wide grant. A mount outside any
+  Run still names no Projet. `POST /authorize` places a `page_mount` question the same way.
+
+### A link toward a Node, and an answer typed on someone's behalf
+
+- A deep link toward a Node opens the Run with that Node selected and its detail shown, its
+  terminal included, Pipeline info giving way: `#/runs/<run>/nodes/<node>`, and
+  `#/runs/<run>/nodes/<node>/iter/<n>` for one of its iterations. A Node the Run does not hold
+  opens the Run alone. A page's reading guide (`pdo page mount --guide`) accepts the iteration form.
+- New seam (extension API 0.23, a minor): `Host::write_to_node(actor, NodeWrite)` types a text into
+  the session of a Node that waits for a person and presses Enter, on behalf of the Actor, who must
+  be allowed to take control of that session (`session` × `take_control`). The Node resumes, its
+  resumption names the Actor, and the Actor is announced as taking control (`session_taken_over`).
+  A Node that no longer waits refuses with the stable reason `not_waiting` ("the node no longer
+  waits"), and nothing is written. `node_link` and `run_link` write the deep links;
+  `@pdo/extension-ui` writes them too (`nodeLink`, `runLink`).
+
+## 2.72.0
+
+### Settings, Stats and extension pages open under the top bar
+
+- Settings, Stats and the pages of the top bar's extension entries now open under the top bar
+  instead of covering it: the command field, the icons and the account stay on screen and usable.
+  The icon of the open surface is selected (`aria-pressed`, a 2 px stroke under it); a second click
+  on it closes the surface, as do its ✕ and Escape, and another icon switches to its surface. A deep
+  link toward a page opens it the same way. Settings with unsaved changes still asks before closing,
+  also when another icon replaces it: "Keep editing" keeps Settings on screen.
+- Extension pages: the core's command field stays above every page, so a page no longer needs a
+  search field of its own in its header.
+
+### New Run, opened prefilled by an extension
+
+- An extension's interface can open the New Run window prefilled: Projet, repositories, name and
+  prompt show in the form and stay editable, and only the calling extension's `run/new` section
+  receives its own data, to start from (items already checked, say). The Pipeline stays your
+  choice. A Projet the form does not offer you is ignored, and the default one applies.
+- New seam (extension API 0.22, a minor): `openNewRun(prefill?)` in `@pdo/extension-ui` and
+  `CommandHost.openNewRun(prefill?)`, with the type `NewRunPrefill`; `RunNewContext.prefill` hands
+  the data to the caller's `run/new` sections, which provide it to the creation as before. Without
+  a prefill, the form opens as the core's New Run button opens it.
+
+### Command line
+
+- **`pdo project`** makes every gesture of Settings › Projects: `list` (and `--deleted`), `show`,
+  `create` with its member repositories, `update` (name, harness or agentic profile, auto-fail,
+  primary repository), `member add|remove`, `skill list|add|remove|set`, `provisioning` (show, or
+  replace with `--file`) and `delete`.
+- **`pdo trigger`** makes every gesture of the Triggers surface: `list`, `show`, `create`,
+  `update`, `fire` (Run now), `pause` and `resume` of one Trigger or of all (`--all`), `fires`,
+  `test-guard` (a guard's dry run), `health` and `delete`.
+- **`pdo session`** reads the status bar's gauges (`status`) and makes the gestures of a hosted
+  session's detail: `show`, `events`, `terminate`, `relaunch`, `configure`. **`pdo audit`**
+  reads the journal of the mutations made outside a Run, **`pdo whoami`** the Actor the daemon
+  names you.
+- A Projet and a Trigger only gain skills of the bank: the daemon refuses another one (400, so
+  `pdo project skill add|set` and `pdo trigger create|update --skill` exit 1), as the selectors
+  only offer the bank's skills. A skill already selected and since deleted from the bank stays.
+- These commands print text by default and the daemon's answer with `--json`. They exit 0 on
+  success, 1 when the daemon is unreachable or refuses the call (with its reason), 2 for an
+  unreadable command line, 4 when the daemon knows no such Run, node, pipeline, Projet,
+  Trigger, session, review comment, profile, skill, folder or update attempt.
+- **`pdo run`** makes the gestures of the Runs list and the run view: `show`, `cancel`, `pause`,
+  `resume`, `retry` (Retry all), `reopen`, `archive`, `forget`, `rename`, `repos`, `inject`,
+  `force-route`, `region`, `manager start|stop`, and reads a Run's `events`, `costs`, `artifact`,
+  `file`, `refs`, `source-drift`, `search` and the sweep's `stale-health`. **`pdo run pipeline`**
+  shows, exports, saves a Run's own pipeline and copies it over the shared one
+  (`overwrite-default`, `--preview`). `run create`, `wait`, `list` and `status` are unchanged.
+- **Cancel a Run.** `pdo run cancel` gives up on a live Run: nothing more is launched, every node
+  holding a session is stopped, and the Run ends `halted` with the reason `cancelled`, ready to
+  be retried or reopened. The daemon's new `cancel_run` command (an Operation `run` ×
+  `cancel_run`) does it; the UI does not offer it yet.
+- **`pdo node`** makes the gestures of a node: `retry` (and `--preview`), `skip` (with its
+  outputs), `restart`, `start`, `stop`, `kill`, `recover`, `done`, `release`, `extend`, `attach`
+  files, and reads its `prompt`, `io`, `diff` and `transcript`. Without `--iter`, a gesture
+  targets the node's latest iteration, the one the node panel shows.
+- **A node the Run does not know is refused.** Every gesture on a node (retry, skip, restart,
+  start, kill, recover, done, release, extend, and the Pipeline Manager's node commands) answers
+  `404 node_not_found` when neither the Run's pipeline nor its state names the node, before
+  anything is written: a mistyped id no longer reopens a finished Run or leaves a ghost node in
+  it. **Breaking**: retry, restart and `extend_cycle` answered `400` for an unknown node; `pdo
+  node` exits 4.
+- **`pdo pipeline`** makes the gestures of the pipelines and the library: `list`, `show`,
+  `export`, `import` (a round trip, skills sidecar included), `versions`, `version`, `restore`,
+  and the editor's other gestures. `restore` is the daemon's new
+  `POST /pipelines/{id}/versions/{n}/restore`: the version saved as the next one, under the
+  pipeline's current name, as Restore then Save in the editor. A version the pipeline does not
+  have answers `404 pipeline has no version N`.
+- **`pdo settings`** reads and changes the instance settings as Settings does: `get [<key>…]`
+  (key, effective value, source on every line; the instance's skills and agentic profile as
+  stored, source `stored`) and
+  `set <key>=<value>…`, validated by the daemon as for the UI (a refused change writes nothing,
+  exit 1; an accepted one prints the settings changed); the agentic profiles (`agent-profile`), the staging
+  profiles (`sandbox-profile`), the instance's provisioning rules and their preview
+  (`provisioning`), your Apparence (`appearance`), the telemetry export (`telemetry`, `--test`),
+  a harness's catalogue (`refresh-harness`) and the price table (`sync-prices`).
+- **`pdo stats`** reads the tabs of Stats with the figures they show (`runs`, `sessions`,
+  `triggers`, `cost`, `performance`), over the surface's periods (`--period 7d|30d|90d|all`, or
+  `--from`/`--to`) and filters (`--completed-only`, `--every-run`, `--uncombined`), and manages
+  the absorptions (`absorptions`, `combine`, `uncombine`). Performance prints the Pipeline rows
+  and the Infrastructure row, and reads the duration the tab's toggle picks (`--duration
+  total|active|waiting`, `active` by default as the tab opens). A Performance period with no
+  successful execution says so, as the tab does.
+- **`pdo skill`** manages the Banque de skills as Settings › Skills: `list`, `show`, `add` from a
+  `SKILL.md`, `update` (rename, move, new content), `remove`, `referents`, the reference files
+  (`file add|show|write|remove`), the folders (`folder list|add|update|remove`, and `rescan` /
+  `sync` with their Source), `scan` and `import` from a Source, `cancel-scan`, `sources`,
+  `export` to a zip and `upload` one. A skill an extension or the core provides stays locked:
+  changing or removing it is refused, exit 1. A skill is named by its id or by its name.
+- **`pdo update`** reads the version section (`status`, `changelog`), checks now (`check`),
+  updates (`apply`) and reads an attempt's journal (`log`).
+- **`pdo review`** gains the Review page's gestures: `diff` (the patch, `--stat`, `--json`, all
+  three read from the diff the page shows, work not committed yet included; this patch is for
+  reading, `--git` prints git's own patch of the committed work for `git apply`),
+  `comment <path> <line> --text …` (written and sent to the Pipeline Manager, as the page sends
+  it; a line the page does not let one comment, past the file or in a file outside the diff, is
+  refused, exit 1, nothing sent), `resolve` and `reopen`. `list` and `reply` are unchanged; the
+  new gestures exit 4 for a Run or a comment the daemon does not know.
+- The instance's skills selection only gains skills of the bank: `PUT /settings` refuses another
+  one (400, `not a skill of the bank: <id>`), as for a Projet or a Trigger. A skill already
+  selected and since deleted from the bank stays; emptying the selection is never refused.
+- Every route of the daemon has its command or an exclusion written with its reason: a
+  structural test fails on a route added without either. No route is a provisional exclusion any
+  more; the shared draft of the pipeline editor, a WebSocket, is excluded for good.
+
+## 2.71.0
+
+### Settings › Appearance
+
+- Settings has an **Appearance** category, right after General, in three sections. **Theme** holds
+  the Theme and Dark mode, which now follow your account, and the UI scale, which stays with this
+  device. **Appearance** holds one block per surface, its switches on the left and a preview
+  beside them. Its first block, Run canvas, starts with Compact nodes; Reset to defaults in the
+  section's title bar shows how many choices differ, and is greyed when none does. **Interface**
+  keeps the behaviour settings (Single-tab mode, Child runs, Wiring grid, Wiring grid size). General
+  no longer shows any of them.
+- Each row shows its scope: "Your account" (new) or "This device". Every choice is saved at once,
+  never by the instance form's Save.
+- Theme, Dark mode and Compact nodes are kept by the daemon for each Actor: you find them on every
+  device you sign in from. The first load of an Actor with nothing saved yet adopts the values this
+  browser held. Other tabs follow a change at once; other devices take it at their next load or
+  reconnection. Without an identity extension, the local operator has the one Appearance of the
+  instance.
+- The command field has a "Customize appearance" entry that opens Settings › Appearance; its
+  Compact nodes switch writes the Actor's Appearance.
+- New seams: `GET` and `PUT /actors/me/appearance`, the caller's Appearance (a versioned document,
+  at most 32 KiB; a malformed one is refused with a `400`, a larger one with a `413`), and the
+  exported types `AppearanceDocument` and `ActorAppearance`. The browser keeps its copy under the
+  same storage keys: `/shared/theme.js`, and the pages extensions serve outside the interface, are
+  unchanged.
+- The **Runs list** block comes first in Appearance, with "Always shown: Status, name". Its switches
+  show or hide, on every row of the Runs list, the Trigger, the child runs, the node progress (first
+  line), the pipeline, the parent link, the duration and the cost (second line), and each mark or
+  people contribution of an extension, named "Extension · label". The defaults are lighter: child
+  runs, node progress, the parent link and the cost are hidden; extension contributions are shown.
+- When every element of the second line is hidden, Run rows take one line. The height comes from
+  your Appearance alone, so every row of the list keeps the same height.
+- The block's preview is drawn with the Runs list's own rows: your most recent Run, plus your
+  most recent triggered Run when no other row has a Trigger, plus a parent with its child, or a
+  sample Run without extension marks when you see no Run. Hovering or focusing a switch rings its
+  element in the preview; a hidden element comes back faded, with a dashed outline. This works on
+  rows that take one line too: the second line comes back while you point to one of its elements.
+  A switch that differs from its default says "changed", with the default in its tooltip, and
+  "Modified only" finds it.
+- New seams in the interface: the core's table of default visibilities for each surface, and the
+  filtering of the contributions an Appearance hides at the `run/item` and `run/item/people`
+  locations. The extension API is unchanged.
+- The **Run canvas** block, "Always shown: Type icon, name, status, child runs of an orchestrator",
+  starts with Compact nodes, then shows or hides on every card of a Run canvas the model, the
+  iteration, the elapsed time, the cost, the isolation flag, the loop badge and the agent profile
+  marker. By default a card shows its elapsed time and its cost on one row, so cards are shorter
+  (49 px instead of 65); with every cell hidden, a card is its header alone. Compact nodes stays the
+  master switch: while it is on, a card takes one line and the card's switches are greyed, with a
+  note saying why. The pipeline editor, and a Run edited for itself, keep detailed cards.
+- A Run canvas lifts what lies below a shorter card by as much, from the height of each card's
+  visible elements, the way Compact nodes did: nothing is written to the pipeline, no wire gains a
+  bend, output labels and conditions stay visible.
+- The **Run info tab** block, "Always shown: Name, status, alert banners", shows or hides each
+  field of the Run and Stats sections, the read-only note, the Graph rows (Nodes, Edges) of the
+  Pipeline section and each extension section, named "Extension · label". By default the
+  read-only note, the Status row, Node sessions and the Graph rows are hidden. A section whose
+  every element is hidden goes away; the failure and awaiting reasons, the "Reached End" banner,
+  the source fetch error and the sandbox preparation always show.
+- Their previews are live: the Run canvas block draws a few cards of your most recent Run with the
+  canvas's own cards, a fork and a join, at 470 px (zoomed out when the column is narrower); the
+  Run info tab block draws your most recent Run's Info tab at 360 px. Both use the most recent Run
+  that no other Run started, not an orchestrator's child. With no Run, both show a sample without
+  extension sections.
+- New seams in the interface: the contributions an Appearance hides are filtered at the `run/info`
+  location too. The extension API is unchanged.
+- A **Triggers list** block, "Always shown: Name, enable switch, last result", shows or hides on
+  every Trigger row the pipeline, the last fire, the next fire, the guard, the overlap policy and
+  each `trigger/item` contribution, under "Extensions". By default the last fire and the overlap
+  are hidden. With the pipeline, the last fire and the next fire all hidden, Trigger rows take one
+  line and the last result moves beside the enable switch.
+- A **Pipelines list** block, "Always shown: Name, select control", shows or hides on every
+  Pipeline row the version, the draft marker (its change count and who has the draft open), the
+  edit date, the validation and each `pipeline/item` contribution, all shown by default. With the
+  version, the draft marker, the edit date and every contribution hidden, Pipeline rows take one
+  line.
+- Their previews use the lists' own rows: the Trigger that fired last, plus a guarded one when it
+  has no guard; the Pipeline edited last, plus one with a draft when it has none; or a sample
+  without extension marks when you see none.
+- New seam in the interface: the `trigger/item` and `pipeline/item` locations filter the
+  contributions an Appearance hides too.
+
+## 2.70.0
+
+### Pipeline editor
+
+- A node card lists each of its outputs on a line of its own, with an icon of its port type
+  (markdown, html, image, image list, files) and its name; the inputs line is gone. A card with
+  several outputs is taller, and the canvas moves what lies under it down by as much, without
+  writing anything: positions in the pipeline file stay as they were, a card with one output is
+  drawn exactly as before, and no wire gains a bend. The Run canvas is unchanged.
+- The node inspector's prompt is a bordered field with a focus ring; the line added at launch
+  (`/pdo-interactive`, `/pdo-orchestrate`) sits under it, locked, "Added at launch".
+- The Agent section's row is named "Model". In Custom, the summary line no longer repeats the
+  three pickers; Inherit and Profile keep it. The Skills selector takes the row's whole width.
+- The edge inspector's "When" section is now "Conditions". "Add condition" is always shown
+  under the last condition (or under "Always"), and says why when nothing is left to add. The
+  field dropdown groups its fields by origin (the output, the loop, the pipeline variables), each
+  with its type and allowed values. Output, Field, Op and Value share one grid of same-height
+  controls. The "Fields" section is gone. The `when:` key of the file is unchanged.
+- Fix: a condition keeps the type of its value when another condition is added or edited. A
+  bool condition was saved as the string `"true"`, which never matches a frontmatter `true`, so
+  the edge never fired; a string that reads as a number (`"42"`) was saved as a number. An enum
+  or string field now always writes its value as a string (an allowed value `"2"` is no longer
+  saved as `2`).
+
+### Node detail pane
+
+- The Transcript opens on its latest entries: newest first by default, the Prompt at the oldest
+  end. A sort icon in the tab's bar switches to oldest first; the choice is remembered on this
+  device and follows you from node to node and Run to Run. Older pages load as you scroll, from
+  the end of the transcript. While a node is live, new entries land on top; a reader lower down
+  stays in place and a "↑ N new" pill brings them back ("↓ N new" oldest first).
+- Frontmatter reads the same in the artifact viewer and the I/O tab: click a value to copy it
+  ("✓ Copied" or "Copy failed"), an http(s) value opens with ↗, and a chevron unfolds the
+  values cut off to read them whole. Verdicts keep their tone.
+- In the I/O tab, each output is a card: its edge in its verdict's tone, its name, path, size and
+  tools, and its whole frontmatter, the verdict first, a link or a long value on a line of its
+  own. An output not produced yet is dashed and says "not produced
+  yet" on hover only. A click anywhere on an output card, a live artifact row or an input row
+  opens it; its controls keep their own action.
+- A Run search hit inside a long transcript entry scrolls to the marked word, not to the middle
+  of the entry.
+
+## 2.69.0 · A shorter dev loop: fast, scoped and full gates, `pdo run status`
+
+### Restarting a node
+
+- A node restarted while the liveness sweep was looking at it stays running: the sweep no longer
+  takes the restart's own kill of the old session for a death, so it neither marks the node
+  interrupted nor kills the new session.
+
+### Development
+
+- Versions, the CHANGELOG and ADR numbers are set once, when a story merges into `main`: changes
+  are written under `## Unreleased`, and a new ADR is born as a draft (`docs/adr/draft-<slug>.md`).
+- `make release-bump` proposes the semver level from the conventional commits since the last tag
+  (`LEVEL=` forces it), bumps the workspace, the extension API, the shared module of the front
+  and `Cargo.lock`, turns `## Unreleased` into the version's entry and numbers the draft ADRs,
+  rewriting every citation. `DRY_RUN=1` prints the plan only.
+- `make e2e` runs the Playwright suite of the frontend, installing Chromium when it is missing.
+- `make fast`, a fast gate that answers in under a minute even on a fresh checkout
+  (`cargo fmt --check` and the structural checks, now in the std-only `tidy` crate); `make test`
+  lists every failure in one pass (`--no-fail-fast`); the Makefile uses sccache when it is
+  installed to share compiled dependencies between worktrees.
+- `make scoped` runs `make fast`, then only the checks the diff since the merge-base touches,
+  after printing its plan: typecheck, lint and vitest for the frontend, nextest and clippy on a
+  changed crate and its dependents, `types-check` for a type exported to the front, nothing more
+  for doc. `BASE=` changes the base, `DRY_RUN=1` prints the plan only.
+- `make gate`, the gate of a ticket: every step the CI declares except the E2E, plus vitest and the
+  script tests, without stopping at a failure; every failure is listed at the end.
+- `make demo-daemon PORT=<port>` starts a demo daemon for agentic tests: this branch's `pdo`,
+  rebuilt incrementally at each start, a fresh `HOME` under `/tmp/pdo-demo-<port>`, no inherited
+  `PDO_*`, `TMUX` or `TMUX_PANE`, copied harness credentials, and a pidfile. `TEST_EXT=1` serves
+  the test extension instead. `make demo-daemon-stop PORT=<port>` stops only that daemon and its
+  tmux socket `pdo-<port>`, and refuses a port without a pidfile.
+- `make bench-gates REF="<ref> …"` measures the dev loop at each ref in a throwaway worktree,
+  removed even on failure: cold build, build with a warm sccache, time to the first structural
+  failure, the scoped gate on a front-only diff and the full suite, with the machine load; a gate
+  the ref lacks reads "n/a". `make run-costs RUN=<run-id>` prints the cost and duration per
+  ticket of a Run and its child Runs.
+- The `grill-with-docs`, `to-spec` and `to-tickets` skills can be invoked by the model, so the
+  chain from grilling to tickets runs without a human command.
+
+### Waiting without polling
+
+- `pdo run status <run-id>` prints the state of a Run in one line: its status, its nodes by state,
+  its active children and its cost. `--json` prints the same fields as one compact object. Exit 0
+  when the Run is found, 4 when the daemon does not know it, 1 when the daemon is unreachable.
+- The seeded `pdo-orchestrate` skill (version 4) waits for children with `pdo run wait` and no
+  `--timeout`, as a background task of the harness when it offers one, otherwise with a timeout no
+  longer than the tool's; the same rule holds for a build or a long test suite. It reads a Run's
+  state with `pdo run status`. No more `run wait --timeout` loop, no `sleep`.
+
+## 2.68.0 · Classic Theme, Dark mode and the acceptance fixes
+
+### Theme and Dark mode
+
+- **Breaking for extensions** (token stylesheet and shared module): `data-theme` changes meaning,
+  with no alias. It carries the **Theme** (`acogni` by default, `classic`) and is set on `<html>`
+  only; the mode moves to **`data-mode`** (`dark` by default, `light`), on `<html>` or on any
+  container. An extension UI that paints with the roles has nothing to change; one that read
+  `data-theme="light"` or `data-theme="dark"` now reads `data-mode`. The palette is defined per
+  Theme and mode; roles, font, density and radii do not change, and no role token is added.
+- **Theme script** served at the stable address `/shared/theme.js`: it sets `data-theme` and
+  `data-mode` before the first paint. The interface loads it; a page an extension serves outside
+  the interface loads it beside `/shared/tokens.css` (`docs/reference/extension-ui.md`
+  § *Tokens*) and keeps no copy of it.
+- **`pdo-extension-api` 0.20.0** and **`@pdo/extension-ui` 0.20.0**: the new minor carries the
+  break of the token stylesheet, the theme script and the removal of a location from the Rust API
+  (see *Node cards*).
+- Settings › Interface: **Theme** (Acogni, Classic) and the **Dark mode** switch replace "Theme"
+  System / Light / Dark. Classic brings back the colors of the interface before 2.65; the logo
+  keeps its ruby. The sun/moon of the top bar only toggles Dark mode; the command field offers
+  "Theme: Acogni", "Theme: Classic" and "Dark mode".
+- Migration per browser: a `light` or `dark` preference becomes the mode, `system` the system's
+  mode at the time of the migration; the Theme is Acogni. The mode is stored under `pdo.ui.mode`,
+  the Theme under `pdo.ui.theme`.
+
+### Node cards
+
+- **Breaking for extensions** (`pdo-extension-api` 0.20.0, Rust API): the `canvas/node`
+  location is removed, with `UiLocation::CanvasNode` and `CanvasNodeContext`. A node card carries
+  no extension decoration any more; show what belongs to a node in its detail (`node/detail`,
+  `node/toolbar`, `port/item`) or in the card's menu (`canvas/node/menu`).
+- Node cards, in the editor and on a Run: a header tinted by the node's status, with the type
+  icon first, in the Theme's accent, and the status icon at the end. An orchestrator shows a
+  second sheet behind its card and, on a Run, "N runs" with the Orchestration tab's pills; the
+  row opens that tab.
+- The whole bar over a child run leads back to the parent run, not only its arrow.
+- Edges: an automatic edge goes around the cards between its ends, including one leaving a loop
+  towards a card beyond the next, and a condition label slides along its edge instead of shrinking.
+  An unplaced condition label keeps off the labels placed by hand on other edges, and off the cards.
+
+### Compact nodes
+
+- Settings › Interface: **Compact nodes**, a switch of this browser (`pdo.ui.compactNodes`), off
+  by default, right under Dark mode; the command field offers "Compact nodes" too. On, every Run
+  canvas, child runs included, draws its cards on one line: the harness icon, the name, the
+  status, and on an orchestrator a second line with "N runs" and its pills. The rest of the
+  pipeline rises by as much, computed in the browser: nothing is written to the pipeline, no edge
+  gains a bend, side ports fold onto the first line, and output and condition labels stay
+  visible. The editor, and a Run edited for itself, keep the detailed cards. A Start, an End or a
+  note beside a row of cards holds that row where it is.
+
+### One avatar for a person
+
+- **Breaking for extensions** (shared module): the kit's `Avatar` is round, tinted with the
+  person's hue, its initials in ink (first and last word), instead of a neutral square. The hue
+  is one of 8 fixed hues (`--av-h0` … `--av-h7`, new tokens with `--av-fill-*` and `--av-solid-*`
+  per Theme and mode), none a status color, picked from the person's Actor (`actor`, new prop),
+  else its name. New props `hollow`, `present`, `title`. The core draws every person with it: the
+  presence on a Run and on a shared draft (whose marks on the canvas take the same hue), the
+  Actors, the Review's comments and completions, the versions.
+- **Breaking** (shared draft socket): the daemon no longer deals a color to each participant of a
+  shared draft; `color` leaves `DraftParticipant` and the `welcome` message.
+- New in `@pdo/extension-ui`: `AvatarStack` (three overlapping, then "+n" listing the others),
+  `personColor(person)`, the person's color for marks outside its avatar, and
+  `useActorDisplays(actors)`, the display names of a list of Actors in one hook.
+- A search source result may carry `avatar: { name, actor?, avatar_url? }`, drawn by the core in
+  its icon column; a completion suggestion's `avatar` takes `actor` too.
+- `Select` takes `active` (a filter in force, tinted); its tooltip is the value shown, no longer
+  its label.
+- The Pipelines list no longer shows the node count of a pipeline.
+- Runs list: a Run archived while it ran ends at its archive (`completed_at`), and its row draws
+  its live nodes as stopped; a Retry all keeps the original's name; a row's accessible name is its
+  name and status.
+
+### Command field
+
+- **Search results with a fixed status shape**: a search source result's `status` takes an
+  optional `shape` (`todo`, `doing`, `review`, `done`), drawn in the tone's color and never
+  spinning, so an entity that is no Run no longer spins like a running Run. `StatusIcon` of
+  `@pdo/extension-ui` takes the same `shape`.
+- **Counter on a global Action**: `UiContribution::with_counter` now also applies to an Action of
+  `palette`; its row shows the `PageCounter` the path answers, nothing at 0.
+- **Group rank**: `UiContribution::with_rank(n)` on a `palette` contribution orders the extensions'
+  groups by rank, lowest first, then those without one, each in registration order.
+- A long result title ends in an ellipsis and its facts stay visible.
+- **Mark complete** is offered in the command field exactly where the node inspector offers it:
+  on a running, awaiting or failed node of a Run that is neither paused nor archived. It is no
+  longer offered on an interrupted or stale node, nor in a paused Run, which the daemon refused
+  to complete.
+
+### Run inspector and pipeline editing
+
+- `GET /runs/{id}` carries **`variables`**: the values the launch gave the pipeline's variables
+  (absent when it gave none). The Variables section of a Run's Pipeline info shows the value the
+  Run received, the default only for a variable the launch left out.
+- The Run inspector names an iteration by the canvas card's iteration icon and its number
+  ("⇄ 2", "⇄ 3/3") in the node header and its picker, the Transcript bar, the enlarged terminal
+  and the groups of the Run search.
+- Back on a tab, the canvas and the inspector show the selection the tab had.
+- The conditions of an edge stay in the order they were added, a new one last, even on a field
+  another condition already reads.
+- The ages of the Versions list follow the clock; an output's or input's name truncated in the
+  inspector is whole in its tooltip.
+
+### Top bar, full-window pages and shared module seams
+
+- A `topbar/end` contribution may be a **panel** (`UiContribution::panel`, `type: "panel"`):
+  its icon opens the exported component in a panel anchored under it (`PanelProps`, with
+  `close()`). Escape, a click outside and the icon close it. A panel and an action of
+  `topbar/end` may carry a counter on their icon, like a page (`with_counter`): absent at 0,
+  `99+` past 99.
+- A click in a toast no longer closes an open anchored panel (a panel of `topbar/end`, a
+  `Popover`, a `Menu`, a `Select`): "Undo" works from inside it.
+- A full-window page sets the title and the icon of its header for the route on screen:
+  `shell.setTitle(title, icon?)`. A route that sets none, and the page once reopened, show
+  the page's label and icon.
+- `Banner` takes an `icon`, drawn in the tone's color instead of the status icon (a lock on a
+  read-only state).
+- The import map resolves `yjs` to the front's own copy (`/shared/yjs.js`): a bundle that lists
+  `yjs` as external loads no second copy.
+
+### Launch forms and Triggers
+
+- `pipeline_validation_changed` now also goes out on `/ws` when a pipeline is created,
+  duplicated, imported or deleted (a new pipeline is born a test pipeline): a client that keeps
+  the pipeline list reads it again, and an open New Run offers the new pipeline at once.
+- Triggers name the time zone their cron is read in (UTC): beside the expression in New
+  Trigger, in the schedule ("daily at 03:00 UTC") and in the next fire of the Trigger's
+  detail, whose tooltip gives the same instant in the browser's time zone.
+- New Run says why a repository cannot be used once, under the field: a path that does not
+  exist, a folder that is not a repository, a repository without a commit, or one outside the
+  Projet. Provisioning is previewed only for a repository the field has accepted.
+- Settings: the hover actions of a repository or staging profile row take no room while hidden
+  (they always show without a hovering pointer), and under a narrow width the Projects list goes
+  above the selected Projet. A path cut in its middle shows an ellipsis in its folders.
+
+### Design system and Workbench
+
+- **`Segmented` takes `fill`** (`@pdo/extension-ui` 0.20): the control takes its row's width,
+  its items share it equally and a long label ends in an ellipsis. Without it, nothing changes.
+- **A tooltip waits for the pointer to move**: a surface that opens under a still pointer no
+  longer shows the tooltip of the control that lands there, and a focus given back by code (a
+  menu closed with Escape or picked from) no longer reopens one. Tab and the arrows still do.
+- The top bar's Dark mode toggle exposes its state (`aria-pressed`) under the stable name
+  "Dark mode".
+- An unknown value stored under `pdo.ui.theme` or `pdo.ui.mode` is rewritten as the default,
+  as a migrated one is.
+- A Workbench layout whose side panels were dragged to their maximum is restored as dragged,
+  the canvas keeping its pixels instead of growing back to a third of the window. A drag and a
+  restore both leave the canvas at least 5 % of the window.
+
+### Stats, Review, What's new and the artifact viewer
+
+- Stats › Cost: the Name column keeps a readable width at 1024 px and 120 %; below that the
+  table scrolls sideways, the Name column held in place and the right edge fading while
+  columns remain. A median the line cuts short reads whole in its tooltip.
+- Review: a folded thread, and a row of the comments list, keep their line number; only the file
+  name gives way.
+- What's new reads this changelog in English, one entry per version, its latest ten versions. A
+  release title is text, no longer a link. "Release notes offline" only shows when the update
+  check is on and its source unreachable; otherwise the banner reads "Update check off", or "No
+  release source" when the build declares none.
+- The artifact viewer's footer names the Run (its id when it has no name, as in the Runs list);
+  the frontmatter keeps the file's order and reads a list as its items.
+- A mounted page's tab shows its name in mono beside the book in the accent color.
+- Overview tour: the archive step points at the archive icon of the row, and Skip goes once the
+  Run is archived.
+
+## 2.67.0 · Session detail bricks, `session/detail` location, page counter
+
+- **`pdo-extension-api` 0.19.0** completed: the `session/detail` location (a tab), the counter
+  of a page (`UiContribution::counter`, `with_counter`, `PageCounter`). **Breaking**:
+  `Host::live_artifacts` answers `Result<Vec<LiveArtifact>, HostedRefusal>`, `404` for a key the
+  extension never gave (an empty list before), `503` without a hosted session.
+- `@pdo/extension-ui` 0.19.0 exports the bricks of a hosted session's detail, which the
+  extension lays out: `SessionHeader`, `SessionActions`, `SessionWaiting`, `SessionTabs`,
+  `LiveArtifacts`, `SessionInfo`, `SessionConfig`, `SessionEvents`, and their live state
+  (`useHostedSession`). Types in `pdo-extension-ui.d.ts`.
+- New routes of a hosted session by its id, each the `session` Operation of its gesture
+  (`read`, `terminate`, `relaunch`, `configure`): `GET /sessions/<id>/hosted` (with `driving`,
+  who drives its terminal), `POST …/terminate`, `POST …/relaunch`, `PUT …/config`,
+  `GET …/events`, `GET …/live[/<path>]`.
+- A hosted session keeps its log (its last 50 changes, and who made them) in its record (an
+  older record has none).
+- A `topbar/end` page that declares a counter shows it on its icon for the current Actor, read
+  again on every event of its extension on `/ws`; `/ws` relays `hosted_session_forgotten`,
+  `hosted_live_artifacts_changed` and `extension_event` to the front.
+
+## 2.66.0 · Sessions hosted for an extension
+
+### Open, hold and terminate a session outside any Run
+
+- **`pdo-extension-api` 0.19.0**, non-breaking: an extension has the core hold a hosted session,
+  agent or shell, outside any Run, through its `Host`: `open_session`, `hosted_session`,
+  `hosted_sessions`, `terminate_session`. New `SessionKind::Hosted`, `SessionRef::extension` and
+  `SessionRef::key` (absent for the other sessions, the JSON of their events does not change),
+  and the `hosted_session_changed` event, published to the extensions and on `/ws` to the
+  connections that may read the session.
+- Opening and terminating are the Operations `session` × `open` and `session` × `terminate`, in
+  the session's Project; the catalog of Resources lists them. Attaching its terminal is
+  `session` × `attach` in the Project of its record.
+- The cap of concurrent sessions counts the live hosted sessions with the nodes: the `live` gauge
+  of `GET /sessions` includes them, a node waits for a slot they hold, and an opening beyond the
+  cap is refused at once (`409`).
+- Their records and state live under `~/.pdo/hosted/<id>/`; the working directory is never
+  modified. The sweep never kills a hosted session recorded as live, and kills any other name with
+  the `pdo-hosted-` prefix.
+- An extension can no longer set `PDO_SESSION_ID` in a session: it is a core variable.
+
+### Relaunch, configure, type text, live artifacts, declared wait
+
+- `Host::relaunch_session`, `configure_session`, `type_in_session`, `forget_session`,
+  `live_artifacts` and `live_artifact`; `HostedSession::wait_message`; `LiveArtifact`; the events
+  `hosted_session_forgotten` and `hosted_live_artifacts_changed`, published like
+  `hosted_session_changed`.
+- New actions of the `session` Operation, listed in the catalog: `relaunch`, `configure`, `type`,
+  `forget` and `wait_user`. An input that lifts the wait of a hosted session asks `session` ×
+  `resume` of whoever types it.
+- Relaunching resumes an agent's conversation through the identity set at its launch, on the same
+  harness; otherwise a new conversation reads the extensions' text and the initial prompt again.
+  The resume templates of the `claude`, `copilot` and `pi` harnesses gain a `{model}` hole, empty
+  when a node resumes: its command does not change.
+- `pdo wait-user` targets the hosted session of `PDO_SESSION_ID` when `PDO_RUN_ID` is absent
+  (`POST /sessions/<id>/wait-user`); `pdo complete`, `pdo fail` and `pdo skip` are refused there
+  (code 3).
+- `PDO_LIVE_DIR` is a core variable in a hosted session: an extension cannot set it. At startup,
+  the live hosted sessions of a missing extension are terminated, their record kept.
+
+### Session terminal for extensions and terminal zoom
+
+- `Host::zoom_session`, `HostedSession::terminal_zoom` (100 for an older record) and the bounds
+  `MIN_TERMINAL_ZOOM`, `MAX_TERMINAL_ZOOM`, `DEFAULT_TERMINAL_ZOOM`.
+- `@pdo/extension-ui` 0.19.0 exports the core's session terminal (`SessionTerminal`), for any
+  session by its id, with a zoom set by the host, as well as the terminal zoom control
+  (`TerminalZoom`) and its hook (`useTerminalZoom`). Types in `pdo-extension-ui.d.ts`.
+- New routes `GET` and `PUT /sessions/<id>/terminal-zoom`; the setting is the Operation `session`
+  × `zoom`, listed in the catalog with `session` × `read`.
+- On `/ws`, an `operation_applied` on the `session` Resource only goes to the connections that
+  may read the session, like `hosted_session_changed`.
+
+## 2.65.0 · Welcome, tours and reading in the Acogni style
+
+- The welcome shows the lockup; the tours are shorter, and their archive step reaches the row
+  menu of the tour's own Run.
+- What's new names no product, keeps its footer on one line and shows the recent changelog only.
+  The messages of the daemon the interface shows name no product either.
+- A mounted page shows its actions as icons and its reading guide as numbered entries.
+- The artifact viewer shows the frontmatter on one line and pages through files and iterations
+  from its header.
+- The terminal palette and the harnesses' colors come from the tokens; every remaining screen
+  uses the type scale and the roles.
+
+## 2.64.0 · Settings in the shared design system
+
+- Settings categories are aligned rows with no help sentence on screen: explanations go to
+  tooltips, a setting reads without hovering, and the search keeps its panels.
+- Agent profiles in columns; deleting one is confirmed in the kit's dialog.
+- A changed setting is discarded or saved (Discard, Save, Ctrl+S); closing with unsaved changes
+  asks for confirmation in the kit's modal.
+- Worktree provisioning in rows, aligned groups, saved on close even while the preview is
+  pending.
+- Extensions: their settings sections sit under "Extensions", each page reached from the rail.
+- The kit's segmented control answers Home and End.
+
+## 2.63.0 · Stats and Review in the shared design system
+
+- Stats: the sections become a strip of tabs under the header, the period a segmented control,
+  Refresh and Pricing details icon buttons. The extensions' tabs follow Performance with a
+  generic icon. Each tab opens on a filter bar (its drill path as a breadcrumb), the figures on
+  one line; the tables sort by any column, carry an inline share bar and hold at 1024 px and
+  120 %, long names in an ellipsis. Absorptions show a count pill, their members and Combine in
+  the kit's dialog frame.
+- Review: a header (the Run, its branch, the stats of the pair, the comments) and a bar (file
+  list, the pair, viewed count, split / unified, collapse all, the extensions' actions). The file
+  tree in numeric order; file cards with "Viewed" (per browser and per pair, `v` on the current
+  file); comment threads in a box that folds, a draft and a folded thread kept in their card in
+  Split.
+
+## 2.62.0 · New Run, Triggers and Projects in the shared design system
+
+- New Run: choosing the Project, a pipeline combobox, the secondary repositories. Ctrl+Enter
+  follows the conditions of the Launch button and Tab stays inside the form.
+- Triggers: the guard test and the history of fires as tables; a Trigger's detail in collapsible
+  sections.
+- Settings › Projects: the Project modal no longer overflows, paths are cut in the middle.
+- A dialog takes back the focus it lost; the kit's modal only handles the Escape aimed at it.
+
+## 2.61.0 · Editing a pipeline in the retained style
+
+- Node edit, edge, region, Start/End and Pipeline info as label-left rows; the Agent control is a
+  segmented control with its pickers; the tabs fold into an overflow menu.
+- The files of a diff are source-control rows; Versions and a Run's Version row.
+- A narrow pane keeps the agent, the conditions, the pipeline name, the diff's refs and the
+  Custom model readable.
+
+## 2.60.0 · Canvas and Run inspector in the retained style
+
+- Node cards with a grid of facts; rounded edges with bounded condition pills, which never cover
+  another; loop regions with their counter.
+- A child Run opened from Orchestration lands on the node waiting in it, and its back bar
+  returns to the parent.
+- Run inspector: tabs and sections, banners on one line, a dark terminal outside the interface
+  zoom (its font carries the scale), I/O rows with the verdict and a counter of the other keys.
+- Transcript as message cards with folded tool calls; live artifacts as rows under the Outputs
+  with a live dot; Orchestration in two-level rows, tinted on failure or wait.
+- The canvas context menu uses the kit's style.
+
+## 2.59.0 · Lists of the left panel on two lines
+
+- Runs on two lines of 46 px: the status mark that selects, the name, the Trigger, the child
+  counts and the node progress; then the pipeline, the extensions' marks and people, duration
+  and cost. Archived Runs are dimmed; a hover action and the "⋯" menu sit in a floating bar,
+  also on keyboard focus.
+- Project groups: a caps header, a count kept while folded, an awaiting dot.
+- Triggers: the switch first, mode icons (guard, overlap), the last fire and the next one.
+- Pipelines: a mono name, the lint only when invalid, validation per Project, version, draft and
+  edit date.
+- A floating bar acts on a selection; an empty list shows an icon, two words and one button.
+- `GET /runs` carries the progress of each Run's working nodes and `completed_at`;
+  `GET /runs/costs?ids=` prices the listed Runs apart; a pipeline that does not parse says why
+  (`invalid`).
+
+## 2.58.0 · Command field: palette, Actions and search sources
+
+- **`pdo-extension-api` 0.18.0**, non-breaking: the `palette` location (the command field,
+  Ctrl+K) accepts global Actions and the new search source contribution type
+  (`UiContribution::search`, `type: "search"`), whose function answers the queries typed (at most
+  50 results kept, abandoned after 5 s, isolated in its own group on error). A command can
+  declare the Operation it performs (`UiCommand::guarded_by`, `operation` on the wire): the core
+  then hides, everywhere, the Action that the Operation authorization denies. The shared module
+  `@pdo/extension-ui` moves to 0.18.0 (types `SearchResult`, `SearchFunction`,
+  `PaletteContext`). Details in `docs/reference/extension-ui.md`.
+- The palette remembers the five most recently opened items (`pdo.palette.recent`, per browser)
+  and offers them on an empty query.
+
+## 2.57.0 · Unambiguous pipeline Save
+
+- Saving a pipeline offers three exclusive outcomes: a new version, a new version keeping the old
+  one aside as the pipeline `<name> (vN)`, or replacing the latest version (same number). The
+  "replace and keep" combination is gone.
+- Shared kit: a key (`Kbd`) inside a button takes the button's color.
+
+## 2.56.0 · Run filters in a funnel
+
+- The `runs/filter` and `projects/filter` locations move, without any API change: their
+  contributions are rows of the funnel menu in the Runs header, after the core's filters. A set
+  attribute counts as an active filter and "Clear all" empties it. `runs/header` is placed
+  before the funnel and "New Run". Details in `docs/reference/extension-ui.md`.
+- The "Project" button of the Runs header is removed: Projects are managed in Settings.
+
+## 2.55.0 · Shell Workbench
+
+- The shell's extension locations move, without any API change: `topbar/end` goes before the
+  core icons (New run, Stats, Settings, the theme), `topbar/account` after the theme, and
+  `statusbar` fits on one 22 px line (icon and number, the name in a tooltip). Details in
+  `docs/reference/extension-ui.md`.
+- The left panel opens at 260 px and the inspector at 400 px, whatever the window size. A layout
+  already saved (`pdo.layout.run`) keeps its percentages.
+- The "Run now" error becomes a toast, which disappears like the others.
+
+## 2.54.0 · Acogni Driver: shared design system, embedded fonts, UI scale
+
+- **Breaking for extensions**: all style tokens are renamed, with no aliases (the decision
+  record explains why). Colors go through roles (`--surface-0/1/2`, `--text`, `--text-2`,
+  `--text-3`, `--line*`, `--primary*`, `--hover`, `--selected`...) and an OKLCH palette for both
+  themes (`--color-paper*`, `--color-ink*`, `--color-st-*`); `--color-bg-*`, `--color-fg-*`,
+  `--color-acc*`, the `--color-st-*-bg` and `--font-sans`/`--font-mono` are removed. The mapping
+  table is in `docs/reference/extension-ui.md` § *The design system*. On the core side, the
+  Tailwind utilities follow the roles (`bg-surface-1`, `text-text-3`, `bg-st-failed/14`) and the
+  type scale replaces Tailwind's (`text-2xs` to `text-xl`, 10 to 16 px).
+- **`pdo-extension-api` 0.17.0**, non-breaking for the Rust API: the shared module
+  `@pdo/extension-ui` exports the design system primitives (`Button`, `IconButton`, `Select`,
+  `Menu`, `Modal`, `ConfirmDialog`, `toast`, `Tabs`, `Section`...), types included. The token
+  stylesheet is served at the stable address `/shared/tokens.css`.
+- Archivo and Geist Mono are served by the binary (`/shared/fonts/`, SIL OFL 1.1 licenses): the
+  interface no longer calls any CDN.
+- "UI scale" setting (Settings › Interface: 100, 110 or 120%, 120 by default), per browser
+  (`pdo.ui.scale`).
+
+## 2.53.0 · Clone a remote repository from Settings › Projects and New Run
+
+- "Add repository" of a Project offers "Clone from a URL...": the repository is fully cloned into
+  the clones folder, with its progress and a Cancel, then joins the Project. The clone continues
+  with Settings closed. New Run also accepts a URL: "Clone and launch" clones then launches the
+  Run on the clone; a URL already cloned is reused ("Launch").
+- New routes `POST`/`GET /repos/clones`, `GET`/`DELETE /repos/clones/{id}` (cancels a running
+  clone, forgets a finished one) and `GET /repos/clone-target`. The clone is made in a hidden
+  neighboring folder, renamed once complete: a failure or a cancellation leaves nothing behind.
+- New instance setting `clones_folder` (default `~/pdo/repos`), "Clones folder" section of
+  Settings › Projects.
+
+## 2.52.0 · The library assistant and external writes go through the draft
+
+- The library assistant no longer writes a file: `POST /sessions/libassist/save` applies to the
+  shared draft of the focused pipeline, like a participant of its Actor, and answers `draft`,
+  `fields` (the changed fields) and `version`. It reads this draft through
+  `GET /sessions/libassist/draft`. Only a pipeline whose file cannot be read, and which
+  therefore has no draft, is still saved, as a version signed by the Actor.
+- A file written outside PDO becomes an "external edit" version (no author) before merging into
+  the draft; the `/ws` stream marks its `pipeline_changed` with `outside: true` and the draft
+  socket sends a `notice` to the participants.
+
+## 2.51.0 · Settings › Projects
+
+- New "Projects" category in Settings: create, rename and delete a Project, add a repository
+  (recent, local folder, new empty repository), remove it, choose the default primary repository
+  that New Run preselects. Changes show live in the other browsers.
+- `GET /repos/remote?path=` returns the remote of a repository, without its credentials (`null`
+  without a remote). `GET /projects/deleted` returns the deleted Projects (id and last name),
+  kept in the `deleted_projects` table so that their Runs still name them ("<name> (deleted)").
+- `POST /repos/create` accepts an empty folder and makes the first commit even without a file.
+- The refusals of `/repos/validate` and of Run creation name the folder rather than the
+  `target_repo` field: `<path> is not a git repository`, `<path> does not exist or is not a
+  directory`, `repository must be an absolute path: <path>`.
+
+## 2.50.0 · Runs list: date filter, collapsing a Project
+
+- **Run summary v4**: it gains the instant of the last activity and the activity ranges (UTC
+  instants; two events less than an hour apart fit in the same range). Summaries are rebuilt when
+  the daemon starts. `GET /runs` carries `last_activity_at` and `activity` on each entry.
+- Run filters: Date axis, Active (the default, any activity in the range) or Started, with
+  presets and a free range; it also applies to archived Runs. The filter does not survive a
+  reload.
+- A Project group collapses; the collapsed state is kept per browser
+  (`pdo.ui.collapsedRunGroups` in the local storage).
+
+## 2.49.0 · Live artifacts
+
+- **Pipeline format**: the intermediate output becomes the live artifact (separate from
+  outputs). An `agent` or `script` node gains `live_artifacts` (`name`, `port_type`,
+  `instructions`, `frontmatter`) and `free_live_artifacts` (the node may publish undeclared
+  artifacts; the editor turns it on for a new node, a silent document leaves it off). Both keys
+  are refused on a structural node.
+- **Migration on load**: an `intermediate: true` output of an `agent`/`script` node is read as a
+  declared live artifact (name, type, expected content, schema); the file is rewritten on save.
+  Elsewhere, the key is ignored with a warning. A node library entry is read the same way.
+- **Refused at parse**: an edge that carries a live artifact, a live artifact name that is not a
+  plain file name or that is declared twice, an output named `live` on a node that publishes live
+  artifacts.
+- The live artifact is published in `<artifacts>/<node>/iter-<n>/live/`: `<name>.md`,
+  `<name>.html`, or the folder `<name>/` of its images or files (type `files`). A `script`
+  receives `PDO_LIVE_DIR`.
+- `GET /runs/{id}/nodes/{node}/io` loses `intermediate` on the ports and gains `live`: the
+  declared then free artifacts, with their files, `schema_warnings` and `updated_at`. The
+  `PortBrief` of a Run's `node_defs` loses `intermediate`.
+
+## 2.48.0 · Pipeline versions
+
+- Save freezes the shared draft into a version, numbered and titled (`vN` by default): a "Save..."
+  window with "Save as a new version" (unchecked, the latest version is replaced under its
+  number) and "Keep old as new pipeline" (the version saved until then becomes the pipeline
+  "<name> (vN)"). The registry file remains the latest version: New Run, the Triggers and the
+  export read it. Versions live in the SQLite table `pipeline_version`.
+- **Migration**: a pipeline without a version becomes v1 on its first read, titled by the free
+  `version:` field of its YAML (otherwise `v1`). This field disappears from the Identity of
+  Pipeline info; the YAML keeps it.
+- **No more silent saving at launch**: New Run no longer writes the modified tabs. A draft that
+  differs from the latest version asks "Save as vN and run" (default) or "Run last version";
+  creating or editing a Trigger no longer saves anything.
+- History: "Versions" tab of Pipeline info (draft, versions, author, date, number of Runs);
+  "View" opens a version read-only, "Restore" puts it back into the draft for everyone, in a
+  single Undo, without creating a version.
+- A Run remembers its version (`pipeline_version` of `RunStarted` and of the Run state); its Info
+  shows "vN · title" and "vM is out" when a more recent version exists.
+- API: `GET /pipelines/{id}/versions`, `GET /pipelines/{id}/versions/{n}`; `PUT /pipelines/{id}`
+  takes `version` (`new_version`, `title`, `keep_old`) and answers `version` and `kept`;
+  `GET /pipelines` gains `version`; the `/ws` stream announces `pipeline_version_changed`. Run
+  summaries (version 4) are rebuilt at boot.
+
+## 2.47.0 · Launch in a Project; a repository in several Projects
+
+- **Breaking.** A Run's Project is chosen at launch and recorded on the Run, never deduced from
+  its repository. `POST /runs` and `POST|PATCH /triggers` accept `project_id`; a named Project
+  must exist and contain the primary repository (`400` otherwise). Without `project_id`, a Run is
+  **outside any Project**, even on a repository that is a member of a Project; a Run created from
+  a node session inherits the Project of its parent Run, a Trigger launches its Runs in its
+  Project. The `Operation.projects` of a Run, of its nodes, sessions and Review comments are this
+  recorded Project: an extension that read the repository's Project must read this field
+  instead.
+- A repository can belong to several Projects: no more `409` "already in another Project".
+  `DELETE /projects/{id}/members` removes the repository from this Project only. Each Project
+  designates a default primary repository (`primary_repo`, `PATCH /projects/{id}`), by default
+  its first member.
+- **One-time migration at startup.** Each existing Run receives in its `run_started` the Project
+  that the old rule assigned to it (`project_id`, `null` if it had none), then the Run summaries
+  are rebuilt; each Trigger likewise receives the Project of its target repository. A Run
+  already recorded is never revisited: changing the members of a Project moves no Run.
+- `GET /runs` and `GET /runs/{id}` carry `project_id`; the Runs and Triggers lists are grouped by
+  recorded Project. Stats file a Run's cost under this Project.
+- **`pdo-extension-api` 0.16.0**, non-breaking: `NewRun::in_project(id)` launches the Run of a
+  `Host::create_run` in a Project. Without it, the Run is outside any Project.
+- `pdo run create --project <id>` launches in a Project; from a node session, the child Run stays
+  in its parent's Project.
+- New Run › Where starts with the Project (the last one chosen is preselected, "No project" only
+  if the Rights allow it), preselects its default primary repository and offers its other
+  repositories as checkable secondaries, read-only by default.
+
+## 2.46.0 · Files output type, artifact download
+
+- New output type `files` (`PortType::Files`): one or more files, in any format, in
+  `<node>/iter-<N>/<port>/`. Completion refuses a folder without a file (`missing_outputs`, a
+  subfolder does not count). Downstream receives the port's folder, in the preamble, in the
+  `PDO_INPUT_*` of a script and in the I/O panel; an accumulation gives one folder per completed
+  iteration.
+- `GET /runs/{id}/artifact?path=...&download=true` returns the raw bytes as an attachment, with a
+  readable name (`<node>-<port>.md`, suffixed `-iter-<N>` after the first iteration).
+  `GET /runs/{id}/artifact/zip?path=...` returns the zip of a port folder (`<node>-<port>.zip`).
+  Both routes share the traversal guard and set `nosniff`; never `text/html` (decision record on
+  artifact serving).
+- Run view: "files" badge, one chip per file that downloads it, "Download all" (zip), a down
+  arrow icon on hover of any artifact row and in the header of the markdown modal. The modal of
+  a files port paginates its files and displays them according to their format (image, text, or
+  download).
+- Inspector: "Files" option in the output type selector.
+
+## 2.45.0 · Total or Active duration of a node
+
+- The iteration state exposes `waited_ms` (closed declared waits) and `open_wait_since` (wait in
+  progress). Both fields are absent from the wire when empty. The rule for declared waits
+  (`pdo_run::domain::declared_wait`) is shared by the projection, Stats › Performance and the
+  lifecycle telemetry.
+- The meta line of a node's panel shows the iteration duration, which ticks while it runs. A
+  click (or Enter, Space) toggles between Total and Active; the choice is remembered
+  (`pdo.ui.nodeDurationMode`) and also applies to the iteration menus. Active stays frozen during
+  a declared wait and Total = Active + Waiting at the displayed second. The tooltip gives the
+  start, the end and the Total / Active / Waiting breakdown.
+- The iterations menu puts the most recent first.
+
+## 2.44.0 · Canvas: edge grabbable at any zoom, validated output rename
+
+- A node's edge is grabbable at any zoom: 8 px on screen, of which at most 3 px (and 25% of the
+  card) inside. The edge starts from the pressed pixel. Zoom out down to 25%, zoom displayed at
+  the bottom left of the canvas.
+- Snapping follows the zoom: pipeline step x 2, 4, 8... as long as a cell is less than 16 px on
+  screen, "snap x4 · 120px" badge at the cursor. The saved layout does not depend on the zoom.
+- Renaming an output applies on Enter or when leaving the field, Escape cancels it. A taken or
+  empty name is refused. Edges follow and the downstream emergent input takes the new name.
+- An edge to a missing port is shown in dotted red, "<port> · port missing", and can be deleted
+  directly. After saving, the lint is read again.
+- Outside a Run, the inspector no longer has a "Run" tab.
+
+## 2.43.0 · Shared pipeline draft and presence
+
+- A registry pipeline is edited in a shared draft: one Yjs document per pipeline, held by the
+  daemon (SQLite) and synchronized through `WS /pipelines/{id}/draft`. Changes merge at field
+  granularity, prompts at character granularity. The draft survives a daemon restart; Save
+  writes it to the file and resets it.
+- Presence: avatars in the tab bar and on the row of the Pipelines list, other people's selection
+  on the canvas (outline and label in their color), typing in a prompt (named caret, "X is
+  typing"). `GET /pipelines` gains `draft` (`changes`, `nodes`): the row shows "draft: N
+  changes" and counts the draft's nodes.
+- Undo only undoes its own changes, and its tooltip names the last one.
+- An Operation authorization that denies `pipeline × update` makes the user join the draft
+  read-only.
+- A file written outside PDO merges into the draft: the conflict window is gone.
+
+## 2.42.0 · Review file tree
+
+- The Review file list is a tree of collapsible folders. A chain of single-child folders fits on
+  one line, each folder shows the count of its unresolved comments, and a button next to the
+  counter collapses or expands everything.
+- The diff cards follow the tree order (folders before files).
+- Keyboard: Left/Right arrows collapse and expand the folder of the current file, j/k skip the
+  files of a collapsed folder. The "/" filter keeps the tree and opens the branches that contain
+  a match.
+
+## 2.41.0 · Pipeline validated for everyone and listed first for Projects
+
+- The `all` validation of a pipeline accepts a list of Projects:
+  `{"kind":"all","project_ids":[...]}`. `{"kind":"all"}` remains valid (empty list), with no
+  migration. An unknown Project is refused (`400`), a duplicate is collapsed.
+- In New Run, these Projects see the pipeline under "Project pipelines", the others under
+  "Global pipelines". Deleting a Project removes it from the list and leaves the pipeline offered
+  to everyone.
+- Validate modal: under "All projects", the Project checkboxes stay active ("Listed first for");
+  the verdict fits in one sentence.
+
+## 2.40.0 · Reading guide of a mounted page, Public URL
+
+- `pdo page mount <name> <directory> --guide <file>` attaches a reading guide (YAML or JSON, at
+  most 50 entries). The daemon validates it before mounting: a refused guide mounts nothing and
+  the command says why. The guide is stored with the mount and leaves with it (`unmount`, archive
+  of the Run that mounted the page).
+- The guided page opens in a tab of the central panel, the guide in the right panel. A guide link
+  leads to a Run, a node, an artifact, a Review file (`/runs/<run>/review?file=`), an extension
+  page or an anchor of the page.
+- New **Public URL** setting (Settings › General, or `PDO_PUBLIC_URL`; the stored setting wins):
+  an origin `http(s)://host[:port]`. `PUT /settings` gains `public_url` (`""` clears it). A node
+  session receives it in `PDO_PUBLIC_URL`, `pdo page mount` prints its addresses under it, and
+  Settings › Telemetry names the address of `/metrics` with it.
+- A Review `?file=` link brings you to the file even below the fold.
+
+## 2.39.0 · Skill completion in prompts, skill export and upload
+
+- `/` at the start of a word in the prompt of a node or of New Run opens the skills list at the
+  cursor; choosing a skill that the node (or the Run) does not receive adds it to its tier.
+- `POST /settings/skills/export` serves a zip in the sidecar format, named after the folder, the
+  skill or `selection` for a mixed selection.
+- `POST /settings/skills/upload?name=` imports a zip according to the sidecar's import policy:
+  new skills arrive in a folder named after the zip, flat (the archive's hierarchy is not
+  kept). The Operation `skill.import` is requested before reading the archive.
+
+## 2.38.0 · Search in the Run transcripts
+
+- `GET /runs/{id}/transcripts/search?q=&client=` searches the transcript of each node iteration
+  that PDO reads: message text and the one-line summary of tool calls, never the model's
+  thinking. Results by node (pipeline order) then chronologically, capped at 200 excerpts, all
+  counted per node. The next search from the same `client` cancels the previous one on the server
+  side (response `cancelled: true`), as does closing the connection.
+- No persistent index: the 1st search on a very large transcript pays for its in-memory
+  indexing, the following ones only reread what the file has gained.
+- Matching is case-insensitive and accent-sensitive (a query without the accent does not find the accented word).
+- Benchmark: `make bench-transcript-search`.
+
+## 2.37.0 · Prometheus `/metrics` and "include the Actor"
+
+- Settings › Telemetry gains the "Prometheus /metrics" section: `GET /metrics` serves the same
+  metrics as the OTLP export in Prometheus text format (no traces), with its own switch, **off by
+  default** (`404` while it is). The route requires nothing more than the rest of the daemon:
+  whoever reaches the instance reads it. Setting `telemetry_prometheus`, env
+  `PDO_TELEMETRY_PROMETHEUS`.
+- "Identity" section: "Include the Actor", **off by default** (`telemetry_include_actor`, env
+  `PDO_TELEMETRY_INCLUDE_ACTOR`). When on, `pdo.actor` (who launched the Run) is added to the Run
+  and node metrics and to the spans, on both paths, and the answer to a declared wait becomes a
+  `pdo.wait.answered` event of the node's span. An agent is named `agent`, without its ids. When
+  checked, a warning recalls prior information of the people concerned, consultation of the works
+  council and the GDPR basis before saving.
+- The `NodeResumed` (Enter typed in the terminal) and `NodeCompletionReleased` (node button)
+  events now carry the Actor who answered (`payload.actor`). Older events have none and read as
+  before.
+- `GET /telemetry/status` also says `metrics_endpoint` and `include_actor`; "What is sent" lists
+  `with_actor`. All changes take effect without a restart.
+
+## 2.36.0 · Transcript tab of a node
+
+- `GET /runs/{id}/nodes/{node}/transcript?iter=&after=&limit=` serves the normalized transcript
+  of an iteration, in pages (Prompt / Agent messages, tool calls collapsed);
+  `GET .../transcript/tools/{index}?iter=` serves the input and output of a call. A call that
+  replaces text carries a diff (`keep` / `remove` / `add`) and its `+N -M` count.
+- The model's thinking is dropped at read time: it appears neither in the pages nor in the detail
+  of a call.
+- A harness without a transcript reader answers `unavailable`; the capability can be read in the
+  support table ("Transcript tab" row).
+
+## 2.35.0 · OTLP export of metrics and traces
+
+- New "Telemetry" category of Settings: the daemon pushes its metrics and traces over OTLP/HTTP
+  to a collector. **Off by default**: nothing connects until the switch is turned on.
+  `PUT /settings` gains the switch, the address and the headers of the collector; a header's
+  value is never returned (`GET /settings` only says it is set). A change reloads the export
+  without a restart.
+- `GET /telemetry/status` and `POST /telemetry/test-export`, authorized like a change to the
+  instance settings.
+- Attributes name the repository by its remote without credentials, never by a local path, and
+  never carry the Actor. `service.instance.id` is `<host>:<port>`.
+- An unreachable collector is logged once, reported in the status, with no effect on Runs; traces
+  emitted during the outage are lost.
+
+## 2.34.0 · Text sending reserved to the pilot, refreshing a harness's models
+
+- **`pdo-extension-api` 0.15.0**, non-breaking: the `instance_settings` operation gains the verb
+  `refresh_catalogue` (re-probe a harness's models). An extension that answers `authorize` can
+  deny it like `update`.
+- `POST /runs/<run>/nodes/<node>/terminal-text` accepts `poste` (the sending station). A station
+  watching a node's terminal while another one pilots it receives `409 not_pilot` (with the
+  pilot's Actor), and nothing is pasted. A send without a station (CLI, extension) goes through
+  as before.
+- `POST /settings/harnesses/{name}/refresh` re-probes a harness's catalogue even at an equal
+  version, and `/ws` announces `harness_catalogue_changed`. The served catalogue carries
+  `probed_at`.
+
+## 2.33.0 · Ports without side or `repeated`
+
+- **Pipeline format change.** A port no longer has a side (`side`) or a `repeated`: the inspector
+  of an output no longer offers `L/T/R/B` or `rpt`, and its type moves into the name line. Where
+  a wire starts belongs to the edge, and so does accumulation. On load, an output's `side`
+  becomes a `source_anchor` without `offset` (middle of the side) on its edges, an End's `result`
+  one becomes a `target_side`, and a port's `repeated` is ignored; the node-end check no longer
+  looks for an output in previous iterations (a running Run whose `repeated` output was only
+  written in an earlier iteration must rewrite it to finish the current iteration). The file is
+  only rewritten on save: run `pdo migrate` to convert the registry (`~/.pdo/pipelines`) and the
+  node library (`~/.pdo/library`); the command says, file by file, what it changed, and a second
+  pass changes nothing.
+- `EdgeAnchor.offset` becomes optional; `PortDef` loses `side` and `repeated`, `PortBrief` loses
+  `side`. The `side` of a `PortBrief` from an earlier event log is ignored on read. Minor bump:
+  every file and every Run written before can be read again without error.
+- The editor now writes an edge's `repeated`: a save from the canvas used to lose it.
+
+## 2.32.0 · Actor author of Review comments, composer autocomplete sources
+
+- **`pdo-extension-api` 0.14.0**: new UI location `review/composer` (the Review comment composer)
+  and new contribution kind `completion` (`UiContribution::completion`, `.rendering`): a trigger
+  character, a suggestions function exported by the bundle, the inserted text, and optionally the
+  rendering of this text in the comment. Without a contribution, the composer does not change.
+  Reference: `docs/reference/extension-ui.md`.
+- A Review comment, each of its replies, its resolution and its reopening record the request's
+  Actor (`actor`, `resolved_by_actor`, `reopened_by_actor`), in addition to the role (`author`,
+  `by`). The `review_comment_*` events carry it, with the text. Comments written before remain
+  readable, without an Actor. When an extension identifies the caller of an agent session, the
+  role (`manager`, node id) can be read in the session headers.
+
+## 2.31.0 · Agent sessions and the Actor who starts them
+
+- **Extension API 0.13.0**, non-breaking: hooks `session_env` and `session_preamble`, requested
+  for any session that makes an agent act (node, Run Manager, library assistant) with the Actor
+  who starts it; by default, `node_env` and `node_preamble` for a node and nothing for the
+  others. Events `session_started`, `session_taken_over` and `session_ended` (`SessionEvent`), on
+  `/ws` for a Run's session, once an extension is loaded.
+- **One library assistant per Actor**: `POST /sessions/libassist` opens the caller's; the local
+  operator keeps `pdo-libassist-shared`. Focus, save and close are the caller's.
+- **Opening the assistant changes Operation**: `pipeline` × `open_assistant` (no target, outside
+  any Project) replaces `session` × `create`. A rights extension that denied the assistant
+  through `session` × `create` must deny the new Operation.
+
+## 2.30.0 · A Run seen by an extension: people, Presences, cost
+
+- **The core no longer draws a Run's creator**: neither on its row in the Runs list, nor in its
+  Info tab (the "Created by" chip is gone). Without an extension, no person appears. `created_by`
+  remains on the API and in the `run/info` context.
+- **`pdo-extension-api` 0.12.0**, by addition: the `run/item/people` location (a Decoration on a
+  Run's row, with its live Presences), `Host::presences` and `Host::run_cost` (the Info tab's
+  cost). An extension written for 0.11 compiles unchanged.
+- **Presences**: each tab says on `/ws` which Run it shows (`{"type": "show_run", "run_id"}`);
+  the core announces `presence_arrived` and `presence_left` (filtered by the Run's read access)
+  and serves `GET /runs/presences`.
+
+## 2.29.0 · Intermediate output
+
+- **Intermediate output**: an output port can be checked "intermediate" (the port's field
+  `intermediate: true`, omitted when false). The agent fills it and updates it while working, the
+  preamble lists it separately with its instruction, and the node panel row follows it during the
+  Run. Writing this file emits no event: the row updates on the next refresh, at most 30 s later.
+  `pdo complete` never checks it, a skip writes nothing for it.
+- **New refusal at parse**: a Pipeline with an edge carrying an intermediate output is refused,
+  naming the port and the edge. A Pipeline without the option does not change.
+- The response of `GET /runs/{id}/nodes/{node}/io` carries `intermediate` on each port, and the
+  `PortBrief` of a Run's `node_defs` carries it when true.
+
+## 2.28.0 · On-demand node, forced skipped node, waiting for started nodes
+
+- **On-demand node**: option `on_demand` of an `agent` or `script` node (refused on a structural
+  node), carried by the library, the portable export and the Run snapshot. The runtime neither
+  launches nor skips it; its play button (grayed card, node panel) goes through `node` × `start`
+  and reopens a finished Run.
+- **Pipeline option `wait_for_started_nodes`** (absent when `false`, the default): a Run that
+  reaches `End` stays `running` as long as a node is `running`, `waiting` or `awaiting_user`,
+  whether it must end or stop there (edge to `End` with `reason:`). The completion or stop of
+  the last of these nodes ends the Run. The Run freezes the option at launch (field
+  `wait_for_started_nodes` of `GET /runs/{id}`). For a Run that has it, `GET /runs/{id}` and
+  `GET /runs` carry `waiting_for_started_nodes` (number of awaited nodes); the Run summary moves
+  to version 2 and is rebuilt at startup. Without the option, a Run reopened by a play button
+  ends again when its node completes, without a waiting banner.
+- **A finished Run marks the untaken branches `Skipped`**, instead of leaving them pending: they
+  thus keep their play button (Retry, `node` × `retry`).
+- The preamble of a node launched before its upstream says the input is absent, and a script's
+  `PDO_INPUT_<PORT>` is empty, instead of giving a path to a file that does not exist.
+- A second `RunCompleted` on an already finished Run is no longer written.
+
+## 2.27.0 · Pipelines validated per Project
+
+`pdo-extension-api` stays at **0.11.0**: the `pipeline` Resource gains the verb `validate`.
+Detail: `docs/reference/extension-api.md` ("The catalogue of the Resources").
+
+- **Pipelines created, duplicated or imported after the update are test pipelines** as long as
+  nobody validates them: New Run and the Trigger form only offer them behind "Show test
+  pipelines". Existing Pipelines remain offered everywhere (no recorded validation = all
+  Projects). A rename keeps the validation, a deletion forgets it, an export does not carry it.
+- Deleting a Project removes it from the validations; a Pipeline validated for that Project only
+  becomes a test Pipeline.
+- API: `GET /pipelines` exposes `validation` (`{"kind":"all"}`, `{"kind":"none"}` or
+  `{"kind":"projects","project_ids":[...]}`); `PUT /pipelines/{id}/validation` replaces it (`404`
+  unknown Pipeline, `400` unknown Project) and broadcasts `pipeline_validation_changed`. The
+  filter is the forms' one: Run creation accepts any Pipeline.
+- **New verb to map** for a Rights extension: `pipeline` × `validate`. An extension that does
+  not know it and denies unknown verbs now denies the Validate button.
+- Tutorials: "Validate the pipeline" step in *First pipeline*; *First run* creates or reuses the
+  "Tutorial" Project, files the tutorial repository in it and validates `tutorial-interactive`
+  for it alone.
+## 2.26.0 · Interface up to date after an absence
+
+`pdo-extension-api` and `@pdo/extension-ui` stay at **0.11.0**, a version not yet published
+on `main`: `openProbedSocket` gets the `silenceMs` option there, an addition only.
+
+- **Reload after an absence**: each time the `/ws` stream (re)opens, when the tab is focused again,
+  when the network comes back, and on the `{"type":"resync"}` frame that the daemon sends to a client
+  that lost events, the interface reloads Runs, the open Run, sessions, Triggers and their pause,
+  Projects, pipelines and the permitted gestures. Nothing is replayed.
+- **Node terminal**: the daemon beats every 10 s on its socket (Ping + `heartbeat` frame).
+  After 30 s without receiving anything, when offline, or on close, the terminal is veiled
+  ("Terminal connection closed", **Reconnect** button) and reattaches by itself in the same xterm.
+  Behind a reverse proxy, its read timeout must exceed the beat: see the WebSockets section of
+  the guide.
+- **Seeded skill `pdo-interactive` v2**: the `pdo wait-user` banner is a notification; the
+  full question or result is written in the conversation before the call.
+
+## 2.25.0 · Polish of the Run list
+
+`pdo-extension-api` and `@pdo/extension-ui` stay at **0.11.0**, a version not yet published
+on `main`: it gets the `runs/empty` location and `copyToClipboard`, additions only.
+
+- **Empty Run list**: the `runs/empty` UI location (decorations only) is displayed under
+  "No runs yet" as long as the list contains no Run. The core text does not change.
+- **Copy outside HTTPS**: `copyToClipboard(text)` from `@pdo/extension-ui` is the copy used by all
+  the Copy buttons of the core; on an instance served over http, it falls back to
+  `execCommand("copy")`. It never rejects and returns a boolean.
+- **Archived tree**: the archived section arranges Runs under their parent, like the active
+  one; the "Child runs" preference and the global button apply to both. A Run whose
+  parent is in the other section is a root there and carries a link to it. Archiving a parent
+  always takes its finished children with it and is still refused while a child is alive: this case
+  (active child under an archived parent) does not occur from the UI.
+
+## 2.24.0 · Gestures according to Rights, stream guarded by read
+
+`pdo-extension-api` and `@pdo/extension-ui` stay at **0.11.0**, a version not yet published
+on `main`: it gets `ExtensionEvent::guarded_by`, an addition only.
+
+- **Guarded stream for extensions**: `ExtensionEvent::guarded_by(read)` attaches to an
+  event the read Operation that protects it; `/ws` only sends it to connections whose
+  Actor can perform it, and sends it without the guard to no one. An `operation_applied` on an extension Resource is
+  guarded by the read of its entity, in the Projects of its Operation: an extension that
+  refused every Operation whatever its verb now also hides, on `/ws`, the
+  `operation_applied` of its Resources.
+- **Gestures according to Rights**: the Run view calls `POST /authorize` once when it opens
+  for all the gestures of the Run and its nodes, and hides those that are refused; the
+  rows of the Run list, their menu and the bulk actions follow the same rule. Reloaded when
+  a Project changes or when an extension signals a change of Triggers. A gesture that the
+  daemon refuses anyway (a Right changed in the meantime) now says so in a toast, where it said nothing before.
+
+## 2.23.0 · File imported during a Run
+
+`pdo-extension-api` and `@pdo/extension-ui` stay at **0.11.0**, a version not yet published
+on `main`: it gets two more verbs, additions only.
+
+- **File imported during a Run**: two new Operations on the `node` Resource,
+  `import_files` and `send_text` (Resource catalogue). A Rights extension that
+  enumerates the verbs of a Node must map them; otherwise they follow its default rule.
+  The import counts against the same `max_attachments_mb` budget as the files attached at the launch
+  of a Run, per import: behind a reverse proxy, `client_max_body_size` must follow it.
+
+## 2.22.0 · Delivery signed by the git identity of the Node
+
+`pdo-extension-api` stays at **0.11.0**: only the documentation of `node_env` changes. Detail:
+the decision record and `docs/reference/extension-api.md` ("Git identity").
+
+- The variables `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and
+  `GIT_COMMITTER_EMAIL` that an extension gives to a Node are frozen on its `NodeStarted`
+  (`git_identity`, these four only) and sign all its delivery: the commit
+  `<node> iter-<N>: completed`, the commit of the sub-worktree of an isolated Node, its merge and the
+  resolution commit in favor of the Node.
+- A daemon without a git identity now delivers, provided all four are given; a missing or empty
+  variable falls back to the daemon identity. Without them, nothing changes.
+
+## 2.21.0 · Read-only driving of a Run
+
+- **"Save" in a Run no longer writes the shared pipeline**:
+  `PUT /runs/{id}/pipeline` only modifies the snapshot of the Run, neither the shared pipeline nor the
+  other Runs. A Run tab opens read-only; the pencil in the bar offers "Edit
+  for this run" and "Edit source pipeline". To make a change permanent: "Save > Overwrite default
+  pipeline...", which warns (future Runs, Triggers that reference the pipeline,
+  shared pipeline modified since the launch) then copies the whole snapshot, orphan prompts
+  removed. API: `GET /runs/{id}/pipeline/overwrite-preview`,
+  `POST /runs/{id}/pipeline/overwrite-default`. Overwriting requires `run` × `edit_pipeline`
+  **and** `pipeline` × `update`: a Rights extension has no new verb to map.
+  A Run launched before the update has no launch fingerprint: the warning says it
+  cannot tell whether the shared pipeline has changed.
+
+## 2.20.0
+
+`pdo-extension-api` goes to **0.11.0**, and the `@pdo/extension-ui` module with it: additions
+only, an extension 0.1 to 0.10 compiles and runs as is. Detail:
+`docs/reference/extension-api.md`.
+
+- **Name of a Project**: `Host::project_name(id)` gives the name of a Project, or nothing
+  for an unknown id, synchronously (including from `authorize`). The daemon reads the
+  Projects before serving and rereads a Project on each change, before announcing it.
+- **Live Triggers**: the interface stream relays `trigger_updated` and
+  `project_changed`, which it used to drop; a Trigger modified or a Project renamed elsewhere
+  updates without reloading. `Host::triggers_changed()` announces a `trigger_updated` without
+  `trigger_id`, and the Trigger list rereads everything.
+- **Triggers read in their Project**: the Operations on a Trigger are in the
+  Project of its target repository (none without a target repository). `GET /triggers`, `GET /triggers/{id}`,
+  its firings and what `/ws` says about a Trigger require `trigger` × `read`. An extension that
+  refused every Operation whatever its verb now also hides Triggers.
+
+## 2.19.0 · Probed opening of WebSockets, Run Summary
+
+`pdo-extension-api` goes to **0.10.0**: addition only, an extension 0.1 to 0.9 compiles and
+runs as is (`OLDEST_COMPATIBLE_API_VERSION` stays `0.1.0`). Detail: the decision records
+and `docs/reference/extension-ui.md` ("WebSockets").
+
+- **Probed opening**: an interface WebSocket opens, or reopens, only after a
+  successful HTTP probe (`GET /actors/me`); as long as it fails, the probe repeats (backoff with
+  jitter, ~1 s to ~30 s), a hidden tab does not probe. This covers the event stream, the terminals and,
+  through `openProbedSocket` of the `@pdo/extension-ui` module (0.10.0), the extension interfaces.
+  A tab opens only one event stream, the Review page included. The terminal of a node
+  reattaches by itself after a daemon restart (`reconnect: "after-drop"`); closed by the
+  daemon (session ended), it stays closed.
+- **Clean closes**: `/ws` and the PTY answer the Close frame of the client.
+- **Log**: one line per opening, closing and refused upgrade of a WebSocket.
+- **Cache-Control**: `assets/` (hashed names) `immutable`, the rest `no-cache`.
+- **Run Summary**: new table `run_summaries`, rebuilt from the event log at the first
+  start (and after a daemon that did not maintain it); events written in the database of a
+  running instance, outside the daemon, are caught up on the next read. `GET /runs`, `GET /runs/{id}/children`
+  and the access checks of a Run read it; HTTP contract unchanged. The front groups its
+  refreshes (~300 ms) and no longer polls the children of a Run or the I/O of a node as long
+  as the stream is open.
+- The `performance` marks `ws:ouvert` (opening of the stream) and `terminal:pret` (first byte
+  of a PTY) are set by the interface.
+
+## 2.18.0 · Run creation seams and UI locations `stats/tab` and `settings/page`
+
+`pdo-extension-api` goes to **0.9.0**: additions only, an extension 0.1 to 0.8 compiles and
+runs as is (`OLDEST_COMPATIBLE_API_VERSION` stays `0.1.0`). Detail: the decision record
+(amendments), `docs/reference/extension-api.md` ("The creation of a Run") and
+`docs/reference/extension-ui.md`.
+
+- **Extension data of a Run**: `POST /runs` takes `extensions` (extension id -> free
+  JSON value, also in multipart). An id that is not installed answers `400` like an unknown field;
+  the extension concerned validates its value (`Extension::validate_create`) after authorization and
+  before any effect: a refusal answers `400` with its reason, with no Run and no event. The value is
+  frozen in `RunStarted` (`extensions`) and a `retry_all` carries it over to the twin.
+- **Marking before the first Node**: `Extension::on_create_with_data` receives the value
+  (default: `on_create`). The attributes of a Run are now set **before** the launch of
+  its first Node, for a gesture as for a Trigger fire; the twin of a `retry_all` is
+  marked too (it was not before).
+- **`Host::create_run(actor, NewRun)`**: an extension creates a Run on behalf of an Actor, with the
+  same authorization and the same hooks as `POST /runs`.
+- **CLI**: `pdo run create ... --ext <id>.<key>=<value>` (repeatable).
+- **New Run**: a `run/new` section can provide a value (`SectionForm.provide`), sent
+  under the id of its extension; the `run/new` context gains `input` and `name`.
+- **`stats/tab`**: an extension adds a tab to the Stats rail, after Performance, rendered
+  in the Stats frame; its context carries the displayed period and the Refresh counter.
+- **`settings/page`**: an extension adds a whole page to Settings, one rail entry
+  per contribution after "Extensions" (which still lists the `settings` Sections);
+  reachable through `#/ext/<extension>/settings/page/<path>`. The Save footer of Settings is
+  hidden on such a page: it saves in its own way.
+- The shared module `@pdo/extension-ui` goes to `0.9.0` with the API (same major `0`).
+- The test extension of the core refuses a value starting with `refuse`, marks `data.<key>`,
+  traces the order marking / launch (`GET /ext/test/creations`), creates a Run through its Host
+  (`POST /ext/test/runs`) and its `run/new` section provides `cle`; it also contributes the
+  "Test stats" and "Exploding" tabs and the "Test settings" page.
+
+## 2.17.1 · The core names no extension
+
+No contract change: `pdo-extension-api` stays at **0.8.0**. Detail: the decision record.
+
+- Doc comments (and regenerated TypeScript types), Rust and front tests,
+  `docs/reference/extension-api.md`, `docs/reference/extension-ui.md` and the past entries of
+  this file describe each seam for itself, with the test extensions of the core (`test`,
+  `demo`, `a/panneau`, `gate`) and a sample distribution, `acme-pdo`. Same assertions,
+  other data.
+- A repository created from scratch signs its initial commit with its own identity (`user.name` /
+  `user.email`), even when `GIT_AUTHOR_*` / `GIT_COMMITTER_*` variables are inherited.
+
+## 2.17.0 · Identity and rights seams
+
+`pdo-extension-api` goes to **0.8.0**: additions only, an extension 0.1 to 0.7 compiles and
+runs as is (`OLDEST_COMPATIBLE_API_VERSION` stays `0.1.0`). Detail: the decision record
+(amendments) and `docs/reference/extension-api.md`.
+
+- **Projects of an Operation**: an `Operation` carries `projects` (empty: outside any Project).
+  The core fills it in: a Run, its nodes, its sessions and its Review comments are in the
+  Project that owns the primary repository of the Run; a Project in itself; a repository in its
+  Project; the rest outside any Project. On the wire (`/ws`, `on_event`), an Operation gains
+  `"projects": [...]`. An extension fills `projects` for its own Resources. A repository
+  written another way (`/repo/`, `/repo/.`, a link to `/repo`) stays in the Project of `/repo`.
+- **Resource catalogue**: the `Manifest` declares the Resources of an extension
+  (`with_resource(ResourceDeclaration)`); `GET /resources` and `Host::catalogue()` return the
+  19 Resources of the core (label, help, verbs) then those of the extensions.
+- `Runs::authorize`, `Review::authorize` and the session use cases that authorize become
+  `async` (they read the Project of a Run); these workspace-internal APIs are not in the
+  contract.
+- **Run creator**: `RunStarted` freezes `created_by` (the Actor of `run` × `create`, the Trigger
+  for a fire) and, for a triggered Run, `trigger_editor` (the Last editor of the Trigger). Both
+  are in `GET /runs/<id>`; `created_by` also in `GET /runs`. The Info tab of a Run
+  displays "Created by" (a Trigger by its name). A Trigger stores `last_editor` (column added to `triggers`), updated
+  on each creation and `PATCH`, displayed in its detail.
+- **Node launch**: new hooks `Extension::node_env` (variables of an agent or a
+  script, host and sandbox, resume included; a core variable is never overwritten) and
+  `Extension::node_preamble` (text at the head of the preamble of an agent). `NodeLaunch` gives them the
+  Run, the Node, the creator, the Trigger and its last editor, the Project.
+- **`CLAUDE_CONFIG_DIR`** provided by an extension: frozen on the `NodeStarted`
+  (`claude_config_dir`), the cost and the liveness of the NodeRun read its transcripts below it.
+- **Suspended Trigger**: hook `Extension::trigger_suspension`. A suspended Trigger no longer fires
+  (`skipped-suspended` in its history, `409` on "Run now", which names the Trigger and the reason); `GET /triggers` returns it with
+  `suspension: {extension, reason}`, the UI shows it with the switch off, an amber
+  "suspended" chip (which moves under the name when the column is narrow, and truncates on hover rather than
+  going under the actions), the reason in a tooltip and
+  in the detail.
+- Extension context: `trigger/item` and `trigger/item/menu` receive `last_editor` and
+  `suspension`; `run/info` receives `created_by` and `trigger_editor`.
+- The test extension of the core (the demo daemon of the Feature Paths) learns to inject
+  variables (`PDO_TEST_NODE_ENV`, `PUT /ext/test/launch`), a preamble
+  (`PDO_TEST_NODE_PREAMBLE`) and to suspend a Trigger (`PUT /ext/test/suspensions`).
+- **Authorized reads**: new verb `read` (`Verb::Read`). Listing and viewing a Run
+  (every `GET /runs/{id}...` read), listing and viewing a Project, browsing the disk
+  (`GET /fs/browse`, `repository` × `read`) go through the Operation authorization: when refused, an
+  entity disappears from the lists, its detail answers `403`. `/ws` relays to a connection only the
+  events of the Runs its Actor can read (creation included; a `trigger_fired` arrives there without
+  the `run_id` of an unreadable Run). **Breaking for an extension** that refused every
+  Operation without looking at the verb: it now also hides Runs and Projects.
+- **Authorization question**: `POST /authorize {"operations": [...]}` returns one decision
+  per Operation without executing anything; an `Operation` deserializes. The New Run form uses it
+  (magnifier hidden, repositories grouped by permitted Project, "N Project(s) hidden", "New Run" disabled
+  when no Project allows it, question asked again every 15 s and when the window regains focus
+  as long as it is, prefill limited to the proposed repositories); the `run/new` context gains
+  `targetProject`. `GET /repos/recent` now lists only the repositories of readable Runs. Measured:
+  500 Runs listed in ~35 ms (optimized build) with an extension that authorizes.
+- **Admission of a request** (`Extension::admit`): an extension can refuse (`401`
+  `unauthenticated`) or redirect to its login page a request that no extension
+  identified, on all routes, `/ws` and PTYs included, never on the interface files.
+  The interface follows the redirect before rendering anything (`next=` brings back
+  the deep link, or the open Run when the session is lost along the way). Without an extension
+  that asks for it, nothing changes.
+- **`PDO_TOKEN`**: every CLI command that talks to the daemon sends it as
+  `Authorization: Bearer`. New command `pdo run list [--json]`. An admission refusal reads
+  in the same words everywhere, `pdo run create` included.
+- **Display name of an Actor** (`Extension::display_name`, `Host::display_name`,
+  `GET /actors/me`, `POST /actors/display`, `useCurrentActor` / `useActorDisplay` of the shared
+  module); the audit log (`GET /audit`) returns `actor` and `actor_display` (column `actor`
+  added to `audit_log`, without backfill: old rows have no Actor); the row of a
+  Run names its creator when an extension names it.
+- New UI location `topbar/account` (Decoration, after Settings) for the avatar menu.
+- New top-level routes `/actors/*`: a reverse proxy that filters by prefix must
+  let them through.
+
+## 2.16.0 · Deep link to a Run, core factory out of GitHub issues
+
+No crate change: `pdo-extension-api` stays at **0.7.0**. No daemon change.
+
+- `#/runs/<run_id>` is a core deep link: following it closes the open extension page,
+  selects the Run in the list and opens its detail. It works from the address bar, a markdown
+  link, a page that writes `location.hash`, and `CommandHost.open`, which accepts it in addition
+  to `#/ext/...`. An unknown Run shows an error toast and changes nothing. Reference:
+  `docs/reference/extension-ui.md`, "Toward a Run".
+- The core factory leaves GitHub issues: its business and technical tracking moves into a
+  tool of the instance (dev tooling, `docs/agents/`), no more `gh issue` or `Closes` references
+  for new work. GitHub issues still open stay there until they are closed.
+
+## 2.15.0 · Overview tour, on a real Run of script nodes
+
+No API change: `pdo-extension-api` stays at **0.7.0**. No daemon change.
+
+- New *Overview* tour, first in the welcome modal and in Settings > Tutorials;
+  the full tour chains *Overview* -> *First run* -> *First pipeline*. It works without a harness.
+- The intro card prepares the training repository, the `tutorial-overview` pipeline (layout
+  of `implement-review`, `script` nodes), a sample Trigger whose guard always refuses,
+  and a Run awaited until `completed`; replaying reuses the last finished, non-archived Run. *Start*
+  stays inactive until then.
+- A 17-step visit, including 7 gestures that only advance on the observed state: Run, implementer
+  (outputs, frozen terminal), edge reviewer -> End, Start, real archiving (skippable), Triggers,
+  Pipelines. Settings and Stats are highlighted without being opened. The canvas is read-only
+  during the tour.
+- The sample Trigger is deleted on any exit from the tour (end, abandon, chaining of the full
+  tour); a cleanup failure is reported on the displayed card. The pipeline and the Run stay.
+- The third Happy Path now starts with *Overview*.
+
+## 2.14.0 · Pipeline info as the only metadata surface, right panel collapsed
+
+No API change: `pdo-extension-api` stays at **0.7.0**.
+
+- Pipeline info (`i` in the toolbar) becomes the only surface for the metadata of a pipeline.
+  On a template, the Info tab shows Identity (Name, Version, Prompt required), Variables,
+  Canvas (Global / S / M / L grid) and Stats; each change marks the tab unsaved, can be
+  undone, appears in the YAML and is written on Save. On a Run, active or archived,
+  the same values are read-only. The fake "Description" block disappears.
+- Removed: the Pipeline Inspector. An empty selection on a template shows nothing on the right.
+- The right panel collapses when it has nothing to show (template with no selection and
+  Pipeline info closed, home with no tab): the canvas takes the full width and the handle is
+  hidden. It reopens at once at the last chosen width as soon as some content asks for it; the
+  collapse never overwrites the persisted width. No manual collapse. A Run with no selection keeps
+  its panel, an archived Run its "Run archived" state.
+
+## 2.13.0 · Provisioning block collapsed, explained and diagnosable
+
+No API change: `pdo-extension-api` stays at **0.7.0**.
+
+- The Provisioning block is collapsed by default where it is secondary (New Run, project
+  edit, inspector of an isolated node, detail of a running node). It stays expanded in
+  Settings > Sandbox & worktrees. Collapsed, its header summarizes the rules
+  (`N inherited · M at this level`, or `none`) and a line explains what provisioning is.
+- Each mode (Copy, Hardlink, Symlink) and the level bar carry a tooltip.
+- A mode conflict or a preview error reopens the block by itself, and it no longer collapses as long
+  as the problem remains. In New Run, the disabled Launch button explains why.
+- Removed: the "Configure worktree provisioning..." button of project edit and the
+  "Configure / Hide provisioning" toggle of the node inspector, replaced by the collapsible block.
+
+## 2.12.0 · Merge node removed, convergence is carried by any node
+
+No API change: `pdo-extension-api` stays at **0.7.0**. The Merge node is removed.
+
+- The `merge` node type disappears from the editor, the model and the runtime. Convergence is
+  carried by **any node**: connect several edges to an `agent`, it waits until each branch
+  has fired or is dead, receives only the branches that fired and finds their code on the branch of the
+  Run. The toolbar no longer has a Merge button.
+- A YAML that still contains `type: merge` loads: the node becomes an isolated `agent`, with the
+  ordinary "unknown node type" warning, and keeps its `branches` / `merged` ports. No alias, no
+  `pdo migrate` rule.
+- Only behavior difference: a convergence node whose branches are all dead is
+  now skipped (the old Merge was excluded from auto-skip).
+- The automatic merge resolver, dead in production since an earlier decision, is removed (`merge-resolver`
+  prompt, `merge_resolution_failed` / `merge_resolver_*` refusals, "fan-out without
+  Merge" lint, Merge advice of the importer). The TypeScript contract loses `MergeResolverInfo` and the
+  `merge_resolver` field of `RunState`. The `MergeResolver*` events of old Runs stay
+  readable: these Runs reopen, are costed and keep their Infrastructure row in Stats.
+- A merge-back conflict puts the node in Interrupted; its banner now says "Merge-back
+  conflict" instead of "Session died".
+- Canvas: an auto edge that leaves on the right toward a target located behind (typically the
+  output without `side` of an old Merge, above its End) no longer crosses its source card.
+  It leaves through a leg on the output side and goes around the card.
+
+## 2.11.0 · Leaving a terminal writes nothing to it, node terminal enlarged in an overlay
+
+No API change: `pdo-extension-api` stays at **0.7.0**. Closing a terminal (switching
+node, closing the run Shell) no longer writes anything into the tmux session: the Claude Code input
+in progress stays intact on one line and a detached shell survives.
+"Expand terminal" opens the enlarged terminal: the same session, without remounting, in an overlay
+16 px from the edges on a darkened background, with a name · iteration · status bar, a frame in the color of
+the status and the compact completion gestures in `awaiting_user`. You leave it with Minimize, Esc
+outside the terminal or a click on the background; the enlarged state is never persisted.
+
+## 2.10.1 · Closable secondary panel, modals bounded to the window
+
+No API change: `pdo-extension-api` stays at **0.7.0**. The secondary panel of the
+full-window shell (Stats > Cost > Pricing details, Settings > Skills bank) opens
+under the header, which stays visible, with a title, the Esc hint and a ✕. "Pricing details"
+becomes a toggle. The Edit project, agent profile, loops destruction and
+tab closing modals are bounded to 85% of the window height: title and actions stay
+visible, only the body scrolls.
+
+## 2.10.0 · One-click copy of the raw content of an output
+
+No API change: `pdo-extension-api` stays at **0.7.0**. In the detail of a node, a
+"Copy raw file" button appears on the port row of an output (hover or keyboard focus) and
+in the header of the artifact modal. It copies the raw file of the displayed iteration
+(frontmatter included, markdown not rendered, source for an html output), including on an
+archived Run, and displays "Copied!" or "Copy failed" with the reason in a tooltip. No button on
+image outputs (ported from core 1.114.0).
+
+## 2.9.0 · Editor: edge by drag only, Assistant and Info exclusive
+
+No API change: `pdo-extension-api` stays at **0.7.0**. Gesture change on the editing
+canvas: an edge is now born only from a drag from the border of a
+node, now 4.5 px thick. Clicking a border then another node no longer connects anything: the
+click selects the node. On a template, the "agent" glyph and `i` of the toolbar are
+exclusive and follow the displayed tab of the Pipeline info panel.
+
+## 2.8.0 · README media configurable by a config
+
+No API change: `pdo-extension-api` stays at **0.7.0**. The README media tooling
+is set by a config (binary of the demo instance, Scenes, fixture,
+seeding, selection, destination, Playwright resolution): another repo calls it from
+a checkout of the core, `make readme-media CONFIG=<file>` then
+`make readme-media-publish CONFIG=<file>` (reference: `scripts/readme-media/README.md`).
+The core goes through its own config: its commands and its published media do not change.
+`make readme-media-export` / `-import` stay specific to the core and refuse a third-party config.
+
+## 2.7.0 · Location catalogue: tabs, sections, decorations and filters
+
+`pdo-extension-api` goes to **0.7.0**, by addition: an extension written for 0.1 to 0.6 compiles
+and runs unchanged (see the amended decision record; reference: `docs/reference/extension-ui.md`).
+
+- **Tabs**: `node/detail`, `trigger/detail`, `skill/detail`.
+- **Sections**: `project/edit` (at creation as at editing of a Project), `run/new`,
+  `node/config`, `pipeline/config`, `run/info`. A Section of `project/edit` or of `run/new`
+  receives `form` (`SectionForm`): it keeps a draft and applies it in `onSave`, called
+  after the host Save with the saved entity (its id and its Attributes included);
+  `onCancel` on cancel.
+- **Decorations**: `run/item` (line 2 of the right column), `trigger/item` (line 3,
+  under the pipeline name), `pipeline/item`, `canvas/node`, `port/item`, `review/file` (which also accepts the Actions of 2.6.0), `statusbar`.
+  Without a contribution, nothing is rendered.
+- **List filters**: `triggers/filter`, `pipelines/filter`, `projects/filter` (above the
+  Run and Trigger lists, grouped by Project, behind a "Project" label). A
+  filter receives `label`, the declared label of its contribution.
+- **0.1 slots**: `ListFilter` of Triggers, pipelines and Projects, `DetailTab` of a node, a
+  Trigger, a skill and a Project are now rendered (converted to these locations).
+- The tab bar of the info panel of a Run scrolls instead of overflowing.
+
+## 2.6.0 · Action locations, "⋯" row menus, core menus on the shared `DropdownMenu`
+
+`pdo-extension-api` goes to **0.6.0**, by addition: an extension written for 0.1 to 0.5 compiles
+and runs unchanged (see the amended decision record; reference: `docs/reference/extension-ui.md`).
+
+- **Fourteen Action locations**: `runs/header`, `run/item/menu`, `runs/bulk`, `run/toolbar`,
+  `canvas/node/menu`, `canvas/edge/menu`, `node/toolbar`, `trigger/item/menu`,
+  `pipeline/item/menu`, `pipelines/header`, `tab/menu`, `review/toolbar`, `review/file`,
+  `skill/menu`. Each passes on, in addition to the selected Run and its Project, what is at stake
+  there (`entity`, `selection`, `pipeline`, `review`).
+- **"⋯" menu** on Run, Trigger and Pipeline rows: the verbs of the row, one
+  group per extension, then the destructive entry.
+- **Context menus** of the canvas, the tab bar and the skills tree on the
+  shared `DropdownMenu`, same entries and same behavior; a disabled entry there is
+  `aria-disabled` (keyboard focusable) instead of a native `disabled`.
+
+## 2.5.1 · Fix: the v2.5.0 tag does not compile
+
+The merge of a change into `main` (v2.5.0) called `self.registered` instead of
+`self.registry.registered` in `Extensions::skills` (`pdo-kernel`): the crate did not
+compile, so neither did any consumer of the tag. No API change:
+`pdo-extension-api` stays at **0.5.0**. Pin `v2.5.1`, never `v2.5.0`.
+
+## 2.5.0 · Agent surface: `pdo ext <id>` and extension skills
+
+`pdo-extension-api` goes to **0.5.0**, by addition: an extension written for 0.1 to 0.4
+compiles and runs unchanged if it does not use the new hooks
+(see the amended decision record).
+
+- **`pdo ext <id> <args...>`**: the CLI of an extension, relayed by the daemon (`POST
+  /ext-cli/<id>`). Arguments and flags as is, standard input (pipe or file only),
+  working directory, and identity of the node session: the extension sees `Actor::Agent{run, node}`
+  from a session, the local Operator otherwise. Stdout and stderr come back byte for byte.
+  Codes: those of the extension; `1` daemon unreachable or extension failing; `127` no
+  extension `<id>`, or no CLI. `pdo ext` alone lists the extensions that have one.
+- **Hooks `cli()` / `run_cli()`** (`CliSpec`, `CliInvocation`, `CliOutput`, `EXIT_NO_CLI`) and
+  **`skills()`** (`ExtensionSkill`, `SkillFile`), neutral by default. `GET /ext` carries a `cli`
+  field (`{summary}`) for each extension that declares one.
+- **Extension skills**: seeded at each start in the Skills bank, in a folder
+  named after the extension, under the id `ext-<extension>-<name>`, locked and marked
+  `extension: {id, version}` (badge "Extension `<id>`" and version in the detail). Rewritten
+  when the version of the extension or their content changes, removed when it no longer provides them,
+  delivered to worktrees like any selected skill. Two additive columns on
+  `skills` (`extension`, `extension_version`): an existing database opens as is.
+- `pdo complete`, `pdo ext` and the whole agent CLI still do not build the extensions.
+
+## 2.4.0 · UI locations hosted by an extension
+
+`pdo-extension-api` goes to **0.4.0**, by addition: an extension written for 0.1, 0.2 or 0.3
+compiles and runs unchanged (see the amended decision record; reference: `docs/reference/extension-ui.md`
+§ *Hosted locations*).
+
+- **Hosted locations** (`HostedLocation`, `UiContributions::host`): an extension declares
+  its own locations, `<id>/<name>`, with the accepted contribution type (`UiElementKind`)
+  and the shape of their context. Others contribute to them through `UiLocation::Hosted("<id>/<name>")`.
+  A contribution to the location of an absent extension is ignored.
+- **Shared module `@pdo/extension-ui`**, in the import map of the front next to React:
+  `useHostedContributions`, `HostedContribution`, `HostedContributions`, `runHostedCommand`. A
+  bundle that imports it declares so (`UiContributions::importing_ui_module`); another major
+  is not loaded, with a banner.
+- **Wire of `GET /ext`**: `ui.locations` and `ui.ui_module_major` are added.
+## 2.3.0 · Interoperability: extension resource and Host
+
+`pdo-extension-api` moves to **0.3.0**. An extension routes its own mutations through the core's
+mechanisms, so that two extensions installed together interoperate without naming each other.
+
+- **`ResourceKind::Extension { extension, kind }`** (`ResourceKind::extension("test", "note")`),
+  named `test/note` on the wire. Core resources keep their names (`agent_profile`...).
+- **`Host`**, in `ExtensionContext::host` at `start`: `authorize` (all extensions, the emitting
+  one included; a panic denies), `publish(ExtensionEvent)` (on `/ws` and to the other
+  extensions, envelope `{"type": "extension_event", "extension", "name", "payload"}`),
+  `applied(OperationApplied)` after a successful mutation, `on_create` (the Attributes of the other
+  extensions, prefixed, to be stored by the extension). `NeutralHost` for an extension's tests.
+- **`Denied`** and `OPERATION_REFUSED` move into the API (`Authorization::into_result`): an
+  extension answers its denials with the core's `403`.
+- **`OperationApplied` is broadcast on `/ws`** as soon as an extension is loaded. Without an
+  extension, `/ws` does not change.
+
+### Breaking for an extension (0.2 -> 0.3)
+
+- `ResourceKind` is no longer `Copy`: clone where a copy used to be enough (`.clone()`, `.cloned()`).
+  Its serialization is now written by hand; the names of the core resources do not change.
+- `ExtensionContext` carries a `host` field and no longer implements its traits through `derive`
+  (same behavior, equality included). `ExtensionContext::new(data_dir)` remains valid.
+- An extension that did not rely on `Copy` compiles unchanged and
+  is still accepted: `OLDEST_COMPATIBLE_API_VERSION` stays at `0.1.0`, since the breakage only
+  affects compilation.
+
+## 2.2.0 · UI location catalog, Commands, `when`, `topbar/end`, deep links
+
+`pdo-extension-api` moves to **0.2.0**, by addition: an extension written for 0.1 compiles and
+runs unchanged (reference: `docs/reference/extension-ui.md`).
+
+- **Catalog of named locations** (`UiLocation`): `topbar/start`, `topbar/end`, `settings`,
+  `runs/filter`, `run/detail`. An extension declares `UiContribution`s there (Page, Action,
+  Tab, Section, Decoration, list filter) through `UiContributions::contribute`. The four
+  0.1 slots (`UiSlot`) are still accepted and are converted to their location.
+- **Commands** (`UiCommand`, `UiContributions::command`) and **`when` clauses** (`When`).
+- **Context**: every component receives `context`, with the selected Run and its Project.
+- **`topbar/end`**: icons before Stats, full-screen Page without a rail; `FullWindowShell` has an
+  optional rail.
+- **Deep links** `#/ext/<id>/<location>/<path>`, clickable in all markdown renderings of the
+  core.
+- **API compatibility**: the API declares `OLDEST_COMPATIBLE_API_VERSION`; the daemon accepts an
+  extension that requires a version between this one (0.1.0) and its own, instead of only the same
+  minor in 0.x.
+- **Wire format of `GET /ext`**: `ui.slots` becomes `ui.contributions` (the 0.1 slots already
+  converted) and `ui.commands`. Only the front end of the same binary read it.
+
+## 2.1.0 · Third-party distributions: `main_with`, prebuilt frontend, update channel, 404 under `/ext`
+
+Seams for third-party distributions. Backward-compatible addition
+to the contract of `crates/pdo`: the CLI, its exit codes and the daemon do not
+change (`--help` output identical for every subcommand). `pdo-extension-api` stays
+at 0.1.1.
+
+### `pdo::main_with(extensions)`
+
+- **`pdo::main_with(extensions)`**, covered by semver alongside `serve`, `Config` and
+  `Daemon`: command-line parsing, dispatch, exit code. The vanilla binary is now just
+  `pdo::main_with(Vec::new)`. A distribution writes the same `main` with its extension factory
+  and depends only on `pdo-daemon` and `pdo-extension-api`: no more copied dispatch, no more
+  crates outside semver to pin.
+- **`pdo::main_with_config(extensions, configure)`**: same, with `configure` applied to the
+  `Config` of `pdo daemon` before `serve`. This is how a distribution declares its
+  `ReleaseChannel`.
+- The factory (`impl FnOnce() -> Vec<Box<dyn Extension>>`) is called only by `pdo daemon` and
+  `pdo service`, once. The agent CLI (`complete`, `fail`, `wait-user`, `run create`...) never
+  builds the extensions.
+- **`pdo service` goes through the binary's extensions**: `install` and
+  `uninstall` are subject to their Operation authorization. Without an extension, nothing changes.
+- The exit codes of `pdo wait-user` (`3`) and `pdo run wait` (`2`) now have their tests
+  at the binary level, like those of `pdo complete`.
+
+### Embedded frontend without Node on the distribution side
+
+- `crates/pdo/build.rs` builds the frontend into `$OUT_DIR/frontend-dist`, never again into
+  `frontend/dist` nor into the cargo checkout. **`PDO_FRONTEND_DIST=<absolute path>`** embeds an
+  already built `dist/`, without Node or pnpm: this is the path for a git tag dependency.
+- Without `frontend/node_modules` or `PDO_FRONTEND_DIST`, the build fails with a message that names
+  both remedies, instead of relying on pnpm's auto-install.
+- **Breaking for core development**: `PDO_SKIP_FRONTEND_BUILD` (non-empty value) no longer embeds
+  `frontend/dist`, but what `OUT_DIR` already contains. To embed `frontend/dist`, use
+  `PDO_FRONTEND_DIST=$PWD/frontend/dist`. A release build refuses an empty frontend.
+
+### `/ext/<id>` of an absent extension answers 404
+
+- The whole `/ext/` prefix answers a JSON `404` when the extension is not loaded or does not serve
+  a route (`{"error":"extension_not_found","message":...,"id":...}`), whatever the method,
+  instead of the SPA's HTML with `200`. A path that a loaded extension does not serve answers
+  `{"error":"not_found",...}` (the old body `{"error":"not found"}` is gone).
+
+### Configurable update channel
+
+- **`Config::with_release_channel(ReleaseChannel { name, installed_version, source_url,
+  upgrade_command })`**, covered by semver: a distribution declares its source, its version and
+  its upgrade command. Without a command, Update is refused (`409`); without a source, no
+  check is made.
+- Vanilla v2 no longer pointed to itself: the source and the installer targeted the v1 repository,
+  and Update ran the v1 formula. The Homebrew command becomes `brew update && brew upgrade
+  Loulen/pdo-v2/pdo-v2`, and **no check is made by default** as long as `PDO-v2` does not
+  publish releases (`PDO_UPDATE_SOURCE_URL` remains the override).
+- `GET /update` adds `channel_name` and `core_version`; `source`, `source_url` and
+  `manual_command` can be `null`. The Update button is offered only if a newer version is known
+  and the daemon would accept it.
+
+## 2.0.0 · PDO v2: extensible architecture
+
+First number of the **PDO v2** line, which lives in the private repository `Loulen/PDO-v2` and
+is installed with the `pdo-v2` formula (tap `Loulen/homebrew-pdo-v2`), next to PDO v1 which stays
+on the 1.x line of the public repository. No code change compared to 1.112.1: this major bump
+marks the split of the two lines and the whole story, whose entries 1.109.1 to
+1.112.1 below give the detail.
+
+- The daemon is a hexagonal modular monolith: twelve context crates, `pdo-kernel`,
+  `pdo-extension-api` (extension API 0.1, its own semver) and the composition root `crates/pdo`.
+- The story's issues were recreated in `Loulen/PDO-v2` under new numbers. Commit messages and the
+  entries below keep the old numbers.
+- Only breaking point for the operator, already noted in 1.112.1: `RUST_LOG` targets in
+  `pdo_daemon...` no longer match anything (see `docs/reference/runbook.md`).
+
+## 1.112.1 · Contract: legacy crate, snapshot suite and ratchet removed
+
+Refactor with no change visible to the operator: the HTTP/WS contract does not change. The
+temporary snapshot suite was run one last time, green, on the final tree before being
+removed. Only change to note: **`RUST_LOG` targets in `pdo_daemon...` no longer match
+anything.** The old target -> new target table is in
+[`docs/reference/runbook.md`](docs/reference/runbook.md). The default filter goes from
+`pdo_daemon=info,info` to `info`, which comes to the same thing.
+
+- The legacy crate (`crates/pdo-daemon`, package `pdo-legacy`) no longer exists. Only the
+  twelve context crates, `pdo-kernel`, `pdo-extension-api` and the composition root
+  `crates/pdo` remain. The remainder was distributed as follows:
+  - into the composition root: daemon startup (`src/daemon/`: base, fix-ups, background loops,
+    handle and its test seams), the wiring of each context (`src/contexts/`, one
+    file per context), the CLI (`src/cli/`), the embedded SPA (`src/spa.rs`, and the `build.rs`
+    that builds the front end), and the ports that read several contexts (`src/ports/`: the
+    Run facts of the session context, the mounts that an archiving releases, the Runs seen by the
+    platform, the Trigger fires counted by Stats). The cyclic global state (`AppState`)
+    is gone: a context wired after the port that reads it is reached through a `Late` handle;
+  - into `pdo-run`: the Runs that use a pipeline (`adapters/pipeline_runs.rs`);
+  - into `pdo-settings`: who names a skill, who names a staging profile, and the real type of
+    what a Project carries (`adapters/contexts/`).
+- The `crates/pdo/tests/snapshots_temporary/` suite (8 scenarios and the test of its masks),
+  `scripts/layout-ratchet.sh` and its CI step are removed, as is the `insta` dependency.
+- Tests: no tier 4 test lost. The internal tests of the legacy crate move into the
+  composition root, against the contexts wired the way the daemon wires them on an in-memory
+  database (`contexts::testing`): declared wait, pane, `/sessions` gauges, reaper doctrine,
+  historical `stale` Run (`ports/session/`), CLI (`cli/`), nested posture and relaunch command
+  (`daemon/env.rs`), announced URL (`daemon/origins.rs`), SPA (`spa.rs`), Trigger fires
+  (`ports/trigger_fires.rs`); the type of the Project settings moves into `pdo-settings`. The two
+  service health tests no longer force the supervisor (the probe reads it from the
+  environment): they check that the relayed value is the platform's. The architecture test
+  now checks that it covers exactly the twelve contexts.
+- The baseline of the 400-line test is empty. These were split: `App.tsx` (state hooks and
+  panels of `app/`), `NodeInspector` (sections under `pipeline/components/nodeInspector/`),
+  `EdgeDetailPanel`, `OrthogonalEdge`, `editNodeDerivation`, `anchorSide`, `serializePipeline`,
+  and the tours (`lib/tour.ts`, `lib/tours/*`, `TourCards`, `useTour`); the `lib.rs` of the
+  legacy crate was dissolved.
+- Front end: the old flat folder `frontend/src/components/` is gone. The pipeline editor
+  joins `pipeline/components/`, the tours `app/tour/`, the left panel `app/`, the generic
+  components `shared/ui/` (`FullWindowShell`, `SelectControl`, `ConfirmDeleteModal`,
+  `ImageLightbox`, `MermaidDiagram`, `ThemeSelect`), `ServiceHealthIndicator` `platform/` and
+  `AgentControl` `settings/`.
+- Docs: `docs/agents/module-layout.md` describes the final tree (the "during the migration"
+  section is removed), `CONTRIBUTING.md` says where the code lives, the runbook is new
+  (`docs/reference/runbook.md`), and the Vite proxy says where the router lives.
+- Playwright specs: 45 of them were already failing on the integration branch (same
+  list before and after this ticket). They pass again, with no product change except one
+  fix:
+  - the harness: the "Library" tab of the left panel has been called "Pipelines" for a while,
+    and the welcome modal of the guided tour, which any database without a Run displays, is marked
+    as already offered (`storageState` of `playwright.config.ts`);
+  - specs that followed an old UI: the header of a branch group carries its
+    counter, the attachments field no longer has an `accept` attribute, the Pipeline Manager
+    starts on demand, the YAML tab shows the saved document, the control line of the
+    review is chosen in the README as it is;
+  - a fix: an automatic edge between two cards in a column left through the
+    right side and went back through its source card; drawn above the nodes, it
+    captured the click on the node name. It now goes around its source card through the shortest
+    corridor (automatic routes only, nothing is persisted).
+
+## 1.112.0 · Extension API 0.1.1: entity Attributes, events, `/ext/` routes and UI locations
+
+Feature addition, backward-compatible: without an extension, the HTTP/WS contract does not change
+(identical temporary snapshots, no UI element added). The only additions are those
+opened by the extension API.
+
+- **Entity attributes.** When a Run, a Project, an agent profile, a Trigger or a library
+  pipeline is created, extensions set their attributes
+  (`on_create`), prefixed by their id (`<id>/<key>`) and stored outside the event log (table
+  `entity_attributes`). They are returned with the entity (`attributes`, absent when empty), and
+  `GET /runs`, `/projects`, `/settings/agent-profiles`, `/triggers` and `/pipelines` accept
+  `?attr.<id>/<key>=<value>`.
+- **Events.** `on_event` receives the exact JSON of `/ws`, plus `operation_applied`
+  (`{actor, operation, entity}`) after every authorized and successful mutation. Delivery is
+  asynchronous and isolated: one thread and one bounded queue per extension, so that a
+  slow or panicking extension never delays or blocks the core.
+- **Routes and data.** An extension's routes are mounted under `/ext/<id>/` (prefix
+  added to the Vite proxy); `GET /ext` lists the extensions and their UI contributions. Each
+  extension receives its data folder `~/.pdo/extensions/<id>/` (new `start` hook).
+- **UI locations** (`frontend/src/shared/extensions/`): navigation entry (top bar),
+  settings panel ("Extensions" entry of Settings), Run list filter,
+  Run detail tab. The front end imports the extension's ES bundle at runtime and shares
+  its React with it through an import map; a bundle of another React major is not loaded and
+  a banner reports it.
+- `pdo-extension-api` moves to 0.1.1 (backward-compatible additions: `start`/`ExtensionContext`,
+  `UiContributions` and its `UiSlot`s, `OperationApplied`).
+
+## 1.111.15 · `settings` context: instance configuration hub dissolved, agent profiles
+
+Refactor with no change visible to the operator: the HTTP/WS contract does not change (HTTP
+and WS snapshots identical; `GET/PUT /settings` and `/settings/agent-profiles*` answer as
+before, byte for byte, without an extension).
+
+- The `instance_config` hub is dissolved: each context owns its instance defaults (environment
+  variable, built-in value, `stored -> env -> default` resolver and disclosure on the
+  page) in its own `adapters/instance_defaults.rs`: `pdo-run` (session cap,
+  auto-completion, naming, `auto_fail`, manager, attachment budget), `pdo-session` (reaper and
+  assistant TTL, default model and harness), `pdo-trigger` (guard timeout),
+  `pdo-review`, `pdo-platform`, `pdo-sandbox` (default sandbox, staging profiles, Docker).
+  The kernel gains the common shape of this disclosure (`instance_default::Disclosed`).
+- The context leaves `pdo-legacy` for `crates/pdo-settings`: it keeps the stored tier (the
+  singleton row) and assembles the page from the contexts' sections. It depends on the other
+  contexts, never the reverse; it implements the ports through which the upstream contexts read
+  their settings (`InstanceSettings`, `ReviewSettings`, `TriggerSettings`,
+  `UpdateCheckSetting`), wired by the composition root.
+- Each mutation is a use case that receives the Actor and first consults the Operation
+  authorization: editing the settings (`instance_settings` x `update`), creating, editing
+  and deleting an agent profile (`agent_profile` x `create` / `update` / `delete`).
+  The startup warning about removed sandbox settings and the preheating of the harness
+  catalogs are daemon transitions and ask for nothing.
+- Tests: use cases against in-memory ports (tier 2) replace the `oneshot` tests of the
+  legacy crate (`/settings`); the store tests (`instance_config`, `agent_profile`) and the
+  page tests through the context's router move to tier 3 (`crates/pdo-settings/tests/adapters/`).
+  The coverage of extension denials extends to the four mutation routes of the context. The
+  legacy crate's router no longer declares any route.
+- The `RUST_LOG` targets change with the code: `pdo_daemon` (settings handlers,
+  startup warning) becomes `pdo_settings::application` (`::boot`,
+  `::agent_profiles::read`...).
+- Front end: the Settings surface (split by section under 400 lines), the agent profiles panel and modal,
+  their stores, models and API move into `frontend/src/settings/`.
+
+## 1.111.14 · `trigger` context: cron, guard, fires
+
+Refactor with no change visible to the operator: the HTTP/WS contract does not change (HTTP
+and WS snapshots identical; `/triggers*` answers as before, byte for byte, without an extension).
+
+- Triggers leave `pdo-legacy` for `pdo-trigger`: the Trigger and its history, the cron,
+  the next fire, the fire decision and the plan of a tick, the guard bounds in
+  `domain/`; one use case per gesture in `application/`; SQLite, `sh`, the heartbeat, the routes
+  and what the context reads from the others in `adapters/`.
+- Each mutation first consults the Operation authorization: creation, editing, deletion
+  (`trigger` x `create` / `update` / `delete`), global pause (`trigger` x `pause`), guard
+  dry run (`trigger` x `test_guard`). A fire is an Operation (`trigger` x `fire`): "Run now"
+  requests it with the request's Actor (denial: `403 operation_refused` before any effect), a
+  tick with the `Trigger` Actor (denial: no Run, the slot is consumed, an `error` row in the
+  history carries the reason). Deciding that a Trigger is due asks for nothing.
+- `GET /stale/health` is the Runs liveness sweep and stays in `pdo-run`.
+- Tests: use cases against in-memory ports (tier 2) replace the `oneshot` tests of the
+  legacy crate (`/triggers*` routes: creation and audit, repoint, `target_repo` refused, pause,
+  deletion, guard dry run); the store tests (`trigger_store`) and the pre-cut fetch
+  move to tier 3 (`crates/pdo-trigger/tests/adapters/`); the guard timeout precedence
+  becomes a pure test, without environment mutation. The coverage of extension denials
+  extends to the six Trigger mutation routes, and a tier 4 test proves that a cron fire
+  asks for authorization as the `Trigger` Actor.
+- The `RUST_LOG` targets change with the code: `pdo_daemon` (Trigger handlers and tick)
+  becomes `pdo_trigger::application` (`::fire`, `::fire::tick`...), `pdo_daemon::guard_runner`
+  becomes `pdo_trigger::adapters::guard_shell`.
+- Front end: the Triggers tab, the detail panel, the guard verdict and output, the cron presets
+  and their API move into `frontend/src/trigger/`, split under 400 lines per file.
+
+## 1.111.13 · `stats` context: Overview, Cost, Performance, absorptions and price sync
+
+Refactor with no change visible to the operator: the HTTP/WS contract does not change (HTTP
+and WS snapshots identical; `/stats/overview`, `/stats/cost`, `/stats/performance`,
+`/stats/absorptions`, `/stats/absorptions/member` and `/settings/cost-prices/sync` answer
+as before, byte for byte, without an extension).
+
+- The context leaves `pdo-legacy` for `crates/pdo-stats`: the three folds and their
+  accumulators, the R-7 median and Tukey fences, the absorption rules (keys, resolution
+  order, frozen scope, cascade of a removal) and the normalization of the price source
+  are pure domain. The absorption rules of the decision records do not change.
+- The aggregations read the event journal through the ports of the `run` context (`EventStore`
+  and the new `EventWindows`, whose SQLite adapter carries the indexed queries), never
+  the table directly. The absorptions store no longer reads the `events` table: a Pipeline's
+  history is supplied to it by these ports before the write, which remains a transaction.
+- Each mutation is a use case that receives the Actor and first consults the Operation
+  authorization: Combine (`stats_absorption` x `create`), Uncombine (`stats_absorption` x
+  `delete` on the member), price sync (`price_table` x `sync`). The extension
+  API gains these two resources (`ResourceKind::StatsAbsorption`,
+  `ResourceKind::PriceTable`, minor addition). The price refresh at startup and
+  the absorption born from a rename are daemon transitions and ask for nothing.
+- The Performance memo and the sync lock belong to the context's instance,
+  no longer to a global state.
+- Tests: use cases against in-memory ports (tier 2), the context on its real
+  adapters (SQLite, files, transcripts) driven by its router (tier 3, the internal
+  tests of the legacy crate moved), the coverage of extension denials extended to the three
+  mutation routes.
+- The `RUST_LOG` targets change with the code: `pdo_daemon` (price sync and
+  refresh) becomes `pdo_stats::application::prices`, and the rename
+  `pdo_stats::application::absorptions::record_rename`.
+- Front end: `StatsCharts` (3.8k lines) is split by tab (Overview, Cost, Performance)
+  in `frontend/src/stats/components/charts/`, with `StatsModal`, `StatsAbsorption`,
+  `StatsAbsorptionsPanel`, their hooks, their models and their API (`frontend/src/stats/`).
+
+## 1.111.12 · `review` context: diff, structured diff, review comments
+
+Refactor with no change visible to the operator: the HTTP/WS contract does not change (HTTP
+and WS snapshots identical; `GET /runs/{id}/diff`, `.../diff/structured` and `.../review/comments*`
+answer as before, byte for byte, without an extension).
+
+- A Run's review leaves `pdo-legacy` for its own crate, `crates/pdo-review`: the diff as data
+  and its parser, the comment rules (ids, excerpt, author of a reply, filter, anchor re-map,
+  effect of a reply or a decision, single message to the manager)
+  in `domain/`; one use case per gesture and per read in `application/`, behind three
+  ports (`ReviewRuns` on the `run` context, `ReviewGit` on the git adapter of the `workspace`
+  context, `ReviewSettings` for `review_agent_can_resolve`, still implemented on the legacy side);
+  the routes, the CLI (`pdo review list`, `pdo review reply`) and the adapters in
+  `adapters/`. The composition root wires the context and merges its `router()`.
+- Each gesture first consults the Operation authorization, even before reading the Run: sending
+  (`review_comment` x `create`), reply, resolution, reopening (`review_comment` x `reply`,
+  `resolve`, `reopen` on `<run>/<comment>`). The author of a reply comes from the Actor set
+  by `identify` (the Agent of the manager's or a node's session). A denial answers
+  `403 operation_refused` without writing anything.
+- Front end: the review lives in `frontend/src/review/` (`api/`, `model/`, `store/`,
+  `components/`): the Review page split into stores (Run and pair, diff and re-map, live,
+  layout, state, comment list and gestures) and components (top bar,
+  banners, body), the Diff tab, the cards and the file header, all under 400 lines.
+- Tests: use cases against in-memory ports (`crates/pdo-review/tests/use_cases/`,
+  tier 2), the context on its real adapters (git in a temporary repository, the real journal
+  of the `run` context, `tests/lifecycle/`, tier 3), the coverage of extension denials extended
+  to the four review mutation routes. Moves and removals:
+  - the 16 internal tests of the legacy crate (`run_diff_*`, `structured_diff_*`,
+    `run_refs_lists_deliveries_...`, `default_review_diff_...`, `send_review_comments_*`,
+    `review_reply_*`) are moved as is into `crates/pdo-review/tests/lifecycle/`
+    (`diff.rs`, `comments.rs`);
+  - the unit tests of `structured_diff.rs` (parser) and `review_comments.rs`
+    (ids, excerpt, message, author, filter, re-map) are moved next to their code in
+    `domain/`; those that touched git (`compute_over_a_real_repo`, `compute_worktree_...`,
+    `snapshot_worktree_...`, `ref_and_path_safety`) into `adapters/git.rs`;
+  - `review_agent_can_resolve_stored_beats_env_and_defaults_off` is converted into a pure test of
+    the `stored -> env -> default` resolution (`domain/comments/decision.rs`): it no longer depends
+    on the process environment;
+  - no test is removed.
+- The `RUST_LOG` targets change with the code: the review handlers of `pdo_daemon`
+  become `pdo_review::application::{run_diff, structured_diff, list_comments,
+  send_comments, reply, decide, comment_events}`, the glue to the manager
+  `pdo_review::adapters::runs`.
+
+## 1.111.11 · `run` context, 3/3: Run surfaces and front-end Run views
+
+Refactor with no change visible to the operator: the HTTP/WS contract does not change (HTTP
+and WS snapshots identical; `POST/GET /runs`, `DELETE /runs/{id}`, `reapable`, `children`,
+`artifact`, `file`, `refs`, `source-drift`, the run-scope pipeline, `PATCH repos` and the Pipeline
+Manager answer as before, byte for byte, without an extension).
+
+- The Run surfaces leave `pdo-legacy` for `pdo-run`: `lib.rs` no longer contains any Run
+  handler (a Run's review, its diffs and its comments, waits for the `review` context). Creation
+  is split by step (repositories, pipeline, frozen provisioning and isolation, `RunStarted`
+  payload, the Run on disk, its start).
+- Each mutation is a use case that receives the Actor and first consults the Operation
+  authorization: creation (`run` x `create`), forgetting (`run` x `delete`), repositories
+  (`run` x `edit_repos`), run-scope pipeline (`run` x `edit_pipeline`), Pipeline Manager
+  (`run` x `start_manager` / `stop_manager`). A denial answers `403 operation_refused` before
+  any write. Archiving and `retry_all` remain the consequence of an already authorized command;
+  the `RunSurfaces` port is gone.
+- The cost of a Run (`run_cost`), the price table (its tiers and their reading) and the Run
+  refs join the context; price sync stays with the instance settings. The git reads shared by
+  refs and review move into the `workspace` context (`adapters/git/revisions.rs`).
+- `pdo run create` and `pdo reap` join the context's CLI.
+- Tests: the surfaces' use cases against in-memory ports (tier 2), the internal tests
+  of the legacy crate that covered this code moved into `crates/pdo-run/tests/lifecycle/surfaces/`
+  (tier 3), the coverage of extension denials extended to the six new mutation routes.
+- The `RUST_LOG` targets change with the code (`pdo_daemon` for creation, archiving,
+  forgetting, repositories, the run-scope pipeline and the manager becomes
+  `pdo_run::application::{create_run, archive, forget_run, edit_repos, run_pipeline, manager}`,
+  `pdo_daemon::price_table` becomes `pdo_run::domain::prices`).
+- Front end: the Run list, the launch modal, the node detail, the artifacts, the child
+  Runs, a Run's repositories and their API move into `frontend/src/run/`, split under 400
+  lines per file.
+
+## 1.111.10 · `run` context, 2/3: node scheduler and lifecycle, agent commands
+
+Refactor with no change visible to the operator: the HTTP/WS contract does not change (HTTP
+and WS snapshots identical; the node routes, `/runs/{id}/commands` and `/stale/health` answer
+as before, byte for byte, without an extension).
+
+- The scheduler and the node lifecycle leave `pdo-legacy` for `pdo-run`: the pure
+  scheduler evaluators (`domain/scheduler/`, with the dispatcher, stuck Run detection,
+  the resume choice and the verdict of a Merge), the interpreter and its drivers
+  (`application/scheduler/`), the spawn, the primitives, the prompt, the inputs and outputs, the
+  reap and the reattach of a node (`application/node/`), the resume at startup, the
+  liveness sweep and the preparation of a Run's sandbox. The functions of more than 400 lines
+  (`spawn_node`, the command dispatch, the start primitive, the preamble) are split
+  by step.
+- Each gesture is a use case that receives the Actor set by `identify` (`Agent{run, node}` for
+  the agent CLI) and first consults the Operation authorization: `CompleteNode`,
+  `ReleaseCompletion`, `FailNode`, `SkipNode`, `StartNode`, `StopNode`, `RetryNode` (Operation
+  `node` x action, target `<run>/<node>`) and `RunCommand` (a node command targets its node,
+  the others the Run, after the `410` denial of a forgotten Run and the validation). A denial answers
+  `403 operation_refused` before any write. The scheduler transitions never build any:
+  an extension that refuses everything blocks no Run.
+- The context reads the others through narrow ports (tmux and the declared wait, the Projects, the
+  skill bank, the staging profiles); what remains legacy (the instance settings and
+  the agent profiles, archiving and `retry_all`) is implemented in `run_ports.rs`.
+- The node routes, `/runs/{id}/commands` and `/stale/health` move into the context's
+  `router()`; the agent CLI (`pdo complete`, `fail`, `skip`, `wait-user`, `run wait`) into
+  `adapters/cli/`. The constants `DEFAULT_PORT` / `DEFAULT_DAEMON_URL` move into the kernel,
+  `DEFAULT_PROFILE_ID` into the `harness` context.
+- Tests: use cases against in-memory ports (tier 2), the context on its real
+  adapters driven by its router (`tests/lifecycle/`, the internal tests of the legacy crate
+  that covered this code, moved), unit tests next to their code.
+- The `RUST_LOG` targets change with the code (`pdo_daemon::node_spawn` becomes
+  `pdo_run::application::node::spawn`, etc.; the table is in `docs/agents/module-layout.md`).
+- Front end: the node API (prompt, inputs and outputs, Start / Stop / Retry), completion
+  (`markNodeDone`, `releaseNodeCompletion`), the Pipeline Manager commands and the
+  `useNodeRun` store move into `frontend/src/run/`.
+
+## 1.111.9 · `run` context, 1/3: domain and event store
+
+Refactor with no visible change: the HTTP/WS contract does not change (HTTP and WS snapshots
+identical; `/ws`, `GET /runs/{id}` and `GET /runs/{id}/events` answer as before).
+
+- New crate `pdo-run` (domain / application / adapters), foundation of the context's next two
+  tickets: a Run's events, its state and the projection (pure function, split by
+  event family) leave `pdo-legacy` (`event_log`), with the Run rules
+  (`graph_resolver`, `loop_region`, `edge_router`, `switch_router`, `condition`,
+  `variable_resolver`, `transition_guard`, `admission`, `blackboard`, `input_resolution`,
+  `retry_verdict`, `restart_verdict`, `reap_policy`, `auto_fail`, `completion_refusal`,
+  `child_awaiting`) and the folded part of the review comments.
+- The event log goes behind the `EventStore` port (SQLite adapter). A single use case,
+  `AppendEvent`, lets an event in: transition guard, write, then publication
+  on the kernel bus. It is a transition: it does not consult authorization.
+- The kernel bus carries exactly the JSON of `/ws`; `/ws` reads only from it. The two internal
+  channels (Run events, announcements) become one, sized for both.
+- The HTTP projection of the verdicts (completion, retry, restart) moves into
+  `adapters/http/verdicts/`, and the reading of `PDO_SESSION_CAP` into `adapters/env.rs`: the
+  domain no longer reads HTTP or the environment.
+- What a Run's detail reads from disk (LOC, cost, the Run's pipeline) is a port that the legacy
+  crate implements as long as these contexts live there (`run_ports.rs`).
+- The `RUST_LOG` targets change: `pdo_daemon` (append, `/ws`) becomes
+  `pdo_run::application::append_event` and `pdo_run::adapters::http::ws`, `pdo_daemon::event_log`
+  becomes `pdo_run::domain::projection`.
+- Front end: a Run's API (`fetchRun`, `fetchRunEvents`), the `/ws` stream (`useDaemonSocket`, its
+  frames), the Run selection, the live node choice and the session counter move into
+  `frontend/src/run/`.
+## 1.111.8 · `pipeline` context extracted
+
+Refactor with no visible change: the HTTP/WS contract does not move (identical snapshots; the
+`/pipelines*`, `/library*` and `/nodes/parse` routes answer as before).
+
+- New `pdo-pipeline` crate (domain / application / adapters): the pipeline model and its parsing,
+  the references it makes to itself, loop regions and cycles, the migrator, the portable
+  document, the import of a Claude Code workflow, the node library, the identity of a pipeline
+  (name ⇄ file) and the rules for an edit during a Run leave `pdo-legacy` (`pipeline`,
+  `pipeline_migrator`, `portable_pipeline`, `workflow_importer`, `library_store`,
+  `mutation_validator`, `frontmatter_parser`, `pipeline_watcher`). The instance registry, the
+  library and the watcher are adapters.
+- Every mutation (create, save, rename, duplicate, delete, import a document or a workflow, pin
+  or remove a node from the library) goes through a use case that builds an Operation
+  (`pipeline` or `library_entry`) and calls authorization.
+- A pipeline's active Runs and the Stats absorption of a rename are ports that the legacy crate
+  implements as long as those contexts live there (`pipeline_ports.rs`).
+- `pipeline_semantics` and the `library_store::pipelines` module, which only served tests (the
+  former pipeline library, removed earlier), are deleted along with their tests.
+- The `RUST_LOG` targets change: `pdo_daemon::pipeline_watcher` becomes
+  `pdo_pipeline::adapters::watcher`, `pdo_daemon::pipeline_migrator` becomes
+  `pdo_pipeline::adapters::fs_migration`, `pdo_daemon` (pipeline handlers) becomes
+  `pdo_pipeline::application`.
+- Front end: the API, the editor store, the canvas, the info panel and the Pipelines tab move to
+  `frontend/src/pipeline/`, split into files of at most 400 lines.
+
+## 1.111.7 · Extension API: identity and Operation authorization
+
+Without an extension, nothing changes: the HTTP/WS contract is identical (unchanged snapshots).
+
+- `serve(config, extensions)` registers extensions after checking their manifest: a valid and
+  unique id, and a compatible extension API version (`Manifest::api_version`, by default the one
+  the extension is compiled against). Otherwise, the daemon refuses to start and says why.
+- `identify` sets the Actor chosen by an extension; `authorize` is consulted by every mutation
+  use case of the extracted contexts, never by the transitions the daemon performs on its own.
+- A refused Operation answers `403` with `{"error": "operation_refused", "message", "reason"}`
+  (the convention of the decision record). The `403` refusal responses of `platform`,
+  `workspace`, `session`, `sandbox` and `skill` change from `{"error": "operation refused: …"}`
+  to this body; the `skill` refusal loses its `"code": "denied"` field along the way (the
+  `403` `locked` of the bundled skill keeps its own). The UI shows the reason in the gesture's
+  existing error. A panic in `authorize` counts as a refusal and leaves a log line that names
+  the Actor (for an identified Actor: `<namespace>:<id>`).
+- Naming a group is **a single** `Create` Operation: `POST /projects` accepts an optional
+  `members` field (the group's paths), attached at creation; a path that is already a member of
+  another Project refuses the whole creation (`409` naming the owner, nothing is written).
+  Without `members`, the request and the response are unchanged. The group pencil no longer
+  sends an empty `PATCH` after creation, and if a later step fails, it keeps the created Project
+  (a new attempt edits it, with no duplicate).
+
+## 1.111.6 · `skill` context extracted
+
+Refactor with no visible change: the HTTP/WS contract does not move (identical snapshots; the
+`/settings/skills*` and `/settings/skill-folders*` routes answer as before).
+
+- New `pdo-skill` crate (domain / application / adapters): skill bank, folders, import from a
+  Source, selection by tier, portable document sidecar and delivery into the worktree leave
+  `pdo-legacy` (`skill_bank`, `skill_import`, `skill_selection`, `skill_sidecar`,
+  `skill_delivery`). Every mutation goes through a use case that builds an Operation and calls
+  authorization; the startup seed and the delivery (daemon and scheduler transitions) do not go
+  through it.
+- Delivery goes through a port (`SkillDelivery`); its adapter reads the index, `info/exclude`
+  and the provisioning manifest through the git adapter of the `workspace` context, which also
+  gains the shallow clone of a Source.
+- A skill's referents (instance, Projects, Triggers, pipelines, Runs not started yet) are read
+  through a port that the legacy crate implements as long as those contexts live there.
+- Front end: bank, import, paste, Files tab, selector and tree move to `frontend/src/skill/`,
+  split into files of at most 400 lines.
+- Fix: `useDaemonSocket` no longer schedules a reconnection when the `close` event arrives after
+  unmounting (second socket after a remount, timer firing after the end of a test).
+
+## 1.111.5 · `sandbox` context extracted
+
+Refactor with no visible change: the HTTP/WS contract does not move (identical snapshots; the
+staging profile routes and those of their referents answer as before).
+
+- New `pdo-sandbox` crate (domain / application / adapters): staging profiles, image,
+  container, home staging and Run preparation leave `pdo-legacy`. `run_sandbox.rs` keeps the Run
+  side (a Run's sandbox context from its state) until the run context is extracted.
+- Docker goes behind the `DockerCli` port (`ProcessDocker` adapter). Creating, editing and
+  deleting a profile are use cases that build an Operation and go through authorization, with
+  the Actor from the `identify` middleware and the same extension host as the other contexts.
+  The session context ports (`SandboxExec`, `ContainerExec`) now rely on `pdo-sandbox`.
+- Still to do: like workspace, the sandbox router is still mounted in `pdo-legacy`
+  (`run_sandbox::router`) rather than through `contexts.rs`.
+- Front end: the staging profile editor moves to `frontend/src/sandbox/`.
+
+## 1.111.4 · `session` context extracted
+
+Refactor with no visible change: the HTTP/WS contract does not move (identical snapshots).
+
+- New `pdo-session` crate (domain / application / adapters): tmux manager, PTY bridge, shared
+  terminal, declared wait and library assistant leave `pdo-legacy`, along with the `/sessions*`,
+  `…/nodes/{id}/pane` and `…/wait-user` routes.
+- tmux goes behind a single port (`Tmux`): the legacy crate, the PTY bridge and the two shared
+  terminal calls (`list-clients`, `refresh-client`) go through it. The manager (5.4k lines) is
+  split by responsibility: session lifecycle, text sending, reaper, terminal driver.
+- Every mutation of the context (wait, resume on Enter, shell, assistant, focus, save, take
+  control, pop-out, pane resurrection) goes through a use case that asks for Operation
+  authorization; the reaper and the wait set by the daemon on a refused completion remain
+  internal transitions.
+- `RUST_LOG` targets: `pdo_daemon::tmux_session_manager` becomes `pdo_session::adapters::tmux`
+  (and `pdo_session::application::launch`), `pdo_daemon::pty_bridge` becomes
+  `pdo_session::adapters::pty`.
+- Front end: the terminal, the Run shell modal and the assistant panel move to
+  `frontend/src/session/`.
+
+## 1.111.3 · `workspace` context extracted
+
+Refactor with no visible change: the HTTP/WS contract does not move (identical snapshots; the
+`/projects*`, `/repos*`, `/fs/browse` and `/settings/provisioning` routes answer as before).
+
+- New `pdo-workspace` crate (domain / application / adapters): projects, provisioning,
+  worktrees and repository creation leave `pdo-legacy` (`project_store`, `provisioning`,
+  `worktree_ops`, `repo_scaffold`). Every mutation goes through a use case that builds an
+  Operation and calls authorization.
+- Git goes behind a port: a single adapter (`adapters/git`), tested against a real temporary
+  repository, that the other contexts will call when they migrate.
+- The legacy crate mounts the context's router and passes it the extension host through
+  `DaemonConfig::extension_host`; going through `contexts.rs`, like `platform`, is still to do.
+- Front end: project editing, `SourceBranchField`, provisioning editors, folder explorer and
+  repository combobox move to `frontend/src/workspace/`.
+
+## 1.111.2 · `platform` context extracted
+
+Refactor with no visible change: the HTTP/WS contract does not move (identical snapshots; the
+`/pages*`, `/update*` and `/audit` routes answer as before).
+
+- New `pdo-platform` crate (domain / application / adapters), the first extracted context and
+  the template for the following ones: page mounting, update checking and applying, changelog,
+  service unit and audit log leave `pdo-legacy`. Every mutation goes through a use case that
+  builds an Operation and calls authorization.
+- The `pdo page` and `pdo service` CLI moves to the context's `adapters/cli`. The legacy crate
+  wires the extracted contexts through `contexts.rs`, the only seam the composition root uses.
+- Front end: mounted pages, update, changelog and audit log move to `frontend/src/platform/`.
+
+## 1.111.1 · `harness` context extracted
+
+Refactor with no visible change: the HTTP/WS contract does not move (identical snapshots, the
+`harness_descriptors` block of `GET /settings` identical to the previous version's).
+
+- New `pdo-harness` crate (domain / application / adapters): registry, argv, per-harness
+  capabilities, catalog, resolution and agent choice leave `pdo-legacy`.
+- The probes ↔ cost / stale / staging / tmux / stats cycle is broken: the parsers for
+  transcripts, reported cost and context peak live in the harness domain. On-disk transcript
+  resolution and the binary probe become adapters; the catalog cache becomes a use case behind
+  the `BinaryProbe` port.
+- Front end: the harness, model and effort selectors move to `frontend/src/harness/`.
+
+## 1.111.0 · Typed contract and hexagonal skeleton
+
+Second ticket of the spec (three decision records). The HTTP/WS contract does not change
+(identical snapshots); the only additions are the session headers sent by the agent CLI.
+
+- Cargo workspace: `pdo-extension-api` 0.1 (`Extension` trait, neutral hooks, re-exports axum),
+  `pdo-kernel` (clock, Actor, Operation, neutral authorization, event bus, extension host),
+  `pdo` becomes the composition root (`serve(config, extensions)`). The legacy crate is now
+  called `pdo-legacy`; its lib remains `pdo_daemon` (the `RUST_LOG` targets do not change).
+- `identify` middleware at the head of the router: local Operator by default, Agent for
+  `pdo complete` / `fail` / `skip` / `wait-user`.
+- TS types generated by ts-rs in `frontend/src/shared/generated/` (`make types`);
+  `frontend/src/types.ts` goes away and `make check` fails if the types drift.
+- Discrepancies revealed by the generated types, fixed: a `waiting` Node (waiting for a session
+  slot) is finally displayed ("Waiting") without looping polling, and the editor keeps
+  `required` / `auto_fail` on save.
+- Structure tests: an architecture test on a fixture, a ceiling of 400 lines per production file
+  with a baseline that can only go down.
+
+## 1.109.1 · Refactor safety net: covered routes and temporary snapshots
+
+No production code touched. First ticket of the spec (three decision records): it lays the net
+before the migration to a modular monolith.
+
+- Integration tests for the 23 routes not covered until now (`crates/pdo-daemon/tests/routes_*`).
+- `route_coverage`: every route of the router must be called by at least one test.
+- Temporary snapshots (`tests/snapshots_temporary/`, insta) of the HTTP and WS journeys, with
+  volatile values masked; they freeze the contract during the migration and will go away with
+  a later ticket.
+
+## 1.109.0 · Stats: absorption of Pipelines, Nodes, Models, efforts and pairs
+
+The four tickets of the story, delivered together.
+
+**Stats: absorb a model's efforts and a Node's pairs.**
+
+- On the "By model" axis of Cost and Performance, select efforts of the same model
+  (`not set` + `high`) then "Combine": one effort row, a `[⧉ N]` badge and a modal listing the
+  members. A selection across two models is refused, in the UI and by the API (400).
+- Global absorptions (Models, efforts) also merge each Node's model × effort pairs, in the
+  Pipeline and Project trees. The affected pair carries a greyed "Global absorption" badge:
+  read-only modal, link to the "By model" axis.
+- In a Node's detail, any two pairs combine into one row. The absorption is local to the Node,
+  never appears on "By model", and applies after the global one.
+- Frozen scope: an absorption of efforts or pairs covers the raw keys present when it is set; a
+  member absorbed later is not covered.
+- Settings › Stats absorptions lists the "Effort · <model>" and "Pair · <Node>" entries.
+
+**Stats: absorb Nodes and Models.**
+
+- Under a single Pipeline, select two Node rows (Ctrl/Shift-click in the detail) then
+  "Combine": a Node renamed from one version to another (`review` -> `code-review`) reads as a
+  single row in Sessions, Cost (Pipeline, Project and Model trees) and Performance. The
+  selection visibly refuses to mix Pipelines and Nodes, or Nodes of two Pipelines; the API also
+  refuses the latter case.
+- Removing an absorbed Pipeline takes its Nodes out of the Node absorption of its former
+  absorber: they get their row back under their Pipeline.
+- On the "By model" axis of Cost and Performance, two Model rows (a pinned alias and its
+  observed id) combine; the absorber keeps its verbatim id, their efforts merge by effort, and
+  the member list says whether each id was observed or requested. The Pipeline axis is not
+  touched.
+- Settings › Stats absorptions lists the Nodes (with their Pipeline) and the Models.
+- Fix: the "Combine" bar and its modals were missing from the Performance tab.
+
+**Stats: absorption on rename, absorptions list, Uncombined switch.**
+
+- Renaming a Pipeline in the library (id changed) creates the old -> new absorption, with
+  origin `rename`. A chain A -> B -> C gives C absorbing A and B; a display rename that keeps
+  the id creates nothing.
+- Settings › General › *Stats absorptions* (`saves as you go`) lists all absorptions, their
+  absorber, their absorbed members and their origin; the cross removes an absorbed member at
+  once.
+- An *Uncombined* switch on Sessions, Cost, Performance and Triggers shows the raw figures
+  (`uncombined=true`); it goes back to its default each time Stats is opened.
+
+**Stats: absorb Pipelines.**
+
+- In Stats › Sessions, select several Pipelines (Ctrl/Shift-click) then "Combine": a single
+  row, named after the absorber, accumulates their Runs in Sessions, Cost, Performance and
+  Triggers. The `[⧉ N]` badge opens the member list, from which an absorbed member can be
+  removed.
+- The absorption is stored in `pdo.db` and applied on read: the event log is never rewritten,
+  and `uncombined=true` on the Stats routes returns the raw figures.
 
 
 ## 1.108.0
-**Sélecteur de skills compact, « active skills » partout** (#849, story #847).
+**Compact skill selector, "active skills" everywhere.**
 
-- Replié, le sélecteur tient sur une ligne : icône, « Skills », sous-ligne « No skill » /
-  « n active skills ». La liste de noms sous le bouton et le paragraphe d'avertissement rouge
-  disparaissent ; un skill sélectionné qui n'existe plus dans la banque se signale par une icône
-  d'alerte (message en tooltip) et n'est pas compté.
-- Déplié : skills hérités cochés, grisés, tier d'origine à droite ; skills disparus listés barrés
-  en tête, décochables ; le popover reste ouvert après chaque coche et s'ouvre aussi en lecture
-  seule, cases figées.
-- Le tour *First run* (étape « Add the two PDO skills ») lit l'état coché dans le popover.
-- Vocabulaire : « effective » devient « active » côté skills (types du résolveur front, type du
-  skill gelé côté daemon, identifiants de test, scénarios HP, documentation). Format des
-  pipelines stockés inchangé.
+- Collapsed, the selector fits on one line: icon, "Skills", sub-line "No skill" /
+  "n active skills". The list of names under the button and the red warning paragraph are gone;
+  a selected skill that no longer exists in the bank is flagged by an alert icon (message in a
+  tooltip) and is not counted.
+- Expanded: inherited skills checked, greyed out, origin tier on the right; missing skills
+  listed struck through at the top, uncheckable; the popover stays open after each check and
+  also opens in read-only mode, checkboxes frozen.
+- The *First run* tour (step "Add the two PDO skills") reads the checked state in the popover.
+- Vocabulary: "effective" becomes "active" on the skills side (front resolver types, frozen
+  skill type on the daemon side, test identifiers, HP scenarios, documentation). Stored pipeline
+  format unchanged.
 
-## 1.107.1 — README vitrine : les médias publiés sont ceux des pipelines cibles (#852)
+## 1.107.1 · Showcase README: published media are those of the target pipelines
 
-Le README montre enfin les scènes rejouées sur les pipelines cibles dessinés par le mainteneur
-(ADR-0074 §6). Les 1.104.0 à 1.107.0 les avaient enregistrées sans les publier : les GIF hero,
-Visual pipelines, Routing & loops, Triggers, Agent profiles, Skill bank et Stats dataient
-encore de la v1.
+The README finally shows the scenes replayed on the target pipelines drawn by the maintainer.
+Versions 1.104.0 to 1.107.0 had recorded them without publishing them: the hero, Visual
+pipelines, Routing & loops, Triggers, Agent profiles, Skill bank and Stats GIFs still dated
+from v1.
 
-- **`docs/assets/readme/` republié** : le hero tourne `implement-review` avec sa boucle, le
-  trigger lance `prod-check`, les chemins affichés sont `~/code/...`. La ligne Routing & loops
-  décrit `verdict = fail` / `verdict = pass`, comme la cible.
-- **Le hero passe le screen guard** : le `~/.claude/CLAUDE.md` de l'instance de démo interdit à
-  l'agent live de taper un chemin absolu, qui montrait la racine jetable
-  `/tmp/pdo-readme-media-*` dans son terminal.
-- **Scène Agent profiles** : elle ouvre le profil par son crayon `Edit`, dans la modale de la
-  1.103.2 (#899).
+- **`docs/assets/readme/` republished**: the hero runs `implement-review` with its loop, the
+  trigger launches `prod-check`, the displayed paths are `~/code/...`. The Routing & loops line
+  describes `verdict = fail` / `verdict = pass`, like the target.
+- **The hero passes the screen guard**: the `~/.claude/CLAUDE.md` of the demo instance forbids
+  the live agent from typing an absolute path, which showed the throwaway root
+  `/tmp/pdo-readme-media-*` in its terminal.
+- **Agent profiles scene**: it opens the profile through its `Edit` pencil, in the modal of
+  1.103.2.
 
-## 1.97.4 — README vitrine, référence dans `docs/reference/` (#855)
+## 1.97.4 · Showcase README, reference in `docs/reference/`
 
-Le README devient une vitrine (traduction française : `docs/readme/README.fr.md`). La
-référence qu'il portait déménage sans perte : commandes CLI, installation et mise à jour dans
-`docs/reference/cli.md`, reverse proxy et pièces jointes dans `docs/reference/reverse-proxy.md`,
-copier-coller dans `docs/reference/terminal.md`, développement dans `CONTRIBUTING.md`.
+The README becomes a showcase (French translation: `docs/readme/README.fr.md`). The reference
+it carried moves out with no loss: CLI commands, installation and update in
+`docs/reference/cli.md`, reverse proxy and attachments in `docs/reference/reverse-proxy.md`,
+copy-paste in `docs/reference/terminal.md`, development in `CONTRIBUTING.md`.
 
-- **Le tableau de support des harnais vit dans `docs/reference/harnesses.md`**, avec les
-  prérequis. `make check` et `make support-table` visent ce fichier, et c'est désormais le
-  `--file` par défaut de `pdo docs support-table` (avant : `README.md`, qui ne porte plus de
-  bloc généré).
+- **The harness support table lives in `docs/reference/harnesses.md`**, with the
+  prerequisites. `make check` and `make support-table` target this file, and it is now the
+  default `--file` of `pdo docs support-table` (before: `README.md`, which no longer carries a
+  generated block).
 
-## Licence — MIT, explicitement
+## License · MIT, explicitly
 
-Le dépôt n'avait aucun fichier `LICENSE` depuis sa création ; seules les métadonnées Cargo
-déclaraient MIT. Le fichier existe désormais et confirme ces termes ; les règles de
-contribution sont dans `CONTRIBUTING.md`.
+The repository had no `LICENSE` file since its creation; only the Cargo metadata declared MIT.
+The file now exists and confirms these terms; the contribution rules are in `CONTRIBUTING.md`.
 
 ## 1.103.2
-**Profils agents : seul le bouton Edit ouvre l'éditeur, dans une modale partagée avec New
-profile** (#899).
+**Agent profiles: only the Edit button opens the editor, in a modal shared with New
+profile.**
 
-- Le crayon de chaque ligne de Settings › Agents › Agent profiles est un vrai bouton
-  `Edit <nom>`. Cliquer sur le reste de la ligne n'ouvre plus rien.
-- L'éditeur (Name, Harness, Model, Effort) quitte le formulaire sous la liste pour une modale.
-  **New profile** ouvre la même modale, vide, avec `Create`. Les règles et appels REST ne
-  changent pas ; Cancel, Échap ou un clic sur le fond ferment sans rien enregistrer.
+- The pencil on each row of Settings › Agents › Agent profiles is a real `Edit <name>` button.
+  Clicking the rest of the row no longer opens anything.
+- The editor (Name, Harness, Model, Effort) leaves the form under the list for a modal. **New
+  profile** opens the same modal, empty, with `Create`. The rules and REST calls do not change;
+  Cancel, Esc or a click on the backdrop close it without saving anything.
 
 ## 1.103.1
-**Enregistrer un pipeline sans changer son nom ne le renomme plus** (#886).
+**Saving a pipeline without changing its name no longer renames it.**
 
-- Un save ne compte comme renommage que si `name:` change vraiment. Avant, un fichier dont le
-  nom contient une majuscule (`Mixed-Case.yaml`) était déplacé à chaque save, ou refusé en 409
-  pendant qu'un run l'utilisait.
-- Un nouveau pipeline prend pour nom de fichier le slug de son nom (`Bugfix-auto-clean` →
-  `bugfix-auto-clean.yaml`), comme duplicate, import et rename. Son nom visible ne change pas.
-  Un nom vide est refusé (400), un nom déjà pris aussi (409).
+- A save only counts as a rename if `name:` really changes. Before, a file whose name contains
+  an uppercase letter (`Mixed-Case.yaml`) was moved on every save, or refused with a 409 while
+  a run was using it.
+- A new pipeline takes the slug of its name as file name (`Bugfix-auto-clean` ->
+  `bugfix-auto-clean.yaml`), like duplicate, import and rename. Its visible name does not
+  change. An empty name is refused (400), and so is a name already taken (409).
 
 ## 1.103.0
-**Grille de câblage : 30px par défaut, taille S/M/L réglable** (#877).
+**Wiring grid: 30px by default, adjustable S/M/L size.**
 
-- Le pas de la grille de câblage n'est plus figé à 40px : `S` = 20px, `M` = 30px (défaut),
-  `L` = 40px. ADR-0076 supersede ADR-0072 pour le pas.
-- Réglage global dans Settings › General › Interface (par navigateur). Le panneau Inspector
-  d'un pipeline peut le surcharger ; ce choix est enregistré dans le fichier pipeline
-  (`grid_size`) et voyage avec ses `waypoints`.
-- Changer de taille ne réécrit jamais les waypoints déjà enregistrés : les anciens tracés à
-  40px gardent leurs coudes jusqu'à ce qu'on les retouche.
+- The wiring grid step is no longer fixed at 40px: `S` = 20px, `M` = 30px (default),
+  `L` = 40px. The decision record supersedes the previous one for the step.
+- Global setting in Settings › General › Interface (per browser). A pipeline's Inspector panel
+  can override it; this choice is saved in the pipeline file (`grid_size`) and travels with its
+  `waypoints`.
+- Changing the size never rewrites the waypoints already saved: old 40px routes keep their
+  bends until they are touched again.
 
 ## 1.102.1
-**Le terminal n'ampute plus ses dernières colonnes** (#876).
+**The terminal no longer cuts off its last columns.**
 
-- Sur un pane large, les 1 à 2 dernières colonnes disparaissaient derrière une bande noire à
-  droite. L'espacement de lettres de la page, hérité par xterm, faussait la largeur des
-  glyphes. Le conteneur du terminal le remet à zéro : la dernière colonne de tmux est entière,
-  quelle que soit la largeur du pane.
-- La barre de statut tmux reste tronquée par tmux lui-même (`status-right-length 40`,
-  `status-left-length 10`) : ce n'est pas un rognage du pane.
+- On a wide pane, the last 1 or 2 columns disappeared behind a black band on the right. The
+  page's letter spacing, inherited by xterm, skewed the glyph width. The terminal container
+  resets it to zero: tmux's last column is whole, whatever the pane width.
+- The tmux status bar remains truncated by tmux itself (`status-right-length 40`,
+  `status-left-length 10`): this is not a pane crop.
 
 ## 1.102.0
-**Terminal partagé : un seul pilote, spectateurs en lecture seule, prise de main** (#867, #869, #870).
+**Shared terminal: a single driver, read-only spectators, take control.**
 
-- Quand deux navigateurs ouvrent le même terminal (nœud ou Manager), le premier est le
-  **pilote** : lui seul pèse sur la taille de la fenêtre tmux. Les suivants sont **spectateurs**
-  (client tmux `ignore-size`) : ils voient l'écran entier du pilote, police réduite (plancher
-  6 px, défilement au-delà), et leurs frappes n'atteignent jamais la session.
-- Le pilote voit un œil et le nombre de spectateurs ; le spectateur lit un tooltip de lecture
-  seule. Quand le pilote part, le spectateur redevient seul : taille, police et saisie normales.
-- Deux onglets du **même** poste restent sans rôle, comme avant.
-- Un spectateur voit une icône main (« Take control ») dans la barre du terminal. Un clic lui
-  donne la main tout de suite, sans confirmation : sa fenêtre reprend sa taille et sa police
-  normales, ses frappes atteignent la session. La bascule se fait à chaud (`refresh-client -f`),
-  sans rattacher de client tmux.
-- L'ancien pilote devient spectateur, lit brièvement « Another browser took control » et garde
-  l'icône main pour reprendre la main. Quand le pilote part, la main revient au poste arrivé le
-  plus tôt.
-- En attente déclarée, la bannière d'un spectateur dit « take control to reply, then press Enter
-  to resume ».
-- Point connu, antérieur : fermer un socket terminal injecte `\n^D` dans le pane
-  (`portable-pty`), à traiter dans un ticket séparé.
+- When two browsers open the same terminal (node or Manager), the first is the **driver**: only
+  it weighs on the tmux window size. The following ones are **spectators** (tmux client
+  `ignore-size`): they see the driver's whole screen, with a reduced font (6 px floor, scrolling
+  beyond), and their keystrokes never reach the session.
+- The driver sees an eye and the number of spectators; the spectator reads a read-only tooltip.
+  When the driver leaves, the spectator is alone again: normal size, font and input.
+- Two tabs on the **same** machine remain without a role, as before.
+- A spectator sees a hand icon ("Take control") in the terminal bar. One click gives them
+  control right away, with no confirmation: their window gets its normal size and font back,
+  their keystrokes reach the session. The switch happens live (`refresh-client -f`), without
+  reattaching a tmux client.
+- The former driver becomes a spectator, briefly reads "Another browser took control" and keeps
+  the hand icon to take control back. When the driver leaves, control goes to the machine that
+  arrived earliest.
+- During a declared wait, a spectator's banner says "take control to reply, then press Enter
+  to resume".
+- Known earlier issue: closing a terminal socket injects `\n^D` into the pane
+  (`portable-pty`), to be handled in a separate ticket.
 
 ## 1.101.1
-**La node End accepte une edge sur ses quatre bords** (#840).
+**The End node accepts an edge on all four of its sides.**
 
-- End atterrit là où le fil est lâché, comme un node agent ou script : haut, droite, bas ou
-  gauche, avec aperçu, ancre sauvegardée et tracé perpendiculaire au bord. L'edge porte toujours
-  le port `result`.
-- Une edge vers End sauvegardée sans ancre garde le côté déclaré de `result` : les pipelines
-  existants se rouvrent à l'identique. Le node merge reste fixé sur sa pastille `branches`.
+- End lands where the wire is dropped, like an agent or script node: top, right, bottom or
+  left, with preview, saved anchor and a route perpendicular to the side. The edge still
+  carries the `result` port.
+- An edge to End saved without an anchor keeps the declared side of `result`: existing
+  pipelines reopen identically. The merge node stays fixed on its `branches` badge.
 
 ## 1.101.0
-**Tour « First pipeline » : geste depuis le bord, correction du port dans la section Outputs** (#846, #840).
+**"First pipeline" tour: gesture from the edge, port fix in the Outputs section.**
 
-- Les étapes d'edge ne parlent plus de dot ni de handle : elles enseignent le bord de la carte
-  (#844).
-- Les deux edges du tester avancent sur l'output porté. Si l'edge ne porte pas `out`, la carte
-  re-vise l'edge puis la section Outputs du panneau, et avance quand `out` est coché ; l'étape de
-  sélection qui suit est alors déjà satisfaite.
-- Les conditions `when` sont acceptées sur une edge multi-port (`out.verdict`) comme sur une edge
-  à un port (`verdict`) ; une valeur fausse retient l'étape avec un indice précis.
+- The edge steps no longer talk about a dot or a handle: they teach the card's edge.
+- The tester's two edges advance on the output carried. If the edge does not carry `out`, the
+  card re-aims at the edge then at the panel's Outputs section, and advances when `out` is
+  checked; the selection step that follows is then already satisfied.
+- `when` conditions are accepted on a multi-port edge (`out.verdict`) like on a single-port edge
+  (`verdict`); a wrong value holds the step with a precise hint.
 
 ## 1.100.0
-**Câblage des edges depuis le bord, tracé sur grille, drag de segments snappé** (#844, #840).
+**Wiring edges from the side, grid-based routing, snapped segment drag.**
 
-- Création : les dots d'output disparaissent. Une edge part de n'importe quel point du bord du
-  node source et se trace par cellules de la grille de câblage (ADR-0072). `Shift` libère le
-  tracé ; le relâcher ré-origine la grille sur le point courant. L'edge créée est en
-  `mode: manual` et porte le premier output déclaré.
-- YAML : deux champs de layout, `source_anchor` et `target_anchor` (`{ side, offset }`), disent où
-  le fil quitte et touche les cartes. Absents, le fil part du milieu du côté comme avant ; ils sont
-  ignorés par le diff sémantique.
-- Drag de segment : snap à la grille, `Shift` libère, les autres waypoints ne bougent pas, deux
-  segments alignés fusionnent. « Re-route automatically » donne un tracé auto aligné sur la grille.
-- Le clic droit sur un handle de segment ne supprime plus de waypoint ; le menu « Delete edge »
-  reste sur l'edge.
+- Creation: output dots disappear. An edge starts from any point on the side of the source node
+  and is routed by cells of the wiring grid. `Shift` frees the route; releasing it re-origins
+  the grid on the current point. The created edge is `mode: manual` and carries the first
+  declared output.
+- YAML: two layout fields, `source_anchor` and `target_anchor` (`{ side, offset }`), say where
+  the wire leaves and touches the cards. When absent, the wire starts from the middle of the
+  side as before; they are ignored by the semantic diff.
+- Segment drag: snaps to the grid, `Shift` frees it, the other waypoints do not move, two
+  aligned segments merge. "Re-route automatically" gives an automatic route aligned on the grid.
+- Right-clicking a segment handle no longer deletes a waypoint; the "Delete edge" menu stays on
+  the edge.
 
 ## 1.99.0
-**Labels d'edge déplaçables, toggle des labels d'output, ordre de dessin edges/nodes** (#845, #840).
+**Movable edge labels, output labels toggle, edge/node drawing order.**
 
-- Labels d'output : petit tag par port porté, placé en alternance au pied de l'edge, déplaçable
-  (`output_label_pos`). Toggle par edge (`show_output_labels`), actif par défaut si le node source
-  déclare au moins 2 outputs.
-- Label de condition : la pill `when` est déplaçable (`condition_label_pos`) et se place par défaut
-  à côté du trait, plus sur le handle de segment.
-- Ordre de dessin : les edges passent au-dessus des nodes par défaut ; le switch « Draw under
-  nodes » (`below_nodes`) les repasse dessous, handles et pill compris.
-- Ces 4 champs sont du layout : écrits seulement hors valeur par défaut, ignorés par le diff
-  sémantique.
+- Output labels: a small tag per carried port, placed alternately at the foot of the edge,
+  movable (`output_label_pos`). Per-edge toggle (`show_output_labels`), on by default if the
+  source node declares at least 2 outputs.
+- Condition label: the `when` pill is movable (`condition_label_pos`) and is placed by default
+  next to the line, no longer on the segment handle.
+- Drawing order: edges go above nodes by default; the "Draw under nodes" switch (`below_nodes`)
+  puts them back underneath, handles and pill included.
+- These 4 fields are layout: written only when not at their default value, ignored by the
+  semantic diff.
 
 ## 1.98.0
-**Edge multi-port : une seule edge porte plusieurs outputs d'un même node** (#843, #840).
+**Multi-port edge: a single edge carries several outputs of the same node.**
 
-- YAML : `source: { node, ports: [a, b] }` pour une edge multi-port ; la forme `port:` à un seul
-  port reste inchangée et les pipelines existants ne sont pas réécrits.
-- Runtime : une edge multi-port se déclenche une fois et le node aval reçoit un input par port,
-  nommé d'après le port (`PDO_INPUT_<PORT>`, préambule « Inputs » listé par port).
-- Panneau d'edge : section **Outputs** en tête (le dernier port coché ne peut pas être décoché) ;
-  une condition `when` choisit le port lu et son schéma se résout par ligne.
-- Diff sémantique insensible à l'ordre des ports portés.
+- YAML: `source: { node, ports: [a, b] }` for a multi-port edge; the single-port `port:` form
+  is unchanged and existing pipelines are not rewritten.
+- Runtime: a multi-port edge fires once and the downstream node receives one input per port,
+  named after the port (`PDO_INPUT_<PORT>`, "Inputs" preamble listed per port).
+- Edge panel: **Outputs** section at the top (the last checked port cannot be unchecked); a
+  `when` condition chooses the port read and its schema resolves per row.
+- The semantic diff ignores the order of the carried ports.
 
 ## 1.97.3
-**Échec d'upload des pièces jointes en instance distante : l'erreur nomme la couche** (#839).
+**Attachment upload failure on a remote instance: the error names the layer.**
 
-- Un 413 **sans corps JSON** (page HTML d'un reverse proxy, nginx `client_max_body_size` à 1 Mo
-  par défaut) est attribué à l'intermédiaire, avec la taille envoyée et les deux limites à
-  vérifier — plus jamais `POST /runs failed: 413`. Un 413 du daemon garde sa phrase.
-- `Failed to fetch` sur un `POST /runs` avec pièces jointes devient « Upload interrupted after
-  Ns while sending X MB to <hôte> … », et un upload qui ne progresse plus **expire** (UI et CLI :
-  une minute plus dix secondes par Mo) au lieu de rester suspendu.
-- Côté daemon, un multipart coupé en cours de flux répond 400 « upload interrupted … while
-  reading attachment `<nom>` » (ou « after field `<champ>` ») au lieu du trompeur « missing
-  field: input ». Un test couvre désormais le 413 sur `POST /runs`.
-- README : section « Attachments through a proxy ».
+- A 413 **without a JSON body** (HTML page of a reverse proxy, nginx `client_max_body_size` at
+  1 MB by default) is attributed to the intermediary, with the size sent and the two limits to
+  check, never again `POST /runs failed: 413`. A 413 from the daemon keeps its sentence.
+- `Failed to fetch` on a `POST /runs` with attachments becomes "Upload interrupted after
+  Ns while sending X MB to <host> …", and an upload that stops progressing **times out** (UI
+  and CLI: one minute plus ten seconds per MB) instead of staying hung.
+- On the daemon side, a multipart cut off mid-stream answers 400 "upload interrupted … while
+  reading attachment `<name>`" (or "after field `<field>`") instead of the misleading "missing
+  field: input". A test now covers the 413 on `POST /runs`.
+- README: "Attachments through a proxy" section.
 
 ## 1.97.2
-**Tour guidé : scroll hors spotlight, dropdown skills, « Create » à l'étape 3** (#837).
+**Guided tour: scroll outside the spotlight, skills dropdown, "Create" at step 3.**
 
-- La molette dans la zone assombrie du projecteur fait défiler la modale au lieu d'être avalée.
-- Cocher un skill referme le sélecteur de skills.
-- Étape 3 du tour « première pipeline » : « Create » reste inatteignable sous un bloqueur tant que
-  l'étape ne l'a pas allumé ; la touche Entrée fait bifurquer le texte de l'étape 4 au lieu de
-  perdre la pipeline.
+- The wheel in the darkened area of the spotlight scrolls the modal instead of being swallowed.
+- Checking a skill closes the skill selector.
+- Step 3 of the "first pipeline" tour: "Create" stays unreachable under a blocker until the step
+  has lit it; the Enter key makes the text of step 4 branch instead of losing the pipeline.
 
 ## 1.97.1
-**La diff par défaut du pane review montre l'arbre de travail du run** (#835).
+**The default diff of the review pane shows the run's working tree.**
 
-- Pour un run en cours, `/runs/<id>/review` et `GET /runs/<id>/diff/structured` sans paramètres
-  comparent le point de fork à un instantané de l'arbre de travail (modifs non commitées et
-  fichiers non suivis inclus, `.pdo/` exclu) au lieu de `fork → tip`. Les sélecteurs de ref
-  proposent « Working tree » ; `?from=fork&to=tip` reste inchangé. Run terminé : la valeur par
-  défaut coïncide avec `fork → tip`.
-- L'instantané fonctionne aussi quand le dépôt cible ignore `.pdo/` (`.gitignore` ou
-  `.git/info/exclude`), et `/refs` comme `/diff` échouent de manière cohérente si l'instantané
-  échoue. La lecture ne touche jamais l'index, le status ni le HEAD du nœud.
+- For a running run, `/runs/<id>/review` and `GET /runs/<id>/diff/structured` without
+  parameters compare the fork point to a snapshot of the working tree (uncommitted changes and
+  untracked files included, `.pdo/` excluded) instead of `fork → tip`. The ref selectors offer
+  "Working tree"; `?from=fork&to=tip` is unchanged. For a finished run, the default coincides
+  with `fork → tip`.
+- The snapshot also works when the target repository ignores `.pdo/` (`.gitignore` or
+  `.git/info/exclude`), and `/refs` and `/diff` fail consistently if the snapshot fails.
+  Reading never touches the node's index, status or HEAD.
 
 ## 1.97.0
-**Mode tutoriel livré sur `main`** (spec #821, story #816, tickets #822 à #825).
+**Tutorial mode shipped on `main`.**
 
-- Release d'intégration : réunit sur `main` la branche `integration/816-tutorial-mode` (1.94.0 à
-  1.96.0 : menu pipeline maison et cibles stables, Projecteur et moteur de tours, tours *First
-  pipeline* et *First run*, dépôt d'entraînement, full tour) et les releases 1.92.0 / 1.93.0 déjà
-  sur `main`. Aucun changement fonctionnel propre à cette version.
-- Le CHANGELOG retrouve les entrées 1.92.0 et 1.93.0, perdues lors d'une réconciliation.
+- Integration release: brings together on `main` the `integration/816-tutorial-mode` branch
+  (1.94.0 to 1.96.0: home pipeline menu and stable targets, Spotlight and tour engine, *First
+  pipeline* and *First run* tours, practice repository, full tour) and the 1.92.0 / 1.93.0
+  releases already on `main`. No functional change specific to this version.
+- The CHANGELOG recovers the 1.92.0 and 1.93.0 entries, lost during a reconciliation.
 
 ## 1.96.0
-**Le tour *First run* va jusqu'à l'output, et le full tour s'enchaîne** (#825, spec #821, story #816, ADR-0071).
+**The *First run* tour goes all the way to the output, and the full tour chains together.**
 
-- Le tour **First run** ne s'arrête plus au lancement : six étapes de lecture enseignent la vie d'un
-  node interactif — retrouver le Run dans la liste, ouvrir le node, parler à l'agent dans son propre
-  terminal (bloc à copier), libérer la complétion (ADR-0068), attendre la fin du node, ouvrir
-  l'output. Chaque avancement est observé sur l'état réel du Run que l'inspecteur charge déjà ; le
-  daemon ne sait toujours rien des tours.
-- **L'attente de fin de node n'a aucune limite de temps** : un agent met le temps qu'il met. Le
-  popover le dit, coche en direct « complétion libérée » / « node terminé », et éclaire tout
-  l'inspecteur en **zone souple** — pointillés, grisé plus clair, terminal lisible et cliquable
-  pendant l'attente. Un node qui échoue est une fin lui aussi : l'étape le nomme et demande un Next
-  pour que la phrase soit lue.
-- **Full tour** : entre deux tours, une carte intermédiaire dit où en est l'enchaînement et pose le
-  choix — *Finish here* ou *Continue*. Un tour qui **s'arrête proprement** (cible absente, lancement
-  refusé) propose quand même le tour suivant, sans être marqué terminé.
-- Le popover porte désormais sa sortie en petit (`✕ quit`) au lieu d'un bouton, et dit en une ligne
-  grise ce qu'il attend (« advances once released ») quand il n'y a rien à cliquer. **Échap
-  appartient au terminal du node** tant qu'il a le focus : le tour ne vole plus les touches de
-  l'agent.
-- Nouvelles cibles stables : les lignes de ports d'un node (`out` sous Outputs) et la modale
-  d'artefact, qui devient un propriétaire d'Échap (`role="dialog"`).
-- `docs/test-scenarios/HP-03` — le full tour est **proposé** comme 3ᵉ Happy Path (curation humaine à
-  la MR integration→develop).
+- The **First run** tour no longer stops at launch: six reading steps teach the life of an
+  interactive node: find the Run in the list, open the node, talk to the agent in its own
+  terminal (copy-ready block), release the completion, wait for the node to finish, open the
+  output. Each advance is observed on the real Run state that the inspector already loads; the
+  daemon still knows nothing about tours.
+- **Waiting for a node to finish has no time limit**: an agent takes the time it takes. The
+  popover says so, ticks "completion released" / "node finished" live, and lights up the whole
+  inspector as a **soft zone**: dotted lines, lighter greying, terminal readable and clickable
+  during the wait. A node that fails is an end too: the step names it and asks for a Next so
+  that the sentence is read.
+- **Full tour**: between two tours, an intermediate card says where the chain stands and offers
+  the choice: *Finish here* or *Continue*. A tour that **stops cleanly** (target missing, launch
+  refused) still offers the next tour, without being marked done.
+- The popover now carries its exit in small print (`✕ quit`) instead of a button, and says in
+  one grey line what it is waiting for ("advances once released") when there is nothing to
+  click. **Esc belongs to the node's terminal** while it has focus: the tour no longer steals
+  the agent's keys.
+- New stable targets: a node's port rows (`out` under Outputs) and the artifact modal, which
+  becomes an Esc owner (`role="dialog"`).
+- A third Happy Path scenario in `docs/test-scenarios/`: the full tour is **proposed** as the 3rd
+  Happy Path (human curation at the integration -> develop MR).
 
-Corrections issues du passage de la Feature Path sur une vraie instance :
+Fixes from running the Feature Path on a real instance:
 
-- **Un tour démarre sur une scène dégagée.** La modale d'artefact que *First run* fait ouvrir à sa
-  dernière étape restait montée pendant que *First pipeline* démarrait : son fond plein écran
-  avalait tous les clics, l'app gelée derrière une modale dont le tour ne parlait plus. Les surfaces
-  flottantes se déclarent désormais congédiables (`lib/overlays.ts`) et le démarrage d'un tour les
-  ferme — sans qu'aucune d'elles sache ce qu'est un tour.
-- **« Find your Run » s'affiche enfin.** Le Start ouvre lui-même l'onglet du Run, donc la condition
-  de l'étape était vraie un tick après son entrée et le tour sautait de 9 à 11 sans rien montrer.
-  L'étape demande maintenant un `Next` explicite et dit ce qui vient de se passer.
-- **La carte de fin ne recouvre plus l'output.** La dernière étape se recentre sur l'artefact ouvert
-  — zone souple à lire, popover à côté — et attend `Next` : le récapitulatif n'arrive qu'une fois la
-  page lue.
-- **Un nouveau node ne tombe plus sur un autre** (hors #825, révélé par la FP) : l'évitement compare
-  désormais l'empreinte des cartes, pas 30 pixels. Deux cartes posées à 40 pixels enterraient l'arête
-  qui les relie, que *First pipeline* demande justement de cliquer.
+- **A tour starts on a clear scene.** The artifact modal that *First run* has you open at its
+  last step stayed mounted while *First pipeline* was starting: its full-screen backdrop
+  swallowed every click, the app frozen behind a modal the tour no longer talked about.
+  Floating surfaces now declare themselves dismissable (`lib/overlays.ts`) and starting a tour
+  closes them, without any of them knowing what a tour is.
+- **"Find your Run" is finally displayed.** Start opens the Run's tab itself, so the step's
+  condition was true one tick after its entry and the tour jumped from 9 to 11 without showing
+  anything. The step now asks for an explicit `Next` and says what has just happened.
+- **The end card no longer covers the output.** The last step recenters on the open artifact
+  (soft zone to read, popover beside it) and waits for `Next`: the recap only arrives once the
+  page has been read.
+- **A new node no longer lands on another** (outside this ticket, revealed by the FP): the
+  avoidance now compares the cards' footprint, not 30 pixels. Two cards placed 40 pixels apart
+  buried the edge that links them, which *First pipeline* precisely asks to click.
 
-Second passage de la Feature Path :
+Second pass of the Feature Path:
 
-- **Un nouveau node reste à l'écran.** La grille d'évitement raisonnait en unités de canvas et
-  ignorait le viewport : sur un pipeline neuf, que le canvas cadre au zoom 2, un pas à droite fait
-  440 pixels et la deuxième carte de *First pipeline* naissait **hors du canvas**, injoignable, avec
-  un tour qui la demandait. La recherche connaît désormais la zone visible et n'y répond que par une
-  place qu'on voit ; et le cadrage automatique **ne grossit plus au-delà de 1:1**, si bien qu'une
-  carte a la taille pour laquelle elle a été dessinée.
-- **Un tour peut montrer un node du canvas.** Une carte vit dans un viewport transformé : la faire
-  défiler ne la déplace pas. Le canvas se déclare capable de l'amener au centre (`lib/canvasReveal.ts`,
-  même patron que `lib/overlays.ts`) et le tour le lui demande — une fois par visée, et seulement si
-  la carte n'est pas déjà dans le cadre.
-- **Les deux étapes d'arête de *First pipeline* nomment la sortie** à tirer. Le tester a deux
-  poignées à ce moment-là ; une arête partie d'`image_list` ne porte aucun `verdict`, et la condition
-  demandée deux étapes plus loin devenait impossible à écrire. Le geste ne compte plus que depuis
-  `out`, et la ligne grise nomme l'autre poignée.
-- **Un `Create` refusé le dit.** La modale New Pipeline avalait l'erreur du daemon : bouton sans
-  effet, aucun message. Elle affiche désormais la phrase du daemon — et, pour un nom déjà pris, le
-  dit dans les termes du lecteur. Le tour *First pipeline* s'arrête alors sur sa carte de refus au
-  lieu d'attendre un bouton mort.
-- **Le pipeline `tutorial-interactive` ne se chevauche plus** : ses trois nodes portent une position,
-  au lieu de laisser le canvas empiler Start sous l'agent.
-
+- **A new node stays on screen.** The avoidance grid reasoned in canvas units and ignored the
+  viewport: on a new pipeline, which the canvas frames at zoom 2, one step to the right is 440
+  pixels and the second card of *First pipeline* was born **outside the canvas**, unreachable,
+  with a tour that asked for it. The search now knows the visible area and only answers with a
+  place that can be seen; and auto-framing **no longer zooms in beyond 1:1**, so a card has the
+  size it was designed for.
+- **A tour can show a canvas node.** A card lives in a transformed viewport: scrolling it does
+  not move it. The canvas declares itself able to bring it to the center (`lib/canvasReveal.ts`,
+  same pattern as `lib/overlays.ts`) and the tour asks it to, once per aim, and only if the
+  card is not already in frame.
+- **The two edge steps of *First pipeline* name the output** to drag. The tester has two
+  handles at that point; an edge starting from `image_list` carries no `verdict`, and the
+  condition requested two steps later became impossible to write. The gesture now only counts
+  from `out`, and the grey line names the other handle.
+- **A refused `Create` says so.** The New Pipeline modal swallowed the daemon's error: button
+  with no effect, no message. It now shows the daemon's sentence and, for a name already taken,
+  says so in the reader's terms. The *First pipeline* tour then stops on its refusal card
+  instead of waiting for a dead button.
+- **The `tutorial-interactive` pipeline no longer overlaps**: its three nodes carry a position,
+  instead of letting the canvas stack Start under the agent.
 ## 1.95.0
-**Tour *First run* et dépôt d'entraînement** (#824, spec #821, story #816, ADR-0071).
+**Tour *First run* and practice repository.**
 
-- Nouveau verbe daemon `POST /repos/create` : crée un dépôt git minimal dans un dossier parent
-  (un commit sur `main`, `README.md` et `notes.txt`), renvoie le même chemin sans nouveau commit
-  s'il existe déjà, et refuse par un message nommé un dossier existant qui n'est pas un dépôt.
-  Le dépôt créé n'entre pas dans les récents.
-- Le tour **First run** (Settings › Tutorials) est actif : à l'entrée il crée — ou réutilise —
-  `/tmp/pdo-tutorial` et le pipeline `tutorial-interactive`, puis guide jusqu'au Start : nom du
-  Run, explorateur ouvert sur `/tmp` avec l'entrée pointée et défilée à l'écran, pipeline, profil
-  Default, les deux skills PDO, le prompt, puis le lancement. Un geste hors cible n'avance pas.
-- Une carte de fin nomme le Run créé, prévient de la question de confiance du harness dans
-  `/tmp/pdo-tutorial`, et enchaîne sur *First pipeline*. Un Start refusé s'arrête proprement en
-  citant la raison du daemon, formulaire intact, sans Run créé.
-- Moteur de tours : une cible qui disparaît transitoirement (dossier replié, filtre) n'abandonne
-  plus le tour ; le Projecteur se rabat sur le conteneur le temps qu'elle revienne.
-- Sélecteur de skills : le nom d'une ligne bascule la skill, plus seulement sa case.
+- New daemon verb `POST /repos/create`: creates a minimal git repository in a parent folder
+  (one commit on `main`, `README.md` and `notes.txt`), returns the same path without a new commit
+  if it already exists, and refuses with a named message an existing folder that is not a repository.
+  The created repository does not enter the recents.
+- The **First run** tour (Settings › Tutorials) is live: on entry it creates (or reuses)
+  `/tmp/pdo-tutorial` and the `tutorial-interactive` pipeline, then guides up to Start: Run
+  name, explorer open on `/tmp` with the entry pointed at and scrolled into view, pipeline, Default
+  profile, the two PDO skills, the prompt, then the launch. A gesture off target does not advance.
+- A closing card names the created Run, warns about the harness trust question in
+  `/tmp/pdo-tutorial`, and chains into *First pipeline*. A refused Start stops cleanly,
+  quoting the daemon's reason, form intact, no Run created.
+- Tour engine: a target that disappears transiently (collapsed folder, filter) no longer
+  abandons the tour; the Spotlight falls back to the container until it returns.
+- Skill picker: clicking a row's name toggles the skill, not only its checkbox.
 
 ## 1.94.0
-**Mode tutoriel : Projecteur, moteur de tours et tour *First pipeline*** (#823, spec #821, story #816, ADR-0071).
+**Tutorial mode: Spotlight, tour engine and *First pipeline* tour.**
 
-- Au premier lancement — clé navigateur absente **et** instance sans aucun Run — une **modale de
-  bienvenue** propose le full tour, un tour précis ou « plus tard ». N'importe lequel des trois
-  choix pose la clé : on n'est jamais sollicité deux fois.
-- Pendant un tour, le **Projecteur** grise tout l'écran sauf la cible de l'étape (au-dessus des
-  modales et des menus portalisés) et absorbe les clics ailleurs. Un popover ancré au trou donne
-  l'instruction, la progression `Step n of N`, le bloc à copier des saisies libres, `Skip` quand
-  l'étape le permet et `Quit tour` toujours — Échap aussi, sauf quand un menu ou un dialogue le
-  réclame d'abord.
-- Une étape avance sur l'**état réellement observé**, jamais sur un délai ; une cible absente plus
-  de quelques secondes arrête le tour proprement (« This step could not be completed ») au lieu
-  d'attendre. Les définitions de tours sont de simples données : ajouter un tour ne touche pas au
-  moteur.
-- Le tour **First pipeline** construit `tutorial-implement-test` de bout en bout : deux nœuds
-  interactifs (implémenteur dans le worktree du Run, testeur isolé), leurs prompts et leurs
-  outputs, un schéma `verdict` en énumération `pass`/`fail`, un port `image_list`, puis les trois
-  edges dont deux conditionnelles.
-- Nouvelle section **Settings › General › Tutorials** : full tour, un bouton par tour avec sa durée
-  estimée, une coche sur les tours terminés et un lien « Reset tutorial memory ». Coches et
-  proposition de bienvenue vivent dans le navigateur, comme le thème — jamais côté daemon.
-- Le tour *First run* est annoncé et grisé : il arrive avec #824.
+- On first launch (browser key absent **and** instance with no Run at all), a **welcome modal**
+  offers the full tour, a specific tour or "later". Any of the three
+  choices sets the key: nobody is prompted twice.
+- During a tour, the **Spotlight** dims the whole screen except the step's target (above
+  modals and portaled menus) and absorbs clicks elsewhere. A popover anchored to the hole gives
+  the instruction, the `Step n of N` progress, the copyable block for free-form input, `Skip` when
+  the step allows it and `Quit tour` always. Esc too, except when a menu or a dialog
+  claims it first.
+- A step advances on the **actually observed state**, never on a delay; a target missing for more
+  than a few seconds stops the tour cleanly ("This step could not be completed") instead of
+  waiting. Tour definitions are plain data: adding a tour does not touch the
+  engine.
+- The **First pipeline** tour builds `tutorial-implement-test` end to end: two interactive
+  nodes (implementer in the Run's worktree, isolated tester), their prompts and
+  outputs, a `verdict` schema as a `pass`/`fail` enumeration, an `image_list` port, then the three
+  edges, two of them conditional.
+- New **Settings › General › Tutorials** section: full tour, one button per tour with its estimated
+  duration, a check mark on completed tours and a "Reset tutorial memory" link. Check marks and
+  the welcome offer live in the browser, like the theme, never on the daemon side.
+- The *First run* tour is announced and greyed out: it arrives next.
 
 ## 1.93.0
-**Filtres par onglet, mode de durée Total/Active/Waiting, couverture, réglages éphémères** (#819, story #817).
+**Per-tab filters, Total/Active/Waiting duration mode, coverage, ephemeral settings.**
 
-- La barre de titre de Stats ne garde que la période (et Pricing details sur Cost). Chaque onglet
-  porte sa **bande de filtres** avec sa cohorte « completed runs only » et son propre défaut :
-  activée sur Performance, désactivée sur Overview / Sessions / Triggers et sur Cost. Basculer la
-  cohorte ne refetch que l'onglet concerné.
-- Sur Performance, la bascule « exclude user wait » devient un contrôle à trois positions
-  **Total / Active / Waiting** (défaut Active). Cartes, en-tête de colonne, box-plots, libellés et
-  tri suivent le mode, côté client, sans refetch. En Active et Waiting, un « i » donne
-  « n exécutions sur N ont déclaré au moins une attente ».
-- **Cassant côté navigateur** : les réglages Stats sont **éphémères**. Plus aucune clé
-  `pdo.stats.*` n'est lue ni écrite (les anciennes restent inertes dans `localStorage`) ; l'état vit
-  tant que Stats est montée, rouvrir réinitialise. Échelles indépendantes activées par défaut.
-  Plus de pastille de déviation sur le rail.
-- Daemon, additif : `GET /stats/performance` porte `wait_duration` à côté de `duration` et
-  `active_duration` à chaque niveau (Total = Active + Waiting par exécution), plus
-  `waited_executions` et `executions` pour la couverture.
+- The Stats title bar keeps only the period (and Pricing details on Cost). Each tab
+  carries its own **filter band** with its "completed runs only" cohort and its own default:
+  on for Performance, off for Overview / Sessions / Triggers and for Cost. Toggling the cohort
+  refetches only the tab concerned.
+- On Performance, the "exclude user wait" toggle becomes a three-position control
+  **Total / Active / Waiting** (default Active). Cards, column header, box plots, labels and
+  sort follow the mode, client side, without refetch. In Active and Waiting, an "i" gives
+  "n executions out of N declared at least one wait".
+- **Breaking on the browser side**: Stats settings are **ephemeral**. No `pdo.stats.*` key is
+  read or written any more (the old ones stay inert in `localStorage`); the state lives
+  as long as Stats is mounted, reopening resets it. Independent scales are on by default.
+  No more deviation badge on the rail.
+- Daemon, additive: `GET /stats/performance` carries `wait_duration` next to `duration` and
+  `active_duration` at every level (Total = Active + Waiting per execution), plus
+  `waited_executions` and `executions` for coverage.
 
 ## 1.92.0
-**L'archivage d'un Run parent entraîne ses Runs enfants terminés** (#815).
+**Archiving a parent Run takes its finished child Runs with it.**
 
-- `cleanup_run` archive le Run **et ses descendants terminés** (enfants, petits-enfants, résolus
-  par `parent_run_id`), petits-enfants d'abord, par le même chemin de démontage : worktrees et
-  dossiers de run des enfants sont réclamés avec le parent. Les descendants déjà archivés sont
-  ignorés sans erreur ; la réponse `200` liste les `archived_children`.
-- Un descendant **vivant** (running, awaiting-user, paused) n'est jamais archivé en cascade : la
-  requête est refusée en `409` avec la liste `live_children` et rien n'est touché. Arrêter
-  l'enfant d'abord.
-- Dans l'UI, la boîte de confirmation Cleanup compte les enfants terminés qui partiront avec le
-  parent et prévient quand un enfant encore vivant fera refuser la demande par le daemon.
-- `pdo reap` : un parent moissonné emporte ses enfants terminés même plus jeunes que leur TTL ;
-  un parent dont le sous-arbre tourne encore reste listé jusqu'à ce qu'il se pose.
+- `cleanup_run` archives the Run **and its finished descendants** (children, grandchildren,
+  resolved through `parent_run_id`), grandchildren first, through the same teardown path: the
+  children's worktrees and run folders are reclaimed along with the parent. Descendants already archived
+  are skipped without error; the `200` response lists the `archived_children`.
+- A **live** descendant (running, awaiting-user, paused) is never archived in cascade: the
+  request is refused with `409` and the `live_children` list, and nothing is touched. Stop
+  the child first.
+- In the UI, the Cleanup confirmation box counts the finished children that will leave with the
+  parent and warns when a still-live child will make the daemon refuse the request.
+- `pdo reap`: a reaped parent takes its finished children with it even when younger than their TTL;
+  a parent whose subtree is still running stays listed until it settles.
 
 ## 1.91.0
-**Durée active hors attente déclarée, filtre par genre de nœud, runs terminés seulement** (#810, story #808).
+**Active duration excluding declared wait, filter by node kind, finished runs only.**
 
-- Dans Performance, une bascule **exclude user wait** remplace la durée murale par la **durée
-  active** : l'attente déclarée (`pdo wait-user`, complétion non libérée) est soustraite, pour les
-  nœuds comme pour la ligne Infrastructure, sans refetch. Badge ambre `−Xm wait` et boîte fantôme
-  de la durée murale sur les box-plots. Une attente `children_pending` ne soustrait rien
-  (ADR-0069).
-- Filtre multi-sélection par **genre de nœud** (Standard / Interactive / Orchestrator) sur les
-  lignes Node des axes Pipeline et Modèle ; un nœud à la fois interactif et orchestrateur matche les
-  deux. Sous un filtre partiel, les totaux Pipeline et les cartes de tête lisent « filtered »,
-  jamais une valeur recalculée ; un niveau vidé affiche « No node of the selected kinds at this
-  level · show all kinds ».
-- Dans la coquille Stats, une bascule **completed runs only** (ON par défaut dans le navigateur)
-  restreint la cohorte des trois sections aux Runs arrivés à `completed` ; Overview affiche
-  « Errors: 0 (completed only) » avec une ligne de cohorte ambre. Les trois réglages sont
-  mémorisés par navigateur (`localStorage`, clés `pdo.stats.*`).
-- Un nœud interactif fraîchement lancé est `running` : la primitive de démarrage n'émet plus
-  d'attente au spawn, seule la déclaration le passe orange.
-- Daemon, additif : `active_duration` partout où `duration` existe dans `GET /stats/performance` ;
-  `orchestrator` gelé dans le payload `NodeStarted` à côté d'`interactive` (repli sur le snapshot
-  du pipeline pour l'historique) ; paramètre `completed_only` sur `/stats/overview`, `/stats/cost`
-  et `/stats/performance`, inclus dans les clés de mémo.
+- In Performance, an **exclude user wait** toggle replaces the wall-clock duration with the **active
+  duration**: the declared wait (`pdo wait-user`, unreleased completion) is subtracted, for
+  nodes as well as for the Infrastructure row, without refetch. Amber `−Xm wait` badge and ghost box
+  of the wall-clock duration on the box plots. A `children_pending` wait subtracts nothing.
+- Multi-select filter by **node kind** (Standard / Interactive / Orchestrator) on the Node
+  rows of the Pipeline and Model axes; a node that is both interactive and orchestrator matches
+  both. Under a partial filter, the Pipeline totals and the headline cards read "filtered",
+  never a recomputed value; an emptied level shows "No node of the selected kinds at this
+  level · show all kinds".
+- In the Stats shell, a **completed runs only** toggle (ON by default in the browser)
+  restricts the cohort of the three sections to Runs that reached `completed`; Overview shows
+  "Errors: 0 (completed only)" with an amber cohort line. The three settings are
+  remembered per browser (`localStorage`, `pdo.stats.*` keys).
+- A freshly launched interactive node is `running`: the start primitive no longer emits
+  a wait at spawn, only the declaration turns it orange.
+- Daemon, additive: `active_duration` everywhere `duration` exists in `GET /stats/performance`;
+  `orchestrator` frozen in the `NodeStarted` payload next to `interactive` (falling back to the
+  pipeline snapshot for history); `completed_only` parameter on `/stats/overview`, `/stats/cost`
+  and `/stats/performance`, included in the memo keys.
 
 ## 1.90.0
-**Médiane partout, niveaux de zoom et axes indépendants des box-plots** (#811, story #808).
+**Median everywhere, zoom levels and independent box plot axes.**
 
-- Partout où Stats résume une distribution, la valeur centrale est la **médiane** : tri et
-  libellés de la liste maître, tick des box-plots de Performance, cartes et coût par exécution
-  de Cost (« median » remplace « avg »). La moyenne ne subsiste que dans le tooltip, comme
-  sixième valeur. Les totaux ne changent pas.
-- Les box-plots de Performance gagnent un **zoom à trois niveaux** (Full, Fenced, Box : axe
-  calé sur le max, la borne haute de Tukey ou Q3) et une bascule **« independent scales »**
-  (chaque ligne sur son propre axe). Une marque « › » / « ‹ » signale une observation hors
-  cadre sans la dessiner. Zoom et axe sont mémorisés par navigateur (`localStorage`).
-- Daemon, additif : `GET /stats/cost` expose `median_usd` à côté d'`average_usd` ;
-  `GET /stats/performance` ajoute `fence_low` / `fence_high` (bornes de Tukey observées) aux
-  six stats, calculées côté daemon (ADR-0029).
+- Everywhere Stats summarizes a distribution, the central value is the **median**: sort and
+  labels of the master list, tick of the Performance box plots, cards and cost per execution
+  in Cost ("median" replaces "avg"). The mean remains only in the tooltip, as the
+  sixth value. Totals do not change.
+- The Performance box plots gain a **three-level zoom** (Full, Fenced, Box: axis
+  set on the max, the Tukey upper fence or Q3) and an **"independent scales"** toggle
+  (each row on its own axis). A "›" / "‹" mark flags an out-of-frame observation
+  without drawing it. Zoom and axis are remembered per browser (`localStorage`).
+- Daemon, additive: `GET /stats/cost` exposes `median_usd` next to `average_usd`;
+  `GET /stats/performance` adds `fence_low` / `fence_high` (observed Tukey fences) to the
+  six stats, computed on the daemon side.
 
 ## 1.89.0
-**Fetch avant la coupe et avertissement sur la branche source** (#804, story #801).
+**Fetch before the cut and warning on the source branch.**
 
-- Un Trigger qui tire sur `origin/<branche>` **fetch d'abord** (borné à 20 s) puis coupe sur le
-  tip amont réel : un commit poussé et jamais fetché est quand même pris. Un tick
-  `skipped-overlap` ne touche pas au réseau.
-- Un fetch raté **ne bloque pas** le tir : le Run démarre sur le dernier état connu localement,
-  et l'événement `run_started` porte `source_fetch_error` (`kind` + stderr de git). La vue du Run
-  le dit sans le peindre en échec : encart « Started on local state · fetch failed » dans Info,
-  marqueur `CloudOff` sur la ligne `branche · sha` du dépôt primaire dans Repositories.
-- Dans le formulaire de Trigger (création et édition), une branche **locale** porte un
-  avertissement : chaque tir coupe depuis son état local, que le fetch ne fait pas bouger ;
-  préférer `origin/<branche>`. La liste et le détail du Trigger ne changent pas.
+- A Trigger that fires on `origin/<branch>` **fetches first** (bounded to 20 s) then cuts on the
+  real upstream tip: a commit pushed and never fetched is still picked up. A
+  `skipped-overlap` tick does not touch the network.
+- A failed fetch **does not block** the firing: the Run starts on the last locally known state,
+  and the `run_started` event carries `source_fetch_error` (`kind` + git's stderr). The Run view
+  says so without painting it as a failure: "Started on local state · fetch failed" callout in Info,
+  `CloudOff` marker on the primary repository's `branch · sha` line in Repositories.
+- In the Trigger form (creation and edition), a **local** branch carries a
+  warning: each firing cuts from its local state, which the fetch does not move;
+  prefer `origin/<branch>`. The Trigger list and detail do not change.
 
 ## 1.88.0
-**Fast-forward sans perte depuis le popover de synchro et dérive de la source affichée sur le
-Run** (#803, story #801).
+**Lossless fast-forward from the sync popover and source drift shown on the Run.**
 
-- Le popover de synchro de New Run propose un **fast-forward** de la branche locale quand elle
-  est strictement en retard sur sa branche de suivi. Le verbe daemon (`POST /repos/fast-forward`)
-  avance la référence *et* l'arbre de travail ; il refuse sans rien toucher, avec une cause nommée
-  (`dirty_tree`, `diverged`, `checked_out_elsewhere`, `no_upstream`, `up_to_date`), et chaque
-  refus offre le raccourci « Lancer depuis `origin/<branche>` ». PDO ne merge, ne rebase et ne
-  pousse jamais.
-- Le popover relit l'écart ahead/behind à chaque ouverture (sans fetch implicite, ADR-0070) et la
-  carte de résultat s'efface sur « Fetch again ».
-- La vue d'un Run affiche la **dérive de sa source** en chip `n↑ m↓` (Info et onglet
-  Repositories) : commits sur la branche du Run depuis la coupe, et commits arrivés sur la source
-  (`main +x · origin/main +y`) ; un bouton fetch met à jour la part distante. Un Run archivé passe
-  le chip en `unavailable`.
+- The New Run sync popover offers a **fast-forward** of the local branch when it is
+  strictly behind its tracking branch. The daemon verb (`POST /repos/fast-forward`)
+  advances the reference *and* the working tree; it refuses without touching anything, with a named cause
+  (`dirty_tree`, `diverged`, `checked_out_elsewhere`, `no_upstream`, `up_to_date`), and each
+  refusal offers the shortcut "Run from `origin/<branch>`". PDO never merges, rebases or
+  pushes.
+- The popover rereads the ahead/behind gap on each opening (no implicit fetch) and the
+  result card clears on "Fetch again".
+- A Run's view shows the **drift of its source** as an `n↑ m↓` chip (Info and Repositories
+  tab): commits on the Run's branch since the cut, and commits that arrived on the source
+  (`main +x · origin/main +y`); a fetch button updates the remote part. An archived Run turns
+  the chip into `unavailable`.
 
 ## 1.87.0
-**Quick pick de branches, fetch à l'ouverture et bouton de synchro** (#802, story #801).
+**Branch quick pick, fetch on open and sync button.**
 
-- Le champ « branche source » de New Run devient un quick pick à la VS Code : recherche par
-  fragment, branches locales et distantes groupées, âge et sujet du dernier commit, chip
-  d'écart `n↑ m↓` par ligne.
-- Ouvrir la modale ou changer de dépôt cible déclenche un `git fetch` (borné à 20 s) ; la
-  fraîcheur (`fetched N ago`) est lue depuis `.git/FETCH_HEAD`, sans état stocké côté PDO.
-- Un bouton de synchro expose cinq états (`behind`, `diverged`, `up to date`, `fetching`,
-  `unknown`) ; un fetch raté n'écrase pas la date du dernier succès et ne bloque pas le
-  lancement. Le raccourci bascule la sélection sur `origin/<branche>`, et le Run coupe alors
-  sur le tip amont réel.
-- Chaque dépôt secondaire porte sa propre fraîcheur (même composant).
+- The New Run "source branch" field becomes a VS Code style quick pick: search by
+  fragment, local and remote branches grouped, age and subject of the last commit, `n↑ m↓` gap
+  chip on each row.
+- Opening the modal or changing the target repository triggers a `git fetch` (bounded to 20 s);
+  freshness (`fetched N ago`) is read from `.git/FETCH_HEAD`, with no state stored on the PDO side.
+- A sync button exposes five states (`behind`, `diverged`, `up to date`, `fetching`,
+  `unknown`); a failed fetch does not overwrite the date of the last success and does not block
+  the launch. The shortcut switches the selection to `origin/<branch>`, and the Run then cuts
+  on the real upstream tip.
+- Each secondary repository carries its own freshness (same component).
 
 ## 1.86.2
-**Niveaux d'effort par modèle** (#798).
+**Effort levels per model.**
 
-- Le catalogue du harnais gagne une cinquième source (RPC) : une session `--mode rpc` liste
-  les modèles puis interroge **les niveaux de réflexion offerts par chaque modèle**
-  (`get_available_thinking_levels`). Le catalogue expose désormais `model_efforts` —
-  clé absente = inconnu (repli sur l'axe global), clé présente (même vide) = connue.
-- Les sélecteurs d'effort (profil d'agent, agent personnalisé d'instance, Node Inspector,
-  Merge Inspector) n'offrent que les niveaux que le modèle sélectionné supporte ; une valeur
-  explicite devenue non supportée reste visible mais désactivée, avec un avertissement.
+- The harness catalog gains a fifth source (RPC): a `--mode rpc` session lists
+  the models then queries **the thinking levels offered by each model**
+  (`get_available_thinking_levels`). The catalog now exposes `model_efforts`:
+  key absent = unknown (fall back to the global axis), key present (even empty) = known.
+- The effort pickers (agent profile, instance custom agent, Node Inspector,
+  Merge Inspector) only offer the levels the selected model supports; an explicit value
+  that became unsupported stays visible but disabled, with a warning.
 
 ## 1.86.1
-**Outputs hérités d'une exécution précédente** (#796).
+**Outputs inherited from a previous execution.**
 
-- Le commit de complétion d'un nœud **n'embarque plus `.pdo/artifacts/`**, même si le dépôt
-  cible n'ignore pas `.pdo/` (amendement d'ADR-0060). Le reste de `.pdo/` suit toujours le
-  `.gitignore` du dépôt cible.
-- `GET /runs/{run}/nodes/{node}/io` marque `inherited: true` un fichier de sortie plus ancien
-  que le `started_at` de l'itération (ou du Run si le nœud n'a jamais démarré), **ou suivi par
-  git dans le worktree et non modifié** (arrivé avec le checkout, quel que soit son mtime ;
-  un fichier suivi que l'exécution courante a réécrit redevient sa propre sortie) ; le panneau le
-  badge « inherited » et **n'affiche pas son verdict** de frontmatter. Une liste d'images
-  mixte affiche « k inherited » et grise les vignettes concernées. Le fichier reste listé
-  (ADR-0049 : l'agent relancé bâtit dessus).
-- `GET /runs/{run}/artifact` répond `Cache-Control: no-store`.
-- Le préambule ne présente plus comme « sortie partielle de la tentative interrompue » un
-  fichier plus ancien que le Run lui-même, ni un fichier **suivi par git et non modifié** — le
-  checkout du worktree ayant lieu quelques ms *après* le démarrage du Run, seul le signal git
-  écarte le rapport d'un autre ticket hérité via la branche source. Un fichier suivi que la
-  tentative interrompue a réécrit reste transmis à l'agent relancé (ADR-0049).
+- A node's completion commit **no longer embeds `.pdo/artifacts/`**, even if the target
+  repository does not ignore `.pdo/` (amendment to an earlier decision record). The rest of `.pdo/` still follows the
+  target repository's `.gitignore`.
+- `GET /runs/{run}/nodes/{node}/io` marks `inherited: true` an output file older than the
+  iteration's `started_at` (or the Run's if the node never started), **or tracked by
+  git in the worktree and unmodified** (arrived with the checkout, whatever its mtime;
+  a tracked file that the current execution rewrote becomes its own output again); the panel
+  badges it "inherited" and **does not show its frontmatter verdict**. A mixed image
+  list shows "k inherited" and greys out the thumbnails concerned. The file stays listed
+  (the restarted agent builds on it).
+- `GET /runs/{run}/artifact` answers `Cache-Control: no-store`.
+- The preamble no longer presents as "partial output of the interrupted attempt" a file
+  older than the Run itself, nor a file **tracked by git and unmodified**: the
+  worktree checkout happening a few ms *after* the Run starts, only the git signal
+  keeps out another ticket's report inherited through the source branch. A tracked file that the
+  interrupted attempt rewrote is still passed to the restarted agent.
 
 ## 1.86.0
-**Attente déclarée, préambule de base, attente d'enfants** (#793 ; story #588, ADR-0069).
+**Declared wait, base preamble, children wait.**
 
-- **Attente déclarée.** Un nœud `interactive` fraîchement spawné n'est plus `awaiting_user` :
-  il a la couleur d'un nœud qui travaille. L'agent déclare son attente avec
-  `pdo wait-user [--message "<question>"]` (accepté sur tout nœud à session vivante,
-  interactif ou non ; refus nommé `node_is_script` / `node_session_not_live` — tmux fait foi,
-  pas la seule projection : un pane mort avant le passage du balayage est refusé — exit 3 ;
-  idempotent) : nœud et run passent `awaiting_user`, le message (≤ 100 caractères) est la
-  raison en bannière et dans `awaiting_reason`, **sans** `awaiting_reason_code`. Le refus
-  `completion_not_released` d'un `pdo complete` déclare aussi l'attente. Retour à `running`
-  sur la **touche Entrée** d'un humain traversant le pont PTY de l'UI (après au moins un
-  octet tapé depuis la déclaration ; flèches, molette, souris et `paste_text` ne comptent
-  pas) — nouvel événement `node_resumed` — ou sur la libération de la complétion (ADR-0068).
-- **Cassant — préambule.** Le préambule est identique pour tous les nœuds agentiques : plus
-  de bloc Completion interactif ni de section « Orchestration — creating child Runs ». Les
-  toggles n'ajoutent que les lignes d'invocation `/pdo-interactive` et/ou `/pdo-orchestrate`
-  après le prompt du rôle (miroir byte à byte dans l'inspecteur). Le skill seedé
-  **`pdo-interactive`** (verrouillé, `skill_version: 1`) porte la conduite ; le toggle
-  `interactive` sème sa référence comme `orchestrator` sème `pdo-orchestrate`.
-  **`pdo-orchestrate`** passe en `skill_version: 3` : section « Waiting for your children »
-  autour de `pdo run wait`, contrat de liaison déplacé depuis l'amendement, plus aucun
-  sondage périodique. Le mécanisme de seed porte une liste.
-- **Attente d'enfants.** `pdo run wait [--all] [--timeout <s>]` depuis une session de nœud :
-  long-poll bloquant sur `GET /runs/{run}/nodes/{node}/children/wait` (retenu côté daemon
-  25 s au plus, la CLI reboucle). Exit 0 + une ligne JSON par enfant devenu terminal
-  (`run_id`, `name`, `status`, `reason`, `children_active`) ; exit **2** sur délai écoulé
-  (rien sur stdout) ; exit 1 daemon injoignable ou hors session (`not_in_node_session`) ;
-  aucun enfant actif ⇒ `{"noop":true,…}`. Un enfant `awaiting_user` ne réveille pas l'appel
-  mais rend le nœud parent et son run `awaiting_user` **par dérivation à la lecture**
-  (liste, détail, enfants ; rien d'écrit dans le log du parent ; récursif sur l'arbre),
-  raison « child run <nom> is awaiting you », nœud parent `awaiting.cause = child_awaiting`
-  (sa dernière itération aussi, pour que la bannière du détail de nœud s'affiche).
-- **Wire.** `nodes.<id>.awaiting` (`cause`, `message`, `since`, `child_run_id`) sur
-  `GET /runs/{id}` ; `awaiting_reason` d'un run peut désormais être une attente déclarée (le
-  slug `awaiting_reason_code` reste le seul marqueur d'incident).
+- **Declared wait.** A freshly spawned `interactive` node is no longer `awaiting_user`:
+  it has the color of a working node. The agent declares its wait with
+  `pdo wait-user [--message "<question>"]` (accepted on any node with a live session,
+  interactive or not; named refusal `node_is_script` / `node_session_not_live`: tmux is the
+  authority, not the projection alone: a pane dead before the sweep ran is refused, exit 3;
+  idempotent): node and run turn `awaiting_user`, the message (≤ 100 characters) is the
+  reason in the banner and in `awaiting_reason`, **without** `awaiting_reason_code`. The
+  `completion_not_released` refusal of a `pdo complete` also declares the wait. Back to `running`
+  on a human's **Enter key** crossing the UI's PTY bridge (after at least one
+  byte typed since the declaration; arrows, wheel, mouse and `paste_text` do not count)
+  (new `node_resumed` event) or on the release of the completion.
+- **Breaking: preamble.** The preamble is identical for all agentic nodes: no more
+  interactive Completion block nor "Orchestration: creating child Runs" section. The
+  toggles only add the `/pdo-interactive` and/or `/pdo-orchestrate` invocation lines
+  after the role prompt (byte-for-byte mirror in the inspector). The seeded skill
+  **`pdo-interactive`** (locked, `skill_version: 1`) carries the conduct; the `interactive`
+  toggle seeds its reference as `orchestrator` seeds `pdo-orchestrate`.
+  **`pdo-orchestrate`** moves to `skill_version: 3`: "Waiting for your children" section
+  around `pdo run wait`, binding contract moved from the amendment, no more periodic
+  polling. The seed mechanism carries a list.
+- **Children wait.** `pdo run wait [--all] [--timeout <s>]` from a node session: blocking
+  long-poll on `GET /runs/{run}/nodes/{node}/children/wait` (held on the daemon side at most
+  25 s, the CLI loops). Exit 0 + one JSON line per child that became terminal
+  (`run_id`, `name`, `status`, `reason`, `children_active`); exit **2** on timeout
+  (nothing on stdout); exit 1 daemon unreachable or outside a session (`not_in_node_session`);
+  no active child: `{"noop":true,…}`. An `awaiting_user` child does not wake the call
+  but makes the parent node and its run `awaiting_user` **by derivation at read time**
+  (list, detail, children; nothing written to the parent's log; recursive on the tree),
+  reason "child run <name> is awaiting you", parent node `awaiting.cause = child_awaiting`
+  (its last iteration too, so that the node detail banner shows).
+- **Wire.** `nodes.<id>.awaiting` (`cause`, `message`, `since`, `child_run_id`) on
+  `GET /runs/{id}`; a run's `awaiting_reason` can now be a declared wait (the
+  `awaiting_reason_code` slug remains the only incident marker).
 
 ## 1.85.0
-**Messages de pilotage (Steering) dans Stats › Performance** (#792 ; spec #791, story #790).
-Troisième métrique `Steering` (messages tapés par un humain par exécution) sur les axes pipeline
-et modèle, plus une carte `Steered executions` (part des exécutions réussies avec ≥ 1 message).
-Le compteur est dérivé des transcripts (claude, copilot, pi), jamais persisté : prompt de
-lancement exclu, messages collés par le daemon exclus via le préfixe `[pdo-runtime]` désormais
-posé au goulot tmux (`send_message` / `paste_message`). opencode et Infrastructure affichent « — »
-avec une raison, jamais `0`. Huitième capacité « Steering » dans la table de support des harness.
+**Steering messages in Stats › Performance.**
+Third metric `Steering` (messages typed by a human per execution) on the pipeline and model
+axes, plus a `Steered executions` card (share of successful executions with ≥ 1 message).
+The counter is derived from transcripts (claude, copilot, pi), never persisted: launch prompt
+excluded, messages pasted by the daemon excluded via the `[pdo-runtime]` prefix now
+set at the tmux chokepoint (`send_message` / `paste_message`). opencode and Infrastructure show `—`
+with a reason, never `0`. Eighth "Steering" capability in the harness support table.
 
 ## 1.84.1
-**Sélection texte du terminal effacée au premier mouvement de souris** (#788).
-Avec le mode souris de tmux (suivi de tout mouvement, DECSET 1003), xterm.js rapportait chaque
-déplacement du pointeur sans bouton au pty et effaçait sa propre sélection sur cette « saisie »,
-rendant la copie quasi impossible. Ces mouvements sont désormais stoppés en phase de capture tant
-qu'une sélection existe ; glisser, clic et molette passent toujours.
+**Terminal text selection cleared on the first mouse movement.**
+With tmux mouse mode (tracking every movement, DECSET 1003), xterm.js reported each
+buttonless pointer move to the pty and cleared its own selection on that "input",
+making copying nearly impossible. These moves are now stopped in the capture phase as long
+as a selection exists; drag, click and wheel still pass.
 
 ## 1.84.0
-**Liste de runs en arbre** (#784 ; story #783).
-Les runs enfants (créés via `pdo run create` depuis une session de nœud) se replient sous leur
-parent : seules les racines sont au niveau 0, un chevron déplie chaque parent, et une rangée de
-compteurs agrège le sous-arbre (finished / failed / stale / running). Un bouton global déplie ou
-replie tout ; la préférence « Child runs » des Settings (locale à l'appareil) fixe l'état par
-défaut. Le filtre pipeline garde le parent d'un enfant filtré ; un parent archivé redevient
-feuille et ses enfants remontent en racines. Le nœud orchestrateur et son onglet Orchestration
-affichent une pastille orange pour les enfants « stale ».
+**Run list as a tree.**
+Child runs (created via `pdo run create` from a node session) collapse under their
+parent: only roots are at level 0, a chevron expands each parent, and a row of
+counters aggregates the subtree (finished / failed / stale / running). A global button expands or
+collapses everything; the Settings "Child runs" preference (local to the device) sets the default
+state. The pipeline filter keeps the parent of a filtered child; an archived parent becomes a
+leaf again and its children move up as roots. The orchestrator node and its Orchestration tab
+show an orange badge for "stale" children.
 
 ## 1.83.0
-**Fichiers et images transmis au run enfant** (#779).
-`POST /runs` multipart accepte un champ répétable `files` à côté d'`images` : tout fichier atterrit dans
-`_input/` du worktree enfant, le nœud d'entrée le voit sous `## Input Files` dans son préambule et sur son
-port d'entrée. Un doublon de nom est **refusé** (400 nommé) au lieu d'écraser en silence. `pdo run create`
-gagne `--input-file`, `--image` et `--file` et bascule en multipart dès qu'une pièce jointe est présente.
-La modale « New run » remplace le champ « Images » par « Attachments » (vignettes + puces, compteur, budget).
-**Nouveau réglage** `max_attachments_mb` (défaut 50, env `PDO_MAX_ATTACHMENTS_MB`) : un seul budget par run,
-partagé entre la limite du corps `POST /runs` et la garde côté client. Le skill seedé `pdo-orchestrate` passe
-en `skill_version: 2` et corrige ses exemples (`--pipeline`/`--project`/`--variable` n'existaient pas).
+**Files and images passed to the child run.**
+`POST /runs` multipart accepts a repeatable `files` field next to `images`: any file lands in
+`_input/` of the child worktree, the input node sees it under `## Input Files` in its preamble and on its
+input port. A duplicate name is **refused** (named 400) instead of silently overwriting. `pdo run create`
+gains `--input-file`, `--image` and `--file` and switches to multipart as soon as an attachment is present.
+The "New run" modal replaces the "Images" field with "Attachments" (thumbnails + chips, counter, budget).
+**New setting** `max_attachments_mb` (default 50, env `PDO_MAX_ATTACHMENTS_MB`): a single budget per run,
+shared between the `POST /runs` body limit and the client-side guard. The seeded `pdo-orchestrate` skill moves
+to `skill_version: 2` and fixes its examples (`--pipeline`/`--project`/`--variable` did not exist).
 
 ## 1.81.0
-**Déploiement derrière un reverse proxy** (#769 ; story #766, ADR-0019).
-`pdo daemon` et `pdo service install` acceptent désormais `--bind <ip>` ou `PDO_BIND`.
-L'adresse explicite survit aux mises à jour, les unités de service dédupliquent leur `PATH` et
-précisent que les harnais utilisent le `PATH` du shell interactif (ADR-0055). Le README regroupe
-les commandes `pdo` dans une table et documente le drop-in systemd persistant.
+**Deployment behind a reverse proxy.**
+`pdo daemon` and `pdo service install` now accept `--bind <ip>` or `PDO_BIND`.
+The explicit address survives updates, the service units deduplicate their `PATH` and
+state that harnesses use the interactive shell's `PATH`. The README groups
+the `pdo` commands in a table and documents the persistent systemd drop-in.
 
 ## 1.80.0
-**Nœud interactif — « Mark ready for completion » rend la complétion à l'agent** (#764 ; story #763, ADR-0068).
-Sur un nœud `interactive`, `pdo complete` lancé par l'agent est désormais **refusé** (exit 3, garde
-`completion_not_released`) tant que l'utilisateur n'a pas libéré la complétion : l'agent est invité à demander le clic.
-Le panneau du nœud propose deux boutons côte à côte : **Mark complete** (prend les artefacts tels quels, complète
-immédiatement — comportement inchangé) et **Mark ready for completion** (`POST /runs/{id}/nodes/{node}/release`,
-commande `release_node_completion`, évènement `node_completion_released`, idempotent). Une fois libéré, le nœud repasse
-`running`, le Run n'est plus `awaiting_user`, et c'est l'agent qui complète quand il a fini. La libération est
-refusée (409 `run_not_live`) sans session vivante.
+**Interactive node: "Mark ready for completion" hands completion back to the agent.**
+On an `interactive` node, `pdo complete` run by the agent is now **refused** (exit 3, guard
+`completion_not_released`) until the user has released completion: the agent is invited to ask for the click.
+The node panel offers two buttons side by side: **Mark complete** (takes the artifacts as they are, completes
+immediately: behavior unchanged) and **Mark ready for completion** (`POST /runs/{id}/nodes/{node}/release`,
+command `release_node_completion`, event `node_completion_released`, idempotent). Once released, the node goes back to
+`running`, the Run is no longer `awaiting_user`, and the agent completes when it is done. Release is
+refused (409 `run_not_live`) without a live session.
 ## 1.79.0
-**Page de Review — report / outdated des commentaires, accès rapide Review, onglet Repositories** (#752 ; story #746, ADR-0067).
-Quand la paire affichée a bougé depuis l'écriture d'un commentaire (relivraison d'un nœud, merge-back), le daemon
-**mappe l'ancre à la lecture** (`GET /runs/{id}/review/comments?from=&to=` ajoute `outdated` / `mapped_line` / `moved`
-et renvoie `from_sha` / `to_sha`) : ligne inchangée → commentaire **reporté** à sa nouvelle position (chip `↳ from R…`
-quand le numéro diffère) ; ligne éditée ou supprimée → **outdated**, replié en tête du fichier avec son hunk d'origine,
-toujours répondable / résolvable. Rien n'est écrit dans l'event log : l'ancre d'origine reste la vérité, et
-`pdo review list` (fork → tip) expose `outdated` au manager. Bascule `Show outdated` (mémorisée par navigateur).
-Toolbar du canvas : le bouton « Run repositories » disparaît, remplacé par un lien **Review** avec pastille des
-commentaires en attente (bleu contour = envoyés non résolus, bleu plein = réponse non lue, ambre = résolution
-proposée), sur tout Run non archivé. La sidebar `RunInfoSidebar` est supprimée : **Repositories** devient un onglet
-du panneau du Run (`Info | Diff | Repositories | Manager | YAML`), l'en-tête Info porte la raison d'échec / d'attente
-et la note d'édition. Couvre la seconde moitié de #566 (laissé ouvert).
+**Review page: comment carry-over / outdated, Review quick access, Repositories tab.**
+When the displayed pair has moved since a comment was written (node redelivery, merge-back), the daemon
+**maps the anchor at read time** (`GET /runs/{id}/review/comments?from=&to=` adds `outdated` / `mapped_line` / `moved`
+and returns `from_sha` / `to_sha`): unchanged line -> comment **carried over** to its new position (chip `↳ from R…`
+when the number differs); edited or deleted line -> **outdated**, collapsed at the top of the file with its original hunk,
+still replyable / resolvable. Nothing is written to the event log: the original anchor remains the truth, and
+`pdo review list` (fork -> tip) exposes `outdated` to the manager. `Show outdated` toggle (remembered per browser).
+Canvas toolbar: the "Run repositories" button goes away, replaced by a **Review** link with a badge for pending
+comments (outlined blue = sent unresolved, solid blue = unread reply, amber = resolution
+proposed), on every non-archived Run. The `RunInfoSidebar` sidebar is removed: **Repositories** becomes a tab
+of the Run panel (`Info | Diff | Repositories | Manager | YAML`), the Info header carries the failure / wait reason
+and the edit note. Covers the second half of an earlier ticket (left open).
 ## 1.78.0
-**Page de Review — conversation avec l'agent** (#751 ; story #746, ADR-0067).
-Un commentaire envoyé devient un **fil** : l'agent répond avec `pdo review list [--state open|resolved|all]`
-et `pdo review reply <rc-id> --text "…" [--resolved]` (auteur déduit de la session : `manager` ou l'id du
-nœud). Les évènements `review_comment_replied` / `resolved` / `reopened` sont désormais émis et projetés
-(`proposal_pending`, `resolved_by`, `reopened_by`, `proposal_declined`). Par défaut, un `--resolved` de
-l'agent n'est qu'une **proposition** : la carte passe en ambre et l'humain tranche avec **Resolve** /
-**Reopen** (Reopen sur une proposition = refus, le commentaire reste ouvert). Nouveau réglage d'instance
-`review_agent_can_resolve` (`PUT /settings`, env `PDO_REVIEW_AGENT_CAN_RESOLVE`, défaut `false`, case
-Settings › Runs « Let the agent resolve review comments directly ») : quand il est actif, l'agent résout
-directement et l'humain peut rouvrir. Endpoints `POST /runs/{id}/review/comments/{rc}/reply|resolve|reopen`
-(idempotents, `changed: false` sans évènement), `GET …/review/comments?state=`. Côté UI : icônes d'état
-(ouvert / proposé / résolu) et d'auteur, cartes résolues repliées sur une ligne, pastille cloche des
-réponses non lues (mémorisées par navigateur), bascule œil pour masquer le résolu, badge bleu sur l'onglet
-Diff du Run tant qu'une réponse n'est pas lue. Le prompt builtin du manager documente le CLI.
+**Review page: conversation with the agent.**
+A sent comment becomes a **thread**: the agent replies with `pdo review list [--state open|resolved|all]`
+and `pdo review reply <rc-id> --text "…" [--resolved]` (author inferred from the session: `manager` or the
+node id). The `review_comment_replied` / `resolved` / `reopened` events are now emitted and projected
+(`proposal_pending`, `resolved_by`, `reopened_by`, `proposal_declined`). By default, an agent's `--resolved` is only a
+**proposal**: the card turns amber and the human decides with **Resolve** /
+**Reopen** (Reopen on a proposal = refusal, the comment stays open). New instance setting
+`review_agent_can_resolve` (`PUT /settings`, env `PDO_REVIEW_AGENT_CAN_RESOLVE`, default `false`, checkbox
+Settings › Runs "Let the agent resolve review comments directly"): when active, the agent resolves
+directly and the human can reopen. Endpoints `POST /runs/{id}/review/comments/{rc}/reply|resolve|reopen`
+(idempotent, `changed: false` without event), `GET …/review/comments?state=`. UI side: state icons
+(open / proposed / resolved) and author icons, resolved cards collapsed to one line, bell badge for
+unread replies (remembered per browser), eye toggle to hide resolved, blue badge on the Run's
+Diff tab as long as a reply is unread. The manager's builtin prompt documents the CLI.
 ## 1.77.0
 
-**Page de Review — commentaires inline, brouillons et envoi au manager** (#750 ; story #746, ADR-0067).
-Le widget `+` d'une ligne du diff ouvre un éditeur sous la ligne (Write/Preview markdown, ⌘/Ctrl+Entrée,
-Échap, Cancel · Send now · Save draft). Un **brouillon** vit dans le navigateur (`localStorage` par Run,
-texte en cours en `sessionStorage`), éditable et supprimable, marqué d'un point ambre sur la ligne.
-L'envoi — par carte, via la pastille de la barre d'outils ou la barre de pied de page « Send all » —
-écrit un évènement `review_comment_sent` par commentaire (ids `rc-001…`, `batch_id` partagé, paire de
-refs et SHAs), projeté dans `RunState.review_comments` (absent quand vide : payloads historiques
-inchangés), et colle **un seul message** dans le pane du manager (démarré à la demande) via
-`load-buffer` + `paste-buffer`. Un commentaire envoyé devient immuable et affiche `rc-NNN · paire ·
-Awaiting manager reply`. Nouveaux endpoints `GET /runs/{id}/review/comments` et
-`POST /runs/{id}/review/comments/send` ; branche du Run disparue ou Run archivé → `409 run_branch_gone`,
-envoi désactivé avec la raison, rien n'est écrit. Les évènements `review_comment_replied` /
-`resolved` / `reopened` sont définis mais pas encore émis (#751). Le prompt builtin du manager gagne
-une section « Review comments ». Navigation entre commentaires : `c` / `C`.
+**Review page: inline comments, drafts and send to the manager.**
+The `+` widget on a diff line opens an editor under the line (Write/Preview markdown, ⌘/Ctrl+Enter,
+Esc, Cancel · Send now · Save draft). A **draft** lives in the browser (`localStorage` per Run,
+in-progress text in `sessionStorage`), editable and deletable, marked with an amber dot on the line.
+Sending (per card, via the toolbar badge or the "Send all" footer bar)
+writes one `review_comment_sent` event per comment (ids `rc-001…`, shared `batch_id`, ref pair
+and SHAs), projected into `RunState.review_comments` (absent when empty: historical payloads
+unchanged), and pastes **a single message** into the manager's pane (started on demand) via
+`load-buffer` + `paste-buffer`. A sent comment becomes immutable and shows `rc-NNN · pair ·
+Awaiting manager reply`. New endpoints `GET /runs/{id}/review/comments` and
+`POST /runs/{id}/review/comments/send`; Run branch gone or Run archived -> `409 run_branch_gone`,
+sending disabled with the reason, nothing is written. The `review_comment_replied` /
+`resolved` / `reopened` events are defined but not emitted yet. The manager's builtin prompt gains
+a "Review comments" section. Navigation between comments: `c` / `C`.
 
 ## 1.76.0
 
-**Page de Review — relecture de diff GitHub-like** (#749 ; story #746, ADR-0067). Depuis l'onglet Diff,
-« Expand and comment » ouvre `/runs/<id>/review`, une page à part entière (nouvel onglet, rechargeable,
-paire de refs dans l'URL). Elle liste les fichiers à gauche avec leurs +/−, rend le diff **side-by-side**
-par défaut (bascule unifiée mémorisée en local) via un composant tiers (`@git-diff-view/react`), et
-permet d'**étendre le contexte** caché entre les hunks depuis le contenu du fichier à une ref. Un
-sélecteur **source → destination** propose les refs du Run exposées par le nouveau `GET /runs/{id}/refs` :
-point de fork, tip, et pour chaque nœud livré ses `before`/`after` libellés par nom et itération ;
-défaut fork → tip, ref inconnue → repli sur le défaut avec avis. Le panneau d'un nœud livré ou en cours
-gagne le raccourci « Review this node's delivery ». Aucune surface « diff de nœud » ; les commentaires
-viendront dans un ticket suivant.
+**Review page: GitHub-like diff review.** From the Diff tab,
+"Expand and comment" opens `/runs/<id>/review`, a full page (new tab, reloadable,
+ref pair in the URL). It lists the files on the left with their +/−, renders the diff **side-by-side**
+by default (unified toggle remembered locally) via a third-party component (`@git-diff-view/react`), and
+lets you **expand the context** hidden between hunks from the file's content at a ref. A
+**source -> destination** picker offers the Run's refs exposed by the new `GET /runs/{id}/refs`:
+fork point, tip, and for each delivered node its `before`/`after` labeled by name and iteration;
+default fork -> tip, unknown ref -> fall back to the default with a notice. The panel of a delivered or running node
+gains the "Review this node's delivery" shortcut. No "node diff" surface; comments
+will come in a later ticket.
 
 ## 1.75.0
 
-**Onglet Diff de niveau Run qui fonctionne** (#748 ; story #746, ADR-0067). Le diff d'un Run est
-désormais calculé dans le **dépôt effectif** du Run (le repo cible du worktree), plus dans
-`state.repo_root` — sur un repo cible distinct du cwd du daemon il rendait « No changes ». Le daemon
-expose `GET /runs/{id}/diff/structured` (fichiers, hunks, compteurs +/−, refs fork → tip) et
-`GET /runs/{id}/file?path=…` (garde-fous : chemin hors dépôt → 400, ref/option → 400, inconnu → 404).
-Côté UI, la section Diff de l'onglet Info devient un **onglet Diff** dédié (`Info | Diff | Manager | YAML`) :
-résumé collant, ledger des fichiers, transcript plat avec repli par fichier persistant entre onglets,
-surlignage intra-ligne. Un Run **archivé** affiche « Diff not preserved for archived runs » (404 côté API).
-Le sélecteur de nœud et la section Diff de l'onglet Info sont retirés ; la stat *Changes* ouvre l'onglet Diff.
+**Run-level Diff tab that works.** A Run's diff is
+now computed in the Run's **effective repository** (the worktree's target repo), no longer in
+`state.repo_root`: on a target repo distinct from the daemon's cwd it rendered "No changes". The daemon
+exposes `GET /runs/{id}/diff/structured` (files, hunks, +/− counters, fork -> tip refs) and
+`GET /runs/{id}/file?path=…` (guards: path outside the repository -> 400, ref/option -> 400, unknown -> 404).
+UI side, the Diff section of the Info tab becomes a dedicated **Diff tab** (`Info | Diff | Manager | YAML`):
+sticky summary, file ledger, flat transcript with per-file collapse persisted across tabs,
+intra-line highlighting. An **archived** Run shows "Diff not preserved for archived runs" (404 on the API side).
+The node picker and the Diff section of the Info tab are removed; the *Changes* stat opens the Diff tab.
 
 ## 1.74.0
 
-**Page mounts — `pdo page mount|unmount|list` et service en lecture seule sous `/pages/<name>/`**
-(#743 ; story #674, ADR-0066, amendement de l'ADR-0028). Un agent ou un opérateur lie un nom à un
-répertoire du disque et l'ouvre aussitôt dans le navigateur en vrai HTML (type MIME deviné, scripts
-exécutés) ; le contenu servi est celui du disque à la requête, sans remount ni rebuild. Mêmes trois
-opérations en HTTP (`GET|POST /pages`, `DELETE /pages/{name}`), montages persistants au redémarrage.
-Un montage fait depuis une session de nœud porte l'id du Run et disparaît à son archivage ; hors Run
-il vit jusqu'au démontage et va dans l'`audit_log`. Fichier manquant sous `/pages/` = vrai 404
-(jamais le shell SPA) ; chemins canonisés et confinés au répertoire monté ; `.pdo/artifacts/` non
-montable. Le stockage vit dans un nouveau fichier `page_mount.rs` du crate daemon (module autonome :
-table + requêtes), d'où le ratchet de layout.
+**Page mounts: `pdo page mount|unmount|list` and read-only serving under `/pages/<name>/`.**
+An agent or an operator binds a name to a
+directory on disk and opens it right away in the browser as real HTML (MIME type guessed, scripts
+executed); the content served is the disk's at request time, with no remount or rebuild. The same three
+operations over HTTP (`GET|POST /pages`, `DELETE /pages/{name}`), mounts persistent across restarts.
+A mount made from a node session carries the Run's id and disappears when it is archived; outside a Run
+it lives until unmounted and goes into the `audit_log`. Missing file under `/pages/` = real 404
+(never the SPA shell); paths canonicalized and confined to the mounted directory; `.pdo/artifacts/` cannot be
+mounted. Storage lives in a new `page_mount.rs` file of the daemon crate (standalone module:
+table + queries), hence the layout ratchet.
 ## 1.73.2
 
-**Le bandeau de démarrage du daemon annonce une URL navigable** (#541). `pdo daemon` écoute toujours
-sur `0.0.0.0:<port>` (#260), mais un navigateur ouvert sur `http://0.0.0.0:<port>` envoie une
-`Origin` que le garde WebSocket (#564) refuse : UI à moitié chargée, pied de page « reconnecting… ».
-La ligne de log garde l'adresse de bind pour l'opérateur et ajoute `— open http://localhost:<port>`
-(bind non spécifié `0.0.0.0`/`::` → `localhost` ; bind concret annoncé tel quel).
+**The daemon startup banner announces a browsable URL.** `pdo daemon` always listens
+on `0.0.0.0:<port>`, but a browser opened on `http://0.0.0.0:<port>` sends an
+`Origin` that the WebSocket guard refuses: half-loaded UI, "reconnecting…" footer.
+The log line keeps the bind address for the operator and adds `— open http://localhost:<port>`
+(unspecified bind `0.0.0.0`/`::` -> `localhost`; concrete bind announced as is).
 
 ## 1.73.1
 
-**Stats › Cost — le headline d'un pipeline n'agrège plus le coût Infrastructure/Unassigned** (#742).
-Seules les contributions `Node` alimentent le headline pipeline/projet et le niveau pipeline de
-l'axe modèle ; les lignes Infrastructure/Unassigned restent listées et drillables, et le total
-d'instance continue de compter chaque contribution (ADR-0058 inchangé) — la somme des lignes peut
-désormais dépasser le headline, c'est voulu.
+**Stats › Cost: a pipeline's headline no longer aggregates Infrastructure/Unassigned cost.**
+Only `Node` contributions feed the pipeline/project headline and the pipeline level of the
+model axis; the Infrastructure/Unassigned rows stay listed and drillable, and the instance
+total still counts every contribution (the earlier decision unchanged): the sum of the rows can
+now exceed the headline, which is intended.
 
 ## 1.73.0
 
-**Stats › Performance « By model » — pic de contexte et durée par modèle** (#737 ; story #733, spec
-#734, ADR-0065). Le deuxième select de groupement (« By pipeline » / « By model ») est indépendant
-du tri (« By context » / « By duration »). En « By model », l'arbre Modèle → effort → Pipeline →
-Node porte le pic de contexte médian et la durée médiane avec les mêmes boîtes à six statistiques,
-`measured` / `expected` / `missing_reasons` inchangés : le pic de chaque fichier de session est
-attribué au **modèle de ce fichier** (un sous-agent a le sien), même découpage que Cost — source
-d'abord (ADR-0065 §1 : `claude` par message, `pi` modèle + fournisseur + niveau de réflexion,
-`copilot` modèle + effort aux points d'usage), repli sur le demandé marqué « ? » sinon, rien
-inventé quand ni l'une ni l'autre ne parle. En « By pipeline », le drill d'un Node se termine par
-ses couples modèle × effort (pics et durées distincts côte à côte) ; la ligne Infrastructure reste
-conservée sur cet axe et hors de l'axe modèle. Provenance en infobulle comme dans Cost. Wire
-additif (`by_model`, `models` sur les feuilles Node) ; memo de Performance invalidé par les mêmes
-empreintes (événements, mtimes) — rien de matérialisé.
+**Stats › Performance "By model": context peak and duration per model.** The second grouping select ("By pipeline" / "By model") is independent
+of the sort ("By context" / "By duration"). In "By model", the Model -> effort -> Pipeline ->
+Node tree carries the median context peak and the median duration with the same six-statistic boxes,
+`measured` / `expected` / `missing_reasons` unchanged: each session file's peak
+is attributed to **that file's model** (a sub-agent has its own), same split as Cost: source
+first (`claude` per message, `pi` model + provider + thinking level, `copilot` model + effort at
+usage points), falling back to the requested one marked "?" otherwise, nothing
+invented when neither speaks. In "By pipeline", a Node's drill ends with
+its model × effort pairs (distinct peaks and durations side by side); the Infrastructure row stays
+kept on this axis and out of the model axis. Provenance in a tooltip as in Cost. Additive wire
+(`by_model`, `models` on Node leaves); Performance memo invalidated by the same
+fingerprints (events, mtimes): nothing materialized.
 
 ## 1.72.0
 
-**Sources pi et copilot — modèle et effort observés, fusion inter-harnais par id verbatim** (#736 ;
-story #733, spec #734, ADR-0065). La capacité de harnais (ADR-0051) étend la source d'identité
-observée au-delà de `claude` : `pi` porte modèle et fournisseur sur chaque message et lit le niveau
-de réflexion dans l'événement de changement de niveau ; `copilot` (vérifié en 1.0.83) journalise
-modèle choisi et effort de raisonnement à l'ouverture de session, puis modèle sur chaque point
-d'usage. L'effort observé prime sur l'effort demandé, provenance dite en infobulle (marque « ? »
-réservée au demandé/mixte) ; un même id de modèle lancé via deux harnais fait **une ligne** à deux
-colonnes harnais, totaux additionnés (ADR-0052) ; le fournisseur n'apparaît qu'en infobulle, jamais
-dans l'identité. Un alias épinglé et un id observé daté restent deux lignes. `opencode`, sans source
-de coût (#561), reste absent de l'axe « By model » et « — » sur les autres axes.
+**pi and copilot sources: observed model and effort, cross-harness merge by verbatim id.** The harness capability
+extends the observed identity source beyond `claude`: `pi` carries model and provider on each message and reads the thinking level
+from the level-change event; `copilot` (verified in 1.0.83) logs the
+chosen model and reasoning effort at session opening, then the model on each usage point.
+Observed effort takes precedence over requested effort, provenance stated in a tooltip ("?" mark
+reserved for requested/mixed); the same model id launched through two harnesses makes **one row** with two
+harness columns, totals added up; the provider only appears in a tooltip, never
+in the identity. A pinned alias and a dated observed id stay two rows. `opencode`, with no cost source,
+stays absent from the "By model" axis and `—` on the other axes.
 
 ## 1.71.0
 
-**Stats › Cost « By model » pour claude** (#735 ; story #733, spec #734, ADR-0065). Le select
-« Cost grouping » gagne l'option « By model » : drill master/detail Modèle → effort → Pipeline →
-Node réutilisant l'existant, ids de modèle verbatim (un alias épinglé et l'id observé restent deux
-lignes, jamais de repli sur une famille). Côté backend, la capacité de harnais (ADR-0051)
-s'enrichit d'une source d'identité observée : `claude` lit le modèle par message des transcripts
-(coût ventilé par message, une session à deux modèles coûtant et comptant dans chaque bucket),
-tandis que `pi`/`copilot`/`opencode` retombent sur le modèle demandé au `node_started` ; le fold
-de coût porte des slices model × effort (effort « not set » italique quand ni demandé ni observé)
-et la memo reste intacte (ADR-0029). Le wire `/stats/cost` s'enrichit additivement : `by_model`,
-couples modèle × effort en feuilles de Node sur les axes By pipeline/By project, provenance
-`observed | requested | mixed` par bucket (marque « ? », les mots vivant dans les infobulles —
-jamais le mot « real »), couvertures par bucket et `by_period` à chaque niveau. Titre
-« per execution » sur l'axe modèle et au niveau Node, « per Run » ailleurs.
+**Stats › Cost "By model" for claude.** The
+"Cost grouping" select gains the "By model" option: master/detail drill Model -> effort -> Pipeline ->
+Node reusing the existing one, verbatim model ids (a pinned alias and the observed id stay two
+rows, never falling back to a family). On the backend, the harness capability
+gains an observed identity source: `claude` reads the per-message model from transcripts
+(cost split per message, a two-model session costing and counting in each bucket),
+while `pi`/`copilot`/`opencode` fall back to the model requested at `node_started`; the cost fold
+carries model × effort slices (effort "not set" in italics when neither requested nor observed)
+and the memo stays intact. The `/stats/cost` wire grows additively: `by_model`,
+model × effort pairs as Node leaves on the By pipeline/By project axes, provenance
+`observed | requested | mixed` per bucket ("?" mark, the words living in tooltips,
+never the word "real"), per-bucket coverage and `by_period` at every level. Title
+"per execution" on the model axis and at the Node level, "per Run" elsewhere.
 
 ## 1.70.0
 
-**Toggle « Orchestrator » + onglet Orchestration + pastilles** (#723 ; story #709, spec #719,
-ADR-0064). Un nœud agent gagne un toggle « Orchestrator » dans son détail d'édition (sous
-« Interactive », gelé au spawn, immuable pendant le run — ADR-0007) qui fait quatre choses : il
-pose la référence du skill `pdo-orchestrate` sur le nœud (visible dans le sélecteur, comptée dans
-le diff sémantique, retirable avec l'avertissement « skill absent » existant) ; il fait
-amender le prompt du NodeRun au spawn d'une ligne d'invocation `/pdo-orchestrate` et du bloc
-de contrat Orchestration — rendus après le prompt de rôle, jamais dans la textarea (toggle et
-texte ne peuvent pas diverger), toggle off étant byte-identique au pré-#723 ; le préambule
-runtime documente `pdo run create` au titre des capacités CLI (universel, pré-#723). En run, le
-panneau de détail du nœud orchestrator se coupe en deux onglets « I/O » (défaut, contenu
-inchangé) et « Orchestration » : la liste des enfants du nœud via `GET /runs/{id}/children`
-(statut, démarré, durée qui tique, coût), un clic sur le titre ouvrant le run enfant avec barre
-« ← Back to Orchestrator » qui revient au parent sur l'onglet Orchestration, et des pastilles
-vert/rouge/bleu avec compteurs (finis/échoués/en cours — un enfant `awaiting_user` compte en
-bleu) en en-tête d'onglet et sur la carte dans le canvas, masquées tant qu'il n'y a aucun enfant.
-Les nœuds sans toggle restent strictement identiques.
-
+**"Orchestrator" toggle + Orchestration tab + badges.** An agent node gains an "Orchestrator" toggle in its edit detail (under
+"Interactive", frozen at spawn, immutable during the run) that does four things: it
+sets the `pdo-orchestrate` skill reference on the node (visible in the picker, counted in the
+semantic diff, removable with the existing "skill missing" warning); it makes the
+NodeRun prompt amended at spawn with a `/pdo-orchestrate` invocation line and the
+Orchestration contract block, rendered after the role prompt, never in the textarea (toggle and
+text cannot diverge), toggle off being byte-identical to before this change; the runtime preamble
+documents `pdo run create` among the CLI capabilities (universal, predating the toggle). In a run, the
+orchestrator node's detail panel splits into two tabs "I/O" (default, content
+unchanged) and "Orchestration": the node's children list via `GET /runs/{id}/children`
+(status, started, ticking duration, cost), a click on the title opening the child run with a
+"← Back to Orchestrator" bar that returns to the parent on the Orchestration tab, and
+green/red/blue badges with counters (finished/failed/in progress; an `awaiting_user` child counts
+as blue) in the tab header and on the card in the canvas, hidden while there are no children.
+Nodes without the toggle stay strictly identical.
 ## 1.69.0
 
-**Le Pipeline Manager devient opt-in** — plus de session `pdo-mgr-*` systématique : un run naît
-sans manager, et l'onglet Manager apparaît sur tout run vivant avec un état vide (« No manager
-on this run », bouton « Start manager », lien vers Settings) ; la session se lance à la demande
-(`POST /runs/{id}/manager/start`, idempotent) et se stoppe avec confirmation en deux temps
-(`POST /runs/{id}/manager/stop`). Deux réglages d'instance rejoignent Settings › Agents ›
-Pipeline Manager : `manager_enabled` (auto-spawn à la création d'un run — machinerie stored →
-env → default d'ADR-0015, seam `PDO_MANAGER_ENABLED`) et `manager_profile`, qui épingle le
-manager sur un profil d'agent (harnais · modèle · effort, écrasant le tier du run) avec repli
-averti « Follow the Run » si le profil nommé a disparu — la valeur stockée n'est jamais
-réécrite, et un PUT nommant un profil inconnu est un 400. `has_manager` est un fait observé
-(sonde `tmux has-session` à chaque `GET /runs/{id}`), jamais un état projeté : arrêt manuel,
-sweep d'orphelins et restart du daemon ne peuvent pas désynchroniser l'UI. La réservation du
-nom passe sur des events `ManagerStarted` / `ManagerStopped` (ADR-0038) émis avant le spawn
-tmux sur tous les chemins, auto comme manuel.
+**The Pipeline Manager becomes opt-in.** There is no longer a systematic `pdo-mgr-*` session: a run is born
+without a manager, and the Manager tab appears on every live run with an empty state ("No manager
+on this run", a "Start manager" button, a link to Settings). The session starts on demand
+(`POST /runs/{id}/manager/start`, idempotent) and stops with a two-step confirmation
+(`POST /runs/{id}/manager/stop`). Two instance settings join Settings > Agents >
+Pipeline Manager: `manager_enabled` (auto-spawn when a run is created, using the stored -> env -> default
+machinery of the decision record, seam `PDO_MANAGER_ENABLED`) and `manager_profile`, which pins the
+manager to an agent profile (harness, model, effort, overriding the run's tier) with a warned fallback
+to "Follow the Run" if the named profile has disappeared. The stored value is never
+rewritten, and a PUT naming an unknown profile is a 400. `has_manager` is an observed fact
+(a `tmux has-session` probe on every `GET /runs/{id}`), never a projected state: a manual stop,
+the orphan sweep and a daemon restart cannot desynchronize the UI. Name reservation
+now goes through `ManagerStarted` / `ManagerStopped` events (see the decision record), emitted before the tmux
+spawn on every path, automatic or manual.
 
 ## 1.68.0
 
-**Liaison forte orchestrateur ↔ enfants** (#724 ; story #709, spec #719, ADR-0064). Un nœud
-portant le toggle « Orchestrator » (posé par #723, gelé dans le snapshot `node_defs` de
-`RunStarted`) ne peut plus se compléter tant que ses runs enfants (`parent_run_id` +
-`parent_node_id`, ADR-0064) sont non terminaux : `pdo complete` est refusé en 409
-`children_pending` avec compteur (active/failed, exit 3 recoverable tant qu'aucun enfant n'a
-échoué, exit 4 dès qu'un enfant est `failed`). Au refus, un marqueur `NodeAwaitingUser`
-(`reason: children_pending`, idempotent) parque le nœud et arme un watcher détaché qui, dès que
-tous les enfants sont terminaux sans échec, complète le nœud par la voie commune (source
-`children_settled` — livraison, validation, terminal, advance identiques à un `pdo complete`).
-Un enfant `awaiting_user`/`paused` retient aussi le nœud ; l'arbitrage utilisateur (retry,
-`Mark complete`) ou le forçage `mark_node_done` — volontairement non gated — dénouent. Aucune
-propagation de mort vers le bas : la liaison ne fait que lire — stop, archive et forget du
-parent ne touchent pas les enfants, un restart ré-adopte les enfants vivants, et un nœud sans
-toggle n'est jamais retenu.
+**Strong link between orchestrator and children.** A node
+carrying the "Orchestrator" toggle (set by an earlier change, frozen in the `node_defs` snapshot of
+`RunStarted`) can no longer complete while its child runs (`parent_run_id` +
+`parent_node_id`) are non-terminal: `pdo complete` is refused with a 409
+`children_pending` and a counter (active/failed; exit 3 recoverable as long as no child has
+failed, exit 4 as soon as a child is `failed`). On refusal, a `NodeAwaitingUser` marker
+(`reason: children_pending`, idempotent) parks the node and arms a detached watcher that, as soon as
+all children are terminal without failure, completes the node through the common path (source
+`children_settled`: delivery, validation, terminal event and advance identical to a `pdo complete`).
+A child that is `awaiting_user` or `paused` also holds the node; user arbitration (retry,
+`Mark complete`) or the `mark_node_done` override, deliberately not gated, resolves it. No
+death propagates downward: the link only reads. Stopping, archiving or forgetting the
+parent does not touch the children, a restart re-adopts the live children, and a node without the
+toggle is never held.
 
 ## 1.66.0
 
-**`pdo run create <pipeline>` — créer un run enfant depuis une session de nœud** (#721 ; story #709,
-spec #719, ADR-0064). Nouvelle sous-commande CLI, client mince de `POST /runs` : chaque champ de
-creation passe en flag (input, variables, skills, agent_choice, harness, sandbox, target_repo(s),
-source_branch, name, auto_name, auto_fail, provisioning). L'identité voyage avec la session,
-jamais dans le corps : lancée depuis une session de nœud (`PDO_RUN_ID` / `PDO_NODE_ID`), la
-sous-commande crée un run mécaniquement lié à ce run + nœud ; hors session, le run est racine et
-`--target-repo` devient obligatoire (refus lisible du daemon, ADR-0033). Le projet de l'enfant
-vaut par défaut celui du parent. Les refus du daemon remontent tels quels sur stderr avec un code
-non nul.
+**`pdo run create <pipeline>`: create a child run from a node session.** A new CLI subcommand, a thin client of
+`POST /runs`: every creation field becomes a flag (input, variables, skills, agent_choice, harness, sandbox,
+target_repo(s), source_branch, name, auto_name, auto_fail, provisioning). Identity travels with the session,
+never in the body: launched from a node session (`PDO_RUN_ID` / `PDO_NODE_ID`), the
+subcommand creates a run mechanically linked to that run and node; outside a session, the run is a root and
+`--target-repo` becomes mandatory (readable refusal from the daemon). The child's Project
+defaults to the parent's. Daemon refusals come back as is on stderr with a non-zero exit code.
 
 ## 1.67.0
 
-**La liste de runs rend visible et navigable la provenance « orchestré »** (#725 ; story #709).
-Tout run enfant porte un badge neutre (GitFork) à côté du badge trigger — accent/Zap pour un
-trigger, gris/GitFork pour un enfant orchestré, les deux coexistent ; un orphelin (parent
-oublié) reste visible mais dimmé et inerte. Le badge est cliquable : il ouvre le run parent
-dans la vue et le met en surbrillance (`stopPropagation`, scroll-into-view). Quatrième axe de
-filtre « racines seules » (chip icon-only GitFork, ON par défaut, offert seulement s'il existe
-au moins un run orchestré) : les enfants disparaissent, le filtre s'applique avant le split
-actifs/archivés, et le ✕ « Clear filters » réinitialise le toggle. Tout est calcul de vue sur
-`parent_run_id` (#720) — aucun endpoint nouveau, symboles seuls dans la liste, mots dans les
-`title` (tooltips comptés : nom du trigger, total d'enfants).
+**The run list makes the "orchestrated" provenance visible and navigable.**
+Every child run carries a neutral badge (GitFork) next to the trigger badge: accent/Zap for a
+trigger, grey/GitFork for an orchestrated child, and both coexist. An orphan (forgotten parent)
+stays visible but dimmed and inert. The badge is clickable: it opens the parent run
+in the view and highlights it (`stopPropagation`, scroll-into-view). A fourth
+"roots only" filter axis (icon-only GitFork chip, ON by default, offered only if at least one
+orchestrated run exists): children disappear, the filter applies before the active/archived
+split, and the "Clear filters" cross resets the toggle. All of it is view computation on
+`parent_run_id`: no new endpoint, symbols only in the list, words in the
+`title` attributes (tooltips counted: trigger name, total number of children).
 
 ## 1.65.0
 
-**Un run créé depuis une session de nœud porte sa provenance mécaniquement** (#720 ; story #709,
-spec #719, ADR-0064). `POST /runs` lit l'identité de session (headers `X-PDO-Session-Run-Id` /
-`X-PDO-Session-Node-Id`, alimentés par `PDO_RUN_ID` / `PDO_NODE_ID` dans le sandbox) et, après
-vérification d'une session de nœud **vivante**, gèle `parent_run_id` + `parent_node_id` dans le
-`RunStarted` — la provenance ne se déclare jamais : toute clé de parent fournie dans le corps
-répond 400 en champ inconnu, et un claim invalide (run inconnu, nœud inconnu, nœud sans session
-vivante) répond 403 avant tout effet. Sans claim, le run est racine ; le projet de l'enfant vaut
-par défaut celui du parent, overridable explicitement, sans héritage spécial sandbox/harnais.
-`RunState` et la liste de runs projettent les deux champs, et le nouvel endpoint
-`GET /runs/{id}/children` groupe les enfants par nœud parent avec statut, `started_at`,
-`completed_at` et coût **dérivé à la lecture** via le cache existant (jamais persisté, ADR-0052 —
-indisponible ⇒ clé absente, jamais `$0`). Un enfant reste un run ordinaire : il s'ouvre dans
-l'éditeur avec son propre graphe.
+**A run created from a node session carries its provenance mechanically.**
+`POST /runs` reads the session identity (headers `X-PDO-Session-Run-Id` /
+`X-PDO-Session-Node-Id`, fed by `PDO_RUN_ID` / `PDO_NODE_ID` in the sandbox) and, after
+checking that the node session is **live**, freezes `parent_run_id` + `parent_node_id` in
+`RunStarted`. Provenance is never declared: any parent key supplied in the body
+gets a 400 as an unknown field, and an invalid claim (unknown run, unknown node, node without a
+live session) gets a 403 before any effect. Without a claim, the run is a root; the child's Project
+defaults to the parent's, explicitly overridable, with no special sandbox/harness inheritance.
+`RunState` and the run list project both fields, and the new endpoint
+`GET /runs/{id}/children` groups children by parent node with status, `started_at`,
+`completed_at` and cost **derived at read time** through the existing cache (never persisted;
+unavailable means the key is absent, never `$0`). A child remains an ordinary run: it opens in the
+editor with its own graph.
 
 ## 1.64.0
 
-**Le skill `pdo-orchestrate` est semé dans la Banque de skills** (#722). Premier mécanisme de
-seed du produit : à chaque démarrage du daemon, le skill est écrit dans un dossier « PDO » —
-créé si absent, contenu réécrit si la copie versionnée avec le binaire diffère, re-seedé si le
-dossier disque est effacé ou corrompu. Il est verrouillé : toute écriture via la banque
-(édition, renommage, suppression, fichiers) répond 403 `locked`, la surface affiche un badge
-« Managed by PDO » et masque les gestes d'édition. Il reste sélectionnable et livrable comme
-tout skill (ADR-0062). Le ratchet de layout est realigné sur main (dérive présente depuis
-#718, aucun nouveau fichier racine ajouté ici).
+**The `pdo-orchestrate` skill is seeded in the Skill bank.** First seeding mechanism of the product:
+at every daemon start, the skill is written into a "PDO" folder, created if absent,
+content rewritten if the copy versioned with the binary differs, re-seeded if the
+disk folder is deleted or corrupted. It is locked: any write through the bank
+(edit, rename, delete, files) answers 403 `locked`, the surface shows a
+"Managed by PDO" badge and hides the editing gestures. It remains selectable and deliverable like
+any skill. The layout ratchet is realigned on main (drift present since an earlier
+change, no new root file added here).
 
 ## 1.63.1
 
-**La page Settings se referme à nouveau** (#717). `SettingsSurface` et `StatsModal`, deux
-siblings toujours montés dans `App`, partageaient la même clé React (`0`) ; React 19
-(`mapRemainingChildren`) indexant ses enfants restants par `fiber.key` seul, le second
-écrasait le premier et la mise à jour d'ouverture atterrissait sur la mauvaise fiber — la
-surface devenait définitivement inclosable (✕ / Cancel / Escape morts, DOM gelé). Clés
-namespacées (`settings-N` / `stats-N`) + test de régression `App.settingsClose.test.tsx`
-qui monte la vraie `App` et couvre les trois chemins de fermeture (✕ après un cycle
-Stats, Cancel, Escape).
+**The Settings page closes again.** `SettingsSurface` and `StatsModal`, two
+siblings always mounted in `App`, shared the same React key (`0`). React 19
+(`mapRemainingChildren`) indexes its remaining children by `fiber.key` alone, so the second
+overwrote the first and the opening update landed on the wrong fiber: the
+surface became permanently impossible to close (cross / Cancel / Escape dead, DOM frozen). Namespaced
+keys (`settings-N` / `stats-N`) plus a regression test `App.settingsClose.test.tsx`
+that mounts the real `App` and covers the three closing paths (cross after a Stats
+cycle, Cancel, Escape).
 
 ## 1.63.0
 
-**Story #702 livrée** (spec #704) : `pi` devient le troisième harnais first-party. Fusion de
-`integration/702-pi-harness` (#705, #706, #707, #708) dans `main` ; les quatre sous-tickets ci-dessous
-avaient été numérotés 1.58.2 → 1.62.0 sur la branche d'intégration pendant que `main` publiait la ligne
-1.59–1.61 (mise à jour in-app) : ils sortent ensemble en 1.63.0.
+**Story delivered:** `pi` becomes the third first-party harness. Merge of
+the integration branch (four sub-tickets) into `main`. The four sub-tickets below
+had been numbered 1.58.2 -> 1.62.0 on the integration branch while `main` published the
+1.59 to 1.61 line (in-app update): they ship together in 1.63.0.
 
-### #708 — set de staging `pi`
+### `pi` staging set
 
-**Set de staging `pi` rempli au spawn du nœud** (#708 ; story #702, spec #704, ADR-0063). Le conteneur
-sandbox naît avec les homes des harnais first-party montés **vides** (`~/.pi/agent`) ; le set d'un harnais
-(auth, settings, catalogue, extensions, skills — jamais `sessions/`) est copié **une fois par (Run,
-harnais)**, au spawn du premier nœud qui le résout, derrière un marqueur `<staging>/sets/<harnais>`. Un Run
-claude-only n'embarque donc jamais l'auth `pi`. L'env du set (`PI_SKIP_VERSION_CHECK`, `PI_TELEMETRY`) voyage
-dans le `docker exec` ; les sessions `pi` sont rapatriées sur l'hôte au merge-back sous le même dossier
-encodé, et le coût/contexte lit le sink stagé tant que le Run vit. Au spawn sandboxé, PDO fait un `which`
-du binaire dans le conteneur : absent ⇒ un WARN par Run et le nœud passe **Interrupted** avec la raison
-`harness_binary_missing` (PDO ne fournit pas l'image, ajoutez `pi` au profil).
+**`pi` staging set filled at node spawn.** The sandbox container is born with the first-party
+harness homes mounted **empty** (`~/.pi/agent`). A harness's set
+(auth, settings, catalog, extensions, skills, never `sessions/`) is copied **once per (Run,
+harness)**, at the spawn of the first node that resolves it, behind a marker `<staging>/sets/<harness>`. A
+claude-only Run therefore never ships the `pi` auth. The set's env (`PI_SKIP_VERSION_CHECK`, `PI_TELEMETRY`) travels
+in the `docker exec`; `pi` sessions are brought back to the host at merge-back under the same
+encoded folder, and cost/context reads the staged sink while the Run lives. At a sandboxed spawn, PDO runs a `which`
+of the binary in the container: if absent, one WARN per Run and the node goes **Interrupted** with the reason
+`harness_binary_missing` (PDO does not provide the image, add `pi` to the profile).
 
-### #707 — harnais `pi` instrumenté
+### Instrumented `pi` harness
 
-**Harnais `pi` instrumenté** (#707 ; story #702, spec #704). Le descripteur embarqué `pi` remplit les
-capacités laissées à `None` par #705 : **transcript par identité** (JSONL `*_<session_id>.jsonl` dans le
-dossier `~/.pi/agent/sessions/<cwd encodé>/`), **coût rapporté** en dollars (somme des `usage.cost.total`
-assistant, constante 1.0 — affiché sans `~`, `—` si un message n'est pas chiffrable), **contexte** (pic de
-`usage.totalTokens` lu contre la fenêtre du catalogue) et **fin de tour** par extension `agent_settled`
-injectée dans le trou `{settings}` (`-e <fichier>`), qui lance `pdo complete --auto` quand
-`autocomplete_turn_end` est coché — sans sortie forcée du TUI, la reprise reste possible. Le sweep garde la
-queue de session comme repli. Le coût d'un Run mixte est ventilé par harnais (`by_harness`, tranches
-`derived`/`reported`). Tableau de support et prérequis README (catalogue de modèles `pi` joignable) mis à
-jour.
+**Instrumented `pi` harness.** The embedded `pi` descriptor fills the
+capabilities left as `None` by the first-party descriptor change: **transcript by identity** (JSONL `*_<session_id>.jsonl` in the
+folder `~/.pi/agent/sessions/<encoded cwd>/`), **reported cost** in dollars (sum of assistant `usage.cost.total`,
+constant 1.0, shown without `~`, `—` if a message cannot be priced), **context** (peak of
+`usage.totalTokens` read against the catalog window) and **turn end** through an `agent_settled` extension
+injected into the `{settings}` hole (`-e <file>`), which runs `pdo complete --auto` when
+`autocomplete_turn_end` is checked, with no forced exit of the TUI so resuming stays possible. The sweep keeps the
+session tail as a fallback. The cost of a mixed Run is broken down by harness (`by_harness`, slices
+`derived`/`reported`). Support table and README prerequisites (reachable `pi` model catalog) updated.
 
-### #705 — descripteur first-party `pi`
+### First-party `pi` descriptor
 
-**Harnais `pi`, descripteur first-party** (#705 ; story #702, spec #704, ADR-0045/0046/0056 amendés).
-`pi` rejoint le tier embarqué (`claude`, `opencode`, `copilot`, `pi`) : TUI résident dans son pane
-(`exec pi -a … --session-id <id>`), fichiers projet pré-approuvés, identité de session imposée par PDO,
-reprise **par identité** uniquement (aucune reprise aveugle). Le catalogue lit `--list-models`
-(modèles `provider/model` avec fenêtre de contexte, servie dans `GET /settings.model_contexts`) et la
-ligne `--thinking` de `--help` (efforts). Les probes déclarent `None` pour coût, transcript, fin de tour,
-ancre de limite, staging et contexte : le tableau de support gagne la colonne `pi` 0.85.1. Le trou
-`{settings}` porte `-e` et reste vide jusqu'à #707 ; le JSON de hook `Stop` n'est plus écrit que pour un
-harnais dont le substrat de fin de tour est le transcript claude. Prérequis README : auth `pi` faite sur
-l'hôte, binaire dans le PATH utilisateur.
+**`pi` harness, first-party descriptor** (the decision records on the harness tiers are amended).
+`pi` joins the embedded tier (`claude`, `opencode`, `copilot`, `pi`): a resident TUI in its pane
+(`exec pi -a … --session-id <id>`), pre-approved project files, session identity imposed by PDO,
+resume **by identity** only (no blind resume). The catalog reads `--list-models`
+(`provider/model` models with a context window, served in `GET /settings.model_contexts`) and the
+`--thinking` line of `--help` (efforts). The probes declare `None` for cost, transcript, turn end,
+limit anchor, staging and context: the support table gains the `pi` 0.85.1 column. The `{settings}` hole
+carries `-e` and stays empty until the instrumentation change; the `Stop` hook JSON is now only written for a
+harness whose turn-end substrate is the claude transcript. README prerequisites: `pi` auth done
+on the host, binary in the user PATH.
 
-### #706 — prefactor `StagingSet`
+### `StagingSet` prefactor
 
-**Prefactor sandbox : `StagingFloor` devient `StagingSet`** (#706 ; story #702, spec #704, ADR-0063).
-La capacité de staging rend désormais, par harnais, un set (entrées `$HOME`-relatives, exclusions, env,
-entrées *transcripts*) plus des autonomy fixups ; le merge-back parcourt les entrées *transcripts* de tous
-les sets. `claude` est ré-exprimé dans cette forme, octet pour octet (cinq garanties ADR-0031 intactes) ;
-`copilot` et `opencode` déclarent `None`. Aucun changement observable ; la ligne « Sandbox staging set »
-du tableau de support remplace « staging floor ».
+**Sandbox prefactor: `StagingFloor` becomes `StagingSet`.**
+The staging capability now returns, per harness, a set (`$HOME`-relative entries, exclusions, env,
+*transcripts* entries) plus autonomy fixups; merge-back walks the *transcripts* entries of all
+sets. `claude` is re-expressed in this form, byte for byte (the five staging guarantees intact);
+`copilot` and `opencode` declare `None`. No observable change; the "Sandbox staging set" row
+of the support table replaces "staging floor".
+
 ## 1.61.1
 
-**Story #695 livrée** (spec #696) : l'intégration `integration/695-in-app-update` (#697, #698, #699)
-rejoint `main`. Suite HP non rejouée pour cette fusion (décision humaine) ; la vérification systemd du
-chemin stable (`systemctl --user cat pdo` pointe `bin/pdo`) reste manuelle, voir #699.
+**Story delivered:** the in-app update integration branch (three sub-tickets)
+joins `main`. The HP suite was not replayed for this merge (human decision); the systemd check of the
+stable path (`systemctl --user cat pdo` points to `bin/pdo`) remains manual.
 
 ## 1.61.0
 
-**Mise à jour depuis l'app : exécutant détaché** (#699 ; story #695, spec #696).
-Un bouton **Update** apparaît dans la modale « What's new » et dans Settings › Version & update
-quand une version plus récente existe (méthode d'installation Homebrew ou script ; désactivé avec
-motif si elle est inconnue). Après confirmation (commande affichée, mode de relance, Runs actifs,
-survie des sessions tmux), `POST /update/apply` lance un exécutant détaché qui met à jour, arrête
-puis relance le daemon avec ses arguments courants (ou via le superviseur systemd/launchd, chemin
-stable de l'unité). L'UI attend, se reconnecte et recharge sur la nouvelle version ; la tentative
-(statut, versions, journal) est consultable dans Settings via `GET /update/attempts/{id}/log`.
+**In-app update: detached executor.**
+An **Update** button appears in the "What's new" modal and in Settings > Version & update
+when a newer version exists (Homebrew or script install method; disabled with a
+reason if it is unknown). After confirmation (command shown, restart mode, active Runs,
+survival of tmux sessions), `POST /update/apply` launches a detached executor that updates, stops
+then restarts the daemon with its current arguments (or through the systemd/launchd supervisor, stable
+path of the unit). The UI waits, reconnects and reloads on the new version; the attempt
+(status, versions, log) can be viewed in Settings through `GET /update/attempts/{id}/log`.
 
 ## 1.60.0
 
-**Modale « What's new » au clic sur la version** (#698 ; story #695, spec #696).
-Cliquer la version dans la barre de statut ouvre une modale markdown listant les notes des
-versions manquées (plus récente en premier, pré-releases exclues, liens vers les releases GitHub),
-servie par `GET /update/changelog`. Si le check est désactivé ou la source injoignable, la modale
-signale le repli et affiche le `CHANGELOG.md` embarqué dans le binaire ; à jour, elle l'indique et
-affiche ce même changelog. Le pied de page rappelle la commande de mise à jour manuelle (copie en un clic).
+**"What's new" modal on clicking the version.**
+Clicking the version in the status bar opens a markdown modal listing the notes of the
+missed versions (most recent first, pre-releases excluded, links to the GitHub releases),
+served by `GET /update/changelog`. If the check is disabled or the source unreachable, the modal
+reports the fallback and shows the `CHANGELOG.md` embedded in the binary; when up to date, it says so and
+shows that same changelog. The footer reminds the manual update command (one-click copy).
 
 ## 1.59.0
 
-**Vérification de version par le daemon et section « Version & update » en lecture** (#697 ; story #695).
-Le daemon interroge la dernière release publiée (source configurable, cache, check désactivable) et
-expose `GET /update` / `POST /update/check`. Le pied de page porte un badge « → x.y.z » quand une
-version plus récente existe ; il ouvre Settings › General › « Version & update », qui affiche la version
-installée, la dernière publiée, la date du dernier check, la méthode d'installation et la commande de
-mise à jour manuelle. Aucune mise à jour automatique : lecture seule.
+**Version check by the daemon and a read-only "Version & update" section.**
+The daemon queries the latest published release (configurable source, cache, check can be disabled)
+and exposes `GET /update` / `POST /update/check`. The footer carries a "-> x.y.z" badge when a
+newer version exists; it opens Settings > General > "Version & update", which shows the
+installed version, the latest published one, the date of the last check, the install method and the manual
+update command. No automatic update: read-only.
 
 ## 1.58.1
 
-**Livraison de la story Settings revamp** (#688 ; spec #689) : fusion de `integration/688-settings-revamp`
-(#690, #691) dans `main`. Aucun changement fonctionnel par rapport à 1.58.0.
+**Delivery of the Settings revamp story:** merge of its integration branch
+(two sub-tickets) into `main`. No functional change compared to 1.58.0.
 
 ## 1.58.0
 
-**Settings : catégories Agents et Sandbox & worktrees en sections inline** (#691 ; story #688, spec #689).
-Agents expose Harness & models, Agent profiles et Skills ; Sandbox & worktrees expose Default sandbox,
-Staging profiles et Worktree provisioning. Les anciens panneaux « Manage… » sont montés inline et gardent
-leur propre persistance (« saves as you go »), hors du Save du formulaire d'instance. L'ancienne boîte de
-dialogue centrée et le drill-down (chevron retour) sont supprimés. « Manage staging profiles » dans New Run
-ouvre les Settings directement sur Sandbox & worktrees › Staging profiles ; New Run voit un profil créé ou
-un défaut modifié sans rechargement. Exception assumée : le Skill bank reste un tiroir large ouvert
-par-dessus les Settings (Esc y revient). HP-02 étape 13 mise à jour.
+**Settings: Agents and Sandbox & worktrees categories as inline sections.**
+Agents exposes Harness & models, Agent profiles and Skills; Sandbox & worktrees exposes Default sandbox,
+Staging profiles and Worktree provisioning. The former "Manage…" panels are mounted inline and keep
+their own persistence ("saves as you go"), outside the Save of the instance form. The former centered dialog
+and the drill-down (back chevron) are removed. "Manage staging profiles" in New Run
+opens Settings directly on Sandbox & worktrees > Staging profiles; New Run sees a created profile or
+a modified default without a reload. Deliberate exception: the Skill bank stays a wide drawer opened
+over the Settings (Esc returns to it). Happy path 2, step 13, updated.
 
 ## 1.57.0
 
-**Settings pleine fenêtre** (#690 ; story #688, spec #689). Les Settings s'ouvrent sur la même coquille
-que Stats : rail de quatre catégories (General, Agents, Sandbox & worktrees, Diagnostics), colonne de
-sous-catégories par ancre, un seul Save avec indicateur de brouillon par catégorie et confirmation à la
-fermeture si des modifications ne sont pas sauvées. Aucun réglage ne disparaît ; le mode mono-onglet reste
-persisté par appareil sous General › Interface. Agents et Sandbox gardent leurs panneaux existants
-(« Manage… ») en attendant le second ticket.
+**Full-window Settings.** Settings open on the same shell as Stats: a rail of four categories (General, Agents, Sandbox & worktrees, Diagnostics), a column of
+subcategories by anchor, a single Save with a draft indicator per category and a confirmation on
+close if changes are not saved. No setting disappears; the single-tab mode stays
+persisted per device under General > Interface. Agents and Sandbox keep their existing panels
+("Manage…") pending the second ticket.
 
 ## 1.56.0
 
-**Voyage des skills par document** (#673 ; story #666, spec #667, ADR-0062). Exporter un pipeline dont
-des nœuds sélectionnent des skills produit, à côté du YAML, un **sidecar** `<pipeline>.skills.zip`
-(entrées `<pipeline>.skills/<id>/SKILL.md` + fichiers de référence) : bouton *Skills (N)* dans la barre
-du document portable, endpoints `GET /pipelines/{id}/document/skills` et
-`GET /runs/{run_id}/pipeline/document/skills` (204 sans skill). L'import (*load files…* accepte YAML +
-zip ; `POST /pipelines/import` prend un `skills_sidecar` base64) recrée dans la banque les skills dont
-l'id est inconnu, **avec le même id**, dans un dossier racine *importés avec <pipeline>* ; un id connu
-reste intact ; un nom déjà pris est suffixé `-2`, `-3`… avec avertissement ; un id absent de la banque
-et du sidecar produit un avertissement, jamais un échec. La réponse porte un rapport `skills`
-(`created`, `kept`, `renamed`, `missing`, `folder`). Le YAML du document ne change pas.
+**Skills travel with the document.** Exporting a pipeline whose
+nodes select product skills produces, next to the YAML, a **sidecar** `<pipeline>.skills.zip`
+(entries `<pipeline>.skills/<id>/SKILL.md` + reference files): a *Skills (N)* button in the bar
+of the portable document, endpoints `GET /pipelines/{id}/document/skills` and
+`GET /runs/{run_id}/pipeline/document/skills` (204 without skills). Import (*load files…* accepts YAML +
+zip; `POST /pipelines/import` takes a base64 `skills_sidecar`) recreates in the bank the skills whose
+id is unknown, **with the same id**, in a root folder *imported with <pipeline>*; a known id stays
+intact; a name already taken is suffixed `-2`, `-3`… with a warning; an id absent from the bank
+and the sidecar produces a warning, never a failure. The response carries a `skills` report
+(`created`, `kept`, `renamed`, `missing`, `folder`). The document's YAML does not change.
+
 ## 1.55.0
 
-**Livraison des skills effectifs dans le worktree** (#672 ; story #666, spec #667 ; ADR-0062). Quand
-PDO crée un worktree (celui du Run ou le sous-worktree d'un nœud isolé), il y copie les skills
-effectifs du nœud dans `.agents/skills/<name>/` et pose un lien relatif `.claude/skills/<name>` par
-skill. Le contenu est **gelé au Run** : instantané additif sous `.pdo/runs/<run>/skills/`, hors
-worktree ; éditer la banque après le lancement ne change rien aux nœuds suivants. Les chemins livrés
-sont exclus du versionnage au grain du skill (lignes `# pdo <run>` dans `info/exclude` du dépôt
-cible, retirées au nettoyage du Run) et filtrés du commit de complétion même après `git add -A`.
-Un `.agents/skills/<name>` versionné reste intact et suivi ; le skill PDO homonyme est ignoré et
-signalé (`skipped_skills` sur `RunStarted` / `NodeStarted`, visible dans l'inspecteur du nœud).
+**Delivery of effective skills in the worktree.** When
+PDO creates a worktree (the Run's or the sub-worktree of an isolated node), it copies the node's
+effective skills into `.agents/skills/<name>/` and puts a relative link `.claude/skills/<name>` per
+skill. The content is **frozen at the Run**: an additive snapshot under `.pdo/runs/<run>/skills/`, outside the
+worktree; editing the bank after launch changes nothing for the following nodes. Delivered
+paths are excluded from versioning at skill granularity (`# pdo <run>` lines in the target repo's `info/exclude`,
+removed at Run cleanup) and filtered out of the completion commit even after `git add -A`.
+A versioned `.agents/skills/<name>` stays intact and tracked; the PDO skill of the same name is ignored and
+reported (`skipped_skills` on `RunStarted` / `NodeStarted`, visible in the node inspector).
 
 ## 1.54.0
 
-**Import de skills depuis une Source** (#670 ; story #666, spec #667). Depuis la banque, *+ Add ▾ ›
-Import from a source…* accepte une URL de dépôt GitHub (racine, branche, `/tree/<branche>/<chemin>`),
-une URL SSH ou un dossier local : PDO clone en shallow avec les credentials git de l'utilisateur du
-daemon, scanne récursivement les `SKILL.md`, valide chaque frontmatter et présente une liste cochable
-(invalides grisés avec la raison, collisions de nom à résoudre explicitement : remplacer / renommer /
-ignorer — rien n'est écrit tant qu'un choix manque). Les skills cochés atterrissent dans un **dossier
-Source** nommé d'après la Source, qui porte sa provenance (URL, ref, commit, chemin) ; chaque skill
-importé garde la sienne, même déplacé. *Update from source…* re-scanne, montre le diff (mis à jour,
-inchangé, nouveau à la source, sorti du dossier, disparu) et met à jour après confirmation. Les
-fichiers de référence sont copiés intégralement. Endpoints : `POST /settings/skills/scan`,
-`/import`, `/settings/skill-folders/{id}/rescan`, `/update`. Schéma : la provenance des skills passe
-de `(source, source_commit)` à un objet `{url, ref, commit, path}` (colonnes additives, base 1.51
-lisible telle quelle).
+**Skill import from a Source.** From the bank, *+ Add ▾ >
+Import from a source…* accepts a GitHub repo URL (root, branch, `/tree/<branch>/<path>`),
+an SSH URL or a local folder: PDO does a shallow clone with the git credentials of the daemon's user,
+recursively scans for `SKILL.md`, validates each frontmatter and presents a checkable list
+(invalid ones greyed out with the reason, name collisions to resolve explicitly: replace / rename /
+ignore, nothing is written while a choice is missing). Checked skills land in a **Source
+folder** named after the Source, which carries its provenance (URL, ref, commit, path); each imported
+skill keeps its own, even when moved. *Update from source…* rescans, shows the diff (updated,
+unchanged, new at the source, moved out of the folder, gone) and updates after confirmation. Reference
+files are copied in full. Endpoints: `POST /settings/skills/scan`,
+`/import`, `/settings/skill-folders/{id}/rescan`, `/update`. Schema: skill provenance moves
+from `(source, source_commit)` to an object `{url, ref, commit, path}` (additive columns, a 1.51 database
+is readable as is).
 
-Retouches après le Feature Path #670 : *Update from source* ne touche que les skills du dossier
-ciblé (deux dossiers importés du même dépôt ne s'écrasent plus l'un l'autre ; un skill de la même
-source rangé ailleurs est signalé « already in “<dossier>” ») ; le clone d'un scan est isolé par
-processus daemon ; un skill « same commit » coché propose remplacer / renommer / ignorer au lieu
-d'échouer à l'import ; la modale avertit quand un dossier homonyme existe déjà à la destination et
-propose d'importer dedans ; `Esc` ferme la modale après un import partiel ; le diff d'update libelle
-« N reference files changed ».
+Touch-ups after the Feature Path: *Update from source* only touches the skills of the targeted
+folder (two folders imported from the same repo no longer overwrite each other; a skill from the same
+source filed elsewhere is reported as `already in <folder>`); a scan's clone is isolated per
+daemon process; a checked "same commit" skill offers replace / rename / ignore instead of
+failing at import; the modal warns when a folder of the same name already exists at the destination and
+offers to import into it; `Esc` closes the modal after a partial import; the update diff labels
+"N reference files changed".
 
 ## 1.53.0
 
-**Skills : sélection par tier et skills effectifs avec origine** (#669 ; story #666, spec #667 ;
-ADR-0062). Un skill se coche à trois niveaux — Instance (réglages), Projet (fiche projet) et Nœud
-(inspecteur du pipeline) — et un lancement de Run hérite des deux premiers, avec des skills RUN
-ajoutés à la volée (cocher un dossier coche ses skills). L'inspecteur d'un nœud affiche la liste des
-*skills effectifs* avec l'origine de chacun (INSTANCE / PROJECT / NODE / RUN) et la liste figée au
-spawn (`NodeStarted.skills`). Supprimer un skill de la banque liste ses référents (projets, nœuds) ;
-les références orphelines gardent l'id, s'affichent barrées avec un avertissement (inspecteur, bandeau
-de lint du pipeline, modale New Run) et le Run se lance quand même, le skill étant ignoré
-(`missing_skills`). API : `GET /settings/skills/{id}/referents`.
+**Skills: per-tier selection and effective skills with origin.** A skill is checked at three levels: Instance (settings), Project (project sheet) and Node
+(pipeline inspector). A Run launch inherits the first two, with RUN skills
+added on the fly (checking a folder checks its skills). A node's inspector shows the list of
+*effective skills* with the origin of each (INSTANCE / PROJECT / NODE / RUN) and the list frozen at
+spawn (`NodeStarted.skills`). Deleting a skill from the bank lists its referents (projects, nodes);
+orphan references keep the id, are shown struck through with a warning (inspector, pipeline lint
+banner, New Run modal) and the Run still launches, the skill being ignored
+(`missing_skills`). API: `GET /settings/skills/{id}/referents`.
 
 ## 1.52.0
 
-**Fichiers de référence d'un skill** (#671 ; story #666, spec #667 ; ADR-0062). Un skill peut
-embarquer des fichiers à côté de son `SKILL.md` : glisser-déposer dans la modale de collage
-(fichiers stagés avant la création, « Create skill + N files ») ou dans l'onglet *Files* du détail,
-explorateur multi-sélection (chemin hôte), suppression avec confirmation inline, édition texte brut
-avec sauvegarde explicite (`⌘S`). Un `SKILL.md` déposé remplace le texte courant (annulable). Limite
-10 MB par fichier, sous-dossiers conservés, chemins traversants refusés. API REST sous
+**Skill reference files.** A skill can
+embed files next to its `SKILL.md`: drag and drop into the paste modal
+(files staged before creation, "Create skill + N files") or into the detail's *Files* tab,
+multi-select explorer (host path), deletion with inline confirmation, plain-text editing
+with explicit save (`⌘S`). A dropped `SKILL.md` replaces the current text (undoable). Limit
+10 MB per file, subfolders kept, traversing paths refused. REST API under
 `/settings/skills/{id}/files`.
 
 ## 1.51.0
 
-**Banque de skills** (#668 ; story #666, spec #667 ; ADR-0062). L'instance gère une banque de
-skills depuis *Instance settings › Manage skills…* : création par collage d'un `SKILL.md`
-(frontmatter validé en direct — nom kebab-case, description obligatoire —, refus sans écriture
-disque), rangement en dossiers par glisser-déposer, renommage inline (unicité insensible à la
-casse) et suppression précédée d'un inventaire des référents (instance, projets, pipelines, runs).
-Chaque skill vit sous `<repo>/.pdo/skills/<id>/SKILL.md`, à côté de `pdo.db`. API REST sous
+**Skill bank.** The instance manages a skill bank from *Instance settings > Manage skills…*: creation by pasting a `SKILL.md`
+(frontmatter validated live: kebab-case name, mandatory description; refused without any
+disk write), filing into folders by drag and drop, inline rename (case-insensitive uniqueness) and
+deletion preceded by an inventory of referents (instance, projects, pipelines, runs).
+Each skill lives under `<repo>/.pdo/skills/<id>/SKILL.md`, next to `pdo.db`. REST API under
 `/settings/skills`.
 
 ## 1.50.0
 
-**Provisionnement déclaratif des worktrees** (#630 ; ADR-0061). Un worktree de Run ou de Node
-isolé reçoit les ressources du dépôt primaire qu'un checkout Git neuf ne contient pas
-(`.env`, `node_modules`, modèles, fixtures…), déclarées en patrons `.gitignore` sur trois listes —
-copie, lien physique, lien symbolique — aux niveaux Instance, Projet, Run et Node isolé. Les
-règles se composent de manière additive ; le mode le plus spécifique l'emporte ; un conflit de
-mode au même niveau est refusé avant le lancement. La recette est **gelée par Run** : un Node
-redémarré sur la même itération garde son sous-worktree et ses éditions. Une erreur de
-provisionnement interrompt le Run avant tout spawn et nomme le chemin, le mode et la cause.
+**Declarative worktree provisioning.** An isolated Run or Node worktree
+receives the primary repo's resources that a fresh Git checkout does not contain
+(`.env`, `node_modules`, models, fixtures…), declared as `.gitignore` patterns on three lists
+(copy, hard link, symbolic link) at the Instance, Project, Run and isolated Node levels. Rules
+compose additively; the most specific mode wins; a mode conflict at the same level is refused before
+launch. The recipe is **frozen per Run**: a Node restarted on the same iteration keeps its sub-worktree and
+its edits. A provisioning error interrupts the Run before any spawn and names the path, the mode and the cause.
 
 ## 1.49.0
 
-**Un seul contrat de livraison pour les Agents et les Scripts** (#654 ; ADR-0060). *Cassant.*
-Un Node ne reçoit plus aucune consigne Git : il modifie des fichiers, et le runtime livre ce
-qu'il laisse. À la complétion, PDO conserve les commits que le Node a pris lui-même, stage le
-reste avec la sémantique de `git add -A` et crée **un** commit `<node-id> iter-<N>: completed`
-sous l'identité Git configurée, sans trailer. Un Node isolé voit ensuite son sous-worktree
-mergé dans la branche du Run ; un Node non isolé a déjà commité sur place. Aucun changement
-restant ⇒ aucun commit, donc jamais de commit vide.
+**A single delivery contract for Agents and Scripts.** *Breaking.*
+A Node no longer receives any Git instruction: it modifies files, and the runtime delivers
+what it leaves. On completion, PDO keeps the commits the Node made itself, stages the
+rest with the semantics of `git add -A` and creates **one** commit `<node-id> iter-<N>: completed`
+under the configured Git identity, with no trailer. An isolated Node then has its sub-worktree
+merged into the Run's branch; a non-isolated Node has already committed in place. No remaining
+change means no commit, so never an empty commit.
 
-Cette livraison est **une seule opération** que traversent les quatre chemins de complétion :
-la complétion automatique (hook `Stop` et veille de fin de tour), `pdo complete`, la complétion
-manuelle (`mark_node_done`) et la fin d'un Script. Elle s'exécute **avant** l'événement terminal,
-donc avant tout départ de l'aval : un Node isolé forké ensuite voit le travail d'un Node non
-isolé amont. La complétion manuelle ne faisait auparavant ni merge ni commit — l'asymétrie
-qu'ADR-0035 consignait comme limite acceptée disparaît.
+This delivery is **a single operation** that the four completion paths go through:
+automatic completion (`Stop` hook and turn-end watch), `pdo complete`, manual completion
+(`mark_node_done`) and the end of a Script. It runs **before** the terminal event,
+so before any downstream start: an isolated Node forked afterwards sees the work of an upstream
+non-isolated Node. Manual completion used to do neither merge nor commit, and the asymmetry that
+the earlier decision record listed as an accepted limit disappears.
 
-**Le refus `doc_violated_code_immutability` est supprimé, avec toutes ses surfaces.** Un Node non
-isolé qui modifie des fichiers suivis n'est plus refusé : son travail est livré. Le slug disparaît
-du corps de refus, de l'`awaiting_reason_code`, du message de `pdo complete` et du client. Le
-refus `merge_failed` est remplacé par **`delivery_failed`** (`500`), qui couvre désormais le
-staging, le commit et le merge : il appende un `NodeInterrupted`, parque le Run `awaiting_user`
-et **conserve le travail sur disque**, sans rien annuler ni nettoyer.
+**The `doc_violated_code_immutability` refusal is removed, with all its surfaces.** A non-isolated Node that modifies tracked files is no longer refused: its work is delivered. The slug disappears
+from the refusal body, from `awaiting_reason_code`, from the `pdo complete` message and from the client. The
+`merge_failed` refusal is replaced by **`delivery_failed`** (`500`), which now covers
+staging, commit and merge: it appends a `NodeInterrupted`, parks the Run `awaiting_user`
+and **keeps the work on disk**, without undoing or cleaning anything.
 
-**Le staging n'exclut rien.** PDO ne retire aucun de ses propres chemins runtime : le `.gitignore`
-du dépôt cible est l'unique politique d'exclusion. Un dépôt qui n'ignore que `.pdo/runs/` verra
-donc le blackboard (`.pdo/artifacts/`, `.pdo/prompts/`) entrer dans les commits de livraison de
-ses Nodes non isolés — ignorez `.pdo/` comme le fait ce dépôt.
+**Staging excludes nothing.** PDO removes none of its own runtime paths: the target repo's
+`.gitignore` is the only exclusion policy. A repo that only ignores `.pdo/runs/` will
+therefore see the blackboard (`.pdo/artifacts/`, `.pdo/prompts/`) enter the delivery commits of
+its non-isolated Nodes: ignore `.pdo/` as this repo does.
 
-**Nouvel événement `node_delivered`** (`before` / `after`, les deux têtes de la branche du Run),
-projeté sur `nodes.<id>.delivery`. Le **diff par NodeRun** s'y appuie : il existe désormais pour
-tout Agent ou Script qui a livré des changements, isolé ou non, et n'est plus réservé aux Nodes
-qui possédaient une branche `pdo/sub-*`. Le sélecteur de diff de l'UI liste ce que les NodeRuns
-ont livré, plus ce qu'ils sont. Comme le diff du Run, il exclut `.pdo/`.
+**New `node_delivered` event** (`before` / `after`, the two heads of the Run's branch),
+projected onto `nodes.<id>.delivery`. The **per-NodeRun diff** relies on it: it now exists for
+any Agent or Script that delivered changes, isolated or not, and is no longer reserved for Nodes
+that owned a `pdo/sub-*` branch. The UI diff selector lists what the NodeRuns
+delivered, in addition to what they are. Like the Run diff, it excludes `.pdo/`.
 
-**Posture d'outil tranchant conservée.** Plusieurs Nodes non isolés peuvent tourner en même temps :
-le runtime n'ajoute aucune sérialisation. Le premier qui complète commite tout l'état non ignoré
-alors visible, sous son propre message — l'isolation reste le moyen d'obtenir une attribution
-fiable.
+**Sharp-tool stance kept.** Several non-isolated Nodes can run at the same time:
+the runtime adds no serialization. The first to complete commits all the non-ignored state
+then visible, under its own message: isolation remains the way to get reliable
+attribution.
 
 ## 1.48.0
 
-**L'isolation voyage par la bibliothèque et par l'import** (#655 ; ADR-0060). Une entrée de
-bibliothèque `agent` ou `script` porte désormais `isolated_worktree`, l'instanciation le restitue
-tel quel, et l'aperçu de la bibliothèque nomme le workspace de chaque entrée. Sans ça, une entrée
-étoilée retombait sur le défaut de son type à chaque dépôt sur le canvas : un Agent garé dans le
-worktree du Run en forkait un à lui, en silence.
+**Isolation travels through the library and through import.** A library entry of type `agent` or
+`script` now carries `isolated_worktree`, instantiation restores it
+as is, and the library preview names the workspace of each entry. Without this, a starred entry
+fell back to its type's default on every drop on the canvas: an Agent parked in the Run's
+worktree silently forked one of its own.
 
-L'isolation entre du même coup dans l'identité de l'entrée. **Conséquence à l'upgrade** : une
-entrée écrite avant cette version ne dit rien de son workspace ; elle se lit au défaut de son type
-(Agent isolé, Script partagé) — donc rien ne bouge pour la majorité des entrées, mais un Node que
-vous aviez sorti de son isolation lira `out of sync` face à son entrée jusqu'à ce que vous la
-mettiez à jour. C'est la divergence réelle, pas un faux positif.
+Isolation also enters the entry's identity. **Consequence on upgrade**: an
+entry written before this version says nothing about its workspace; it reads as its type's default
+(isolated Agent, shared Script). So nothing moves for most entries, but a Node that
+you had taken out of isolation will read `out of sync` against its entry until you
+update it. That is the real divergence, not a false positive.
 
-Import de workflow : tout rôle importé, placeholder annoté compris, devient un `agent` **isolé** et
-le brouillon écrit la ligne. L'import ne déduit jamais l'isolation du prompt, du nom du rôle, de ses
-sorties ni de son appartenance à une région `collection`.
+Workflow import: any imported role, annotated placeholder included, becomes an **isolated** `agent` and the
+draft writes the line. Import never infers isolation from the prompt, the role name, its
+outputs or its membership in a `collection` region.
 
 ## 1.47.0
 
-**`agent` remplace `doc-only` et `code-mutating` ; l'isolation devient explicite** (#653 ;
-ADR-0060). *Cassant.* Les deux anciens types nommaient un *effet* alors que le runtime n'y lisait
-qu'un répertoire de travail. Un seul type agentique subsiste, `agent`, et l'endroit où le NodeRun
-travaille s'écrit sur le Node : `isolated_worktree: true|false`.
+**`agent` replaces `doc-only` and `code-mutating`; isolation becomes explicit.**
+*Breaking.* The two former types named an *effect* while the runtime only read a working
+directory from them. A single agentic type remains, `agent`, and where the NodeRun
+works is written on the Node: `isolated_worktree: true|false`.
 
-La rupture est franche — **ni alias, ni migrateur, ni diagnostic dédié**. `doc-only` et
-`code-mutating` prennent le chemin de n'importe quelle valeur invalide : coercition vers `agent`
-avec l'avertissement générique de type inconnu, donc un Node qui perd son sous-worktree sans le
-dire. **Les Pipelines existantes se convertissent à la main** : un ancien `doc-only` devient un
-`agent` avec `isolated_worktree: false`, un ancien `code-mutating` un `agent` avec
-`isolated_worktree: true`. Les Pipelines livrées dans ce dépôt sont réécrites ; **celles de
-l'instance (`~/.pdo/pipelines/`) ne le sont pas** — elles sont hors du dépôt.
+The break is clean: **no alias, no migrator, no dedicated diagnostic**. `doc-only` and
+`code-mutating` take the path of any invalid value: coercion to `agent`
+with the generic unknown-type warning, so a Node that loses its sub-worktree without
+saying so. **Existing Pipelines are converted by hand**: a former `doc-only` becomes an
+`agent` with `isolated_worktree: false`, a former `code-mutating` an `agent` with
+`isolated_worktree: true`. The Pipelines shipped in this repo are rewritten; **those of the
+instance (`~/.pdo/pipelines/`) are not**, as they are outside the repo.
 
-Le Document écrit toujours le choix pour un `agent` et un `script`, même à la valeur par défaut
-(Agent isolé, Script partagé) : on lit où le Node travaille au lieu de se rappeler un défaut.
-`merge` reste isolé d'office et n'expose aucun réglage ; `start` et `end` n'en portent aucun.
-L'isolation est **gelée au spawn du NodeRun** — une édition déplace le prochain lancement, jamais
-une exécution vivante, et une reprise retrouve le répertoire qu'elle avait quitté.
+The Document always writes the choice for an `agent` and a `script`, even at the default value
+(isolated Agent, shared Script): you read where the Node works instead of remembering a default.
+`merge` stays isolated by design and exposes no setting; `start` and `end` carry none.
+Isolation is **frozen at NodeRun spawn**: an edit moves the next launch, never
+a live run, and a resume finds the directory it had left.
 
-Côté éditeur, l'inspecteur remplace le sélecteur de type par un type figé et une section
-« Workspace » qui nomme les deux lieux et affiche le répertoire résolu ; le canvas remplace les deux
-marqueurs `doc-only` / `code-mutating` par un glyphe de branche sur les Nodes qui forkent un
-worktree (l'`agent` isolé et le `merge`). L'import de workflow ne devine plus : un rôle importé
-devient un `agent` isolé, sans heuristique de prompt, de nom ni de sortie.
+On the editor side, the inspector replaces the type selector with a fixed type and a
+"Workspace" section that names the two places and shows the resolved directory; the canvas replaces the two
+markers `doc-only` / `code-mutating` with a branch glyph on the Nodes that fork a
+worktree (the isolated `agent` and the `merge`). Workflow import no longer guesses: an imported role
+becomes an isolated `agent`, with no prompt, name or output heuristic.
 
 ## 1.46.0
 
-**Les pipelines appartiennent à l'instance et voyagent par document** (#572 ; ADR-0059). *Cassant.*
-La distinction `repo` / `user` / `library` disparaît de toutes les surfaces — liste, édition,
-sauvegarde, suppression, lancement — et `GET /library/pipelines` n'existe plus. Les pipelines des
-anciens emplacements (`.pdo/pipelines` d'un dépôt, pipelines utilisateur, `.pdo/library/pipelines`)
-sont migrés une fois au boot vers le registre de l'instance, collisions renommées, prompts inclus ;
-rien ne relit ensuite les anciens fichiers.
+**Pipelines belong to the instance and travel by document.** *Breaking.*
+The `repo` / `user` / `library` distinction disappears from all surfaces (list, edit,
+save, delete, launch) and `GET /library/pipelines` no longer exists. Pipelines from the
+former locations (a repo's `.pdo/pipelines`, user pipelines, `.pdo/library/pipelines`)
+are migrated once at boot to the instance registry, collisions renamed, prompts included;
+nothing reads the old files afterwards.
 
-Le partage devient explicite : l'onglet YAML d'une Pipeline — et d'un Run — expose un **Document de
-pipeline transportable** (`pdo_pipeline: 1`) avec copie et téléchargement, que la modale d'import
-reconstitue en une pipeline indépendante. Le document embarque le graphe, les positions, les notes,
-les variables et les prompts, développe les nodes partagés en nodes ordinaires, et n'emporte ni
-secret, ni environnement, ni valeur d'exécution, ni configuration d'instance : un profil agentique
-nommé revient à **Inherit**. Un document invalide ou de version inconnue est refusé sans rien créer.
+Sharing becomes explicit: the YAML tab of a Pipeline, and of a Run, exposes a **portable
+pipeline Document** (`pdo_pipeline: 1`) with copy and download, which the import modal
+rebuilds into an independent pipeline. The document embeds the graph, positions, notes,
+variables and prompts, expands shared nodes into ordinary nodes, and carries no secret,
+no environment, no runtime value, no instance configuration: a named agent profile goes back to
+**Inherit**. An invalid document or one of unknown version is refused without creating anything.
 
 ## 1.45.0
 
-**Un seul fold de coût attribué pour le Run, ses Nodes et Stats** (#647 ; ADR-0058). Les coûts des
-subagents Claude et Copilot appartiennent au Node parent et chaque message Claude est dédupliqué à
-l'échelle du Run. `GET /runs/:id` expose désormais un coût dérivé à la lecture sur chaque Node
-agentique ; une valeur inconnue reste `null` et s'affiche « — », jamais zéro.
+**A single attributed cost fold for the Run, its Nodes and Stats.** The costs of
+Claude and Copilot subagents belong to the parent Node and each Claude message is deduplicated
+at Run scale. `GET /runs/:id` now exposes a cost derived at read time on every agentic
+Node; an unknown value stays `null` and is shown as `—`, never zero.
 
 ## 1.37.0
 
-**Assistant de bibliothèque : un seul assistant, focus par message, reap par inactivité** (#594 ;
-ADR-0051, qui amende ADR-0048 §1/§3/§4). Aucune migration de données ; la colonne SQLite
-`libassist_idle_ttl_secs` est ajoutée par un `ADD COLUMN` idempotent au boot, comme ses voisines.
+**Library assistant: a single assistant, focus per message, reap on inactivity.** (The decision record
+amends the previous one on the assistant's lifetime, spawn and sweep.) No data migration; the SQLite column
+`libassist_idle_ttl_secs` is added by an idempotent `ADD COLUMN` at boot, like its neighbors.
 
-L'unité de durée de vie de l'assistant était la mauvaise : un `claude` par pipeline, vivant le temps
-où l'onglet **Assistant** était affiché. Elle devient **l'humain** : un assistant pour tout le
-daemon, qui apprend à chaque message quelle template est ouverte, et qui meurt quand plus personne
-n'édite.
+The assistant's lifetime unit was the wrong one: one `claude` per pipeline, alive as long as
+the **Assistant** tab was displayed. It becomes **the human**: one assistant for the whole
+daemon, which learns with every message which template is open, and which dies when nobody
+is editing anymore.
 
-Changements cassants sur l'API HTTP :
+Breaking changes on the HTTP API:
 
-- **`POST` / `DELETE /sessions/{pipeline_id}/libassist` → `POST` / `DELETE /sessions/libassist`.**
-  L'id de pipeline disparaît du chemin, et le paramètre `?scope=` avec lui : il n'y a plus qu'une
-  session, `pdo-libassist-shared` au lieu de `pdo-libassist-<id>`. Un client qui appelle l'ancienne
-  route reçoit un 404.
-- **Nouveau `PUT` / `GET /sessions/libassist/focus`.** L'UI y déclare `{pipeline_id, scope}` — jamais
-  un chemin, que le daemon résout lui-même — et le répète toutes les 20 s tant qu'une vue d'édition
-  est ouverte. `GET` sert la même chose en JSON, ou en une phrase avec `?format=text` (la forme que
-  le hook `UserPromptSubmit` de l'assistant injecte dans son contexte à chaque message).
-- **Nouveau `POST /sessions/libassist/save`.** Corps `{yaml, prompts}` — **ni id, ni scope** : le
-  daemon écrit dans le fichier que le focus désigne, puis diffuse le `pipeline_changed` qui fait
-  relire le canvas. C'est désormais le **seul** chemin d'écriture de l'assistant ; `POST
-  /library/pipelines` reste celui de la Library de l'UI et n'est plus documenté à l'assistant.
-- **`GET` / `PUT /settings` exposent `libassist_idle_ttl_secs`** (`stored → env
-  `PDO_LIBASSIST_IDLE_TTL_SECS` → 120 s), le délai au bout duquel le sweep ramasse un assistant sans
-  terminal attaché et sans édition en cours.
-- **`DELETE /sessions/libassist` vide aussi le focus.** Un client qui envoyait `PUT focus: null` puis
-  `DELETE` peut se contenter du `DELETE`.
+- **`POST` / `DELETE /sessions/{pipeline_id}/libassist` -> `POST` / `DELETE /sessions/libassist`.**
+  The pipeline id disappears from the path, and the `?scope=` parameter with it: there is only one
+  session, `pdo-libassist-shared` instead of `pdo-libassist-<id>`. A client calling the old
+  route gets a 404.
+- **New `PUT` / `GET /sessions/libassist/focus`.** The UI declares `{pipeline_id, scope}` there, never
+  a path, which the daemon resolves itself, and repeats it every 20 s while an edit view
+  is open. `GET` serves the same thing as JSON, or as one sentence with `?format=text` (the form the assistant's
+  `UserPromptSubmit` hook injects into its context at every message).
+- **New `POST /sessions/libassist/save`.** Body `{yaml, prompts}`, **no id, no scope**: the
+  daemon writes into the file the focus designates, then broadcasts the `pipeline_changed` that makes the canvas
+  reload. It is now the assistant's **only** write path; `POST
+  /library/pipelines` remains the UI Library's and is no longer documented to the assistant.
+- **`GET` / `PUT /settings` expose `libassist_idle_ttl_secs`** (stored -> env
+  `PDO_LIBASSIST_IDLE_TTL_SECS` -> 120 s), the delay after which the sweep reaps an assistant with no
+  attached terminal and no edit in progress.
+- **`DELETE /sessions/libassist` also clears the focus.** A client that sent `PUT focus: null` then
+  `DELETE` can make do with the `DELETE`.
 
-Changements de comportement visibles :
+Visible behavior changes:
 
-- **Une seule conversation, partagée par toutes les templates.** Passer d'une pipeline à l'autre ne
-  jette plus l'historique — c'est le gain ; en contrepartie il n'y a plus d'isolation entre deux
-  templates éditées en alternance, et l'assistant se resitue via le focus à chaque message.
-- **Le sweep peut désormais tuer l'assistant** (`LibAssistIdle`), ce qu'ADR-0048 §4 lui interdisait.
-  Trois verdicts dans l'ordre : session attachée → gardée ; focus frais → gardée ; sinon tuée après
-  la TTL d'inactivité. C'est ce filet qui borne enfin le cas réellement cassé — un reload ou une
-  fermeture d'onglet n'envoie aucun `DELETE` (React ne joue pas ses cleanups au déchargement), et la
-  session survivait donc sans borne.
-- **Le cwd de l'assistant devient `<repo>/.pdo/pipelines`** au lieu du *library store*. C'était un
-  bug : un onglet de scope `repo` ou `user` édite un fichier de `.pdo/pipelines/`, où le `<id>.yaml`
-  annoncé par le primer n'existait pas. Le chemin réel du fichier édité arrive maintenant par le
-  focus, en absolu.
-- **Le save de l'assistant écrit dans le fichier ouvert, point.** Le mot *scope* désigne deux arbres
-  différents — `.pdo/pipelines/` pour un onglet d'édition, `.pdo/library/pipelines/` pour le library
-  store — et faire porter ce mot par l'assistant le faisait écrire un doublon dans le mauvais, laisser
-  le fichier édité intact et annoncer « Sauvé ». L'argument disparaît, la classe de bug avec.
-- **Aller voir un Run ne reape plus l'assistant** tant qu'un onglet de template reste ouvert. « Quitter
-  toute vue d'édition » se lit sur les onglets ouverts, pas sur l'onglet actif.
+- **A single conversation, shared by all templates.** Switching from one pipeline to another no longer
+  throws away the history. That is the gain; in return there is no more isolation between two
+  templates edited alternately, and the assistant relocates itself via the focus at every message.
+- **The sweep can now kill the assistant** (`LibAssistIdle`), which the earlier decision record forbade it to do.
+  Three verdicts in order: session attached, kept; fresh focus, kept; otherwise killed after
+  the idle TTL. This safety net finally bounds the truly broken case: a reload or a
+  tab close sends no `DELETE` (React does not run its cleanups on unload), so the
+  session survived without bound.
+- **The assistant's cwd becomes `<repo>/.pdo/pipelines`** instead of the *library store*. That was a
+  bug: a tab of scope `repo` or `user` edits a file of `.pdo/pipelines/`, where the `<id>.yaml`
+  announced by the primer did not exist. The real path of the edited file now arrives through the
+  focus, absolute.
+- **The assistant's save writes into the open file, period.** The word *scope* designates two different
+  trees, `.pdo/pipelines/` for an edit tab, `.pdo/library/pipelines/` for the library
+  store, and having the assistant carry that word made it write a duplicate in the wrong one, leave
+  the edited file untouched and announce "Saved". The argument disappears, and the class of bug with it.
+- **Going to look at a Run no longer reaps the assistant** as long as a template tab stays open. "Leaving
+  every edit view" is read on the open tabs, not on the active tab.
 
-Dégradation assumée : le hook `UserPromptSubmit` n'existe que sur un harnais dont le gabarit de lancement
-expose `--settings` (le `claude` de la registry ; ni `opencode`, ni `pi`). Ailleurs, la consigne
-équivalente du primer — aller lire le focus avant d'agir — est le seul mécanisme, et le daemon le
-dit en `warn!` au spawn.
-
+Accepted degradation: the `UserPromptSubmit` hook only exists on a harness whose launch template
+exposes `--settings` (the registry's `claude`; neither `opencode` nor `pi`). Elsewhere, the primer's
+equivalent instruction, to go read the focus before acting, is the only mechanism, and the daemon
+says so with a `warn!` at spawn.
 ## 1.35.0
 
-**Résilience des runs — observabilité & véracité de l'état** (#601, lot 4/4 de la spec #596 ;
-ADR-0025/0035/0037/0038/0049/0050). Aucune migration : le nouveau champ d'état est additif
-(`skip_serializing_if`), les logs historiques restent lisibles (le code machine se dérive du préfixe
-de prose quand il manque).
+**Run resilience: observability and truthful state** (batch 4/4 of the run resilience spec; related
+decision records). No migration: the new state field is additive (`skip_serializing_if`), and
+historical logs stay readable (the machine code is derived from the prose prefix when it is missing).
 
-L'état d'un run devient **auto-diagnostiquable** : la raison de tout non-avancement vit dans l'état,
-la détection de stall est exhaustive par construction, et les entrées d'API disent la vérité.
+A run's state becomes **self-diagnosing**: the reason for any lack of progress lives in the state,
+stall detection is exhaustive by construction, and API inputs tell the truth.
 
-Changements de comportement (non cassants sur les lecteurs de payload historiques, mais visibles des
-clients d'API) :
+Behavior changes (non-breaking for readers of historical payloads, but visible to API clients):
 
-- **Raison machine + prose sur tout non-avancement.** Un park / give-up / `Interrupted` / `unrouted`
-  porte désormais un **`awaiting_reason_code`** (slug stable : `session_died`, `spawn_aborted`,
+- **Machine reason plus prose on every lack of progress.** A park / give-up / `Interrupted` / `unrouted`
+  now carries an **`awaiting_reason_code`** (stable slug: `session_died`, `spawn_aborted`,
   `boot_recovery`, `run_stalled`, `unrouted`, `region_exhausted`, `region_ended_unrouted`,
   `merge_conflict`, `merge_resolution_failed`, `merge_resolver_spawn_failed`,
   `script_validation_failed`, `frontmatter_retry_exhausted`, `doc_violated_code_immutability`,
-  `agent_fail_awaiting`) **à côté** de la prose `awaiting_reason` — même contrat slug+prose qu'un
-  refus (ADR-0035). Exposé sur `GET /runs/:id` **et** `GET /runs` (l'entrée de liste porte enfin
-  `awaiting_reason`), lu par le manager (préambule) et l'UI. Plus besoin de `journalctl`.
-- **`run_stall_reason` exhaustif par construction.** L'attente sur région ouverte passe par un
-  `match` sans joker sur `RegionStateKind` (loop / foreach / collection) : un futur type de région
-  ne peut plus rouvrir un run figé en `stalled=false` (fin de la classe #453).
-- **`loop_states` non ambigu.** Une région bornée a une entrée dès le **lap 1** (comme le nœud
-  `Loop` legacy) : « pas d'entrée » signifie « pas de boucle », plus « premier tour » (amende la
-  mise en garde ADR-0025 §4, répercutée dans le préambule manager).
-- **`POST /runs` : champ inconnu → `400` nommant le champ**, avant tout effet (JSON *et* multipart).
-  Fin du succès silencieux qui jetait un champ mal orthographié (ex. `target_repos`). Doctrine
-  ADR-0033 (validation à l'écriture), volontairement plus étroite que l'ignorance des champs de
-  *config* d'ADR-0015 #471 (validation explicite, pas de `deny_unknown_fields`).
-- **Corps d'erreur de `/commands` normalisés en JSON** (#491) — plus de `text/plain` avalé par le
-  `.catch(() => null)` du front (`load_projected`, échecs d'append, sondes `restart_node`,
-  `cleanup_run`). `{ "error": … }` partout.
-- **Commande valide mais sans effet → `200 {noop, reason}` honnête** (déjà porté par le socle via la
-  porte de complétion partagée ; couvre `skip` d'un nœud déjà terminal).
+  `agent_fail_awaiting`) **alongside** the `awaiting_reason` prose, the same slug+prose contract as a
+  refusal. Exposed on `GET /runs/:id` **and** `GET /runs` (the list entry finally carries
+  `awaiting_reason`), read by the manager (preamble) and the UI. No more need for `journalctl`.
+- **`run_stall_reason` exhaustive by construction.** Waiting on an open region goes through a
+  `match` with no wildcard on `RegionStateKind` (loop / foreach / collection): a future region type
+  can no longer reopen a run frozen with `stalled=false` (end of that class of bug).
+- **Unambiguous `loop_states`.** A bounded region has an entry from **lap 1** (like the legacy `Loop`
+  node): "no entry" means "no loop", no longer "first lap" (amends the earlier decision record's
+  caveat, carried over into the manager preamble).
+- **`POST /runs`: unknown field -> `400` naming the field**, before any effect (JSON *and* multipart).
+  No more silent success that discarded a misspelled field (e.g. `target_repos`). Follows the
+  validate-on-write doctrine, deliberately narrower than the ignoring of *config* fields (explicit
+  validation, no `deny_unknown_fields`).
+- **`/commands` error bodies normalized to JSON**: no more `text/plain` swallowed by the front end's
+  `.catch(() => null)` (`load_projected`, append failures, `restart_node` probes,
+  `cleanup_run`). `{ "error": … }` everywhere.
+- **Valid command with no effect -> honest `200 {noop, reason}`** (already carried by the foundation
+  through the shared completion gate; covers `skip` of an already terminal node).
 
 ## 1.34.0
 
-**Résilience des runs — lot 3/4 : débloquer un run coincé sans désamorçage** (#600, spec #596,
-ADR-0011/0025/0038/0049, Sharp tool ADR-0001). Aucune migration, données historiques lisibles :
-les nouveaux champs de projection (`region_max_iter_overrides`, `forced_routes`) se déduisent du log
-append-only et sont **absents du fil** tant qu'aucune commande ne les pose (runs existants sérialisés
-à l'identique) ; le port `required:` et le marqueur `skipped:` sont eux aussi rétro-compatibles.
+**Run resilience, batch 3/4: unblock a stuck run without defusing it** (related spec and decision
+records, Sharp tool). No migration, historical data readable: the new projection fields
+(`region_max_iter_overrides`, `forced_routes`) are derived from the append-only log and are **absent
+from the wire** until a command sets them (existing runs serialize identically); the `required:` port
+and the `skipped:` marker are also backward compatible.
 
-De nouvelles primitives de pilotage, toutes exposées sur `POST /runs/:id/commands` (l'humain force,
-PDO obéit — Sharp tool) :
+New steering primitives, all exposed on `POST /runs/:id/commands` (the human forces, PDO obeys, Sharp
+tool):
 
-- **`set_region_max_iter(region_id, max_iter)`** — relève le plafond d'une région bornée **en vol**,
-  valeur **absolue** (≠ le delta de `bump_region`), **uniforme** pour un cap littéral et un cap `$var`.
-  Le scheduler lit l'override (folded depuis le log) à la place du `max_iter` déclaré, donc la région
-  repart pour N tours sans éditer le YAML ni redémarrer, et l'effet tient après une ré-ouverture.
-- **`force_route(from, target)`** — sortie explicite d'un **node** ou d'une **région** vers une cible,
-  qui **court-circuite les `when:`** des edges. Le lever d'un run bloqué `unrouted` (verdict non-`PASS`,
-  CI verte, MR mergeable) : `force_route <reviewer> -> End` fait atteindre Finalize sans amender le
-  verdict à la main sur tous les iters. Folded depuis le log ⇒ **non re-décidé** par les `when:` au
-  tour suivant ni après une ré-ouverture.
-- **`skip_node(node_id, [iter], [overrides])`** — **skip local** : marque un node satisfait avec un
-  **output vide par défaut** (surchargeable par port via `overrides`), le run **continue** (jamais de
-  `RunSkipped` qui tuerait tout, contrairement à `pdo skip`/#245). Compté satisfait pour la
-  re-projection : une ré-ouverture ne le re-spawn pas.
-- **`overrides` sur `start_node`** (#486) — lance un node avec un **input factice** par port (contenu
-  inline, écrit en artefact), sans attendre l'upstream. Couvre aussi les ports **émergents** (nodes
-  `doc-only`/`code-mutating`/`script` sans `inputs:` déclarés).
+- **`set_region_max_iter(region_id, max_iter)`**: raises the cap of a bounded region **in flight**,
+  **absolute** value (unlike the delta of `bump_region`), **uniform** for a literal cap and a `$var`
+  cap. The scheduler reads the override (folded from the log) in place of the declared `max_iter`, so
+  the region restarts for N laps without editing the YAML or restarting, and the effect holds after a
+  reopen.
+- **`force_route(from, target)`**: explicit exit from a **node** or a **region** to a target, which
+  **bypasses the `when:`** of the edges. The way to lift a run stuck `unrouted` (non-`PASS` verdict,
+  green CI, mergeable MR): `force_route <reviewer> -> End` makes it reach Finalize without hand-editing
+  the verdict on every iteration. Folded from the log, so **not re-decided** by the `when:` on the next
+  lap or after a reopen.
+- **`skip_node(node_id, [iter], [overrides])`**: **local skip**: marks a node satisfied with an
+  **empty output by default** (overridable per port through `overrides`), and the run **continues**
+  (never a `RunSkipped` that would kill everything, unlike `pdo skip`). Counted as satisfied for
+  re-projection: a reopen does not re-spawn it.
+- **`overrides` on `start_node`**: launches a node with a **dummy input** per port (inline content,
+  written as an artifact), without waiting for the upstream. Also covers **emergent** ports
+  (`doc-only`/`code-mutating`/`script` nodes with no declared `inputs:`).
 
-Et deux comportements du moteur :
+And two engine behaviors:
 
-- **Atteignabilité + auto-skip** (#589) — un input `required:` (nouveau champ de port) **structurellement
-  inatteignable** (branche either/or non prise) fait **auto-skip** le node avec une **raison** dans
-  l'event, au lieu de le laisser pendre ; l'aval avance sur l'output vide. Balayage borné (`advance_run`),
-  qui cascade proprement (skip d'un node ⇒ ré-évaluation d'un either/or aval).
-- **Diagnostic `unrouted` enrichi** (AC4) — la raison portée dans `awaiting_reason` **liste les edges
-  candidats**, leur garde (`when:`/`else`), s'ils ont firé, et **la valeur réellement lue** pour chaque
-  champ testé (`verdict=minor_changes` …). Lisible depuis l'état du run, sans `journalctl`.
+- **Reachability and auto-skip**: a `required:` input (new port field) that is **structurally
+  unreachable** (either/or branch not taken) **auto-skips** the node with a **reason** in the event,
+  instead of leaving it hanging; downstream advances on the empty output. Bounded sweep
+  (`advance_run`) that cascades cleanly (skipping a node -> re-evaluation of a downstream either/or).
+- **Richer `unrouted` diagnostic**: the reason carried in `awaiting_reason` **lists the candidate
+  edges**, their guard (`when:`/`else`), whether they fired, and **the value actually read** for each
+  tested field (`verdict=minor_changes` …). Readable from the run state, without `journalctl`.
+
 ## 1.33.0
 
-**Résilience des runs — récupérer un node `Interrupted` & sous-worktree résilient à l'environnement**
-(#599, lot 2/4 de #596, ADR-0049/0050/0045/0036). Aucune migration, données historiques lisibles
-(log append-only ; un Run pré-#599 se ré-attache ou restart comme avant).
+**Run resilience: recover an `Interrupted` node and a sub-worktree resilient to the environment**
+(batch 2/4 of the run resilience spec, related decision records). No migration, historical data
+readable (append-only log; a Run from before this change re-attaches or restarts as before).
 
-Récupération d'un node `Interrupted` par deux mécanismes, déclenchés à la main (ADR-0049 §3) :
+Recovery of an `Interrupted` node through two mechanisms, triggered by hand:
 
-- **Ré-attache de session** (optimal) — nouvelle commande **`recover_node`** : reprend la **même**
-  session dans le sous-worktree existant (`claude --continue`), sans relancer le run.
-  **Conditionnée à une capacité déclarée du harnais** (`HarnessDescriptor::can_resume()`, ADR-0045) —
-  la mécanique de reprise (exclusion `script`, réservation d'admission #487 §3, trace `NodeStarted`)
-  est désormais partagée avec `GET …/pane` (`reattach_node_session`).
-- **Repli automatique** — si le harnais ne sait pas reprendre, `recover_node` retombe **tout seul**
-  sur le **restart-avec-artefacts** (décision pure `recovery::choose_recovery`) : un agent frais
-  reçoit les artefacts partiels du node en **input**, jamais réécrits par-dessus. Le préambule du
-  spawn expose la sortie partielle survivante (`## Partial output from an interrupted attempt`) —
-  elle n'est jamais wipe sur un re-spawn de même itération.
+- **Session re-attach** (optimal): new **`recover_node`** command: resumes the **same** session in the
+  existing sub-worktree (`claude --continue`), without restarting the run. **Conditional on a
+  declared harness capability** (`HarnessDescriptor::can_resume()`). The resume mechanics (`script`
+  exclusion, admission reservation, `NodeStarted` trace) are now shared with `GET …/pane`
+  (`reattach_node_session`).
+- **Automatic fallback**: if the harness cannot resume, `recover_node` falls back **on its own** to
+  **restart-with-artifacts** (pure decision `recovery::choose_recovery`): a fresh agent receives the
+  node's partial artifacts as **input**, never overwritten. The spawn preamble exposes the surviving
+  partial output (`## Partial output from an interrupted attempt`); it is never wiped on a re-spawn
+  of the same iteration.
 
-Sous-worktree résilient à ce que l'agent a fait à son git (Sharp tool, ADR-0001) :
+Sub-worktree resilient to what the agent did to its git (Sharp tool):
 
-- **`classify_sub_worktree`** : un worktree à **notre propre chemin** sur une branche nommée
-  ≠ `pdo/sub-*` (l'agent a fait `git checkout -b feature/…`) est désormais **`Reusable`**, plus
-  `Occupied`. `Occupied` reste réservé à « la branche est checkoutée dans un **autre** worktree
-  vivant » (ADR-0050 §3).
-- **Merge-back suit le HEAD réel** du sous-worktree (`node_tip`), plus le **nom** `pdo/sub-*`
-  (ADR-0036 amendé) : le travail commité sur `feature/…` entre dans la branche pipeline au lieu
-  d'être perdu par un « Already up to date » silencieux.
+- **`classify_sub_worktree`**: a worktree at **our own path** on a branch named other than
+  `pdo/sub-*` (the agent ran `git checkout -b feature/…`) is now **`Reusable`**, no longer
+  `Occupied`. `Occupied` stays reserved for "the branch is checked out in another **live** worktree".
+- **Merge-back follows the real HEAD** of the sub-worktree (`node_tip`), no longer the **name**
+  `pdo/sub-*` (earlier decision amended): work committed on `feature/…` enters the pipeline branch
+  instead of being lost to a silent "Already up to date".
 
-Déjà couverts par le socle #598/#489/#516, confirmés ici : le reap d'une branche `pdo/sub-*`
-survivante avant recréation (fin de #498), et l'**inventaire** d'une opération git interrompue
-(`index.lock`, `MERGE_HEAD`, `rebase-merge/`) dans la réponse du restart **et** le préambule du
-re-spawn — jamais supprimée en aveugle (#516).
+Already covered by the earlier foundation work, confirmed here: the reap of a surviving `pdo/sub-*`
+branch before recreation (end of that bug), and the **inventory** of an interrupted git operation
+(`index.lock`, `MERGE_HEAD`, `rebase-merge/`) in the restart response **and** the re-spawn preamble,
+never deleted blindly.
 
 ## 1.32.0
 
-**Résilience des runs — socle « retomber sur ses pattes »** (#598, ADR-0049/0050, ADR-0032/0009/0036
-amendés). Aucune migration, données historiques lisibles (log append-only, `resume_run` reste projeté).
+**Run resilience: the "land on your feet" foundation** (related decision records, several amended).
+No migration, historical data readable (append-only log, `resume_run` stays projected).
 
-Changement de comportement, non cassant sur le fil : **le runtime ne déclare plus jamais forfait de
-lui-même**. Un incident infra (mort de session, boot recovery, spawn-abort) met le node en
-`Interrupted` (nouveau statut de node, **non terminal**, distinct de `Failed`) et le run en
-`AwaitingUser` avec une **raison** (`awaiting_reason`), jamais `RunFailed`. Les give-up runtime
-(stall run-level, refus de validation d'output, conflit de merge, `unrouted`) parkent de même en
-`AwaitingUser`. `Failed` ne provient plus que d'un `pdo fail` **délibéré** d'un agent (opt-in
-`auto_fail`) ou d'un abandon humain.
+Behavior change, non-breaking on the wire: **the runtime never forfeits on its own anymore**. An
+infra incident (session death, boot recovery, spawn abort) puts the node in `Interrupted` (new node
+status, **non-terminal**, distinct from `Failed`) and the run in `AwaitingUser` with a **reason**
+(`awaiting_reason`), never `RunFailed`. Runtime give-ups (run-level stall, output validation refusal,
+merge conflict, `unrouted`) park the same way in `AwaitingUser`. `Failed` now only comes from a
+**deliberate** agent `pdo fail` (opt-in `auto_fail`) or a human abandon.
 
-Notes qui ne se déduisent pas du titre :
+Notes that cannot be deduced from the title:
 
-- **`auto_fail`** — opt-in résolu `nœud < Run < Projet < instance` (défaut décoché) : décoché, un
-  `pdo fail` d'agent parke le run pour confirmation humaine ; coché, il termine direct en `Failed`.
-  Ne concerne QUE le `pdo fail` d'agent ; tout give-up runtime parke quoi qu'il arrive. Colonnes
-  `auto_fail` ajoutées (idempotent) à `instance_config` et `projects` ; clé gelée dans `RunStarted`
-  et lisible par nœud (`auto_fail:` YAML). Env `PDO_AUTO_FAIL`.
-- **Ré-ouverture** — `terminal ≠ verrouillé`. `reopen_run` (bouton **Play** de la toolbar de niveau
-  Run) re-projette n'importe quel run terminal (`Completed`/`Skipped`/`Failed`/`Halted`) vers
-  `Running` : les `(node, iter)` satisfaits restent gelés (jamais re-spawnés, anti-#221), seul le
-  travail non satisfait repart. Les commandes ciblées (retry/restart/start/mark-complete/inject)
-  **embarquent** leur propre ré-ouverture — plus de « resume the run first », plus de course de
-  re-fail. Le label terminal précédent reste dans l'event log.
-- **Spawn idempotent** — un `SpawnOutcome::Failed`/abort sur le chemin scheduler appende désormais un
-  événement `NodeInterrupted` nommant le node + la cause (fin du run figé `running` de #498) ; le
-  reap d'un worktree/branche survivant reste porté par `ensure_sub_worktree`.
-- Front : statut de node `interrupted` (ambre), raison d'interruption dans la sidebar du run, groupe
-  d'actions « run terminé » (Reopen · Retry-all · Open shell) dans la toolbar du canvas (Variante A).
+- **`auto_fail`**: opt-in resolved `node < Run < Project < instance` (default unchecked): unchecked,
+  an agent `pdo fail` parks the run for human confirmation; checked, it ends directly in `Failed`.
+  Concerns ONLY an agent `pdo fail`; any runtime give-up parks regardless. `auto_fail` columns added
+  (idempotent) to `instance_config` and `projects`; key frozen in `RunStarted` and readable per node
+  (`auto_fail:` YAML). Env `PDO_AUTO_FAIL`.
+- **Reopen**: `terminal ≠ locked`. `reopen_run` (the **Play** button of the Run-level toolbar)
+  re-projects any terminal run (`Completed`/`Skipped`/`Failed`/`Halted`) to `Running`: satisfied
+  `(node, iter)` pairs stay frozen (never re-spawned), only unsatisfied work restarts. Targeted
+  commands (retry/restart/start/mark-complete/inject) **embed** their own reopen: no more "resume the
+  run first", no more re-fail race. The previous terminal label stays in the event log.
+- **Idempotent spawn**: a `SpawnOutcome::Failed`/abort on the scheduler path now appends a
+  `NodeInterrupted` event naming the node and the cause (end of the run frozen in `running`); the
+  reap of a surviving worktree/branch stays handled by `ensure_sub_worktree`.
+- Front end: `interrupted` node status (amber), interruption reason in the run sidebar, "run
+  finished" action group (Reopen · Retry-all · Open shell) in the canvas toolbar (Variant A).
 
 ## 1.31.0
 
-Rien de cassant, aucune migration. **Assistant IA d'authoring des templates de bibliothèque**
-(#302, ADR-0048). Un glyphe Bot « Pipeline assistant » apparaît dans la barre d'outils du canvas
-**uniquement sur un template de bibliothèque** (jamais sur un Run) ; il ouvre un onglet **Assistant**
-qui attache une session `claude` amorcée, streamée dans le terminal embarqué.
+Nothing breaking, no migration. **AI authoring assistant for library templates**
+(related decision record). A "Pipeline assistant" Bot glyph appears in the canvas toolbar
+**only on a library template** (never on a Run); it opens an **Assistant** tab that attaches a primed
+`claude` session, streamed in the embedded terminal.
 
-Notes de version qui ne se déduisent pas du titre : la session s'ouvre avec pour **cwd le dossier
-des templates** (`.pdo/library/pipelines`), pas la pipeline courante — c'est délibéré (ADR-0048),
-les templates voisins servent d'exemples few-shot et le canvas↔fichier est réconcilié par le store
-disk-first à la sauvegarde. Conséquence assumée : ouvert sur une pipeline de travail sans jumelle en
-bibliothèque, l'assistant décrit un dossier vide (job d'authoring *from scratch*). Cycle de vie
-**create-on-open / reap-on-leave** : la session est créée au premier affichage de l'onglet et
-**récoltée dès qu'on le quitte** (changement d'onglet ou fermeture du panneau) ; la ré-ouverture
-ré-attache la même session (create-if-absent).
+Release notes that cannot be deduced from the title: the session opens with the **templates folder**
+as its cwd (`.pdo/library/pipelines`), not the current pipeline. This is deliberate: neighboring
+templates serve as few-shot examples, and canvas<->file is reconciled by the disk-first store on save.
+Accepted consequence: opened on a working pipeline with no twin in the library, the assistant
+describes an empty folder (an authoring-*from scratch* job). **Create-on-open / reap-on-leave**
+lifecycle: the session is created the first time the tab is displayed and **reaped as soon as you
+leave it** (tab change or panel close); reopening re-attaches the same session (create-if-absent).
 
 ## 1.30.0
 
-**Changement de comportement observable (durcissement sécurité).** Le contrôle d'`Origin`
-WebSocket s'étend au second endpoint : `/ws` (le flux d'événements du dashboard) **vérifie
-désormais l'`Origin`** comme le fait déjà le terminal PTY. Jusqu'ici `/ws` n'avait aucune garde —
-n'importe quelle page ouverte dans le navigateur de l'opérateur pouvait s'y abonner et exfiltrer
-passivement tous les événements (repos, prompts, verdicts). Un `Origin` hors allowlist reçoit
-maintenant un `403`.
+**Observable behavior change (security hardening).** The WebSocket `Origin` check extends to the
+second endpoint: `/ws` (the dashboard event stream) now **checks the `Origin`** as the PTY terminal
+already does. Until now `/ws` had no guard: any page open in the operator's browser could subscribe
+to it and passively exfiltrate every event (repos, prompts, verdicts). An `Origin` outside the
+allowlist now receives a `403`.
 
-L'allowlist est **configurable** via `PDO_ALLOWED_WS_ORIGINS` (liste d'origines exactes séparées
-par des virgules), **additive** aux défauts localhost — nécessaire derrière un reverse-proxy / ALB
-sur domaine public (cf. README, *Behind a reverse proxy*). Env-only et jamais réglable depuis l'UI
-(le HTTP du daemon n'est pas authentifié).
+The allowlist is **configurable** through `PDO_ALLOWED_WS_ORIGINS` (comma-separated list of exact
+origins), **additive** to the localhost defaults, which is needed behind a reverse proxy / ALB on a
+public domain (see the README, *Behind a reverse proxy*). Env-only and never settable from the UI
+(the daemon's HTTP is unauthenticated).
 
-Échappatoire en développement : le proxy Vite réécrit déjà l'`Origin` (`rewriteWsOrigin` dans
-`vite.config.ts`), donc `make dev` fonctionne sans configuration. Pour un front dev servi sur un
-port non standard, poser `PDO_ALLOWED_WS_ORIGINS=http://localhost:<port>`. Bonus : ce même correctif
-répare le terminal PTY, cassé en dev Vite depuis toujours (même cause d'`Origin`).
+Development escape hatch: the Vite proxy already rewrites the `Origin` (`rewriteWsOrigin` in
+`vite.config.ts`), so `make dev` works without configuration. For a dev front end served on a
+non-standard port, set `PDO_ALLOWED_WS_ORIGINS=http://localhost:<port>`. Bonus: this same fix repairs
+the PTY terminal, which had always been broken in Vite dev (same `Origin` cause).
 
 ## 1.29.0
 
-Rien de cassant, aucune migration. Les **branches remote entrent dans la sélection de branche
-source** du formulaire de nouveau Run (#571). `list_branches` liste désormais les réfs de suivi
-(`git for-each-ref refs/remotes`) en plus des locales ; l'endpoint `GET /repos/branches` renvoie un
-tableau `{name, kind}` (`local` | `remote`), locales d'abord. La note de version qui ne se déduit pas
-du titre : la branche source choisie est **stockée verbatim** (une remote reste `origin/xxx`), le
-worktree est **coupé directement sur la réf de suivi sans `git fetch`** ni matérialisation d'une
-branche locale, la **jumelle locale d'une remote est dédupliquée**, le symref `origin/HEAD` est filtré,
-et le défaut proposé n'est **jamais une remote** tant qu'une locale existe. Une réf source inconnue
-est rejetée en 400 (nommant branche et dépôt), jamais un Run à moitié né.
+Nothing breaking, no migration. **Remote branches enter the source branch selection** of the new Run
+form. `list_branches` now lists tracking refs (`git for-each-ref refs/remotes`) in addition to local
+ones; the `GET /repos/branches` endpoint returns an array of `{name, kind}` (`local` | `remote`),
+local ones first. The release note that cannot be deduced from the title: the chosen source branch is
+**stored verbatim** (a remote stays `origin/xxx`), the worktree is **cut directly from the tracking
+ref with no `git fetch`** and no materialization of a local branch, the **local twin of a remote is
+deduplicated**, the `origin/HEAD` symref is filtered out, and the proposed default is **never a
+remote** as long as a local one exists. An unknown source ref is rejected with a 400 (naming branch
+and repo), never a half-born Run.
 
 ## 1.28.0
 
-Rien de cassant, aucune migration (payload d'event schemaless, blob JSON de trigger — le champ
-voyage tel quel). Les **dépôts secondaires d'un Run multi-repo sont modifiables par défaut** ;
-`read-only` devient une **case à cocher opt-in par dépôt** (#565, ADR-0047 révisant ADR-0042). Un
-flag `read_only: bool` (défaut `false`) sur `RepoPin`/`TargetRepoInput` (`#[serde(default)]` +
-`skip_serializing_if` ⇒ un pin historique se relit *modifiable*, byte-identique sur le fil). La garde
-`secondary_repo_dirtied` (409) ne se déclenche plus que sur un secondaire **coché read-only** ; un
-secondaire modifiable voit son `.git` monté **rw** en sandbox (`-v <g>:<g>:rw`, chemin identique) pour
-que `git` y fonctionne, et son préambule l'invite à écrire/committer/livrer (env
-`PDO_WRITABLE_SECONDARY_REPOS`). **PDO ne livre toujours rien lui-même** : la livraison reste le fait
-de l'agent (`Ship It`, `gh pr create` / `git merge`), par dépôt et indépendamment — aucun merge-back
-multi-repo n'est réintroduit. Limite assumée : un secondaire rendu modifiable **mid-run** n'a son
-`.git` monté qu'après recréation du conteneur (mount figé à la création, cohérent avec la visibilité
-au spawn).
+Nothing breaking, no migration (schemaless event payload, JSON trigger blob: the field travels as
+is). The **secondary repos of a multi-repo Run are writable by default**; `read-only` becomes an
+**opt-in per-repo checkbox** (related decision record revising the earlier one). A flag
+`read_only: bool` (default `false`) on `RepoPin`/`TargetRepoInput` (`#[serde(default)]` +
+`skip_serializing_if`, so a historical pin reads back as *writable*, byte-identical on the wire). The
+`secondary_repo_dirtied` guard (409) now only fires on a secondary **checked read-only**; a writable
+secondary has its `.git` mounted **rw** in the sandbox (`-v <g>:<g>:rw`, identical path) so that `git`
+works there, and its preamble invites the agent to write/commit/ship (env
+`PDO_WRITABLE_SECONDARY_REPOS`). **PDO still ships nothing itself**: shipping stays the agent's job
+(`Ship It`, `gh pr create` / `git merge`), per repo and independently, and no multi-repo merge-back is
+reintroduced. Accepted limit: a secondary made writable **mid-run** only has its `.git` mounted after
+the container is recreated (mount frozen at creation, consistent with visibility at spawn).
 
 ## 1.27.0
 
-**Cassant, migration automatique.** Le **harnais agentique** (PRD #549, quatre tranches — #550,
-#551, #552, #553) : le programme qui fait tourner l'agent d'un nœud (`claude`, `opencode`) devient
-un axe à quatre tiers (`node → Run → Projet → instance → plancher claude`), résolu **une fois au
-spawn** et **gelé** dans l'événement de démarrage — la reprise re-pose ce qui a été lancé, jamais ce
-que le YAML dit maintenant (ADR-0007). L'axe entier est livré ici : le nœud épingle (#550), le Run
-choisit (#551), le Projet porte le tier du milieu (#552), et les capacités sont dispatchées par
-harnais (#553).
+**Breaking, automatic migration.** The **agent harness** (product requirements doc, four slices): the
+program that runs a node's agent (`claude`, `opencode`) becomes a four-tier axis (`node -> Run ->
+Project -> instance -> claude floor`), resolved **once at spawn** and **frozen** in the start event.
+Resume re-applies what was launched, never what the YAML says now. The whole axis ships here: the node
+pins, the Run chooses, the Project carries the middle tier, and capabilities are dispatched per
+harness.
 
-Le tail n'est plus composé de flags en dur : un **descripteur** (ADR-0045) porte deux templates
-d'argv (lancement, reprise) et un bloc d'env, et un module **pur** (`harness_argv`) rend la chaîne
-avec une seule règle — *un token dont un trou est vide disparaît en entier*. Le tail `claude` reste
-**identique au byte** quand rien de neuf n'est posé (goldens). `claude` et `opencode` sont dans le
-**plancher embarqué** ; rien n'est écrit sur disque.
+The tail is no longer composed of hard-coded flags: a **descriptor** carries two argv templates
+(launch, resume) and an env block, and a **pure** module (`harness_argv`) renders the string with a
+single rule: *a token with an empty hole disappears entirely*. The `claude` tail stays
+**byte-identical** when nothing new is set (goldens). `claude` and `opencode` are in the **embedded
+floor**; nothing is written to disk.
 
-**Migration du schéma de nœud** : les champs plats `model:` / `effort:` deviennent une carte par
-harnais `harnesses.<nom>.{model, effort}` (le modèle et l'effort se lisent dans l'entrée du harnais
-gagnant, pas d'axe propre — ADR-0046). Le migrateur de pipelines les replie sous `harnesses.claude`
-au démarrage ; un `pin_harness:` scalaire épingle le harnais d'un nœud. La carte est **sémantique**
-(diff + `content_hash`). Un défaut de harnais **et** un défaut de modèle **par harnais** rejoignent
-la Configuration d'instance (`stored → env → default`, ADR-0015 amendée). Un binaire de harnais
-introuvable au spawn échoue **fort** (jamais un 2xx, ADR-0037) en nommant le harnais.
+**Node schema migration**: the flat `model:` / `effort:` fields become a per-harness map
+`harnesses.<name>.{model, effort}` (model and effort are read in the winning harness's entry, with no
+axis of their own). The pipeline migrator folds them under `harnesses.claude` at startup; a scalar
+`pin_harness:` pins a node's harness. The map is **semantic** (diff + `content_hash`). A harness
+default **and** a model default **per harness** join the instance configuration (`stored -> env ->
+default`, earlier decision amended). A harness binary not found at spawn fails **loudly** (never a
+2xx), naming the harness.
 
-**Le Run est un tier** (#551) : le harnais choisi à la création est **gelé dans l'événement de
-création** — même posture d'immuabilité que le mode de sandbox — proposé par le dialogue de
-lancement, et porté par un Trigger **par construction** (le template d'un Trigger *est* la charge
-utile d'une création de Run, donc aucun tier Trigger séparé). Un nœud qui a **épinglé** résiste au
-choix du Run. Les **sessions d'infra** (Pipeline Manager, résolveur de merge) suivent le harnais du
-Run : « ce Run tourne sur X » devient vrai sans exception — y compris pour l'outil de déblocage, ce
-qu'un A/B sur un harnais neuf met donc aussi à l'épreuve (ADR-0046).
+**The Run is a tier**: the harness chosen at creation is **frozen in the creation event** (same
+immutability posture as the sandbox mode), offered by the launch dialog, and carried by a Trigger
+**by construction** (a Trigger's template *is* the payload of a Run creation, so there is no separate
+Trigger tier). A node that has **pinned** resists the Run's choice. **Infra sessions** (Pipeline
+Manager, merge resolver) follow the Run's harness: "this Run runs on X" becomes true without
+exception, including for the unblocking tool, which an A/B test on a new harness therefore also puts
+to the test.
 
-**Le Projet est une entité** (#552) : un regroupement **nommé** de dépôts qui se travaillent
-ensemble, et le tier du milieu de la précédence. **Rien n'est seedé** — tant que personne n'a nommé
-un groupe, il n'existe aucune ligne de Projet et les listes se groupent **par les mêmes chemins
-qu'avant**, dérivés côté client ; c'est le crayon sur un en-tête de groupe qui **crée** l'entité,
-même posture que la table de prix (ADR-0034). Un chemin appartient à **au plus un** Projet, comparé
-**verbatim** (aucune canonicalisation — ADR-0033), et un ajout conflictuel est un **refus nommant**
-le Projet propriétaire. Le Projet d'un Run est celui de son **dépôt primaire** : ajouter ou retirer
-un secondaire ne change ni le Projet ni le harnais résolu (ADR-0042). Le seuil « ne grouper qu'à
-partir de 2 » porte désormais sur les **projets**.
+**The Project is an entity**: a **named** grouping of repos that are worked on together, and the
+middle tier of the precedence. **Nothing is seeded**: as long as nobody has named a group, there is
+no Project row and lists are grouped **by the same paths as before**, derived client-side; it is the
+pencil on a group header that **creates** the entity, same posture as the price table. A path belongs
+to **at most one** Project, compared **verbatim** (no canonicalization), and a conflicting add is a
+**refusal naming** the owning Project. A Run's Project is that of its **primary repo**: adding or
+removing a secondary changes neither the Project nor the resolved harness. The "only group from 2
+on" threshold now applies to **projects**.
 
-**Changement visible : l'ordre des en-têtes de groupe.** Les groupes se trient désormais sur le
-**libellé affiché** (départagé par la clé), là où #258 triait sur le **chemin complet** du dépôt.
-C'est ce qui permet à un Projet — dont le nom n'a aucun chemin — de prendre sa place dans le même
-ordre que les groupes-chemins. Conséquence à connaître : à contenu identique, une liste peut
-apparaître dans un ordre différent de la version précédente, sans qu'aucun Projet ait été créé.
+**Visible change: the order of group headers.** Groups are now sorted on the **displayed label**
+(ties broken by the key), where the previous version sorted on the repo's **full path**. This lets a
+Project, whose name has no path, take its place in the same order as the path groups. Consequence to
+know: with identical content, a list may appear in a different order than in the previous version,
+without any Project having been created.
 
-**Les capacités sont du code par harnais, et leur absence est dite** (#553). Les cinq — source de
-coût, résolution du transcript, substrat de fin de tour, ancre de menu de limite, plancher de
-staging — passent derrière une fabrique (`harness_probes`) dont **toutes les méthodes ont un défaut
-« absent »** : un harnais déclaré en donnée n'obtient aucune capacité sans qu'on puisse l'oublier.
-`claude` garde les cinq à l'identique. Conséquences visibles : un Run dont le harnais n'a pas de
-source de coût affiche **« — » et une raison**, jamais `$0` ni un `partial` muet (même veine que
-`unpriced_models`, #425) ; les sondes de fin de tour et de menu de limite **ne tournent pas** sans la
-capacité, donc aucun nœud n'est auto-complété sur une heuristique inventée ; un Run sandboxé sur un
-harnais sans plancher de staging **le dit une fois** (ADR-0031). Cette tranche livre aussi le **tier
-disque** des descripteurs : on déclare un harnais inconnu et on le lance sans recompiler, par fusion
-**par nom** avec le plancher embarqué, et un descripteur illisible reste **inerte et diagnostiqué** —
-sa clé retombe sur le tier suivant, jamais partiellement appliquée.
+**Capabilities are per-harness code, and their absence is stated.** The five (cost source, transcript
+resolution, end-of-turn substrate, limit-menu anchor, staging floor) go behind a factory
+(`harness_probes`) whose **methods all have an "absent" default**: a harness declared as data gets no
+capability unless one is explicitly provided, so none can be forgotten. `claude` keeps all five
+unchanged. Visible consequences: a Run whose harness has no cost source shows **"-" and a reason**,
+never `$0` or a mute `partial` (same vein as `unpriced_models`); the end-of-turn and limit-menu
+probes **do not run** without the capability, so no node is auto-completed on an invented heuristic;
+a sandboxed Run on a harness with no staging floor **says so once**. This slice also ships the
+**disk tier** of descriptors: you declare an unknown harness and launch it without recompiling, by
+merging **by name** with the embedded floor, and an unreadable descriptor stays **inert and
+diagnosed**: its key falls back to the next tier, never partially applied.
 
-**Hors périmètre, assumé** : la sandbox (le plancher de staging reste propre à `claude`), les
-capacités d'`opencode` (il se lance, s'attache, se reprend et se complète par `pdo complete` — aucun
-coût, aucune fin de tour automatique), l'effort sur `opencode` (aucun axe d'effort au lancement), et
-le catalogue de modèles (le modèle reste du texte libre).
+**Out of scope, deliberately**: the sandbox (the staging floor stays specific to `claude`),
+`opencode` capabilities (it launches, attaches, resumes and completes through `pdo complete`: no
+cost, no automatic end of turn), effort on `opencode` (no effort axis at launch), and the model
+catalog (the model stays free text).
 
 ## 1.26.0
 
-### Cassant — un spawn tmux échoué fait échouer le nœud et le Run, plus jamais `Spawned` (#508, ADR-0037)
+### Breaking: a failed tmux spawn fails the node and the Run, never `Spawned` anymore
 
-`spawn_node` avalait l'`Err` de `tmux_session_manager::spawn` et rendait `Spawned` alors que
-`NodeStarted` était déjà durable : le nœud se projetait `Running` **sans session**, puis la veille de
-vivacité le réécrivait `Failed` ~30 s plus tard avec une **cause fausse** (`session_died`), et
-`restart_node` répondait un `200 {"spawned":[…]}` menteur. Désormais le bras `Err` appende `NodeFailed`
-(légal : l'itération est `Running`) **puis** un reap gaté (le seul sous-worktree que *ce* spawn a créé,
-jamais un réutilisé) **puis** `RunFailed`, et rend `SpawnOutcome::Failed`. Effets filaires (véracité,
-ADR-0037 §1/§3) : `restart_node` répond **`500 {"error":"spawn_failed","recoverable":false,"run_failed":true}`**
-au lieu de `200 {"spawned":[…]}` ; les routes `resume`/`pause` comptent le nœud en **`noop`** (avec sa
-raison) au lieu de le déclarer `spawned`. Ferme la « Limite acceptée » homonyme d'ADR-0037.
+`spawn_node` swallowed the `Err` of `tmux_session_manager::spawn` and returned `Spawned` while
+`NodeStarted` was already durable: the node projected as `Running` **with no session**, then the
+liveness watch rewrote it `Failed` about 30 s later with a **wrong cause** (`session_died`), and
+`restart_node` answered a lying `200 {"spawned":[…]}`. Now the `Err` arm appends `NodeFailed` (legal:
+the iteration is `Running`) **then** a gated reap (only the sub-worktree that *this* spawn created,
+never a reused one) **then** `RunFailed`, and returns `SpawnOutcome::Failed`. Wire effects (truthful
+state): `restart_node` answers **`500 {"error":"spawn_failed","recoverable":false,"run_failed":true}`**
+instead of `200 {"spawned":[…]}`; the `resume`/`pause` routes count the node as **`noop`** (with its
+reason) instead of declaring it `spawned`. Closes the same-named "accepted limit" of the related
+decision record.
 
 ## 1.25.0
 
-Rien de cassant, aucune migration (`CREATE TABLE IF NOT EXISTS`, aucun backfill). PDO gagne un
-**troisième journal** : `audit_log`, le foyer des **mutations de configuration hors-Run** —
-create/patch/delete de Trigger et pause globale — jusqu'ici invisibles à l'`event_log` (dont
-l'`Event.run_id` est obligatoire). Table dédiée sans `run_id` dans `pdo.db`, écrite au **handler
-HTTP** après commit (best-effort : sous-rapport possible, sur-rapport jamais), lue par `GET /audit`
-(feed global décroissant, filtrable par cible et fenêtre `[from, to)`). L'origine est un indice
-**déclaratif et falsifiable** (`actor_hint` via l'en-tête `X-PDO-Actor`, jamais un gate — bind
-0.0.0.0 sans auth). Referme la cause de la fausse #505 : un Trigger coupé à la main laisse désormais
-une trace. AC5 (signal *vivant* `overdue`) différé hors v1 (#507, ADR-0044).
+Nothing breaking, no migration (`CREATE TABLE IF NOT EXISTS`, no backfill). PDO gains a **third
+journal**: `audit_log`, the home of **out-of-Run configuration mutations** (Trigger create/patch/delete
+and global pause), until now invisible to the `event_log` (whose `Event.run_id` is mandatory). A
+dedicated table with no `run_id` in `pdo.db`, written in the **HTTP handler** after commit
+(best-effort: under-reporting possible, over-reporting never), read by `GET /audit` (global feed,
+descending, filterable by target and `[from, to)` window). The origin is a **declarative and forgeable**
+hint (`actor_hint` through the `X-PDO-Actor` header, never a gate: bind 0.0.0.0 with no auth). Closes
+the cause of a false alarm: a Trigger turned off by hand now leaves a trace. The *live* `overdue`
+signal is deferred beyond v1.
 
 ## 1.24.0
 
-Rien de cassant, aucune migration. La **complétion sur fin de tour gagne un substrat primaire,
-event-driven, côté agent** : un hook `Stop` de Claude Code (`pdo complete --auto; exit 0`), injecté
-au spawn/resume via `claude --settings`, complète le nœud dès que l'agent finit son tour ; le
-balayage daemon devient le repli (#433, ADR-0043 amendant ADR-0032 §2). Opt-in, **décoché par
-défaut** (`autocomplete_turn_end`), réutilise l'event `NodeAutoCompleted` avec un libellé distinct,
-sûr par construction (`; exit 0` avale le refus 3 des outputs manquants — jamais de boucle), immunisé
-côté `script` (bash, jamais `claude`). Bump **re-posé au next-free** (1.24.0 contre `origin/main`
-1.23.0) après collision avec #473.
+Nothing breaking, no migration. **Completion on end of turn gains a primary, event-driven,
+agent-side substrate**: a Claude Code `Stop` hook (`pdo complete --auto; exit 0`), injected at
+spawn/resume through `claude --settings`, completes the node as soon as the agent finishes its turn;
+the daemon sweep becomes the fallback (related decision record amending an earlier one). Opt-in,
+**unchecked by default** (`autocomplete_turn_end`), reuses the `NodeAutoCompleted` event with a
+distinct label, safe by construction (`; exit 0` swallows refusal 3 for missing outputs, so there is
+never a loop), immune on the `script` side (bash, never `claude`). Version bump **re-set to next-free**
+(1.24.0 against `origin/main` 1.23.0) after a collision with another change.
 
 ## 1.23.0
 
-Rien de cassant, aucune migration. Le **transcript d'un nœud est résolu par identité de session
-épinglée** (`<uuid>.jsonl`) au lieu du plus récent fichier d'un dossier projet partagé : un nœud
-non code-mutating ne collisionne plus avec le transcript de la session `__manager__` (#473). Le
-spawn d'un nœud agent épingle un `--session-id` UUID v4 (jamais pour un `script`), la veille et le
-resume résolvent par ce nom exact, les sessions infra restent sans id (donc jamais sondées ni
-reprises). ADR-0032 amendé (invariant byte-identité du tail levé pour un nœud agent, conservé pour
-`None`). Bump **re-posé au next-free** (1.23.0 contre `origin/main` 1.22.1) après collision avec
-#437/#465.
+Nothing breaking, no migration. **A node's transcript is resolved by pinned session identity**
+(`<uuid>.jsonl`) instead of the most recent file of a shared project folder: a non-code-mutating node
+no longer collides with the transcript of the `__manager__` session. The spawn of an agent node pins a
+UUID v4 `--session-id` (never for a `script`), the watch and the resume resolve by that exact name,
+and infra sessions stay without an id (so never probed or resumed). Earlier decision amended (tail
+byte-identity invariant lifted for an agent node, kept for `None`). Version bump **re-set to
+next-free** (1.23.0 against `origin/main` 1.22.1) after a collision with other changes.
 
 
-Rien de cassant. La **liste de dépôts d'un Run devient éditable en cours de Run** — ajout/retrait de
-dépôts secondaires read-only, primaire verrouillé (#465 slice 2, ADR-0042). Bump **re-posé au
-next-free** (1.22.0 contre `origin/main` 1.21.0) après collision avec #528, comme prévu à la pose
-initiale.
+Nothing breaking. **A Run's repo list becomes editable mid-Run**: adding/removing read-only secondary
+repos, primary locked (slice 2). Version bump **re-set to next-free** (1.22.0 against `origin/main`
+1.21.0) after a collision with another change, as planned at the initial bump.
 
-### Édition mid-run de la liste de dépôts (#465, ADR-0042)
+### Mid-run editing of the repo list
 
-La slice 1 gelait la liste de secondaires à la création du Run. Cette slice livre le dernier besoin
-explicite de #465 : « la liste de repos doit rester modifiable à tout moment ». Purement additive —
-on reste dans le modèle snapshot read-only (aucun merge-back, aucun `base_sha`, aucun `commit-tree`).
+Slice 1 froze the secondary list at Run creation. This slice delivers the last explicit need: "the
+repo list must stay editable at any time". Purely additive: we stay in the read-only snapshot model
+(no merge-back, no `base_sha`, no `commit-tree`).
 
-- `PATCH /runs/{run_id}/repos` (`{ add, remove }`) ajoute/retire des secondaires sur un Run **vivant**,
-  depuis le panneau de détail du Run (primaire verrouillé). Refus typés (`RepoEditRefusal`) :
-  `run_not_editable`, `secondary_is_primary`, `secondary_already_pinned`, `bad_secondary_repo`, …
-- Nouvel event `run_repos_edited` portant la **liste active complète re-gelée** ;
-  `RunState.target_repos` n'est plus figé à `RunStarted`. Le réducteur écrase la liste et **no-op sur
-  un Run terminal** (garde #221 en double, avec le refus 409 du handler).
-- **Visibilité au spawn** : une édition touche les nœuds lancés **après** elle ; les nœuds déjà
-  vivants gardent leur contexte figé. Un ajout matérialise le snapshot (0 mount neuf) ; un retrait le
-  laisse sur disque jusqu'au cleanup, désormais **piloté par le disque** (balaie `repos/*`, couvre
-  les snapshots retirés-mais-persistants et orphelins).
-- Le panneau « Repositories » reste atteignable **pendant qu'un nœud tourne** : un bouton dédié de la
-  barre d'outils du canvas ouvre le détail du Run sans que l'auto-sélection du nœud vivant ne le
-  reprenne aussitôt (sinon l'édition « à tout moment » était infaisable au navigateur).
-- Restent différés : le sélecteur `repo:` par nœud, le `git` in-sandbox sur un secondaire, et
-  l'écriture / MR dans un secondaire.
+- `PATCH /runs/{run_id}/repos` (`{ add, remove }`) adds/removes secondaries on a **live** Run, from the
+  Run detail panel (primary locked). Typed refusals (`RepoEditRefusal`): `run_not_editable`,
+  `secondary_is_primary`, `secondary_already_pinned`, `bad_secondary_repo`, …
+- New event `run_repos_edited` carrying the **complete re-frozen active list**; `RunState.target_repos`
+  is no longer frozen at `RunStarted`. The reducer overwrites the list and **no-ops on a terminal Run**
+  (a doubled guard, together with the handler's 409 refusal).
+- **Visibility at spawn**: an edit affects nodes launched **after** it; nodes already alive keep their
+  frozen context. An add materializes the snapshot (0 new mounts); a removal leaves it on disk until
+  cleanup, now **disk-driven** (sweeps `repos/*`, covers removed-but-persistent and orphaned snapshots).
+- The "Repositories" panel stays reachable **while a node is running**: a dedicated canvas toolbar
+  button opens the Run detail without the auto-selection of the live node immediately taking it back
+  (otherwise "at any time" editing was impossible in the browser).
+- Still deferred: the per-node `repo:` selector, in-sandbox `git` on a secondary, and writing / MR in a
+  secondary.
 
 ## 1.21.0
 
-Rien de cassant. Un champ **purement additif, lecture seule** : `GET /stats/cost` porte désormais un
-tableau **`resolved`** — une entrée par clé de famille, avec le **tier gagnant** (`manual` / `fetched`
-/ `embedded`) et le **`$/MTok`** effectivement appliqué (#528). Rendu dans l'onglet **Stats → Cost**,
-à côté du bouton **« Sync costs »** : on synchronise les prix et on lit ce que PDO sait tarifer au
-même endroit, et le refetch déclenché par la synchro rafraîchit la table. C'est la même `PriceTable`
-que celle avec laquelle le fold de coût chiffre, donc la vue ne peut jamais diverger de ce qui tarifie
-réellement (#373). **Dans le cadre d'ADR-0034** : cette slice **amende sa hors-scope** (qui déclinait
-un `GET /prices` en le jugeant redondant avec `manual_keys` + `fetched_rows`) — **pas de nouvel ADR**,
-**pas de route dédiée** (champ additif sur un endpoint déjà consommé par l'onglet Cost, rétro-compatible,
-zéro taxe proxy vite dev, cf. *Versioning*). Bump re-posé contre `origin/main` (1.20.0, #527) après
-collision de bump : la vue `resolved` reflète désormais aussi le plancher gen-5 introduit par #527
-(quatorze familles embarquées au lieu de onze).
+Nothing breaking. A **purely additive, read-only field**: `GET /stats/cost` now carries a **`resolved`**
+array, one entry per family key, with the **winning tier** (`manual` / `fetched` / `embedded`) and the
+`$/MTok` actually applied. Rendered in the **Stats -> Cost** tab, next to the **"Sync costs"** button:
+you sync prices and read what PDO knows how to price in the same place, and the refetch triggered by
+the sync refreshes the table. It is the same `PriceTable` that the cost fold prices with, so the view
+can never diverge from what actually prices. **Within the scope of the pricing decision record**: this
+slice **amends its out-of-scope section** (which declined a `GET /prices` as redundant with
+`manual_keys` + `fetched_rows`): **no new decision record**, **no dedicated route** (additive field on
+an endpoint already consumed by the Cost tab, backward compatible, zero Vite dev proxy tax, see
+*Versioning*). Bump re-set against `origin/main` (1.20.0) after a bump collision: the `resolved` view
+now also reflects the gen-5 floor introduced in 1.20.0 (fourteen embedded families instead of eleven).
 
 ## 1.20.0
 
-Rien de cassant. Le **plancher de prix embarqué** amorce désormais la génération courante
-(`claude-opus-5` / `claude-sonnet-5` / `claude-fable-5`), si bien qu'une instance **jamais
-synchronisée, hors ligne** chiffre son modèle par défaut au lieu d'afficher `~$0.00 †` (#527,
-amende ADR-0034). Le plancher reste un **plancher, pas un miroir** : un sync surcharge encore
-chaque clé (p. ex. `sonnet-5` à son intro live). Bump posé contre `origin/main` (1.19.0) ; à
-re-poser au next-free si un autre Run livre entre-temps.
+Nothing breaking. The **embedded price floor** now seeds the current generation
+(`claude-opus-5` / `claude-sonnet-5` / `claude-fable-5`), so an **offline, never-synced** instance
+prices its default model instead of showing `~$0.00 †` (amends the pricing decision record). The
+floor stays a **floor, not a mirror**: a sync still overrides every key (e.g. `sonnet-5` at its live
+introduction). Bump set against `origin/main` (1.19.0); to be re-set to next-free if another Run ships
+in the meantime.
 
 ## 1.18.0
 
-Rien de cassant. Une capacité **purement additive** : un Run peut désormais lire plusieurs dépôts
-(#465, ADR-0042). Bump posé contre `origin/main` (1.17.0) ; à re-poser au next-free si un autre Run
-livre entre-temps.
+Nothing breaking. A **purely additive** capability: a Run can now read several repos. Bump set
+against `origin/main` (1.17.0); to be re-set to next-free if another Run ships in the meantime.
 
-### Multi-repo par Run — dépôts secondaires en lecture seule (#465, ADR-0042)
+### Multi-repo per Run: read-only secondary repos
 
-Un Run pouvait ne cibler qu'**un** dépôt (`target_repo`, ADR-0033). Cette slice ouvre le
-**multi-repo par Run** dans son incrément le plus étroit : **lecture multi-repo, écriture
-mono-repo**.
+A Run could only target **one** repo (`target_repo`). This slice opens **multi-repo per Run** in its
+narrowest increment: **multi-repo reading, single-repo writing**.
 
-- On sélectionne, à la création du Run, N **dépôts secondaires** en plus du **primaire**
-  (`target_repos[0]` = le primaire, sémantique de `target_repo` inchangée). Chaque secondaire porte
-  une *target branch* (défaut : la ref **locale**, pas `origin/main` — il n'y a aucun `git fetch`).
-- Chaque secondaire est figé à un **SHA au démarrage** (`git worktree add --detach`), sous
-  `<primaire>/.pdo/runs/<id>/repos/<alias>/`. Reproductible : muter le checkout local du secondaire
-  ne bouge plus le Run.
-- Les nœuds **lisent** les secondaires par **chemin absolu** (injecté au préambule + env
-  `PDO_SECONDARY_REPOS`) — les sous-worktrees n'héritent pas des fichiers du snapshot.
-- Garde **409 `secondary_repo_dirtied`** si un nœud salit un fichier **suivi** d'un secondaire (les
-  *untracked* sont tolérés) ; non terminale (revert + re-complétion passent).
-- Nettoyage : `git worktree remove --force` **+ `prune`** dans **chaque** secondaire au teardown
-  (sans le prune, registration `--detach` fantôme — classe #498).
-- Les Triggers portent la liste (colonne `target_repos`, forwardée au fire).
+- At Run creation you select N **secondary repos** in addition to the **primary** (`target_repos[0]` =
+  the primary, semantics of `target_repo` unchanged). Each secondary carries a *target branch*
+  (default: the **local** ref, not `origin/main`; there is no `git fetch`).
+- Each secondary is frozen at a **SHA at start** (`git worktree add --detach`), under
+  `<primary>/.pdo/runs/<id>/repos/<alias>/`. Reproducible: mutating the secondary's local checkout no
+  longer moves the Run.
+- Nodes **read** the secondaries by **absolute path** (injected in the preamble + env
+  `PDO_SECONDARY_REPOS`); sub-worktrees do not inherit the snapshot's files.
+- **409 `secondary_repo_dirtied`** guard if a node dirties a **tracked** file of a secondary
+  (*untracked* files are tolerated); non-terminal (revert + re-completion pass).
+- Cleanup: `git worktree remove --force` **+ `prune`** in **each** secondary at teardown (without the
+  prune, a phantom `--detach` registration remains).
+- Triggers carry the list (`target_repos` column, forwarded at fire).
 
-Différé (slices ultérieures) : écriture/MR dans un secondaire, édition mid-run de la liste,
-`git` in-sandbox sur un secondaire, merge-back multi-repo (rejeté définitivement), sélecteur
-`repo:` par nœud, grouping list/cost multi-bucket.
+Deferred (later slices): writing/MR in a secondary, mid-run editing of the list, in-sandbox `git` on a
+secondary, multi-repo merge-back (permanently rejected), per-node `repo:` selector, multi-bucket
+list/cost grouping.
 
 ## 1.14.0
 
-Rien de cassant. Un champ **purement additif** sur l'estimation de coût (périmètre AC#4 de #425,
-dans le cadre d'ADR-0034 — pas de nouvel ADR).
+Nothing breaking. A **purely additive** field on the cost estimate (within the scope of the pricing
+decision record, no new decision record).
 
-### L'estimation de coût nomme désormais le modèle non tarifé (#425)
+### The cost estimate now names the unpriced model
 
-Jusqu'ici, un Run (ou un bucket de la modale Stats) dont une session avait tourné sur un modèle
-qu'aucun tier ne tarife affichait `~$0 †` — ou, pire, un nombre plausible mais faux-bas — avec un
-tooltip générique « an unpriced model was excluded ». Le `†` seul ne disait **jamais quel** modèle,
-si bien que `claude-fable-5` (le plus cher) a pu rester invisible des semaines dans `/stats/cost`.
+Until now, a Run (or a bucket of the Stats modal) in which a session had run on a model that no tier
+prices showed `~$0 †`, or worse, a plausible but falsely low number, with a generic tooltip "an
+unpriced model was excluded". The `†` alone **never said which** model, so `claude-fable-5` (the most
+expensive) could stay invisible for weeks in `/stats/cost`.
 
-Désormais `CostStat` porte `unpriced_models: Vec<String>` (clés de famille **dé-datées**, triées,
-uniques) ; `partial` en est **dérivé** (`partial ⟺ !unpriced_models.is_empty()`). Le champ voyage
-sur `GET /runs/:id` et, unioné par bucket, sur `GET /stats/cost` ; l'UI nomme le(s) modèle(s) dans le
-tooltip du `†`. La clé du memo de coût est **inchangée** (l'information voyage dans la valeur), donc
-aucune régression du chemin `/stats/cost`.
+Now `CostStat` carries `unpriced_models: Vec<String>` (**undated** family keys, sorted, unique);
+`partial` is **derived** from it (`partial ⟺ !unpriced_models.is_empty()`). The field travels on
+`GET /runs/:id` and, unioned per bucket, on `GET /stats/cost`; the UI names the model(s) in the `†`
+tooltip. The cost memo key is **unchanged** (the information travels in the value), so there is no
+regression of the `/stats/cost` path.
 
-Ce qui **n'est pas** dans cette version : amorcer le plancher embarqué avec la gen-5 (opus-5,
-sonnet-5, fable-5) — cela réviserait le principe de membership d'ADR-0034 et relève d'une décision du
-propriétaire (#527). Sur une instance non-syncée, le modèle par défaut du compte continue donc de
-contribuer $0 ; la différence est qu'il est maintenant **nommé**, donc actionnable (un clic « Sync
-coûts » ou une ligne dans `~/.pdo/prices/models.yaml`).
+What is **not** in this version: seeding the embedded floor with gen-5 (opus-5, sonnet-5, fable-5),
+which would revise the membership principle of the pricing decision record and is a decision for the
+owner. On a non-synced instance, the account's default model therefore keeps contributing $0; the
+difference is that it is now **named**, hence actionable (one "Sync costs" click or a line in
+`~/.pdo/prices/models.yaml`).
 
 ## 1.13.0
 
-**Cassant** (`feat(#516)!`) : le champ de réponse `stale_git_lock` disparaît, remplacé par
-`interrupted_git_ops`. Amende ADR-0037, pas de nouvel ADR.
+**Breaking** (`feat(…)!`): the `stale_git_lock` response field disappears, replaced by
+`interrupted_git_ops`. Amends an earlier decision record, no new one.
 
-### `stale_git_lock` (`string|null`) → `interrupted_git_ops` (`array`, `[]` si rien) (#516)
+### `stale_git_lock` (`string|null`) -> `interrupted_git_ops` (`array`, `[]` if nothing)
 
-Quand `restart_node` réutilise le sous-worktree d'un nœud `code-mutating`/`merge`, une session tuée
-**au milieu d'une opération git** y laisse des marqueurs dans le gitdir privé (`index.lock`,
-`MERGE_HEAD`, `rebase-merge/`, `rebase-apply/`). Le daemon les **détectait** — mais n'en remontait
-qu'**un seul**, le premier du scan. Chaîne mesurée sur le code 1.12.0 : un `index.lock` **masquait** un
-`MERGE_HEAD` coexistant, l'agent retirait le verrou dont on l'avait averti, lançait `pdo complete`, et
-le merge-back faisait un `git commit` avec le `MERGE_HEAD` resté en place → **un commit de merge à deux
-parents que personne n'a voulu, en silence** (`MergeResult::Success`, zéro événement). Le filet d'ADR-0037
-§7 est en aval du commit ; il ne l'attrape pas.
+When `restart_node` reuses the sub-worktree of a `code-mutating`/`merge` node, a session killed
+**in the middle of a git operation** leaves markers there in the private gitdir (`index.lock`,
+`MERGE_HEAD`, `rebase-merge/`, `rebase-apply/`). The daemon **detected** them, but only reported
+**one**, the first of the scan. Chain measured on the 1.12.0 code: an `index.lock` **masked** a
+coexisting `MERGE_HEAD`, the agent removed the lock it had been warned about, ran `pdo complete`, and
+the merge-back did a `git commit` with the `MERGE_HEAD` still in place -> **a two-parent merge commit
+that nobody wanted, silently** (`MergeResult::Success`, zero events). The safety net of the earlier
+decision record sits downstream of the commit; it does not catch this.
 
-Trois changements :
+Three changes:
 
-- **Inventaire complet.** Le scanner remonte désormais **tous** les marqueurs présents, dans l'ordre du
-  scan (`index.lock` en tête), au lieu du premier seul.
-- **Migration filaire cassante.** Le corps de succès de `restart_node` remplace
-  `"stale_git_lock":"index.lock"|null` par `"interrupted_git_ops":["index.lock",…]|[]` — **toujours** un
-  tableau, jamais `null` ni absent (un client lit `body.interrupted_git_ops.length` sans garde).
-  « Stale git lock » était faux pour trois marqueurs sur quatre : un `MERGE_HEAD` ou un rebase interrompu
-  n'est pas un verrou, et le nommer ainsi a masqué le second marqueur derrière le premier. Le champ,
-  interne comme filaire, se propage du scanner (`SubWorktreeState::Reusable`) jusqu'à la réponse HTTP.
-- **Routage vers le préambule.** La consigne différenciée (retirer `index.lock` d'abord ; inspecter puis
-  finir **ou** avorter un `MERGE_HEAD`/rebase, au jugement de l'agent) arrive maintenant **dans le
-  préambule du nœud re-spawné lui-même**, plus seulement dans le corps que voit le manager. L'agent frais
-  n'attend plus qu'on la lui relaie, et le daemon ne supprime **jamais** un marqueur (il ne peut pas
-  prouver que l'écrivain est mort — #485 est le précédent qui coûte cher).
+- **Full inventory.** The scanner now reports **all** markers present, in scan order (`index.lock`
+  first), instead of the first alone.
+- **Breaking wire migration.** The success body of `restart_node` replaces
+  `"stale_git_lock":"index.lock"|null` with `"interrupted_git_ops":["index.lock",…]|[]`: **always** an
+  array, never `null` nor absent (a client reads `body.interrupted_git_ops.length` without a guard).
+  "Stale git lock" was wrong for three markers out of four: a `MERGE_HEAD` or an interrupted rebase is
+  not a lock, and naming it that way hid the second marker behind the first. The field, internal as
+  well as wire, propagates from the scanner (`SubWorktreeState::Reusable`) up to the HTTP response.
+- **Routing to the preamble.** The differentiated instruction (remove `index.lock` first; inspect then
+  finish **or** abort a `MERGE_HEAD`/rebase, at the agent's judgment) now arrives **in the preamble of
+  the re-spawned node itself**, no longer only in the body the manager sees. The fresh agent no longer
+  waits for it to be relayed, and the daemon **never** deletes a marker (it cannot prove the writer is
+  dead, and an earlier incident shows how costly that is).
 
-Aucun travail frontend : l'UI jette déjà le corps de la réponse (`responseMode:"void"`), et le trou
-d'observabilité reste la propriété de #492.
-
+No frontend work: the UI already discards the response body (`responseMode:"void"`), and the
+observability gap remains tracked separately.
 ## 1.12.0
 
-Rien de cassant. Un nouveau réglage d'instance **purement additif** (application directe d'ADR-0015,
-pas de nouvel ADR).
+Nothing breaking. A new **purely additive** instance setting (a direct application of the existing instance-settings decision record, no new decision record).
 
-### Le nommage automatique des Runs par le manager est désormais configurable (#338)
+### Automatic Run naming by the manager is now configurable
 
-Jusqu'ici, un Run créé sans nom était **toujours** nommé par le Pipeline Manager (depuis son input,
-ou via un placeholder renommé best-effort), et les Triggers l'étaient sans réglage possible. #338
-livre trois choses, sans rien casser :
+Until now, a Run created without a name was **always** named by the Pipeline Manager (from its input, or through a placeholder renamed on a best-effort basis), and Triggers were named with no way to configure it. This release delivers three things, without breaking anything:
 
-- un défaut d'instance `default_auto_name` (booléen, résolu `stored → env PDO_DEFAULT_AUTO_NAME →
-  défaut **true**`), exposé dans `SettingsModal` avec la divulgation de source habituelle. Colonne
-  `instance_config.default_auto_name` NULLABLE, migration `ALTER … ADD COLUMN` PRAGMA-guardée ;
-- un override par-Run — champ optionnel `auto_name` sur `POST /runs` (JSON **et** multipart). **La
-  compat est préservée** : un appelant qui passe un `name` sans le flag garde son nom exactement
-  comme avant (le flag ne se résout sur le défaut d'instance que lorsqu'il est absent ET qu'aucun
-  nom n'est fourni) ;
-- un override par-Trigger — colonne `triggers.auto_name` (`NOT NULL DEFAULT 1`, donc les Triggers
-  existants continuent d'auto-nommer), figée à la création depuis le défaut d'instance et lue au
-  fire. Désactivée, chaque Run né du Trigger porte un *nom placeholder* stable (`Untitled run <id>`)
-  et le manager n'est pas instruit de renommer.
+- an instance default `default_auto_name` (boolean, resolved `stored -> env PDO_DEFAULT_AUTO_NAME -> default **true**`), exposed in `SettingsModal` with the usual source disclosure. The column `instance_config.default_auto_name` is NULLABLE, with a PRAGMA-guarded `ALTER ... ADD COLUMN` migration;
+- a per-Run override: optional `auto_name` field on `POST /runs` (JSON **and** multipart). **Compatibility is preserved**: a caller that passes a `name` without the flag keeps its name exactly as before (the flag only resolves to the instance default when it is absent AND no name is provided);
+- a per-Trigger override: column `triggers.auto_name` (`NOT NULL DEFAULT 1`, so existing Triggers keep auto-naming), frozen at creation from the instance default and read at fire time. When disabled, every Run born from the Trigger carries a stable *placeholder name* (`Untitled run <id>`) and the manager is not instructed to rename it.
 
 ## 1.9.0
 
-Rien de cassant. Une note, parce qu'elle change **rétroactivement** ce qu'un opérateur peut croire de
-ses incidents passés.
+Nothing breaking. One note, because it changes **retroactively** what an operator may believe about past incidents.
 
-### Le balayage d'orphelins tuait les sessions qu'il venait de spawner (#485, ADR-0038)
+### The orphan sweep killed the sessions it had just spawned
 
-Le reaper prenait ses deux observations dans le mauvais ordre : instantané de **tous** les Runs
-(N+1, 21 s mesurées sur 437 Runs en production) **puis** énumération des sessions tmux. Une session née
-dans cet intervalle était vivante dans tmux et absente de l'instantané — donc classée orpheline, et
-tuée. Dans une occurrence, **150 ms après son propre spawn**. Neuf occurrences en huit jours, deux Runs
-perdus dans la nuit du 2026-07-30 ; la probabilité croissait avec le nombre de Runs conservés, ce qui
-en faisait un défaut qui empire tout seul.
+The reaper took its two observations in the wrong order: a snapshot of **all** Runs (N+1, 21 s measured on 437 Runs in production) **then** an enumeration of the tmux sessions. A session born in between was alive in tmux and absent from the snapshot, so it was classified as an orphan and killed. In one occurrence, **150 ms after its own spawn**. Nine occurrences in eight days, two Runs lost on the night of 2026-07-30; the probability grew with the number of retained Runs, which made it a defect that worsens on its own.
 
-**Ce qu'il faut relire dans vos incidents passés** : la veille de vivacité imputait ces morts à tmux
-sous un `session_died: tmux session pdo-… no longer exists` parfaitement crédible, suivi d'un
-`run_stalled` et d'un Run `Failed`. Tout verdict `session_died` antérieur à cette version sur un nœud
-qui venait de démarrer est donc suspect — la cause nommée accusait tmux, la RAM ou l'API pour un bug
-d'ordonnancement d'observations. Le seul témoin du kill était `journalctl`.
+**What to re-read in your past incidents**: the liveness watch blamed these deaths on tmux, under a perfectly credible `session_died: tmux session pdo-... no longer exists`, followed by a `run_stalled` and a `Failed` Run. Any `session_died` verdict prior to this version on a node that had just started is therefore suspect: the named cause blamed tmux, RAM or the API for a bug in the ordering of observations. The only witness of the kill was `journalctl`.
 
-L'ordre est désormais porté par les types plutôt que par la discipline des appelants :
-`decide_sweep` est pure et reçoit l'inventaire tmux comme **donnée d'entrée** clé par session, si bien
-que l'ordre inverse n'est plus exprimable ; la lecture du log vient après, et la preuve est par
-contraposée (le log ne fait que croître, donc une absence constatée *après* l'inventaire garantit
-l'absence *au moment* de l'inventaire). Le N+1 disparaît par construction : seuls les Runs qui tiennent
-une session vivante sont projetés. Côté spawn, `start_node` ne spawne plus — elle rend une intention
-que l'appelant exécute **après** l'append de `NodeStarted`, de sorte qu'aucune session n'existe avant
-sa réservation.
+The order is now carried by the types rather than by the discipline of callers: `decide_sweep` is pure and receives the tmux inventory as an **input** keyed by session, so the reverse order can no longer be expressed; the log is read afterwards, and the proof is by contraposition (the log only grows, so an absence observed *after* the inventory guarantees the absence *at the time of* the inventory). The N+1 disappears by construction: only the Runs that hold a live session are projected. On the spawn side, `start_node` no longer spawns: it returns an intent that the caller executes **after** appending `NodeStarted`, so no session exists before its reservation.
 
-Aucun changement de politique de reap : les trois motifs d'orphelinage, le shell sans TTL (#316), le
-Manager sans TTL (#458) et l'aveuglement à `iter` sont inchangés, et les huit messages de kill sont
-byte-identiques. Deux ajouts d'observabilité : les kills pour **absence** et pour **nom non reconnu**
-passent en `warn!` (le ménage nominal — archivé, TTL — reste en `info!`), donc `journalctl -p warning`
-les trouve sans grep intégral ; et `GET /sessions` porte `reaper: { last_sweep_at, killed,
-killed_for_absent_run }`. Les deux compteurs sont **cumulés depuis le
-démarrage du daemon** (non persistés : un redémarrage les remet à zéro), parce qu'un kill est un
-*événement* — une jauge par passe répondait « le *dernier* balayage a-t-il tué ? », donc `0` quelle que
-soit la vitesse à laquelle on regarde, la passe qui tue étant suivie en quelques secondes d'une passe à
-vide. `killed_for_absent_run` doit rester **plat** : après ce correctif, une absence constatée sur une
-session vivante est un « ne peut plus arriver », et le cumul est ce qui rend cette affirmation
-vérifiable. Le détail par session reste dans `journalctl`.
+No change to the reap policy: the three orphaning reasons, the shell without TTL, the Manager without TTL and the blindness to `iter` are unchanged, and the eight kill messages are byte-identical. Two observability additions: kills for **absence** and for **unrecognized name** now log at `warn!` (nominal housekeeping, archived or TTL, stays at `info!`), so `journalctl -p warning` finds them without a full grep; and `GET /sessions` carries `reaper: { last_sweep_at, killed, killed_for_absent_run }`. Both counters are **cumulative since the daemon started** (not persisted: a restart resets them to zero), because a kill is an *event*: a per-pass gauge answered "did the *last* sweep kill?", hence `0` however fast you looked, since the killing pass is followed within seconds by an empty pass. `killed_for_absent_run` must stay **flat**: after this fix, an absence observed on a live session is a "can no longer happen", and the cumulative count is what makes that claim verifiable. The per-session detail remains in `journalctl`.
 
-Ne ferme pas #498 : le sous-worktree et la branche d'une session tuée survivent et condamnent le nœud
-au respawn ; ce correctif n'en supprime que le producteur principal.
+This does not fully close the related leftover problem: the sub-worktree and the branch of a killed session survive and doom the node to respawn; this fix only removes its main producer.
 
-> **Note de numérotation** : cette ADR est **0038**. Elle a été écrite et revue sous le numéro 0037,
-> que #489 (1.8.0) a pris entre-temps ; le renommage est purement éditorial.
+> **Numbering note**: this decision record is **0038**. It was written and reviewed under number 0037, which the 1.8.0 change took in the meantime; the renumbering is purely editorial.
 
 ## 1.8.0
 
-Un changement cassant livré sous un bump **mineur**, dans la ligne des précédents posés en 1.2.0, 1.3.0
-et 1.6.0 : la surface quotidienne est identique (`restart_node` s'appelle au même endroit avec les mêmes
-arguments), et le comportement retiré était un **mensonge** — la commande répondait `200 {"ok":true}`
-sur les cinq issues possibles de son spawn, dont l'échec, et sur les nœuds `code-mutating`/`merge` elle
-échouait à **100 %** en affirmant avoir réussi. Aucune configuration vivante ne peut en dépendre sans
-être déjà cassée. **Si le mainteneur préfère la lettre du préambule ci-dessus (« la casse se signale ici
-et par un bump majeur »), c'est `2.0.0` : un mot à changer dans `Cargo.toml`.**
+A breaking change shipped under a **minor** bump, in line with the previous ones set in 1.2.0, 1.3.0 and 1.6.0: the daily surface is identical (`restart_node` is called in the same place with the same arguments), and the removed behavior was a **lie**: the command answered `200 {"ok":true}` on all five possible outcomes of its spawn, including failure, and on `code-mutating`/`merge` nodes it failed **100%** of the time while claiming to have succeeded. No live configuration can depend on it without already being broken. **If the maintainer prefers the letter of the preamble above ("breakage is announced here and by a major bump"), it is `2.0.0`: one word to change in `Cargo.toml`.**
 
-### Cassant — un `restart_node` qui n'a pas spawné n'est plus jamais un `200` (#489, ADR-0037)
+### Breaking: a `restart_node` that did not spawn is never a `200` again
 
-Le bras tuait la session tmux, appendait son `CommandIssued`, puis découvrait le Run, le pipeline et le
-nœud, et **jetait** le `SpawnOutcome` de `spawn_node` — pas même un `let _ =`. Voir **ADR-0037**.
+The arm killed the tmux session, appended its `CommandIssued`, then discovered the Run, the pipeline and the node, and **dropped** the `SpawnOutcome` of `spawn_node`, not even with a `let _ =`. See the decision record on restart outcomes.
 
-| Cause | Statut avant | Statut après | Slug (`error`) | `recoverable` |
+| Cause | Status before | Status after | Slug (`error`) | `recoverable` |
 |---|---|---|---|---|
-| Garde de transition rejette (3 raisons atteignables) | `409`, prose dans `error`, pas de `recoverable` | `409` | `restart_refused` | `true` |
-| `node_id` absent du pipeline **du Run** | **`200 {"ok":true}`** | `400` | `node_not_found` | `true` |
-| Conteneur sandbox pas encore prêt (#445) | **`200 {"ok":true}`** | `409` | `sandbox_prep_not_ready` | `true` |
-| Sous-worktree tenu par un autre worktree vivant | **`200 {"ok":true}`** | `409` | `sub_worktree_occupied` | `true` |
-| Le spawn a échoué (`SpawnOutcome::Failed`) | **`200 {"ok":true}`** | `500` | `spawn_failed` | `!run_failed` |
-| Throttle du cap de sessions | `200 {"ok":true}` | `200 {"ok":true,"waiting":true,"reason":…}` | — | — |
-| Spawn réussi | `200 {"ok":true}` | `200 {"ok":true,"spawned":[…],"reused_sub_worktree":…,"base_sha":…,"stale_git_lock":…}` | — | — |
+| Transition guard rejects (3 reachable reasons) | `409`, prose in `error`, no `recoverable` | `409` | `restart_refused` | `true` |
+| `node_id` absent from the pipeline **of the Run** | **`200 {"ok":true}`** | `400` | `node_not_found` | `true` |
+| Sandbox container not ready yet | **`200 {"ok":true}`** | `409` | `sandbox_prep_not_ready` | `true` |
+| Sub-worktree held by another live worktree | **`200 {"ok":true}`** | `409` | `sub_worktree_occupied` | `true` |
+| The spawn failed (`SpawnOutcome::Failed`) | **`200 {"ok":true}`** | `500` | `spawn_failed` | `!run_failed` |
+| Session cap throttle | `200 {"ok":true}` | `200 {"ok":true,"waiting":true,"reason":...}` | n/a | n/a |
+| Spawn succeeded | `200 {"ok":true}` | `200 {"ok":true,"spawned":[...],"reused_sub_worktree":...,"base_sha":...,"stale_git_lock":...}` | n/a | n/a |
 
-- **Les clients discriminent sur `error`, jamais sur le statut** — même règle qu'en 1.6.0, même patron de
-  type (`RestartVerdict` ne porte aucun statut ; sa projection en est la seule propriétaire, avec un
-  `match` exhaustif sans joker).
-- **Tout refus connaissable est rendu AVANT le kill de la session.** ADR-0025 §2 disait « valider avant
-  d'écrire » ; cette version l'étend au kill. Un `4xx` rendu après la destruction d'une session n'est pas
-  une validation, c'est un constat.
-- **`session_killed` est le champ neuf, et le seul qui porte un bit utile sur un refus.** `false` = rien
-  n'a été touché, corrigez la cause et rappelez. `true` = la session est morte et **rien ne l'a
-  remplacée** (deux courses post-kill seulement) : ce nœud demande un autre levier, pas un retry de
-  celui-ci. `recoverable` est uniformément `true` sur les refus — sa définition (ADR-0035) est « le
-  daemon a-t-il déjà enregistré l'issue terminale ? », et aucun refus de restart n'enregistre rien.
-- **`Throttled` reste un `2xx`, et n'est pas un `noop`.** Un `NodeWaiting` **a** été appendé, il a flippé
-  le nœud en `waiting`, et le balayage d'admission le reprend réellement. Appeler ça « no-op » serait le
-  petit mensonge symétrique de celui que ce lot corrige — d'où le vocabulaire `waiting`, qui amende
-  ADR-0025 §3 pour cette classe de commandes.
-- **`spawn_failed` est un `500`, pas un `409`** : ce n'est pas un verdict, c'est une panne. `run_failed`
-  est **re-projeté** après le spawn plutôt que deviné, parce que les quatre producteurs de `Failed`
-  divergent — et un `500` route la CLI vers `pdo fail`, conseil catastrophique si `RunFailed` est déjà
-  au log.
+- **Clients discriminate on `error`, never on the status.** Same rule as in 1.6.0, same type pattern (`RestartVerdict` carries no status; its projection is the only owner of it, with an exhaustive `match` and no wildcard).
+- **Every knowable refusal is returned BEFORE the session is killed.** An earlier decision record said "validate before writing"; this release extends it to the kill. A `4xx` returned after a session has been destroyed is not a validation, it is a finding.
+- **`session_killed` is the new field, and the only one that carries a useful bit on a refusal.** `false` = nothing was touched, fix the cause and call again. `true` = the session is dead and **nothing replaced it** (only two post-kill races): this node needs another lever, not a retry of this one. `recoverable` is uniformly `true` on refusals: its definition (from an earlier decision record) is "has the daemon already recorded the terminal outcome?", and no restart refusal records anything.
+- **`Throttled` stays a `2xx`, and is not a `noop`.** A `NodeWaiting` **was** appended, it flipped the node to `waiting`, and the admission sweep really does pick it up again. Calling it a "no-op" would be the small symmetric lie of the one this batch fixes, hence the `waiting` vocabulary, which amends an earlier decision record for this class of commands.
+- **`spawn_failed` is a `500`, not a `409`**: it is not a verdict, it is a failure. `run_failed` is **re-projected** after the spawn rather than guessed, because the four producers of `Failed` diverge, and a `500` routes the CLI to `pdo fail`, which is catastrophic advice if `RunFailed` is already in the log.
 
-### Le travail non commité d'un sous-worktree survit désormais à un `restart_node`
+### Uncommitted work in a sub-worktree now survives a `restart_node`
 
-C'est une **garantie neuve**, et elle ne se déduit pas du titre. Le sous-worktree d'un nœud est nommé
-purement à partir de `(run, node, iter)` et `restart_node` re-spawne sur le même `iter` : le re-spawn
-rejouait donc `git worktree add -b <branche déjà existante>`, que git refuse (exit 255). Sur les nœuds
-`code-mutating` et `merge` le levier échouait à 100 %, en silence, et la veille de vivacité inventait
-30 s plus tard un `session_died` — une cause fausse qui envoyait l'opérateur sur la piste tmux pour un
-bug git.
+This is a **new guarantee**, and it cannot be deduced from the title. A node's sub-worktree is named purely from `(run, node, iter)` and `restart_node` re-spawns on the same `iter`: the re-spawn therefore replayed `git worktree add -b <already existing branch>`, which git refuses (exit 255). On `code-mutating` and `merge` nodes the lever failed 100% of the time, silently, and the liveness watch invented a `session_died` 30 s later, a false cause that sent the operator down the tmux trail for a git bug.
 
-Le sous-worktree est maintenant **réutilisé en place** quand il est là et sur la bonne branche : aucun
-appel git mutant, le travail en vol de la session morte reste intact, et c'est ce qui distingue
-`restart_node` de `node_retry` côté disque (`node_retry` reste l'outil table-rase, et le seul qui donne
-une base fraîche). Un résidu sans valeur — enregistrement prunable, branche orpheline — est recyclé ;
-un sous-worktree **tenu ailleurs** est refusé en nommant ce qui le tient, jamais reapé. Le corps de
-succès porte `reused_sub_worktree`, et `stale_git_lock` quand un verrou git traîne dans le worktree
-(signalé, jamais supprimé : PDO ne peut pas prouver que l'écrivain est mort).
+The sub-worktree is now **reused in place** when it is there and on the right branch: no mutating git call, the in-flight work of the dead session stays intact, and this is what distinguishes `restart_node` from `node_retry` on disk (`node_retry` remains the clean-slate tool, and the only one that gives a fresh base). A worthless leftover (prunable record, orphan branch) is recycled; a sub-worktree **held elsewhere** is refused, naming what holds it, and never reaped. The success body carries `reused_sub_worktree`, and `stale_git_lock` when a git lock lingers in the worktree (reported, never deleted: PDO cannot prove the writer is dead).
 
-Deux corrections que cette réutilisation rend obligatoires, parce qu'elle promeut deux bugs latents en
-bugs systématiques : `reap_orphan_sub_worktree` prune désormais avant de supprimer la branche (sans
-quoi il laissait les deux verrous en place quand le répertoire avait déjà disparu — c'est aussi le
-levier 2 de #498) ; et `commit_and_merge_sub_worktree_inner` vérifie enfin le **statut** de son
-`git add -A`. Ce dernier valait, avec un `index.lock` résiduel : `add` échoue (128) →
-`diff --cached --quiet` répond 0 → aucun commit → `git merge` dit « Already up to date » →
-`MergeResult::Success` sur **100 % du travail perdu**, sans conflit, sans événement, sans trace. Il
-`bail!`e maintenant, et ressort en `merge_failed`.
+Two fixes that this reuse makes mandatory, because it promotes two latent bugs into systematic ones: `reap_orphan_sub_worktree` now prunes before deleting the branch (otherwise it left both locks in place when the directory had already disappeared; this is also lever 2 of the leftover sub-worktree problem); and `commit_and_merge_sub_worktree_inner` finally checks the **status** of its `git add -A`. The latter held, with a residual `index.lock`: `add` fails (128) -> `diff --cached --quiet` answers 0 -> no commit -> `git merge` says "Already up to date" -> `MergeResult::Success` on **100% of the work lost**, with no conflict, no event, no trace. It now calls `bail!`, and comes out as `merge_failed`.
 
-### Fin de l'auto-throttle d'un restart (#489-C)
+### End of a restart's self-throttle
 
-À `live == cap`, un `restart_node` sur une itération vivante se throttlait **contre lui-même** : le bras
-tue la session mais n'appende aucun événement de cycle de vie, donc le nœud projetait encore `Running`
-quand le comptage passait. Le gel était **définitif** — `retry_waiting_nodes` n'a aucun timer,
-`resume_run` est un no-op sur un throttlé, le boot recovery ne regarde que `Running`/`AwaitingUser`, et
-le bouton Stop répond `409`. Le comptage d'admission exclut désormais le slot que le spawn est en train
-de reprendre, sur la clé `(run_id, node_id, iter)` — jamais `(node_id, iter)`, qui écarterait la session
-vivante d'un **autre** Run du même pipeline et **dépasserait** le cap. Et `kill_node` réveille les nœuds
-`waiting`, ce que rien ne faisait depuis la surface commandes.
+At `live == cap`, a `restart_node` on a live iteration throttled **against itself**: the arm kills the session but appends no lifecycle event, so the node still projected `Running` when the count was taken. The freeze was **permanent**: `retry_waiting_nodes` has no timer, `resume_run` is a no-op on a throttled node, boot recovery only looks at `Running`/`AwaitingUser`, and the Stop button answers `409`. The admission count now excludes the slot that the spawn is taking back, on the key `(run_id, node_id, iter)`, never `(node_id, iter)`, which would discard the live session of **another** Run of the same pipeline and **exceed** the cap. And `kill_node` wakes the `waiting` nodes, which nothing did from the commands surface.
 
-### Ce qui ne change pas
+### What does not change
 
-- **`GET /sessions` et la gauge de la barre de statut** rapportent toujours le compte **vrai** : seule la
-  porte d'admission applique l'exclusion.
-- **ADR-0032 / la veille de vivacité** : indemne par construction — elle lit des événements, jamais un
-  statut HTTP. Elle cesse simplement d'inventer un `session_died` là où un `worktree add` avait échoué.
-- **ADR-0036 / la règle d'adoption du merge-back** : inchangée. Seule la façon dont un re-spawn obtient
-  son `base_sha` change — une réutilisation **reporte** la base d'origine au lieu d'en dériver une, sans
-  quoi l'échappatoire serait silencieusement morte (ou pire, armée à faux) pour tout nœud redémarré.
-- **Le contrat de `node_retry`** et celui des quatre commandes de boucle (ADR-0025).
-- **Les corps `text/plain`** de « run not found » et « cannot read/parse pipeline » : mêmes corps, même
-  content-type, seule leur **position** change (ils passent avant le kill). Les normaliser est #491.
-- **Le kill reste nu**, et non `reap_node_session` : le snapshot de pane ne serait jamais servi sur une
-  itération non terminale (famille #492).
+- **`GET /sessions` and the status bar gauge** still report the **true** count: only the admission gate applies the exclusion.
+- **The liveness watch**: unaffected by construction, since it reads events, never an HTTP status. It simply stops inventing a `session_died` where a `worktree add` had failed.
+- **The merge-back adoption rule**: unchanged. Only the way a re-spawn obtains its `base_sha` changes: a reuse **carries over** the original base instead of deriving one, without which the escape hatch would be silently dead (or worse, wrongly armed) for any restarted node.
+- **The contract of `node_retry`** and that of the four loop commands.
+- **The `text/plain` bodies** of "run not found" and "cannot read/parse pipeline": same bodies, same content-type, only their **position** changes (they now come before the kill). Normalizing them is planned separately.
+- **The kill stays bare**, and is not `reap_node_session`: the pane snapshot would never be served on a non-terminal iteration.
 
 ### Migration
 
-- **Appelants directs de `restart_node`** (`curl`, Pipeline Manager, scripts) : remplacer tout test de la
-  forme `if resp.ok` par une lecture de `body.error` puis `body.recoverable` et `body.session_killed`. Un
-  `409`/`400`/`500` n'est plus une anomalie de transport, c'est un **verdict**.
-- **Traiter `waiting:true` comme un succès différé**, pas comme un échec : le nœud est réservé, il
-  spawnera quand un slot se libère — ne pas ré-émettre la commande.
-- **Lire `reused_sub_worktree`** avant de dire à l'agent frais de repartir de zéro : quand il vaut `true`,
-  le répertoire contient déjà le travail non commité de la session précédente.
-- **Rien à faire côté données** : aucun payload d'événement ne change de forme. Le `base_sha` d'un
-  `node_started` de re-spawn vaut désormais celui de la coupe d'origine au lieu d'être absent.
+- **Direct callers of `restart_node`** (`curl`, Pipeline Manager, scripts): replace any test of the form `if resp.ok` with a read of `body.error`, then `body.recoverable` and `body.session_killed`. A `409`/`400`/`500` is no longer a transport anomaly, it is a **verdict**.
+- **Treat `waiting:true` as a deferred success**, not as a failure: the node is reserved, it will spawn when a slot frees up. Do not re-issue the command.
+- **Read `reused_sub_worktree`** before telling the fresh agent to start from scratch: when it is `true`, the directory already contains the uncommitted work of the previous session.
+- **Nothing to do on the data side**: no event payload changes shape. The `base_sha` of a re-spawn `node_started` is now that of the original cut instead of being absent.
 
-### Trou connu, énoncé pour qu'il ne soit pas re-fiché en régression
+### Known gap, stated so that it is not filed again as a regression
 
-Cette vérité filaire n'est **observable par aucun humain via l'UI**. `api.ts` appelle `restartNode` en
-`responseMode:"void"` avec un `catch {}` — le corps *et* l'erreur sont jetés — et le seul bouton câblé
-vit dans une bannière gatée `node.status === "stale"`, que plus rien ne produit depuis #469. Le
-consommateur vivant de cette route est le Pipeline Manager en `curl`, dont le préambule est mis à jour
-ici. Le volet UI appartient à **#492**. Zéro travail frontend dans ce lot.
+This wire truth is **not observable by any human through the UI**. `api.ts` calls `restartNode` with `responseMode:"void"` and a `catch {}`: both the body *and* the error are dropped. The only wired button lives in a banner gated on `node.status === "stale"`, which nothing produces anymore. The live consumer of this route is the Pipeline Manager through `curl`, whose preamble is updated here. The UI part is tracked separately. Zero frontend work in this batch.
 
 ## 1.7.0
 
-Rien de cassant. Une note, parce qu'elle ne se déduit pas du titre du commit et qu'elle change ce
-qu'un opérateur peut supposer de ses branches.
+Nothing breaking. One note, because it cannot be deduced from the commit title and it changes what an operator may assume about their branches.
 
-### Le runtime peut désormais déplacer la ref d'une branche pipeline (#503, ADR-0036)
+### The runtime can now move the ref of a pipeline branch
 
-Jusqu'ici le runtime ne touchait jamais une ref existante : il créait des branches et des worktrees,
-n'en supprimait aucun, n'en réécrivait aucun (ADR-0012(a)). Le merge-back d'un sous-worktree peut
-maintenant **déplacer** le tip de la branche pipeline pour adopter l'arbre du nœud, lorsque la
-divergence est l'histoire du Run que ce nœud a lui-même réécrite en se rebasant. Le déplacement passe
-par un `commit-tree` à deux parents qui garde **l'ancien tip en premier parent** : aucun commit ne
-devient inatteignable, `git log` de l'ancien tip reste intact, et la règle d'ADR-0012(a) sur la
-non-suppression est inchangée. Le garde est structurel — le tip pipeline doit encore être exactement
-le `base_sha` depuis lequel ce sous-worktree a été coupé — donc il ne peut pas adopter par-dessus le
-travail d'un autre nœud.
+Until now the runtime never touched an existing ref: it created branches and worktrees, deleted none, rewrote none (per an earlier branch-handling decision record). The merge-back of a sub-worktree can now **move** the tip of the pipeline branch to adopt the node's tree, when the divergence is the Run history that this node itself rewrote by rebasing. The move goes through a two-parent `commit-tree` that keeps the **old tip as first parent**: no commit becomes unreachable, `git log` of the old tip stays intact, and the non-deletion rule of that decision record is unchanged. The guard is structural: the pipeline tip must still be exactly the `base_sha` from which this sub-worktree was cut, so it cannot adopt on top of another node's work.
 
-Deux effets de bord du même défaut sont corrigés au passage : `merge_conflict_detected.payload.detail`
-est enfin rempli (il lisait `stderr`, que `git merge` laisse vide en cas de conflit — le rapport est
-sur stdout), et un merge-back qui échoue appende `NodeFailed` puis reape la session du nœud au lieu de
-la laisser vivante sous une projection `running`.
+Two side effects of the same defect are fixed along the way: `merge_conflict_detected.payload.detail` is finally filled in (it read `stderr`, which `git merge` leaves empty on conflict: the report is on stdout), and a merge-back that fails appends `NodeFailed` then reaps the node's session instead of leaving it alive under a `running` projection.
 
 ## 1.6.0
 
-Un changement cassant livré sous un bump **mineur**, dans la ligne des précédents posés en 1.2.0 et
-1.3.0 : la surface quotidienne est identique (le bouton *Mark complete* et `pdo complete` sont au même
-endroit et prennent les mêmes arguments), et le comportement retiré était un **mensonge** — huit sorties
-qui décrivaient un refus répondaient `200`, dont quatre après avoir déjà tué le Run. Aucune
-configuration vivante ne peut en dépendre sans être déjà cassée : un client qui lisait « succès » sur
-ces réponses se trompait par construction. **Si le mainteneur préfère la lettre du préambule ci-dessus
-(« la casse se signale ici et par un bump majeur »), c'est `2.0.0` : un mot à changer dans
-`Cargo.toml`.**
+A breaking change shipped under a **minor** bump, in line with the previous ones set in 1.2.0 and 1.3.0: the daily surface is identical (the *Mark complete* button and `pdo complete` are in the same place and take the same arguments), and the removed behavior was a **lie**: eight exits that described a refusal answered `200`, four of them after having already killed the Run. No live configuration can depend on it without already being broken: a client that read "success" on these responses was wrong by construction. **If the maintainer prefers the letter of the preamble above ("breakage is announced here and by a major bump"), it is `2.0.0`: one word to change in `Cargo.toml`.**
 
-### Cassant — un refus de complétion n'est plus jamais un `200` (#490)
+### Breaking: a completion refusal is never a `200` again
 
-Le chemin par lequel **tout** node se termine — `pdo complete` (`POST …/nodes/<id>/done`) et *Mark
-complete* (`POST …/commands` `kind=mark_node_done`) — répondait `200` sur huit corps qui décrivaient un
-refus. Un agent lisait `Node <id> marked complete.`, sortait en `0`, et croyait avoir livré un Run que
-le daemon venait de tuer. Voir **ADR-0035**.
+The path through which **every** node ends, `pdo complete` (`POST .../nodes/<id>/done`) and *Mark complete* (`POST .../commands` `kind=mark_node_done`), answered `200` on eight bodies that described a refusal. An agent read `Node <id> marked complete.`, exited with `0`, and believed it had delivered a Run that the daemon had just killed. See the decision record on completion refusals.
 
-Les sorties qui passent de `200` à **`409`**, avec leur nouveau slug :
+The exits that go from `200` to **`409`**, with their new slug:
 
-| Slug (`error`) | `recoverable` | Événements déjà appendés |
+| Slug (`error`) | `recoverable` | Events already appended |
 |---|---|---|
 | `frontmatter_retry_pending` | `true` | `FrontmatterRetryPending` |
 | `frontmatter_retry_exhausted` | `false` | `NodeFailed` + `RunFailed` |
@@ -2302,148 +4685,75 @@ Les sorties qui passent de `200` à **`409`**, avec leur nouveau slug :
 | `doc_violated_code_immutability` | `false` | `NodeFailed` + `RunFailed` |
 | `merge_conflict` | `false` | `MergeConflictDetected` + `RunFailed` |
 | `merge_resolution_failed` | `false` | `MergeResolverFailed` + `RunFailed` |
-| `merge_resolver_spawned` / `merge_resolver_failed` | `false` | branches mortes depuis ADR-0006 |
+| `merge_resolver_spawned` / `merge_resolver_failed` | `false` | dead branches since an earlier decision record |
 
-Deux refus **changent de corps sans changer de statut** : `completion_rejected` (le garde de transition,
-déjà en `409`) voit sa prose passer de `error` à **`message`**, `error` portant désormais le slug ; et
-`missing_outputs` gagne simplement `recoverable: true`.
+Two refusals **change body without changing status**: `completion_rejected` (the transition guard, already a `409`) sees its prose move from `error` to **`message`**, with `error` now carrying the slug; and `missing_outputs` simply gains `recoverable: true`.
 
-- **Les clients discriminent sur `error`, jamais sur le statut.** Un statut n'a pas assez de bits pour
-  neuf causes, et le client de l'UI en était la démonstration : il relisait *tout* `409` de ce chemin
-  comme `missing_outputs` avec une liste vide, gatée sur `length > 0`, donc le refus le plus fréquent de
-  tous — tout clic sur un node d'un Run déjà en échec — n'affichait **rien**. Un slug inconnu se rend
-  tel quel (ADR-0001).
-- **`recoverable` répond à une seule question** : *est-ce encore ton tour ?* `true` ⇒ le node est
-  toujours `running`, rien de terminal n'est enregistré. `false` ⇒ le daemon a **déjà** enregistré
-  l'issue terminale ; ne jamais enchaîner sur `pdo fail`.
-- **Le détail est verbatim celui d'avant** (`missing`, `violations`, `detail`, `reason`) : ce lot déplace
-  un statut et ajoute deux clés, il ne renomme aucun champ de détail. Le `detail` du fail-fast d'un node
-  `script` reste **imbriqué** — l'aplatir rendrait sa trace d'audit indistinguable d'un échec après
-  retry, et c'est le **projecteur** qui apprend à lire les deux formes.
+- **Clients discriminate on `error`, never on the status.** A status does not have enough bits for nine causes, and the UI client was the demonstration: it re-read *every* `409` of this path as `missing_outputs` with an empty list, gated on `length > 0`, so the most frequent refusal of all, any click on a node of an already failed Run, displayed **nothing**. An unknown slug is rendered as is.
+- **`recoverable` answers a single question**: *is it still your turn?* `true` means the node is still `running`, nothing terminal is recorded. `false` means the daemon has **already** recorded the terminal outcome; never follow up with `pdo fail`.
+- **The detail is verbatim the same as before** (`missing`, `violations`, `detail`, `reason`): this batch moves a status and adds two keys, it renames no detail field. The `detail` of a `script` node's fail-fast stays **nested**: flattening it would make its audit trail indistinguishable from a failure after retry, and it is the **projector** that learns to read both forms.
 
-### Cassant — `pdo complete` a un contrat de codes de sortie
+### Breaking: `pdo complete` has an exit code contract
 
-| Code | Sens | Geste attendu |
+| Code | Meaning | Expected action |
 |---|---|---|
-| `0` | accordée, ou **doublon légal** (`noop`) | rien |
-| `3` | refusée, **encore ton tour** | corriger, rappeler `pdo complete`. **Pas** `pdo fail` |
-| `4` | refusée, **le runtime a déjà tranché** | s'arrêter et rapporter. **Pas** `pdo fail` |
-| `1` | panne, transport, corps illisible, `5xx` | ici **seulement**, `pdo fail` est le bon conseil |
+| `0` | granted, or **legal duplicate** (`noop`) | nothing |
+| `3` | refused, **still your turn** | fix, call `pdo complete` again. **Not** `pdo fail` |
+| `4` | refused, **the runtime has already ruled** | stop and report. **Not** `pdo fail` |
+| `1` | failure, transport, unreadable body, `5xx` | only here, `pdo fail` is the right advice |
 
-**Pourquoi un `4` distinct du `1`.** Le tail bash d'un node `script` fait `pdo complete || pdo fail`.
-Ce `||` était du **code mort** tant que son déclencheur répondait `200` ; le passage au `409` le
-réveille. Sans discrimination du `4`, chaque refus terminal d'un node `script` produirait **deux**
-`NodeFailed` et **deux** `RunFailed`, le second avec une raison fausse (`NodeFailed` est absorbé par le
-garde, `RunFailed` ne l'est pas). Le tail teste donc le `4`, et un test de couche 3 en vrai tmux + vrai
-bash compte exactement un `run_failed`.
+**Why a `4` distinct from `1`.** The bash tail of a `script` node does `pdo complete || pdo fail`. That `||` was **dead code** as long as its trigger answered `200`; the switch to `409` wakes it up. Without discriminating the `4`, every terminal refusal of a `script` node would produce **two** `NodeFailed` and **two** `RunFailed`, the second with a wrong reason (`NodeFailed` is absorbed by the guard, `RunFailed` is not). The tail therefore tests for `4`, and a layer 3 test in real tmux + real bash counts exactly one `run_failed`.
 
-**Le `0` sur un doublon légal est non négociable** : un agent perplexe qui rappelle `pdo complete` ne
-doit pas lire « refusé » puis enchaîner `pdo fail` — il tuerait un Run qui vient de réussir, et sur un
-node `script` le tail le ferait sans demander.
+**The `0` on a legal duplicate is non-negotiable**: a puzzled agent that calls `pdo complete` again must not read "refused" and then follow up with `pdo fail`: it would kill a Run that has just succeeded, and on a `script` node the tail would do it without asking.
 
-### Ce qui ne change pas
+### What does not change
 
-- **La sémantique du `2xx`** (ADR-0023) : « ton événement terminal est durablement enregistré et
-  l'avance est planifiée ». Elle gagne seulement un corollaire — « et ta complétion n'a pas été
-  refusée ».
-- **La queue d'avance détachée** (#304) et le **fail-fast** d'un node `script` (ADR-0017) : intacts.
-- **`410`, `404`, `500`** : « jamais `2xx` » n'est **pas** « toujours `409` ». Le tombstone d'un Run
-  oublié garde son `410` (ADR-0024), une cible inconnue son `404`, une panne son `500`. Sur la route
-  `POST …/nodes/<id>/done`, ces trois-là portent désormais le corps JSON du contrat
-  (`{error, recoverable, message}`) au lieu d'un texte brut ; leur statut est inchangé.
-- **Le corps de succès de `POST …/done` reste le texte brut `ok`**, asymétrique avec le
-  `{"ok":true}` de `POST …/commands`. Symétriser appartient à **#491**.
-- **La veille de vivacité** (#469 / ADR-0032) : indemne par construction — elle lit la variante du
-  résultat, jamais le statut HTTP.
+- **The `2xx` semantics** (from an earlier decision record): "your terminal event is durably recorded and the advance is scheduled". It only gains a corollary: "and your completion was not refused".
+- **The detached advance queue** and the **fail-fast** of a `script` node: intact.
+- **`410`, `404`, `500`**: "never `2xx`" is **not** "always `409`". The tombstone of a forgotten Run keeps its `410`, an unknown target its `404`, a failure its `500`. On the `POST .../nodes/<id>/done` route, these three now carry the JSON body of the contract (`{error, recoverable, message}`) instead of plain text; their status is unchanged.
+- **The success body of `POST .../done` stays the plain text `ok`**, asymmetric with the `{"ok":true}` of `POST .../commands`. Making them symmetric is planned separately.
+- **The liveness watch**: unaffected by construction, since it reads the variant of the result, never the HTTP status.
 
 ### Migration
 
-- **Appelants directs** (`curl`, scripts, harnais de test) : remplacer tout test de la forme
-  `if resp.ok` ou `if body.status == "..."` sur ce chemin par une lecture de `body.error` +
-  `body.recoverable`. Un `409` n'est plus une anomalie de transport, c'est un **verdict**.
-- **Bash d'un node `script` écrit à la main** : si le corps enchaîne `pdo complete || pdo fail`, ajouter
-  la garde sur le code `4` — sinon chaque refus terminal produit un second `RunFailed` à raison fausse.
-  Le tail généré par PDO le fait déjà.
-- **Rien à faire côté données** : aucun payload d'événement ne change, `NodeState` gagne un
-  `missing_outputs` omis quand vide, et les Runs archivés se projettent à l'identique à l'octet — à une
-  correction près, un bug préexistant : un node redevenu vert ne traîne plus les violations de la
-  tentative dont il s'est remis.
+- **Direct callers** (`curl`, scripts, test harnesses): replace any test of the form `if resp.ok` or `if body.status == "..."` on this path with a read of `body.error` + `body.recoverable`. A `409` is no longer a transport anomaly, it is a **verdict**.
+- **Hand-written bash of a `script` node**: if the body chains `pdo complete || pdo fail`, add the guard on exit code `4`, otherwise every terminal refusal produces a second `RunFailed` with a wrong reason. The tail generated by PDO already does it.
+- **Nothing to do on the data side**: no event payload changes, `NodeState` gains a `missing_outputs` omitted when empty, and archived Runs project byte-identically, with one fix for a pre-existing bug: a node that turned green again no longer drags along the violations of the attempt it recovered from.
 
 ## 1.3.0
 
-Un changement cassant livré sous un bump **mineur**, dans la ligne du précédent posé en 1.2.0 : la
-surface UI est identique (le champ « Target repository » de New Run était déjà requis côté client, et
-son gate `repoValid` est renforcé ici), et aucune configuration vivante ne dépend du comportement
-retiré — les 9 Triggers de production nomment tous leur dépôt. **Si le mainteneur préfère la lettre du
-préambule ci-dessus (« la casse se signale ici et par un bump majeur »), c'est `2.0.0` : un mot à
-changer dans `Cargo.toml`.**
+A breaking change shipped under a **minor** bump, in line with the previous one set in 1.2.0: the UI surface is identical (the "Target repository" field of New Run was already required on the client side, and its `repoValid` gate is tightened here), and no live configuration depends on the removed behavior: the 9 production Triggers all name their repository. **If the maintainer prefers the letter of the preamble above ("breakage is announced here and by a major bump"), it is `2.0.0`: one word to change in `Cargo.toml`.**
 
-### Cassant — le cwd du daemon n'est plus une cible de Run implicite (#470)
+### Breaking: the daemon's cwd is no longer an implicit Run target
 
-`target_repo` devient un **champ requis** aux quatre frontières d'écriture. Un appel sans lui, avec une
-chaîne vide ou avec des blancs répond **400 en nommant le champ**, au lieu de créer silencieusement son
-worktree dans le dépôt d'où le daemon a été lancé (`~/.pdo/app` en production). Le 2026-07-29, deux Runs
-y avaient écrit du code, récupérable seulement par un `git fetch ~/.pdo/app`. Voir ADR-0033.
+`target_repo` becomes a **required field** at the four write boundaries. A call without it, with an empty string or with whitespace answers **400 naming the field**, instead of silently creating its worktree in the repository from which the daemon was launched (`~/.pdo/app` in production). On 2026-07-29, two Runs had written code there, recoverable only through a `git fetch ~/.pdo/app`. See the decision record on the target repository.
 
-- `POST /runs` (JSON **et** multipart) : 400, avant tout effet — aucun `run_id`, aucun `run_started`,
-  aucun worktree, aucune session ;
-- `POST /triggers` : 400, aucune ligne persistée ;
-- `PATCH /triggers/:id` : reste un **merge partiel**. Un `target_repo` **absent** laisse la valeur
-  stockée intacte (c'est ce qui garde `{"enabled": true}` du toggle de liste légal) ; un `null`
-  explicite ou une chaîne blanche répond 400. Effet de bord voulu : avant, un `null` explicite était un
-  **no-op silencieux** côté serde, donc vider le champ dépôt dans l'UI paraissait marcher et ne faisait
-  rien ;
-- `POST /triggers/guard/test` : 400. Le dry-run exécute un `sh -c` arbitraire ; son invariant « zéro
-  effet de bord » portait sur le fait de ne pas créer de Run, pas sur ce que la commande fait ;
-- un **Trigger dont le dépôt cible est nul devient dormant** au lieu de tirer : le refus remonte avant
-  le guard, donc le guard n'est **jamais** lancé (5 des 9 Triggers vivants font `git pull` /
-  `gh issue list`), `next_fire_at` passe à `NULL`, et « Run now » répond **409** avec la raison au lieu
-  d'un `200 {fired:false}` ;
-- `retry_all` recopie désormais le dépôt **résolu** et non le champ brut. Sans ça, retenter un Run
-  d'avant ce changement 400erait **après** l'archivage de l'original : archivé, sans remplaçant.
+- `POST /runs` (JSON **and** multipart): 400, before any effect: no `run_id`, no `run_started`, no worktree, no session;
+- `POST /triggers`: 400, no row persisted;
+- `PATCH /triggers/:id`: stays a **partial merge**. An **absent** `target_repo` leaves the stored value intact (this is what keeps the list toggle's `{"enabled": true}` legal); an explicit `null` or a blank string answers 400. Intended side effect: before, an explicit `null` was a **silent no-op** on the serde side, so clearing the repository field in the UI seemed to work and did nothing;
+- `POST /triggers/guard/test`: 400. The dry-run executes an arbitrary `sh -c`; its "zero side effect" invariant was about not creating a Run, not about what the command does;
+- a **Trigger whose target repository is null becomes dormant** instead of firing: the refusal comes up before the guard, so the guard is **never** launched (5 of the 9 live Triggers do `git pull` / `gh issue list`), `next_fire_at` goes to `NULL`, and "Run now" answers **409** with the reason instead of a `200 {fired:false}`;
+- `retry_all` now copies the **resolved** repository and not the raw field. Without this, retrying a Run from before this change would return 400 **after** the original was archived: archived, with no replacement.
 
-**Ce qui ne change pas, et ne changera jamais** : le repli **de lecture**. Un Run archivé dont le
-payload porte `target_repo: null` (≈ 46 des 101 runs de dev) reste lisible, chiffrable et rangé sous le
-dépôt racine du daemon — pas de bucket « Unassigned ». L'asymétrie est la conception : obligatoire là où
-il y a un appelant à qui répondre 400, résolu là où il n'y a qu'un enregistrement passé à interpréter.
+**What does not change, and never will**: the **read** fallback. An archived Run whose payload carries `target_repo: null` (about 46 of the 101 dev runs) stays readable, priceable and filed under the daemon's root repository, with no "Unassigned" bucket. The asymmetry is the design: mandatory where there is a caller to answer 400 to, resolved where there is only a past record to interpret.
 
-**Migration.** Aucune action requise sur une instance existante : les Triggers vivants nomment tous leur
-dépôt, et l'UI envoyait déjà le champ. Les **appelants directs** de l'API — scripts, agents, `curl`,
-harnais de test — doivent nommer `target_repo` ; le message d'erreur dit quoi passer. Les Runs archivés
-restent lisibles sans intervention.
+**Migration.** No action required on an existing instance: the live Triggers all name their repository, and the UI already sent the field. **Direct callers** of the API (scripts, agents, `curl`, test harnesses) must name `target_repo`; the error message says what to pass. Archived Runs stay readable without intervention.
 
 ## 1.2.0
 
-Deux changements cassants livrés sous un bump **mineur**, par décision explicite du mainteneur : la
-v2.0.0 qu'avaient choisie les deux slices n'a jamais été taggée ni publiée (la dernière release est la
-v1.0.0), et aucune des deux ruptures ne change la surface qu'un utilisateur pilote au quotidien.
+Two breaking changes shipped under a **minor** bump, by explicit decision of the maintainer: the v2.0.0 that the two slices had chosen was never tagged or published (the latest release is v1.0.0), and neither of the two breaks changes the surface that a user drives daily.
 
-### Cassant — `session_died` est le seul verdict de liveness, l'état `Stale` disparaît (#469)
+### Breaking: `session_died` is the only liveness verdict, the `Stale` state disappears
 
-Un nœud n'est plus déclaré mort sur une absence d'activité : seule la mort de sa session compte, et la
-complétion sur fin de tour constatée est opt-in (ADR-0032, ADR-0012). L'état de nœud `Stale` est
-supprimé — un client qui l'attendait ne le verra plus. Nouveau réglage `autocomplete_turn_end`
-(`PDO_AUTOCOMPLETE_TURN_END`), off par défaut.
+A node is no longer declared dead on an absence of activity: only the death of its session counts, and completion on an observed end of turn is opt-in (see the liveness and completion decision records). The `Stale` node state is removed: a client that expected it will no longer see it. New setting `autocomplete_turn_end` (`PDO_AUTOCOMPLETE_TURN_END`), off by default.
 
-### Cassant — `GET`/`PUT /settings` perdent `image_source` et `dockerfile_path` (#471)
+### Breaking: `GET`/`PUT /settings` lose `image_source` and `dockerfile_path`
 
-La source de l'image d'un Run sandboxé n'est plus un réglage d'instance. Elle appartient au
-**profil de staging**, comme le contenu de home et l'env (ADR-0031 §9) : un axe par écran, l'écran
-de réglages ne répondant plus qu'à « quel profil un Run prend par défaut ».
+The image source of a sandboxed Run is no longer an instance setting. It belongs to the **staging profile**, like the home content and the env (per the staging profile decision record): one axis per screen, the settings screen only answering "which profile does a Run take by default".
 
-- `GET /settings` ne contient plus `image_source`, `dockerfile_path`, ni la disclosure
-  `sandbox_image` (le tag que le Dockerfile résolu produisait) ;
-- `PUT /settings` portant l'un de ces champs répond **400 en le nommant**, au lieu de 200 en
-  l'ignorant silencieusement. Un champ simplement inconnu reste ignoré, comme avant ;
-- les colonnes `instance_config.image_source` / `.dockerfile_path` deviennent **inertes**. Elles ne
-  sont pas droppées, et une valeur qui y traîne déclenche **un** `warn!` au boot qui la nomme et
-  renvoie vers le profil à éditer. Aucun Run n'est affecté ;
-- `PDO_SANDBOX_IMAGE_SOURCE` et `PDO_SANDBOX_DOCKERFILE` sont **conservées** et repointées sur le
-  nouveau défaut de profil : une instance headless n'a que des profils virtuels et pas d'UI, donc
-  l'env reste son seul moyen de changer d'image sans POSTer un profil.
+- `GET /settings` no longer contains `image_source`, `dockerfile_path`, or the `sandbox_image` disclosure (the tag that the resolved Dockerfile produced);
+- `PUT /settings` carrying one of these fields answers **400 naming it**, instead of 200 silently ignoring it. A merely unknown field is still ignored, as before;
+- the columns `instance_config.image_source` / `.dockerfile_path` become **inert**. They are not dropped, and a value lingering there triggers **one** `warn!` at boot that names it and points to the profile to edit. No Run is affected;
+- `PDO_SANDBOX_IMAGE_SOURCE` and `PDO_SANDBOX_DOCKERFILE` are **kept** and repointed to the new profile default: a headless instance only has virtual profiles and no UI, so the env remains its only way to change image without POSTing a profile.
 
-**Migration.** Aucune action requise si les deux réglages n'ont jamais été touchés (leur valeur par
-défaut est désormais la constante `DEFAULT_PROFILE_IMAGE` : registre hash-dérivé sur le Dockerfile
-seedé, donc un profil qui ne pose pas d'image produit exactement le même ref qu'avant). Si l'un des
-deux portait une valeur, le boot le dit : reporter le choix sur le profil concerné via
-**Settings → Manage staging profiles…**, ou sur la variable d'environnement du daemon.
+**Migration.** No action required if the two settings were never touched (their default value is now the constant `DEFAULT_PROFILE_IMAGE`: a hash-derived registry on the seeded Dockerfile, so a profile that sets no image produces exactly the same ref as before). If either carried a value, the boot says so: carry the choice over to the relevant profile via **Settings -> Manage staging profiles...**, or to the daemon's environment variable.

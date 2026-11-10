@@ -1,0 +1,189 @@
+import type { CSSProperties } from "react";
+import { Check, ChevronDown } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuLabel,
+  DropdownMenuItem,
+} from "../../shared/ui/dropdown-menu";
+import { cn } from "@/shared/lib/utils";
+import type { HarnessCatalog, HarnessOption } from "../model/catalog";
+
+/** The resolved row's marker: an accent bar flush left and a check, both in the
+ *  accent colour — the design's "this is what runs" cue (picker-simple.png).
+ *
+ *  Exported because the New Run pipeline menu (#822) is the same family of
+ *  dropdown and must wear the same marker; a second copy of these six lines is
+ *  exactly how two menus start looking subtly different. Rows that host it need
+ *  `relative pl-6` for the absolute positioning to land. */
+export function SelectedMarker() {
+  return (
+    <>
+      <span
+        aria-hidden
+        className="absolute inset-y-1 left-0 w-[3px] rounded-full bg-primary"
+      />
+      {/* `size-[13px]`, not just `size={13}`: the menu row sizes every svg
+          without a `size-*` class to 16 px, which pushes the check over the name. */}
+      <Check
+        size={13}
+        className="absolute left-1.5 top-1/2 size-[13px] -translate-y-1/2 text-primary"
+      />
+    </>
+  );
+}
+
+/**
+ * The dynamic harness picker (#586, ADR-0045/0046).
+ *
+ * A custom dropdown — NOT a native `<select>` — because the design (the "simple"
+ * direction, `frontend/design/harness-picker/picker-simple.png`) styles what a
+ * native control cannot: a check + accent bar on the resolved row, letter-spaced
+ * **BUILT-IN** / **FROM DESCRIPTORS** section headers, a right-aligned muted
+ * "not installed" note, a muted resolved-default hint on the inherit row, and section
+ * headers whose tooltips say what each holds. It is built on the same `@base-ui` menu the model picker uses, so it
+ * inherits the app's dropdown behaviour (portal, keyboard nav, click-away).
+ *
+ * The panel lists harness NAMES only (no capability pills — directions B/C/D were
+ * dropped) split into two sections on provenance. A harness whose binary is not
+ * installed (absent from the daemon's `$PATH`) renders **greyed, non-selectable
+ * and keyboard-skipped** with a discreet "not installed" note, because spawning it
+ * would fail fast (ADR-0037). The first row is always the inherit sentinel (value
+ * `""`), whose label each surface supplies — `""` resolves differently per surface.
+ *
+ * Shared by all four harness surfaces (node inspector, New Run, Projet, Settings
+ * default) so the sectioning, greying and check live in one place and can
+ * never drift between them.
+ */
+export default function HarnessSelect({
+  value,
+  onChange,
+  catalog,
+  inheritLabel,
+  inheritHint,
+  id,
+  className,
+  style,
+  disabled,
+  "data-testid": testId,
+}: {
+  /** The selected harness name, or `""` for the inherit sentinel. */
+  value: string;
+  onChange: (value: string) => void;
+  catalog: HarnessCatalog;
+  /** Main label for the inherit row (value `""`), e.g. "Use instance default". */
+  inheritLabel: string;
+  /** Optional muted hint shown right-aligned on the inherit row — the name `""`
+   *  resolves to (e.g. the instance default `claude`). A pure label; never seeded. */
+  inheritHint?: string;
+  id?: string;
+  className?: string;
+  style?: CSSProperties;
+  disabled?: boolean;
+  "data-testid"?: string;
+}) {
+  const optionTestId = (name: string) =>
+    testId ? `${testId}-option-${name}` : undefined;
+
+  // The selected row (inherit or a concrete name) carries the check + accent.
+  const rowClass = (selected: boolean, installed: boolean) =>
+    cn(
+      "relative pl-6 font-mono",
+      selected && "bg-selected text-primary",
+      !installed && "text-text-3",
+    );
+
+  const renderOption = (o: HarnessOption) => {
+    const selected = value === o.name;
+    return (
+      <DropdownMenuItem
+        key={o.name}
+        data-testid={optionTestId(o.name)}
+        disabled={!o.installed}
+        className={rowClass(selected, o.installed)}
+        onClick={() => onChange(o.name)}
+      >
+        {selected && <SelectedMarker />}
+        <span className="truncate">{o.name}</span>
+        {!o.installed && (
+          <span className="ml-auto pl-3 text-[0.9em] text-text-3">
+            not installed
+          </span>
+        )}
+      </DropdownMenuItem>
+    );
+  };
+
+  const inheritSelected = value === "";
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        id={id}
+        data-testid={testId}
+        disabled={disabled}
+        className={cn(
+          "flex cursor-pointer items-center justify-between gap-2 text-left outline-none transition-colors focus:border-primary data-[popup-open]:border-primary disabled:cursor-not-allowed disabled:opacity-40",
+          className,
+        )}
+        style={style}
+      >
+        <span className={cn("truncate", value ? "font-mono" : "text-text-3")}>
+          {value || inheritLabel}
+        </span>
+        <ChevronDown size={12} className="shrink-0 text-text-3" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        data-testid={testId ? `${testId}-menu` : undefined}
+        className="text-text"
+        style={style}
+        side="bottom"
+        align="start"
+      >
+        <DropdownMenuItem
+          data-testid={testId ? `${testId}-option-inherit` : undefined}
+          className={rowClass(inheritSelected, true)}
+          onClick={() => onChange("")}
+        >
+          {inheritSelected && <SelectedMarker />}
+          <span className="truncate font-sans">{inheritLabel}</span>
+          {inheritHint && (
+            <span className="ml-auto pl-3 font-mono text-text-3">
+              {inheritHint}
+            </span>
+          )}
+        </DropdownMenuItem>
+
+        {catalog.builtin.length > 0 && (
+          <DropdownMenuGroup>
+            <DropdownMenuLabel
+              data-testid={testId ? `${testId}-section-builtin` : undefined}
+              className="uppercase tracking-wider text-text-3"
+              title="Embedded harnesses"
+            >
+              Built-in
+              <span className="d-sr">: embedded harnesses</span>
+            </DropdownMenuLabel>
+            {catalog.builtin.map(renderOption)}
+          </DropdownMenuGroup>
+        )}
+        {catalog.descriptors.length > 0 && (
+          <DropdownMenuGroup>
+            <DropdownMenuLabel
+              data-testid={testId ? `${testId}-section-descriptors` : undefined}
+              className="uppercase tracking-wider text-text-3"
+              title="~/.pdo/harnesses/descriptors.yaml"
+            >
+              From descriptors
+              <span className="d-sr">: ~/.pdo/harnesses/descriptors.yaml</span>
+            </DropdownMenuLabel>
+            {catalog.descriptors.map(renderOption)}
+          </DropdownMenuGroup>
+        )}
+
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}

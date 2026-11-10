@@ -1,0 +1,206 @@
+//! Layer 3a — proves Bug A (#18) is fixed: `spawn_tmux_session` produces a
+//! script that invokes `claude --dangerously-skip-permissions` and keeps the
+//! tmux session alive until that process exits.
+//!
+//! The lifecycle test substitutes `claude` with a harmless `sleep` via the
+//! per-daemon `tmux_cmd_override` config (`TestDaemon::spawn`'s default), so the
+//! test box doesn't actually need claude on PATH and no process-global env is
+//! mutated (#181).
+
+use std::time::Duration;
+
+use crate::common::TestDaemon;
+use pdo_session::domain::launch::{build_tmux_script, SessionTail};
+
+const PIPELINE_NAME: &str = "minimal-tmux";
+const NODE_ID: &str = "solo";
+const PIPELINE_YAML: &str = r#"name: minimal-tmux
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: solo
+    name: solo
+    type: agent
+    isolated_worktree: false
+    inputs:
+      - name: in
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: solo, port: in }
+"#;
+
+fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
+    let pipelines_dir = repo.join(".pdo").join("pipelines");
+    std::fs::create_dir_all(&pipelines_dir)?;
+    std::fs::write(
+        pipelines_dir.join(format!("{PIPELINE_NAME}.yaml")),
+        PIPELINE_YAML,
+    )?;
+
+    // git worktree add (used by create_run) requires a real repo with a HEAD.
+    git_init_with_commit(repo)?;
+    Ok(())
+}
+
+fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
+    let run = |args: &[&str]| -> anyhow::Result<()> {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()?;
+        if !out.status.success() {
+            anyhow::bail!(
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        Ok(())
+    };
+    run(&["init", "-q", "-b", "main"])?;
+    run(&["config", "user.email", "test@example.com"])?;
+    run(&["config", "user.name", "Test"])?;
+    run(&["config", "commit.gpgsign", "false"])?;
+    std::fs::write(repo.join(".gitignore"), ".pdo/runs/\n")?;
+    run(&["add", "."])?;
+    run(&["commit", "-q", "-m", "init"])?;
+    Ok(())
+}
+
+#[test]
+fn build_tmux_script_exports_then_invokes_claude() {
+    // Acceptance: the constructed command string contains
+    // `claude --dangerously-skip-permissions` after the exports.
+    // `None` override → production claude tail.
+    let prompt_path = std::path::Path::new("/tmp/pdo-test/solo-iter-1.md");
+    // #550: the `claude` descriptor — its launch template reproduces the legacy
+    // tail byte for byte once the holes are empty (the state this test asserts).
+    let claude = pdo_harness::registry::claude();
+    let script = build_tmux_script(
+        "run-abc",
+        "solo",
+        1,
+        5172,
+        // #661/ADR-0055: the session PATH the live spawn threads from
+        // `harness_probe_path`; a fixed value here keeps the assertion hermetic.
+        "/home/u/.local/bin:/usr/bin:/bin",
+        prompt_path,
+        None,
+        SessionTail::Agent {
+            harness: &claude,
+            model: None,
+            effort: None,
+            session_id: None,
+        },
+        None,
+        // #433: no turn-end `Stop` hook on this legacy-shape assertion.
+        None,
+    );
+
+    assert!(
+        script.starts_with("export PATH="),
+        "script should start with its exports; got: {script}"
+    );
+    assert!(
+        script.contains("exec claude --dangerously-skip-permissions"),
+        "script must invoke claude with --dangerously-skip-permissions; got: {script}"
+    );
+    // The path appears inside a `cat …` command substitution.
+    assert!(
+        script.contains("$(cat ") && script.contains("/tmp/pdo-test/solo-iter-1.md"),
+        "script must `cat` the prompt file inside command substitution; got: {script}"
+    );
+    assert!(
+        script.contains("export PDO_RUN_ID=") && script.contains("run-abc"),
+        "script must export PDO_RUN_ID; got: {script}"
+    );
+    assert!(
+        script.contains("export PDO_DAEMON_URL=") && script.contains("http://localhost:5172"),
+        "script must export PDO_DAEMON_URL; got: {script}"
+    );
+}
+
+#[tokio::test]
+async fn tmux_session_alive_after_run_spawn() {
+    // tmux must be present for this test to be meaningful.
+    if !tmux_available() {
+        eprintln!("tmux not on PATH — skipping tmux_session_alive_after_run_spawn");
+        return;
+    }
+
+    // `TestDaemon::spawn` seeds a harmless `sleep` override per-daemon, so the
+    // spawned node session stays alive (for the poll below) without launching
+    // real claude.
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    // The daemon spawns sessions on its own scoped tmux socket (`tmux -L`),
+    // not the default server — inspect/kill through the same socket.
+    let socket = daemon.tmux_socket();
+
+    // #470: the target repo is required at the create boundary (ADR-0033).
+    let body = serde_json::json!({
+        "pipeline": PIPELINE_NAME,
+        "input": "test input",
+        "target_repo": daemon.target_repo(),
+    });
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs", daemon.url()))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201, "POST /runs should succeed");
+    let resp_json: serde_json::Value = resp.json().await.unwrap();
+    let run_id = resp_json["run_id"].as_str().unwrap().to_string();
+
+    let session = format!("pdo-{run_id}-{NODE_ID}-iter-1");
+
+    // Poll for up to 5s — spawn_node runs async work (worktree, prompt write,
+    // tmux exec) before the session appears.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut alive = false;
+    while std::time::Instant::now() < deadline {
+        if tmux_has_session(&socket, &session) {
+            alive = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Always best-effort kill regardless of outcome so a flake doesn't leak
+    // a sleep 60 process.
+    let _ = std::process::Command::new("tmux")
+        .args(["-L", &socket, "kill-session", "-t", &session])
+        .output();
+
+    assert!(
+        alive,
+        "expected tmux session `{session}` to exist within 5s of POST /runs"
+    );
+}
+
+fn tmux_available() -> bool {
+    std::process::Command::new("tmux")
+        .arg("-V")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn tmux_has_session(socket: &str, session: &str) -> bool {
+    std::process::Command::new("tmux")
+        .args(["-L", socket, "has-session", "-t", session])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}

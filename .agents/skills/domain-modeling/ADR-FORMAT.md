@@ -1,6 +1,7 @@
 # ADR Format
 
-ADRs live in `docs/adr/` and use sequential numbering: `0001-slug.md`, `0002-slug.md`, etc.
+ADRs live in `docs/adr/` and use sequential numbering: `0001-slug.md`, `0002-slug.md`, etc. A new
+ADR is born a **draft**, `docs/adr/draft-<slug>.md`, without a number (see *Numbering*).
 
 Create the `docs/adr/` directory lazily — only when the first ADR is needed.
 
@@ -44,7 +45,14 @@ When a later decision revises an existing ADR:
 
 ## Numbering
 
-Scan `docs/adr/` for the highest existing number and increment by one.
+A new ADR takes **no number**: it is born `docs/adr/draft-<slug>.md` and is cited `ADR draft-<slug>`
+(in `CONTEXT.md`, other ADRs, code comments). Two stories grilled in parallel would otherwise take
+the same number.
+
+The number is set when the story merges into `main`: `make release-bump` gives each draft the next
+number after the highest one (`0094-<slug>.md`, in name order) and rewrites every citation across
+the repository (`ADR draft-<slug>` -> `ADR-0094`, links and paths to the file). Never number a draft
+by hand, and never run the command on a ticket or integration branch.
 
 ## When to offer an ADR
 

@@ -1,0 +1,337 @@
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { X } from "lucide-react";
+import { IconButton } from "./kit";
+
+export interface RailItem {
+  id: string;
+  label: string;
+  /** Something under this entry deviates from its saved/default state —
+   *  renders an amber dot (#690: unsaved edits; #810: Stats filters that differ
+   *  from the defaults). */
+  dirty?: boolean;
+  /** What the dot means, for screen readers and the hover title. Defaults to
+   *  Settings' « Unsaved changes » — Stats says why its numbers moved instead. */
+  dirtyLabel?: string;
+  /** Drawn before the label in a strip of tabs (`railPlacement="top"`). */
+  icon?: ReactNode;
+}
+
+/**
+ * The **panneau secondaire** (CONTEXT.md, #943): a panel the host describes and the shell
+ * frames. It opens under the header — the title, the host's header actions and the ✕ stay
+ * visible and clickable — and carries its own title, Escape hint and ✕. A click outside it
+ * does not close it; Escape still goes through the host's `onEscape`. Once it closes, focus
+ * returns to what opened it (the trigger) rather than falling to `<body>`.
+ */
+export interface ShellDrawer {
+  title: string;
+  /** Escape hint on the right of the panel header (« Esc returns to Settings »). */
+  escHint: string;
+  /** Panel header content, before the hint (Stats' « Sync costs »). */
+  actions?: ReactNode;
+  /** Width class of the panel, a literal Tailwind class (`w-[min(420px,calc(90vw/var(--app-zoom,1)))]`). */
+  widthClassName: string;
+  /** `data-testid` of the panel; its ✕ is `${testId}-close` unless `closeTestId` says otherwise. */
+  testId: string;
+  closeTestId?: string;
+  /** Extra `data-*` attributes on the panel (Settings' `data-drawer`). */
+  dataAttributes?: Record<`data-${string}`, string>;
+  /** Class of the scrolling body. */
+  bodyClassName?: string;
+  onClose: () => void;
+  content: ReactNode;
+}
+
+interface Props {
+  title: string;
+  /** Drawn before the title (an extension page's icon). */
+  titleIcon?: ReactNode;
+  /** After the title, lighter: what the surface shows (Stats' tab). */
+  subtitle?: string;
+  /** Rendered after the title, in the header row (Stats' period presets, etc.). */
+  headerExtras?: ReactNode;
+  /** Right-aligned header content, before the close button (hints, refresh…). */
+  headerActions?: ReactNode;
+  /** The left rail. Without one, the main slot spans the pane: an extension's
+   *  `topbar/end` page brings its own navigation (#29). */
+  rail?: RailItem[];
+  activeRail?: string;
+  onRailChange?: (id: string) => void;
+  /** Width of a left rail in px; Settings needs 176 for "Sandbox & worktrees". */
+  railWidth?: number;
+  railAriaLabel?: string;
+  /** Where the rail sits: a column on the left, or a strip of tabs under the
+   *  header (Stats), navigated with ←→. */
+  railPlacement?: "left" | "top";
+  /** Right end of the strip of tabs (Stats' period dates). */
+  railAside?: ReactNode;
+  /** `data-testid` prefix of a rail entry: `${prefix}-${id}`. */
+  railTestIdPrefix?: string;
+  /** The secondary panel, framed by the shell (Stats' pricing details, Settings' skill bank). */
+  drawer?: ShellDrawer | null;
+  /** Spans the pane, not the rail. Settings' Save footer. */
+  footer?: ReactNode;
+  /**
+   * Escape handler. Called instead of `onClose` so the host can close a drawer or ask a
+   * confirmation first. The shell already ignores Escape while a tooltip is open.
+   */
+  onEscape?: () => void;
+  onClose: () => void;
+  closeLabel: string;
+  testId: string;
+  /** Class of the `<main>` slot. Defaults to a flex row that fills the pane. */
+  mainClassName?: string;
+  children: ReactNode;
+}
+
+/**
+ * The full-window surface Stats, Settings and the extensions' pages share (#690): a layer
+ * under the app's top bar (CORE-183), header (title + ✕), optional rail (a left column navigated with ↑↓, or a strip of tabs under
+ * the header navigated with ←→), main slot, optional secondary panel
+ * and optional footer.
+ *
+ * The shell owns Escape: ignored while a tooltip is open (the tooltip consumes it), else
+ * delegated to `onEscape` (drawer first, then confirmation, then close — the host decides).
+ * It listens on `window`, so a layer inside (an extension page's own dialog) that handles
+ * Escape on `document` or on its elements, and calls `preventDefault()`, keeps the shell open.
+ */
+export default function FullWindowShell({
+  title,
+  titleIcon,
+  subtitle,
+  headerExtras,
+  headerActions,
+  rail,
+  activeRail,
+  onRailChange,
+  railWidth = 144,
+  railAriaLabel,
+  railPlacement = "left",
+  railAside,
+  railTestIdPrefix,
+  drawer,
+  footer,
+  onEscape,
+  onClose,
+  closeLabel,
+  testId,
+  mainClassName = "flex min-h-0 min-w-0 flex-1",
+  children,
+}: Props) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (
+        document.querySelector(
+          '[data-testid="tooltip-content"][data-state="delayed-open"], [data-testid="tooltip-content"][data-state="instant-open"]',
+        )
+      ) {
+        return;
+      }
+      (onEscape ?? onClose)();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onEscape, onClose]);
+
+  const top = railPlacement === "top";
+  const navRef = useRef<HTMLElement>(null);
+  const fade = useScrollFade(navRef, top, rail?.map((item) => `${item.label}${item.dirty ? "•" : ""}`).join("\n") ?? "");
+  // A strip narrower than its tabs scrolls: the active one is kept in view.
+  useEffect(() => {
+    if (!top) return;
+    navRef.current
+      ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+      ?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [top, activeRail]);
+  // The keys that move along the rail: ↑↓ in a column, ←→ in a strip of tabs.
+  const [prevKey, nextKey] = top ? ["ArrowLeft", "ArrowRight"] : ["ArrowUp", "ArrowDown"];
+  const railNav = rail ? (
+    <nav
+      ref={navRef}
+      className={
+        top
+          ? "flex min-w-0 items-stretch overflow-x-auto [scrollbar-width:none]"
+          : "flex shrink-0 flex-col gap-px border-r border-line bg-surface-1 p-2"
+      }
+      style={top ? fade : { width: railWidth }}
+      role="tablist"
+      aria-label={railAriaLabel}
+      onKeyDown={(event) => {
+        if (event.key !== prevKey && event.key !== nextKey) return;
+        event.preventDefault();
+        const index = rail.findIndex((item) => item.id === activeRail);
+        const delta = event.key === nextKey ? 1 : -1;
+        const next = rail[(index + delta + rail.length) % rail.length];
+        onRailChange?.(next.id);
+        document.querySelector<HTMLElement>(`[data-testid='${railTestIdPrefix}-${next.id}']`)?.focus();
+      }}
+    >
+      {rail.map((item) => {
+        const on = activeRail === item.id;
+        return (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            aria-selected={on}
+            tabIndex={on ? 0 : -1}
+            data-testid={`${railTestIdPrefix}-${item.id}`}
+            data-dirty={item.dirty ? "true" : undefined}
+            onClick={() => onRailChange?.(item.id)}
+            className={
+              top
+                ? `relative flex shrink-0 items-center gap-1.5 px-2.5 text-md whitespace-nowrap ${
+                    on
+                      ? "text-text after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:bg-primary"
+                      : "text-text-2 hover:text-text"
+                  }`
+                : `flex h-(--h-row) items-center justify-between gap-2 rounded px-2 text-left text-md ${
+                    on ? "bg-selected text-text" : "text-text-2 hover:bg-hover hover:text-text"
+                  }`
+            }
+          >
+            {top && item.icon}
+            {top ? (
+              <span className="max-w-48 truncate" title={item.label}>
+                {item.label}
+              </span>
+            ) : (
+              <span>{item.label}</span>
+            )}
+            {item.dirty && (
+              <span
+                aria-label={item.dirtyLabel ?? "Unsaved changes"}
+                title={item.dirtyLabel ?? "Unsaved changes"}
+                data-testid={`${railTestIdPrefix}-${item.id}-dirty`}
+                className="h-1.5 w-1.5 shrink-0 rounded-full bg-st-await"
+              />
+            )}
+          </button>
+        );
+      })}
+    </nav>
+  ) : null;
+
+  return (
+    // CORE-183: under the top bar, never over it — its command field, its icons and the
+    // account stay on screen and usable while a surface is open.
+    <div className="fixed inset-x-0 top-(--h-topbar) bottom-0 z-50 bg-surface-1" data-testid={`${testId}-layer`}>
+      <div className="relative flex h-[calc(100dvh/var(--app-zoom,1)_-_var(--h-topbar))] w-[calc(100vw/var(--app-zoom,1))] flex-col bg-surface-2" data-testid={testId}>
+        <header
+          className="flex h-(--h-topbar) shrink-0 items-center gap-3 border-b border-line bg-surface-1 pr-2 pl-3"
+          data-testid={`${testId}-header`}
+        >
+          <h2 className="flex min-w-0 shrink-0 items-center gap-2 text-lg leading-none font-semibold whitespace-nowrap text-text">
+            {titleIcon}
+            {title}
+            {subtitle && <span className="truncate font-normal text-text-2">{subtitle}</span>}
+          </h2>
+          <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">{headerExtras}</div>
+          <div className="flex shrink-0 items-center gap-2">{headerActions}</div>
+          <span className="h-4 w-px shrink-0 bg-line" aria-hidden />
+          <IconButton icon={X} label={closeLabel} kbd="Esc" onClick={onClose} />
+        </header>
+
+        {rail && railPlacement === "top" && (
+          <div className="flex h-(--h-bar) shrink-0 items-stretch gap-3 border-b border-line bg-surface-1 pr-3 pl-1">
+            {railNav}
+            <span className="flex-1" />
+            {railAside && <div className="flex shrink-0 items-center">{railAside}</div>}
+          </div>
+        )}
+        <div className="flex min-h-0 flex-1">
+          {rail && railPlacement === "left" && railNav}
+
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <main className={mainClassName}>{children}</main>
+            {footer}
+          </div>
+        </div>
+
+        {drawer && <SecondaryPanel drawer={drawer} />}
+      </div>
+    </div>
+  );
+}
+
+/** The hint that a strip of tabs scrolls: its edge fades on each side that
+ *  hides a tab. */
+function useScrollFade(
+  ref: RefObject<HTMLElement | null>,
+  enabled: boolean,
+  /** What the tabs show: a change can widen the strip without resizing it. */
+  tabsKey: string,
+): CSSProperties | undefined {
+  const [edges, setEdges] = useState({ start: false, end: false });
+  useEffect(() => {
+    const el = ref.current;
+    if (!enabled || !el) return;
+    const measure = () => {
+      const start = el.scrollLeft > 1;
+      const end = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+      setEdges((prev) => (prev.start === start && prev.end === end ? prev : { start, end }));
+    };
+    measure();
+    el.addEventListener("scroll", measure, { passive: true });
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(el);
+    return () => {
+      el.removeEventListener("scroll", measure);
+      observer?.disconnect();
+    };
+  }, [ref, enabled, tabsKey]);
+  if (!edges.start && !edges.end) return undefined;
+  const mask = `linear-gradient(to right, ${edges.start ? "transparent" : "black"}, black 24px, black calc(100% - 24px), ${
+    edges.end ? "transparent" : "black"
+  })`;
+  return { maskImage: mask, WebkitMaskImage: mask };
+}
+
+/** The frame of the secondary panel: under the header, title + actions + Escape hint + ✕. */
+function SecondaryPanel({ drawer }: { drawer: ShellDrawer }) {
+  const panelRef = useRef<HTMLElement>(null);
+  // Focus return (#944): the element focused when the panel mounted is its opener (the
+  // trigger clicked or activated from the keyboard). When the panel goes — ✕, Escape or the
+  // toggle — focus goes back to it, unless the user has already moved it elsewhere or the
+  // opener is gone (tab change, programmatic entry from another surface).
+  useEffect(() => {
+    const panel = panelRef.current;
+    const opener = document.activeElement;
+    return () => {
+      if (!(opener instanceof HTMLElement) || !opener.isConnected) return;
+      if (panel?.contains(opener)) return;
+      const active = document.activeElement;
+      if (active && active !== document.body && !panel?.contains(active)) return;
+      opener.focus();
+    };
+  }, []);
+
+  return (
+    <aside
+      ref={panelRef}
+      className={`absolute bottom-0 right-0 top-(--h-topbar) z-20 flex flex-col border-l border-line bg-surface-2 shadow-2xl ${drawer.widthClassName}`}
+      aria-label={drawer.title}
+      data-testid={drawer.testId}
+      {...drawer.dataAttributes}
+    >
+      <div className="flex h-(--h-bar) shrink-0 items-center gap-3 border-b border-line pr-2 pl-3">
+        <h3 className="truncate text-md font-semibold text-text">{drawer.title}</h3>
+        <div className="ml-auto flex shrink-0 items-center gap-3">
+          {drawer.actions}
+          <span className="text-xs text-text-3">{drawer.escHint}</span>
+        </div>
+        <IconButton
+          icon={X}
+          label="Close panel"
+          kbd="Esc"
+          onClick={drawer.onClose}
+          data-testid={drawer.closeTestId ?? `${drawer.testId}-close`}
+        />
+      </div>
+      <div className={drawer.bodyClassName ?? "flex min-h-0 flex-1 flex-col overflow-y-auto"}>
+        {drawer.content}
+      </div>
+    </aside>
+  );
+}

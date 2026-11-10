@@ -1,11 +1,33 @@
 [workspace]
 resolver = "2"
-members = ["crates/pdo-daemon"]
+# Modular monolith (ADR-0079): `pdo-extension-api` is the public contract,
+# `pdo-kernel` the shared kernel, one crate per bounded context, and `pdo` the
+# composition root (the distributed `pdo` binary).
+members = [
+  "crates/pdo-extension-api",
+  "crates/pdo-kernel",
+  "crates/pdo-workspace",
+  "crates/pdo-skill",
+  "crates/pdo-platform",
+  "crates/pdo-harness",
+  "crates/pdo-sandbox",
+  "crates/pdo-session",
+  "crates/pdo-pipeline",
+  "crates/pdo-run",
+  "crates/pdo-trigger",
+  "crates/pdo-stats",
+  "crates/pdo-review",
+  "crates/pdo-telemetry",
+  "crates/pdo-settings",
+  "crates/pdo",
+  # The structural checks (`make fast`), std only, never published.
+  "crates/tidy",
+]
 
 [workspace.package]
 edition = "2021"
-version = "1.132.0"
-license = "MIT"
+version = "2.76.0"
+license = "Apache-2.0"
 description = "Prompt-Driven Orchestrator — a local daemon that runs and supervises agentic coding pipelines"
 repository = "https://github.com/Loulen/prompt-driven-orchestrator"
 homepage = "https://github.com/Loulen/prompt-driven-orchestrator"
@@ -14,7 +36,9 @@ homepage = "https://github.com/Loulen/prompt-driven-orchestrator"
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["ws", "multipart"] }
 tower-http = { version = "0.6", features = ["fs", "cors"] }
-rust-embed = { version = "8", features = ["compression"] }
+# interpolate-folder-path: crates/pdo/src/spa.rs embeds `$PDO_FRONTEND_EMBED_DIR`,
+# the folder under OUT_DIR where crates/pdo/build.rs puts the frontend (#21).
+rust-embed = { version = "8", features = ["compression", "interpolate-folder-path"] }
 mime_guess = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -40,10 +64,44 @@ notify = { version = "7", features = ["macos_fsevent"] }
 notify-debouncer-mini = "0.5"
 portable-pty = "0.8"
 pretty_assertions = "1"
-insta = { version = "1", features = ["yaml"] }
 tempfile = "3"
 sha2 = "0.10"
 ignore = "0.4"
+# Generated TypeScript for every DTO the daemon sends over HTTP/WS (#915). The
+# bindings land in frontend/src/shared/generated/ (`make types`); `make check`
+# fails when they drift from the Rust structs.
+ts-rs = { version = "12", features = ["no-serde-warnings"] }
+# The shared draft of a pipeline (ADR-0088, CORE-90): the Rust implementation of
+# the Yjs CRDT, binary-compatible (update format v1) with the `yjs` package of
+# the frontend.
+yrs = "0.28"
+# Telemetry export (ADR-0090): the OpenTelemetry SDK and its OTLP exporter over
+# HTTP/protobuf. No default features: the exporter's own HTTP client would pull
+# a second reqwest; `pdo-telemetry` hands it one built on the reqwest above.
+opentelemetry = { version = "0.33.1", default-features = false, features = ["trace", "metrics"] }
+opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["trace", "metrics"] }
+opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["http-proto", "trace", "metrics"] }
+opentelemetry-http = { version = "0.33.1", default-features = false }
+# `/metrics` (ADR-0090 §2): the SDK's pull reader in the Prometheus text format.
+opentelemetry-prometheus = { version = "0.33.1", default-features = false }
+prometheus = { version = "0.14", default-features = false }
+reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "system-proxy", "rustls-tls", "json", "blocking", "multipart"] }
+pdo-extension-api = { path = "crates/pdo-extension-api", version = "0.25.0" }
+pdo-kernel = { path = "crates/pdo-kernel" }
+pdo-workspace = { path = "crates/pdo-workspace" }
+pdo-skill = { path = "crates/pdo-skill" }
+pdo-platform = { path = "crates/pdo-platform" }
+pdo-harness = { path = "crates/pdo-harness" }
+pdo-sandbox = { path = "crates/pdo-sandbox" }
+pdo-session = { path = "crates/pdo-session" }
+pdo-pipeline = { path = "crates/pdo-pipeline" }
+pdo-run = { path = "crates/pdo-run" }
+pdo-trigger = { path = "crates/pdo-trigger" }
+pdo-stats = { path = "crates/pdo-stats" }
+pdo-review = { path = "crates/pdo-review" }
+pdo-telemetry = { path = "crates/pdo-telemetry" }
+pdo-settings = { path = "crates/pdo-settings" }
+tidy = { path = "crates/tidy" }
 
 # --- Release packaging (dist / ex-cargo-dist) -------------------------------
 # `dist` génère .github/workflows/release.yml à partir de cette config (voir
@@ -72,7 +130,7 @@ publish-jobs = ["homebrew"]
 # de renommer le package Cargo — chantier à part.)
 formula = "pdo"
 # Étapes injectées AVANT `dist build` : Node + `pnpm install` dans frontend/, car le
-# build.rs de pdo-daemon lance `pnpm run build` pendant `cargo build` (rust-embed).
+# build.rs de pdo-daemon (crates/pdo/build.rs) lance `pnpm run build` pendant `cargo build` (rust-embed).
 github-build-setup = "../build-setup.yml"
 # Parité avec l'unité systemd/launchd (`pdo service install` lit current_exe) et
 # avec l'ancien install.sh : binaire dans ~/.local/bin.
@@ -102,7 +160,9 @@ lto = "thin"
 # `incremental = false` : PDO donne à chaque itération de node un worktree neuf,
 # donc un `target/` neuf. Le cache incrémental (2 à 3,6 Go par worktree) est
 # écrit puis jamais relu, c'est du poids mort pur. Le vrai cache inter-worktrees
-# est sccache (voir .cargo/config.toml), qui vit hors de target/.
+# est sccache, qui vit hors de target/ : le Makefile l'active (RUSTC_WRAPPER)
+# quand il est installé, et sccache ne met en cache que les crates compilés sans
+# incrémental.
 # ATTENTION : ce raisonnement S'INVERSE si un CARGO_TARGET_DIR partagé atterrit
 # un jour (issues #518 / #631). Le cache serait alors relu d'une itération sur
 # l'autre et `incremental = true` redeviendrait le bon défaut.

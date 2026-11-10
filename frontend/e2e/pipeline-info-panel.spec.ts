@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { openPipelineForEdit, runMultipart, E2E_TARGET_REPO } from "./helpers";
+import { confirmSaveVersion, openPipelineForEdit, runMultipart, E2E_TARGET_REPO } from "./helpers";
 import type { Page } from "@playwright/test";
 
 // The dirty edit canvas raises an "External edit conflict" modal when the
@@ -33,8 +33,7 @@ async function dismissConflictIfPresent(page: Page): Promise<void> {
 //    an empty canvas selection shows no pipeline settings on the right.
 
 const PIPELINE_NAME = `e2e-info-panel-${process.pid}-${Date.now()}`;
-// Instance pipelines live under `$HOME/.pdo/pipelines` — the daemon's instance
-// root — not under the workspace's `.pdo/` (the Run's blackboard).
+// The instance pipelines the daemon watches.
 const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
@@ -94,7 +93,7 @@ test("clicking toolbar info opens pipeline info panel with metadata", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -133,19 +132,26 @@ test("clicking toolbar info opens pipeline info panel with metadata", async ({
   // #948: on a Run the metadata is read-only — shown, never editable.
   const meta = page.getByTestId("pipeline-meta");
   await expect(meta).toHaveAttribute("data-readonly", "true");
-  await expect(page.getByTestId("pipeline-meta-version")).toContainText("1.0");
+  // ADR-0088: the version the Run launched, its title the free field of v1.
+  await expect(page.getByTestId("info-panel-version")).toContainText("v1 · 1.0");
   await expect(page.getByTestId("pipeline-meta-prompt-required")).toContainText("Yes");
   await expect(page.getByTestId("pipeline-meta-grid-size")).toBeVisible();
   await expect(meta.locator("input, select")).toHaveCount(0);
   await expect(infoPanel).not.toContainText("Description");
 
-  // The Manager lives under its own tab (Info | Diff | Repositories | Manager |
-  // YAML; Info is the default). Manager on demand: a Run starts managerless, so
-  // the tab shows its empty state with a Start button, not a terminal.
+  // The manager terminal lives under the Manager tab (post-refonte: the info
+  // panel is tabbed Info | Manager | YAML; Info is the default). Switch to it.
   const managerTab = page.getByTestId("info-tab-manager");
   await expect(managerTab).toBeVisible({ timeout: 3_000 });
   await managerTab.click();
-  await expect(infoPanel.getByTestId("manager-empty-state")).toBeVisible({ timeout: 5_000 });
+
+  // The manager starts on demand (the tab's Start button) unless the instance
+  // starts it with every Run; either way its terminal then renders.
+  const terminal = infoPanel.getByTestId("tmux-terminal");
+  const start = infoPanel.getByTestId("manager-start");
+  await expect(terminal.or(start)).toBeVisible({ timeout: 5_000 });
+  if (await start.isVisible()) await start.click();
+  await expect(terminal).toBeVisible({ timeout: 10_000 });
 
   // Close the panel
   await page.getByTestId("info-panel-close").click();
@@ -173,7 +179,7 @@ test("clicking a node closes the pipeline info panel (#69)", async ({
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -199,7 +205,7 @@ test("YAML tab shows serialized pipeline and updates on mutation (#69)", async (
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -238,6 +244,13 @@ test("YAML tab shows serialized pipeline and updates on mutation (#69)", async (
   await page.getByTestId("add-menu-node").click();
   await page.waitForTimeout(500);
 
+  // The YAML tab shows the document as the daemon saves it (#673), so the new
+  // node appears there once the pipeline is saved.
+  await dismissConflictIfPresent(page);
+  await page.getByTestId("save-button").click();
+  await confirmSaveVersion(page);
+  await expect(page.getByTestId("saved-ago")).toBeVisible({ timeout: 5_000 });
+
   // Re-open the info panel and check YAML tab reflects the new node
   await dismissConflictIfPresent(page);
   await infoBtn.click();
@@ -250,7 +263,7 @@ test("template metadata is edited through Pipeline info, shown in YAML and saved
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -270,8 +283,9 @@ test("template metadata is edited through Pipeline info, shown in YAML and saved
   await expect(page.getByTestId("pipeline-meta")).toHaveAttribute("data-readonly", "false");
   await expect(infoPanel).not.toContainText("Description");
 
-  // Edit version, Prompt required, a new variable and the grid size.
-  await page.getByTestId("pipeline-version-input").fill("2.5");
+  // Edit Prompt required, a new variable and the grid size (no free
+  // « Version » field since ADR-0088: a Save numbers the versions).
+  await expect(page.getByTestId("pipeline-version-input")).toHaveCount(0);
   const promptRequired = page.getByTestId("prompt-required-checkbox");
   await expect(promptRequired).toBeChecked();
   await promptRequired.uncheck();
@@ -288,7 +302,7 @@ test("template metadata is edited through Pipeline info, shown in YAML and saved
   await page.getByTestId("pipeline-grid-size-S").click();
 
   // Every edit marks the tab dirty…
-  await expect(tabTitle).toHaveText(`• ${PIPELINE_NAME}.yaml`);
+  await expect(tabTitle.locator("xpath=ancestor::button[1]")).toHaveAttribute("data-dirty", "true");
 
   // …and shows in the YAML tab.
   await page.getByTestId("info-tab-yaml").click();
@@ -296,18 +310,18 @@ test("template metadata is edited through Pipeline info, shown in YAML and saved
   await expect(yamlView).toContainText("prompt_required: false", { timeout: 3_000 });
   await expect(yamlView).toContainText("grid_size: S");
   await expect(yamlView).toContainText("target_env");
-  await expect(yamlView).toContainText("2.5");
 
   // Save writes it to the pipeline file.
   await page.getByTestId("save-button").click();
+  await confirmSaveVersion(page);
   await expect(tabTitle).toHaveText(`${PIPELINE_NAME}.yaml`, { timeout: 3_000 });
+  await expect(tabTitle.locator("xpath=ancestor::button[1]")).not.toHaveAttribute("data-dirty", "true", { timeout: 3_000 });
   await expect
     .poll(async () => fs.readFile(PIPELINE_PATH, "utf8"), { timeout: 3_000 })
     .toContain("prompt_required: false");
   const saved = await fs.readFile(PIPELINE_PATH, "utf8");
   expect(saved).toContain("grid_size: S");
   expect(saved).toContain("target_env");
-  expect(saved).toMatch(/version: ["']?2\.5/);
 
   // Restore the seed so the other cases keep a prompt-required pipeline.
   await fs.writeFile(PIPELINE_PATH, SEED_YAML);
@@ -318,7 +332,7 @@ test("library tab after a run: panel shows template, not the previous run", asyn
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -339,7 +353,7 @@ test("library tab after a run: panel shows template, not the previous run", asyn
 
   const infoPanel = page.getByTestId("pipeline-info-panel");
   await expect(infoPanel).toBeVisible({ timeout: 3_000 });
-  await expect(infoPanel).toContainText(`run ${run_id.slice(-8)}`);
+  await expect(infoPanel).toContainText(run_id.slice(-7));
   await expect(page.getByTestId("info-tab-manager")).toBeVisible();
 
   // Close the panel before switching tabs.
@@ -358,8 +372,8 @@ test("library tab after a run: panel shows template, not the previous run", asyn
   await expect(infoPanel).toBeVisible({ timeout: 3_000 });
 
   // Regression checks: no leakage of the previous run into the panel.
-  await expect(infoPanel).toContainText("template ·");
-  await expect(infoPanel).not.toContainText(`run ${run_id.slice(-8)}`);
+  await expect(infoPanel).toContainText("template");
+  await expect(infoPanel).not.toContainText(run_id.slice(-7));
   await expect(page.getByTestId("info-tab-manager")).toHaveCount(0);
 
   // Cleanup tmux sessions
@@ -393,7 +407,7 @@ test("selecting a different run closes the pipeline info panel (#385)", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -446,7 +460,7 @@ test("selecting a Trigger surfaces its detail from behind the open info panel (#
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -477,7 +491,7 @@ test("selecting a Trigger surfaces its detail from behind the open info panel (#
 
   // Reload so the mount refresh picks up the seeded trigger + run.
   await page.reload();
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 

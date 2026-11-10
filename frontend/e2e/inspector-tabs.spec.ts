@@ -1,21 +1,21 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { openPipelineForEdit, runMultipart } from "./helpers";
 
 // Layer 3b — Inspector Run/Edit tabs (refs #68, refs #1, refs #271).
 // Verifies:
 // 1. Run and Edit tabs render when a node is selected.
-// 2. Default tab: active Run → Run; idle pipeline → Edit.
+// 2. Default tab: active Run → Run; idle pipeline → no tab bar, the edition (CORE-88).
 // 3. Tab selection is sticky across node selections, resets on reload.
 // 4. Pending node shows placeholder and resolved inputs.
 // 5. Terminal run (failed) → Run tab default, not Edit (#271).
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-inspector-tabs-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059): a file seeded
+// under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 // Two chained nodes: worker-a → worker-b.
@@ -85,7 +85,7 @@ test("active run: Run tab default, sticky across nodes, reload resets", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -110,7 +110,7 @@ test("active run: Run tab default, sticky across nodes, reload resets", async ({
     .locator('.react-flow__node[data-id="worker-a"]')
     .click({ timeout: 5_000 });
 
-  // Both tabs should be visible. ADR-0080: a run followed in « pilotage » shows
+  // Both tabs should be visible. ADR-0085: a run followed in « pilotage » shows
   // the node's read-only Config, not an Edit tab.
   const runTab = page.getByTestId("inspector-tab-run");
   const configTab = page.getByTestId("inspector-tab-config");
@@ -135,7 +135,7 @@ test("active run: Run tab default, sticky across nodes, reload resets", async ({
 
   // Reload → select run → select running node → Run tab again
   await page.reload();
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
   // Top-left click: hover reveals row action icons that shift layout mid-click
@@ -178,9 +178,9 @@ test("active run: Run tab default, sticky across nodes, reload resets", async ({
   }
 });
 
-test("idle pipeline: Edit tab default", async ({ page }) => {
+test("idle pipeline: no Run tab, the edition opens directly (CORE-88)", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -193,11 +193,10 @@ test("idle pipeline: Edit tab default", async ({ page }) => {
     .locator('.react-flow__node[data-id="worker-a"]')
     .click({ timeout: 5_000 });
 
-  // Edit tab should be active by default (no run)
-  await expect(page.getByTestId("inspector-tab-edit")).toHaveAttribute(
-    "data-active",
-    "true",
-  );
+  // Outside a Run there is no tab bar at all: the edition is the pane.
+  await expect(page.getByTestId("inspector-pane-edit")).toBeVisible();
+  await expect(page.getByTestId("inspector-tab-run")).toHaveCount(0);
+  await expect(page.getByTestId("inspector-tab-edit")).toHaveCount(0);
 });
 
 test("terminal run: clicking a node defaults to Run tab (#271)", async ({
@@ -205,7 +204,7 @@ test("terminal run: clicking a node defaults to Run tab (#271)", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -277,7 +276,7 @@ test("pending node: Run tab shows placeholder and resolved inputs", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -313,7 +312,7 @@ test("pending node: Run tab shows placeholder and resolved inputs", async ({
     timeout: 3_000,
   });
   await expect(page.getByTestId("pending-placeholder")).toContainText(
-    "en attente",
+    "Not started yet",
   );
 
   // Cleanup

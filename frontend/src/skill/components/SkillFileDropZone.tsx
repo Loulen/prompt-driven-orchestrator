@@ -1,0 +1,107 @@
+import { useRef } from "react";
+import { FolderOpen, Square } from "lucide-react";
+import { Tooltip } from "../../shared/ui/kit";
+
+/** The overlay itself (design 02): one line for the count, one for the two rules.
+ *  `title` replaces the count line (the import into a node says where they go). */
+export function DropOverlay({ count, hint, title }: { count: number; hint: string; title?: string }) {
+  return (
+    <div
+      className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-primary/70 bg-surface-0/70"
+      data-testid="skill-drop-overlay"
+      role="status"
+    >
+      <div className="flex flex-col gap-2 rounded-lg border border-line bg-surface-2 p-3 shadow-xl">
+        <div className="rounded-md border border-line-strong bg-surface-2 px-8 py-3 text-center font-semibold text-text text-lg">
+          {title ?? `Drop to attach ${count} file${count === 1 ? "" : "s"}`}
+        </div>
+        <div className="rounded-md border border-primary/40 bg-surface-2 px-4 py-2.5 text-center text-text-3 text-xs">
+          {hint}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface Props {
+  /** The bar's text after the leading label (`Files · 2 · drop more anywhere, or`). */
+  label: React.ReactNode;
+  /** Browse… : open the explorer. */
+  onBrowse: () => void;
+  /** Files chosen in the native picker (`<input type=file multiple>`). */
+  onPickFiles: (files: FileList) => void;
+  disabled?: boolean;
+  /**
+   * Why the caller's rights refuse adding files (CORE-205): the bar stays
+   * focusable but greyed and inert, its tooltip says the sentence.
+   */
+  disabledReason?: string;
+  compact?: boolean;
+  testId?: string;
+}
+
+/**
+ * The drop bar (#671 design 01/03/05): a focusable row with the checkbox-like
+ * glyph, the sentence, and Browse…. Keyboard: Enter/Space on the bar opens the
+ * native file picker (multi-select, files only); Browse… opens the daemon-side
+ * explorer. The surface that accepts the drop is the parent (`useFileDropTarget`).
+ */
+export default function SkillFileDropZone({ label, onBrowse, onPickFiles, disabled, disabledReason, compact, testId = "skill-drop-zone" }: Props) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const inert = disabled || !!disabledReason;
+  const openPicker = () => {
+    if (inert) return;
+    inputRef.current?.click();
+  };
+  return (
+    <Tooltip label="Add reference files" description={disabledReason} disabled={!disabledReason}>
+    <div
+      role="button"
+      tabIndex={disabled ? -1 : 0}
+      aria-disabled={inert || undefined}
+      aria-label="Add reference files"
+      data-testid={testId}
+      onClick={openPicker}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openPicker();
+        }
+      }}
+      className={`flex items-center gap-2 rounded-md border border-dashed border-line-strong bg-surface-2 text-text-3 outline-none transition-colors focus-visible:border-primary hover:border-primary/60 ${
+        compact ? "px-2.5 py-1.5" : "px-3 py-2"
+      } ${disabled ? "opacity-50" : disabledReason ? "cursor-not-allowed opacity-45" : "cursor-pointer"} text-xs`}
+    >
+      <Square size={11} className="shrink-0 text-text-3" aria-hidden />
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <button
+        type="button"
+        disabled={disabled}
+        aria-disabled={disabledReason ? true : undefined}
+        data-testid={`${testId}-browse`}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (!disabledReason) onBrowse();
+        }}
+        className="flex shrink-0 items-center gap-1 rounded-md border border-line-strong bg-surface-2 px-2 py-1 text-text-2 hover:border-primary disabled:opacity-50 text-xs"
+      >
+        <FolderOpen size={10} />
+        Browse…
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        hidden
+        data-testid={`${testId}-input`}
+        // The programmatic `click()` bubbles back to the bar's onClick: stop it here.
+        onClick={(event) => event.stopPropagation()}
+        onChange={(event) => {
+          if (event.target.files && event.target.files.length > 0) onPickFiles(event.target.files);
+          event.target.value = "";
+        }}
+      />
+    </div>
+    </Tooltip>
+  );
+}

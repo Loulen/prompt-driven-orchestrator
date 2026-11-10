@@ -110,6 +110,8 @@ export function groupByRepo<T>(
 export interface ProjectRef {
   id: string;
   name: string;
+  /** The Projet was deleted since (CORE-96): the Run keeps it, under this mark. */
+  deleted?: boolean;
 }
 
 /**
@@ -127,6 +129,8 @@ export interface ProjectGroup<T> {
   label: string;
   /** Hover title: the path (path group) or the joined member paths (Projet). */
   title: string;
+  /** A Projet deleted since its Runs were launched in it (CORE-96). */
+  deleted?: boolean;
   items: T[];
 }
 
@@ -140,10 +144,9 @@ interface Bucket<T> {
 
 /**
  * Group `items` by their **Projet** (#552, ADR-0046), falling back to the #258
- * per-path grouping for any repo in no Projet. The Projet of a path is resolved
- * **verbatim** by `projectOf` (a `path → ProjectRef | null` lookup the caller
- * builds from `GET /projects`); ADR-0033 forbids canonicalising, so two spellings
- * are two paths.
+ * per-path grouping for any item in no Projet. The Projet of an item is the one
+ * `projectOf` gives it — for a Run or a Trigger, the one recorded on it
+ * (ADR-0087), never worked out from its repository, which may be in several.
  *
  * Returns `null` — the flat list, byte-identical to no grouping — unless grouping
  * is warranted. Grouping shows when **there are ≥ 2 distinct groups**, OR **any
@@ -161,13 +164,13 @@ interface Bucket<T> {
 export function groupByProject<T>(
   items: T[],
   repoOf: (item: T) => string | null | undefined,
-  projectOf: (path: string) => ProjectRef | null,
+  projectOf: (item: T, path: string) => ProjectRef | null,
 ): ProjectGroup<T>[] | null {
   const buckets = new Map<string, Bucket<T>>();
   for (const item of items) {
     const raw = repoOf(item);
     const path = raw == null || raw.length === 0 ? "" : raw;
-    const proj = path.length ? projectOf(path) : null;
+    const proj = projectOf(item, path);
     const key = proj ? `project:${proj.id}` : path;
     let bucket = buckets.get(key);
     if (!bucket) {
@@ -201,6 +204,7 @@ export function groupByProject<T>(
         repoPath: "",
         label: b.ref ? b.ref.name : "",
         title: [...b.paths].sort().join(", "),
+        ...(b.ref?.deleted ? { deleted: true } : {}),
         items: b.items,
       };
     }

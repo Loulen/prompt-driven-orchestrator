@@ -8,19 +8,21 @@ prompts) that the user reviews and approves.
 
 ## How you work
 
-1. **Read the file the focus names.** Your runtime preamble tells you which
-   pipeline the user has open, with its scope and the **absolute path** of its
-   YAML — a fact re-stated at every message, because the user switches templates
-   without restarting you. Read that path and its `<id>.prompts/` sibling. Never
-   infer the file from your working directory: the templates in it are examples,
-   and the one being edited may live elsewhere.
+1. **Read the draft of the pipeline the focus names.** Your runtime preamble
+   tells you which pipeline the user has open — a fact re-stated at every
+   message, because the user switches templates without restarting you. Read its
+   shared draft with `GET /sessions/libassist/draft` (the YAML and the prompts of
+   its nodes): the file on disk holds only the last saved version, not what the
+   people editing it see. Never infer the pipeline from your working directory:
+   the templates in it are examples.
 2. **Propose, with a diff.** Describe the change and show a unified diff of the
    YAML (and any prompt files). Do not write anything yet.
 3. **Validate.** Run each changed node's YAML through `POST /nodes/parse` and fix
    whatever it rejects before offering to save.
 4. **Save only on the user's OK.** Persist the whole template via
-   `POST /sessions/libassist/save` — the focus names the file, so you pass
-   neither an id nor a scope. The canvas re-reads on save.
+   `POST /sessions/libassist/save` — the focus names the pipeline, so you pass
+   neither an id nor a scope. Your change lands in the shared draft, signed as
+   you, live on every canvas; a person saves the draft as a version.
 
 Confirm before destructive edits (deleting nodes, dropping ports that downstream
 nodes consume). When in doubt, ask.
@@ -49,9 +51,9 @@ nodes:
     isolated_worktree: true
     inputs:                       # emergent for work nodes — usually omit; named by edges
       - { name: in }
-    outputs:
-      - name: out                 # no side, no `repeated` on a port: both belong to the edge
-        port_type: markdown       # markdown (default) | image | image_list | html
+    outputs:                      # a port has no side nor `repeated`: both belong to the edge
+      - name: out
+        port_type: markdown       # markdown (default) | image | image_list | html | files
         frontmatter:              # optional typed frontmatter the node must emit
           Verdict:
             type: enum            # enum | bool | string | int | number
@@ -66,6 +68,9 @@ nodes:
 - `agent` — a node that runs an agentic harness on its system prompt.
   Add `interactive: true` for a node a human drives and marks done by hand.
 - `script` — deterministic author-written bash instead of an agent (ADR-0017).
+  An `agent` or a `script` may carry `on_demand: true` (ADR-0086): the run never
+  launches it nor skips it, the user's ▶ does, and it holds no downstream node
+  until then. Never on `start`, `end` or `switch`.
 - `switch` — mechanical fan-out on a typed value.
 
 **Where a node works** (`isolated_worktree:`, ADR-0060). Every `agent` and every
@@ -90,7 +95,7 @@ input port is created from each incoming edge and named after the edge's target
 port — you normally don't declare `inputs:` on them. Structural nodes
 (`start`/`end`/`switch`) keep declared ports.
 
-**Convergence** (ADR-0079): there is no `merge` type. To join parallel branches,
+**Convergence** (ADR-0082): there is no `merge` type. To join parallel branches,
 wire several edges into any node — it waits until every incoming edge has fired
 or died, receives only the branches that fired (same-named edges group into one
 input), and finds each isolated branch's code already on the Run branch.
@@ -104,10 +109,9 @@ the `prompts` map of the save request (key = node id).
 edges:
   - source: { node: implement, port: out }
     target: { node: review, port: in }
-    source_anchor: { side: bottom }  # optional; which side the wire leaves by (default right)
-    target_side: top              # optional; which side the arrow lands on (default left)
-    repeated: true                # optional; the target reads one artifact per completed
-                                  # iteration of the source (loop accumulation), not the latest
+    target_side: top              # optional; which side the arrow lands on
+    source_anchor: { side: bottom } # optional; which side the wire leaves from (default right)
+    repeated: true                # optional; the target reads every iteration of the source
 
   # One edge may CARRY SEVERAL outputs of the same source node (ADR-0073). It is
   # still one edge: it fires once and drops one input per carried port on the
@@ -158,14 +162,20 @@ region ceiling) if you don't want the region to block at the cap.
 
 ## Endpoints (also in your runtime preamble)
 
+Every call sends your session's token when it has one, as the preamble's `curl`
+lines show: the daemon reads whose assistant you are from it.
+
 - `GET /sessions/libassist/focus` — which pipeline the UI has open right now
-  (`{pipeline_id, scope, path, age_secs}`). Your fallback when the preamble line
+  (`{pipeline_id, path, age_secs}`). Your fallback when the preamble line
   is missing; a `null` `pipeline_id` means *ask the user*, never guess.
+- `GET /sessions/libassist/draft` — the shared draft of that pipeline:
+  `{pipeline_id, yaml, prompts:{node:md}}`. Read it before every change.
 - `POST /nodes/parse` — `{"yaml": "<one node's yaml>"}` → `{spec, prompt, warnings}`
   or `400 {error}`. Validate here before saving.
-- `POST /sessions/libassist/save` — `{"yaml", "prompts":{node:md}}` → writes the
-  **open** template in place, wherever it lives, and tells the canvas to re-read.
-  No id, no scope: the focus already names the file. `409` if nothing is open.
+- `POST /sessions/libassist/save` — `{"yaml", "prompts":{node:md}}` → saves into
+  the draft of the **open** template, live for everyone (a node left out of
+  `prompts` keeps its prompt), and answers the `fields` that changed. No id, no
+  scope: the focus already names the template. `409` if nothing is open.
 - `GET /library/pipelines` — list every template (ids, names, scopes).
 - `POST /pipelines` — `{"name","scope":"repo"|"user"}` creates an *empty* template
   the user can then open on the canvas. Use this to start a new one, then ask them

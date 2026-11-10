@@ -1,0 +1,3363 @@
+import { render, screen, fireEvent, act, within, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { useEffect } from "react";
+import { useNodeLinkFocus } from "../store/nodeLinkFocus";
+
+globalThis.ResizeObserver = class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};
+
+const fetchPromptMock = vi.fn().mockResolvedValue("system prompt here");
+const fetchNodeIOMock = vi
+  .fn()
+  .mockResolvedValue({ inputs: [], outputs: [] });
+
+// Test-visible counters for the mocked TmuxTerminal lifecycle. Used by the
+// "WebSocket survives fullscreen toggle" regression test to assert React
+// does not remount the terminal subtree when the user toggles fullscreen.
+const tmuxMountCount = { current: 0 };
+const tmuxUnmountCount = { current: 0 };
+
+const killNodeMock = vi.fn().mockResolvedValue(undefined);
+const restartNodeMock = vi.fn().mockResolvedValue(undefined);
+const stopNodeMock = vi.fn().mockResolvedValue(undefined);
+const startNodeMock = vi.fn().mockResolvedValue({ ok: true, iter: 1 });
+const retryNodeMock = vi.fn().mockResolvedValue({ ok: true, iter: 2, invalidated: [] });
+const retryNodePreviewMock = vi.fn().mockResolvedValue({ downstream: [], affected_count: 0, with_artifacts: [] });
+const previewProvisioningMock = vi.fn().mockResolvedValue({
+  entries: [],
+  rules: [],
+  conflicts: [],
+});
+// #490: was `markNodeDone: vi.fn()` inline, which resolves `undefined` — so NO test
+// had ever exercised a *Mark complete* click. Made controllable so the verdict
+// branches can be driven. Vitest compares arity strictly, hence the spread.
+const markNodeDoneMock = vi.fn().mockResolvedValue({ kind: "completed" });
+const releaseNodeCompletionMock = vi.fn().mockResolvedValue({ kind: "released" });
+const fetchArtifactMock = vi.fn();
+
+vi.mock("../../settings/api/settings", () => ({
+  fetchArtifact: (...args: unknown[]) => fetchArtifactMock(...args),
+  artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
+}));
+// The agentic profiles' API answers with the mock of `../../settings/api/settings` too.
+vi.mock("../../settings/api/agentProfiles", async () => await import("../../settings/api/settings"));
+// The run context's API answers with the mock of `../../settings/api/settings`.
+vi.mock("../api/artifacts", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../settings/api/settings")),
+}));
+vi.mock("../api/commands", () => ({
+  killNode: (...args: unknown[]) => killNodeMock(...args),
+  restartNode: (...args: unknown[]) => restartNodeMock(...args),
+}));
+vi.mock("../api/completion", () => ({
+  markNodeDone: (...args: unknown[]) => markNodeDoneMock(...args),
+  releaseNodeCompletion: (...args: unknown[]) => releaseNodeCompletionMock(...args),
+}));
+vi.mock("../api/nodes", () => ({
+  fetchPrompt: (...args: unknown[]) => fetchPromptMock(...args),
+  fetchNodeIO: (...args: unknown[]) => fetchNodeIOMock(...args),
+  stopNode: (...args: unknown[]) => stopNodeMock(...args),
+  retryNode: (...args: unknown[]) => retryNodeMock(...args),
+  retryNodePreview: (...args: unknown[]) => retryNodePreviewMock(...args),
+  startNode: (...args: unknown[]) => startNodeMock(...args),
+}));
+
+// ADR-0086: the ▶ of an on-demand or skipped node asks the Autorisation
+// d'opération. Allowed unless a test says otherwise.
+const askAuthorizationMock = vi.fn((questions: unknown[]) =>
+  Promise.resolve(questions.map(() => ({ decision: "allow" }))),
+);
+vi.mock("../../shared/authorization/api", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  askAuthorization: (questions: unknown[]) => askAuthorizationMock(questions),
+}));
+
+vi.mock("../../workspace/api/provisioning", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../workspace/api/provisioning")>()),
+  previewProvisioning: (...args: unknown[]) => previewProvisioningMock(...args),
+}));
+
+function MockTmuxTerminal({
+  session,
+  expanded,
+  onExpand,
+  status,
+  paneSource,
+  onSpectatingChange,
+  toolbarIdentity,
+  toolbarActions,
+}: {
+  session: string;
+  expanded?: boolean;
+  onExpand?: () => void;
+  status?: string;
+  paneSource?: { runId: string; nodeId: string; iter: number };
+  onSpectatingChange?: (spectating: boolean) => void;
+  toolbarIdentity?: React.ReactNode;
+  toolbarActions?: React.ReactNode;
+}) {
+  useEffect(() => {
+    tmuxMountCount.current += 1;
+    return () => {
+      tmuxUnmountCount.current += 1;
+    };
+  }, []);
+  return (
+    <div
+      data-testid="tmux-terminal"
+      data-session={session}
+      data-expanded={expanded}
+      data-status={status}
+      data-pane-source={paneSource ? JSON.stringify(paneSource) : undefined}
+    >
+      {/* #44: the toolbar slots the enlarged view fills. */}
+      <div data-testid="mock-toolbar">
+        {toolbarIdentity}
+        {toolbarActions}
+      </div>
+      <button data-testid="term-expand" onClick={onExpand}>expand</button>
+      {/* Stands in for xterm's input textarea (focus target, Escape owner). */}
+      <textarea className="xterm-helper-textarea" data-testid="mock-xterm-input" />
+      {/* #870: stand-ins for the daemon's role frames. */}
+      <button data-testid="mock-become-spectator" onClick={() => onSpectatingChange?.(true)}>spectate</button>
+      <button data-testid="mock-become-pilot" onClick={() => onSpectatingChange?.(false)}>pilot</button>
+    </div>
+  );
+}
+
+vi.mock("../../session/components/TmuxTerminal", () => ({
+  default: MockTmuxTerminal,
+}));
+
+vi.mock("../../shared/ui/resizable", () => ({
+  ResizablePanelGroup: ({
+    children,
+    ...rest
+  }: {
+    children: React.ReactNode;
+    [key: string]: unknown;
+  }) => <div {...rest}>{children}</div>,
+  ResizablePanel: ({ children }: { children: React.ReactNode }) => (
+    <div>{children}</div>
+  ),
+  ResizableHandle: () => <div />,
+}));
+
+vi.mock("./MarkdownArtifactModal", () => ({
+  default: ({ portName }: { portName: string }) => (
+    <div data-testid="artifact-modal" data-port={portName} />
+  ),
+}));
+
+import NodeDetailPanel from "./NodeDetailPanel";
+import { useTerminalOverlayStore } from "../../session/store/terminalOverlayStore";
+import type { NodeState } from "../../shared/generated/NodeState";
+import { useGestureRightsStore, useRunViewGestures } from "../store/gestureRightsStore";
+import { NOTHING_REFUSED } from "../model/runGestures";
+
+function makeNode(overrides?: Partial<NodeState>): NodeState {
+  return { frontmatter_retries: 0,
+    node_id: "test-node",
+    status: "running",
+    iter: 1,
+    started_at: "2026-01-01T00:00:00Z",
+    completed_at: null,
+    failure_reason: null,
+    iterations: [],
+    ...overrides,
+  };
+}
+
+  describe("frozen harness (#616)", () => {
+    it("shows the node's frozen harness next to the id when present", () => {
+      render(<NodeDetailPanel node={makeNode({ harness: "copilot" })} runId="run-1" />);
+      // The harness's initial, its name in the tooltip.
+      const chip = screen.getByTestId("node-frozen-harness");
+      expect(chip).toHaveTextContent("G");
+      expect(chip).toHaveAccessibleName("copilot · frozen at spawn");
+    });
+
+    it("shows no harness chip when the node never froze one (a pure skip / pre-#616)", () => {
+      render(<NodeDetailPanel node={makeNode({ status: "completed", harness: undefined })} runId="run-1" />);
+      expect(screen.queryByTestId("node-frozen-harness")).toBeNull();
+    });
+  });
+
+describe("NodeDetailPanel", () => {
+  beforeEach(() => {
+    // No refusal leaks from one test to the next (CORE-205: a refused gesture stays, greyed).
+    useGestureRightsStore.setState({ rights: NOTHING_REFUSED, viewed: null, listed: new Set() });
+    fetchPromptMock.mockClear();
+    fetchNodeIOMock.mockClear();
+    fetchNodeIOMock.mockResolvedValue({ inputs: [], outputs: [] });
+    killNodeMock.mockClear();
+    restartNodeMock.mockClear();
+    previewProvisioningMock.mockClear();
+    stopNodeMock.mockClear();
+    startNodeMock.mockClear();
+    retryNodeMock.mockClear();
+    retryNodePreviewMock.mockClear();
+    retryNodePreviewMock.mockResolvedValue({ downstream: [], affected_count: 0, with_artifacts: [] });
+    markNodeDoneMock.mockClear();
+    markNodeDoneMock.mockResolvedValue({ kind: "completed" });
+    releaseNodeCompletionMock.mockClear();
+    releaseNodeCompletionMock.mockResolvedValue({ kind: "released" });
+    tmuxMountCount.current = 0;
+    tmuxUnmountCount.current = 0;
+  });
+
+  describe("node cost (#647)", () => {
+    it.each([
+      ["derived", false, 0.5, "~$0.5000"],
+      ["reported", false, 2, "$2.00"],
+      ["derived", true, 2, "~$2.00†"],
+      [null, false, 3, "~$3.00"],
+      ["derived", false, null, "—"],
+    ] as const)("renders %s cost beside the duration", (form, partial, usd, text) => {
+      render(
+        <NodeDetailPanel
+          node={makeNode({
+            status: "completed",
+            completed_at: "2026-01-01T00:01:00Z",
+            cost: { reported_in_usd: false,
+              usd,
+              form,
+              partial,
+              executions: 1,
+              readable_executions: usd === null ? 0 : 1,
+              unavailable_reasons: usd === null ? ["missing reading"] : [],
+            },
+          })}
+          runId="run-1"
+        />,
+      );
+      const chip = screen.getByTestId("node-cost");
+      expect(chip).toHaveTextContent(text);
+      // The cost follows the iteration's duration, which replaced `ended …`.
+      expect(chip.parentElement).toHaveTextContent(/ total · /);
+      expect(chip.parentElement).not.toHaveTextContent(/ended|started/);
+      if (usd === null) expect(chip).not.toHaveTextContent("$0");
+    });
+
+    describe("frozen provisioning", () => {
+      it("shows the frozen recipe in the Run pane", async () => {
+        previewProvisioningMock.mockResolvedValue({
+          entries: [],
+          rules: [
+            {
+              scope: "isolated_node",
+              mode: "copy",
+              pattern: ".env",
+              paths: [".env"],
+              excluded_paths: [],
+              unmatched: false,
+            },
+          ],
+          conflicts: [],
+        });
+        render(
+          <NodeDetailPanel
+            node={makeNode({
+              isolated_worktree: true,
+              provisioning: { copy: [".env"], hardlink: [], symlink: [] },
+              provisioning_frozen_at: "2025-12-31T23:58:00Z",
+            })}
+            runId="run-1"
+            provisioningRepository="/repo"
+          />,
+        );
+
+        expect(await screen.findByTestId("provisioning-isolated_node")).toHaveTextContent(
+          `frozen at ${new Date("2025-12-31T23:58:00Z").toLocaleTimeString(undefined, {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+          })}`,
+        );
+        // Notion #7: collapsed on open, the frozen marker and summary visible.
+        const toggle = screen.getByRole("button", { name: /^Provisioning/ });
+        expect(toggle).toHaveAttribute("aria-expanded", "false");
+        expect(screen.queryByLabelText("Copy patterns")).not.toBeInTheDocument();
+        await waitFor(() =>
+          expect(screen.getByTestId("provisioning-summary")).toHaveTextContent("0 inherited · 1 at this level"),
+        );
+        fireEvent.click(toggle);
+        expect(screen.getByLabelText("Copy patterns")).toHaveAttribute("readonly");
+      });
+
+      it("restarts the running isolated iteration and surfaces a refusal", async () => {
+        restartNodeMock.mockRejectedValueOnce(new Error("restart refused"));
+        render(
+          <>
+            <NodeDetailPanel
+              node={makeNode({ isolated_worktree: true })}
+              runId="run-1"
+            />
+          </>,
+        );
+
+        await act(async () => {
+          fireEvent.click(screen.getByTestId("restart-iteration-btn"));
+        });
+        expect(restartNodeMock).toHaveBeenCalledWith("run-1", "test-node", 1);
+        expect(screen.getByTestId("action-verdict")).toHaveTextContent(
+          "Restart refused — restart refused",
+        );
+      });
+    });
+
+    it("omits the cost chip when the projection has no cost", () => {
+      render(<NodeDetailPanel node={makeNode({ cost: undefined })} runId="run-1" />);
+      expect(screen.queryByTestId("node-cost")).toBeNull();
+    });
+  });
+
+  describe("TmuxTerminal integration", () => {
+    it("renders TmuxTerminal when node is running", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      const terminal = screen.getByTestId("tmux-terminal");
+      expect(terminal).toBeInTheDocument();
+      expect(terminal.getAttribute("data-session")).toBe(
+        "pdo-run-1-test-node-iter-1",
+      );
+    });
+
+    it("does not render TmuxTerminal when node is pending", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" />
+        </>,
+      );
+      expect(screen.queryByTestId("tmux-terminal")).not.toBeInTheDocument();
+      const placeholder = screen.getByTestId("pending-placeholder");
+      expect(placeholder).toBeInTheDocument();
+      expect(placeholder).toHaveTextContent("Not started yet");
+    });
+
+    it("passes correct session name with iter", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({ status: "running", iter: 3, node_id: "impl" })}
+            runId="run-abc"
+          />
+        </>,
+      );
+      const terminal = screen.getByTestId("tmux-terminal");
+      expect(terminal.getAttribute("data-session")).toBe(
+        "pdo-run-abc-impl-iter-3",
+      );
+    });
+
+    it("renders the details pane (Approve + sections) by default (collapsed)", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+      expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
+      expect(screen.getByTestId("approve-btn")).toHaveAccessibleName("Approve");
+      expect(screen.getByTestId("prompt-section")).toBeInTheDocument();
+    });
+
+    // #44: « Expand terminal » no longer swaps the panel for a full-height
+    // terminal: it lifts the same terminal into an overlay over the whole app.
+    it("opens the terminal in an overlay over the app, the panel staying underneath", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+
+      const terminal = screen.getByTestId("tmux-terminal");
+      expect(terminal.getAttribute("data-expanded")).toBe("false");
+      expect(screen.queryByTestId("terminal-overlay-backdrop")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("term-expand"));
+
+      expect(screen.getByTestId("tmux-terminal").getAttribute("data-expanded")).toBe("true");
+      const frame = screen.getByTestId("terminal-fullsize");
+      expect(frame).toContainElement(screen.getByTestId("tmux-terminal"));
+      // 16px from the window on all four sides, above a dimmed backdrop.
+      expect(frame.className).toMatch(/\bfixed\b/);
+      expect(frame.className).toMatch(/\binset-4\b/);
+      expect(frame).toHaveAttribute("role", "dialog");
+      expect(screen.getByTestId("terminal-overlay-backdrop").className).toMatch(/\bfixed inset-0\b/);
+      // The old « whole right panel » mode is gone: the panel is still there.
+      expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+      expect(screen.getByTestId("approve-btn")).toBeInTheDocument();
+    });
+
+    it("gives the keyboard to the terminal when it opens", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(document.activeElement).toBe(screen.getByTestId("mock-xterm-input"));
+    });
+
+    it("collapses back to split with the Minimize button", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("terminal-overlay-backdrop")).not.toBeInTheDocument();
+      expect(screen.getByTestId("terminal-pane-wrapper").className).not.toMatch(/\bfixed\b/);
+      expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+    });
+
+    it("collapses on Escape when the focus is outside the terminal", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      fireEvent.click(screen.getByTestId("term-expand"));
+      act(() => {
+        (document.activeElement as HTMLElement | null)?.blur();
+      });
+
+      fireEvent.keyDown(document.body, { key: "Escape" });
+
+      expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
+    });
+
+    it("leaves Escape to the agent when the terminal has the focus", () => {
+      const seenByApp = vi.fn();
+      window.addEventListener("keydown", seenByApp);
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      fireEvent.click(screen.getByTestId("term-expand"));
+      const input = screen.getByTestId("mock-xterm-input");
+      expect(document.activeElement).toBe(input);
+
+      fireEvent.keyDown(input, { key: "Escape" });
+
+      expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
+      expect(seenByApp).toHaveBeenCalledTimes(1);
+      window.removeEventListener("keydown", seenByApp);
+    });
+
+    it("keeps the app's shortcuts away while enlarged and the focus is outside the terminal", () => {
+      const seenByApp = vi.fn();
+      window.addEventListener("keydown", seenByApp);
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      fireEvent.click(screen.getByTestId("term-expand"));
+      act(() => {
+        (document.activeElement as HTMLElement | null)?.blur();
+      });
+
+      fireEvent.keyDown(document.body, { key: "Delete" });
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(seenByApp).not.toHaveBeenCalled();
+
+      // Back in split, the app hears its keys again.
+      fireEvent.keyDown(document.body, { key: "Delete" });
+      expect(seenByApp).toHaveBeenCalledTimes(1);
+      window.removeEventListener("keydown", seenByApp);
+    });
+
+    it("collapses on a click whose press and release both land on the backdrop", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      fireEvent.click(screen.getByTestId("term-expand"));
+      const backdrop = screen.getByTestId("terminal-overlay-backdrop");
+
+      fireEvent.pointerDown(backdrop);
+      fireEvent.pointerUp(backdrop);
+
+      expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
+    });
+
+    it("stays open when a selection pressed in the terminal is released on the backdrop", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      fireEvent.click(screen.getByTestId("term-expand"));
+
+      // An earlier press on the backdrop that was released elsewhere must not
+      // linger and turn the next terminal drag into a close.
+      fireEvent.pointerDown(screen.getByTestId("terminal-overlay-backdrop"));
+      fireEvent.pointerDown(screen.getByTestId("tmux-terminal"));
+      fireEvent.pointerUp(screen.getByTestId("terminal-overlay-backdrop"));
+
+      expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
+    });
+
+    it("starts in fullsize when initialTerminalExpanded is true", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({ status: "running" })}
+            runId="run-1"
+            initialTerminalExpanded
+          />
+        </>,
+      );
+
+      const terminal = screen.getByTestId("tmux-terminal");
+      expect(terminal.getAttribute("data-expanded")).toBe("true");
+      expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
+    });
+
+    it("lets the user collapse the terminal even when it started expanded", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({ status: "running" })}
+            runId="run-1"
+            initialTerminalExpanded
+          />
+        </>,
+      );
+
+      expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("term-expand"));
+
+      expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
+      expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+    });
+
+    it("comes back to split on remount — the enlarged view is never persisted", () => {
+      const { unmount } = render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
+      unmount();
+
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
+      expect(screen.getByTestId("tmux-terminal").getAttribute("data-expanded")).toBe("false");
+    });
+
+    it("stays open when the session ends under the user's eyes", () => {
+      const { rerender } = render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      fireEvent.click(screen.getByTestId("term-expand"));
+
+      rerender(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </>,
+      );
+
+      const frame = screen.getByTestId("terminal-fullsize");
+      expect(frame).toContainElement(screen.getByTestId("tmux-terminal"));
+      expect(frame.style.borderColor).toContain("--color-st-done");
+      expect(screen.getByTestId("term-identity-status")).toHaveTextContent("Completed");
+    });
+
+
+    // Regression: toggling fullscreen used to swap a `<div>` wrapper for a
+    // `<ResizablePanelGroup>` wrapper at the same JSX position, which made
+    // React unmount + remount `TmuxTerminal`. The remount tore the WebSocket
+    // down, spawned a fresh tmux client, and pushed Claude Code's prompt up
+    // by a line on every toggle.
+    it("does not remount TmuxTerminal when the user toggles fullscreen", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+
+      expect(tmuxMountCount.current).toBe(1);
+      expect(tmuxUnmountCount.current).toBe(0);
+      const firstNode = screen.getByTestId("tmux-terminal");
+
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(tmuxMountCount.current).toBe(1);
+      expect(tmuxUnmountCount.current).toBe(0);
+      expect(screen.getByTestId("tmux-terminal")).toBe(firstNode);
+
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(tmuxMountCount.current).toBe(1);
+      expect(tmuxUnmountCount.current).toBe(0);
+      expect(screen.getByTestId("tmux-terminal")).toBe(firstNode);
+
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(tmuxMountCount.current).toBe(1);
+      expect(tmuxUnmountCount.current).toBe(0);
+      expect(screen.getByTestId("tmux-terminal")).toBe(firstNode);
+    });
+  });
+
+  describe("IterSelector", () => {
+    function renderPanel(overrides?: Partial<NodeState>) {
+      return render(
+        <>
+          <NodeDetailPanel node={makeNode(overrides)} runId="run-1" />
+        </>,
+      );
+    }
+
+    it("does not show selector when only one iteration", () => {
+      renderPanel({
+        iter: 1,
+        iterations: [
+          {
+            iter: 1,
+            status: "completed",
+            started_at: null,
+            completed_at: null,
+          },
+        ],
+      });
+      expect(screen.queryByTestId("iter-option-1")).not.toBeInTheDocument();
+    });
+
+    it("switches selectedIter when clicking another iteration", async () => {
+      renderPanel({
+        iter: 2,
+        iterations: [
+          { iter: 1, status: "completed", started_at: null, completed_at: null },
+          { iter: 2, status: "running", started_at: null, completed_at: null },
+        ],
+      });
+
+      await act(async () => {});
+
+      fetchNodeIOMock.mockClear();
+      fetchPromptMock.mockClear();
+
+      const trigger = screen.getByRole("button", { name: /^Iteration 2 of/ });
+      fireEvent.click(trigger);
+
+      const option = await screen.findByTestId("iter-option-1");
+      fireEvent.click(option);
+
+      await act(async () => {});
+    });
+
+    it("shows the iteration a deep link names, when the node ran it (CORE-203)", async () => {
+      const iterations = [
+        { iter: 1, status: "completed", started_at: null, completed_at: null },
+        { iter: 2, status: "awaiting_user", started_at: null, completed_at: null },
+      ] as NodeState["iterations"];
+      renderPanel({ iter: 2, iterations });
+      expect(screen.getByRole("button", { name: /^Iteration 2 of 2/ })).toBeInTheDocument();
+
+      act(() => useNodeLinkFocus.getState().open("run-1", "test-node", 1));
+      expect(await screen.findByRole("button", { name: /^Iteration 1 of 2/ })).toBeInTheDocument();
+
+      // An iteration the node never ran changes nothing.
+      act(() => useNodeLinkFocus.getState().open("run-1", "test-node", 7));
+      expect(screen.getByRole("button", { name: /^Iteration 1 of 2/ })).toBeInTheDocument();
+    });
+  });
+
+  describe("FrontmatterRetryBanners", () => {
+    it("shows amber retry-pending banner when running with retries > 0", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({ status: "running", frontmatter_retries: 1 })}
+            runId="run-1"
+          />
+        </>,
+      );
+      expect(screen.getByTestId("frontmatter-retry-banner")).toBeInTheDocument();
+      expect(screen.getByTestId("frontmatter-retry-banner")).toHaveTextContent(
+        "Frontmatter mismatch",
+      );
+    });
+
+    it("does not show retry banner when running with retries = 0", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({ status: "running", frontmatter_retries: 0 })}
+            runId="run-1"
+          />
+        </>,
+      );
+      expect(
+        screen.queryByTestId("frontmatter-retry-banner"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("shows the output-validation banner when failed with an output validation reason", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "failed",
+              failure_reason: "output validation failed",
+            })}
+            runId="run-1"
+          />
+        </>,
+      );
+      expect(
+        screen.getByTestId("output-validation-banner"),
+      ).toBeInTheDocument();
+      // #490: the reason VERBATIM. The old hard-coded "after retry" title lied for
+      // the `script` fail-fast path, which never retries.
+      expect(
+        screen.getByTestId("output-validation-banner"),
+      ).toHaveTextContent("Failed — output validation failed");
+    });
+
+    it("titles the banner with the script fail-fast reason, not \"after retry\"", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "failed",
+              failure_reason: "script output validation failed",
+            })}
+            runId="run-1"
+          />
+        </>,
+      );
+      const banner = screen.getByTestId("output-validation-banner");
+      expect(banner).toHaveTextContent("Failed — script output validation failed");
+      expect(banner).not.toHaveTextContent("after retry");
+      // `includes`, not `startsWith`: the script reason does not start with the
+      // after-retry one, so the generic banner must NOT also fire.
+      expect(screen.queryByTestId("failed-banner")).toBeNull();
+    });
+
+    it("lists the missing output ports of a script fail-fast", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "failed",
+              failure_reason: "script output validation failed",
+              missing_outputs: ["out"],
+            })}
+            runId="run-1"
+          />
+        </>,
+      );
+      // Before #490 this list had no home at all in Rust OR TS, so the red banner
+      // showed with nothing in it.
+      expect(screen.getByTestId("missing-output-list")).toHaveTextContent(
+        "Missing outputs: out",
+      );
+    });
+
+    it("shows offending fields in exhausted banner when violations present", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "failed",
+              failure_reason: "output validation failed",
+              frontmatter_violations: [
+                { port: "review", field: "verdict", reason: "value 'MAYBE' not in allowed values" },
+                { port: "review", field: "score", reason: "expected int, got 'high'" },
+              ],
+            })}
+            runId="run-1"
+          />
+        </>,
+      );
+      const list = screen.getByTestId("frontmatter-violation-list");
+      expect(list).toBeInTheDocument();
+      expect(list.children).toHaveLength(2);
+      expect(list).toHaveTextContent("review.verdict");
+      expect(list).toHaveTextContent("review.score");
+    });
+
+    it("does not show violation list when no violations present", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "failed",
+              failure_reason: "output validation failed",
+            })}
+            runId="run-1"
+          />
+        </>,
+      );
+      expect(
+        screen.queryByTestId("frontmatter-violation-list"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("shows generic failed banner for other failure reasons", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "failed",
+              failure_reason: "some other error",
+            })}
+            runId="run-1"
+          />
+        </>,
+      );
+      expect(
+        screen.queryByTestId("output-validation-banner"),
+      ).not.toBeInTheDocument();
+      expect(screen.getAllByText(/some other error/).length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("PromptSection", () => {
+    it("renders Initial Prompt section collapsed by default", () => {
+      render(
+        <><NodeDetailPanel node={makeNode()} runId="run-1" /></>,
+      );
+      const toggle = within(screen.getByTestId("prompt-section")).getByRole("button", { name: /Prompt/ });
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
+      expect(screen.queryByText("system prompt here")).not.toBeInTheDocument();
+    });
+
+    it("expands on chevron click and collapses again", async () => {
+      render(
+        <><NodeDetailPanel node={makeNode()} runId="run-1" /></>,
+      );
+      const toggle = within(screen.getByTestId("prompt-section")).getByRole("button", { name: /Prompt/ });
+
+      fireEvent.click(toggle);
+      expect(screen.getByText("Loading…")).toBeInTheDocument();
+
+      fireEvent.click(toggle);
+      expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    });
+
+    // #315: the per-iter rendered prompt lives in the node's working dir, which
+    // is destroyed on archive and is not preserved (ADR-0020). So for an
+    // archived run the button must not fire an always-404 fetch nor show a
+    // stuck "Loading prompt..." — it shows an honest "not preserved" note.
+    it("does not fetch the prompt for an archived run", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({ status: "completed" })}
+            runId="run-1"
+            isArchived
+          />
+        </>,
+      );
+      expect(fetchPromptMock).not.toHaveBeenCalled();
+    });
+
+    it("shows a not-preserved note (not a spinner) when archived", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({ status: "completed" })}
+            runId="run-1"
+            isArchived
+          />
+        </>,
+      );
+      fireEvent.click(within(screen.getByTestId("prompt-section")).getByRole("button", { name: /Prompt/ }));
+      expect(screen.getByText("Not preserved")).toBeInTheDocument();
+      expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("polled preview removal", () => {
+    it("does not have a terminal-pane pre element", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      expect(document.querySelector(".terminal-pane")).toBeNull();
+    });
+
+    it("does not read the pane itself", () => {
+      // The mock for ../api includes no `fetchPane` — if this panel called it, it
+      // would throw. The pane is read one layer down, by the terminal that will
+      // display it (#617), never polled into a preview here.
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      // Just verify it renders without error
+      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+    });
+  });
+
+  // #617: the finished node's frozen pane. The panel's job is to name WHICH
+  // iteration is on screen and what state it is in; the terminal decides between
+  // attaching and reading the snapshot.
+  describe("pane source handed to the terminal", () => {
+    it("names the run, the node and the selected iteration", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({ status: "completed", node_id: "cop", iter: 2 })}
+            runId="run-1"
+          />
+        </>,
+      );
+      // A settled node opens minimized (#346) — restore it to mount the terminal.
+      fireEvent.click(screen.getByTestId("term-restore"));
+      expect(
+        screen.getByTestId("tmux-terminal").getAttribute("data-pane-source"),
+      ).toBe(JSON.stringify({ runId: "run-1", nodeId: "cop", iter: 2 }));
+    });
+
+    it("reports the ITERATION's status, not the node's rollup", async () => {
+      // A node running iteration 2 while the selector sits on iteration 1: that
+      // older session was reaped long ago. Handing the terminal "running" would
+      // send it to attach to a name tmux no longer knows.
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "running",
+              node_id: "cop",
+              iter: 2,
+              iterations: [
+                { iter: 1, status: "completed", started_at: null, completed_at: null },
+                { iter: 2, status: "running", started_at: null, completed_at: null },
+              ],
+            })}
+            runId="run-1"
+          />
+        </>,
+      );
+      await act(async () => {});
+      expect(
+        screen.getByTestId("tmux-terminal").getAttribute("data-status"),
+      ).toBe("running");
+
+      fireEvent.click(screen.getByRole("button", { name: /^Iteration 2 of/ }));
+      fireEvent.click(await screen.findByTestId("iter-option-1"));
+      await act(async () => {});
+
+      const term = screen.getByTestId("tmux-terminal");
+      expect(term.getAttribute("data-status")).toBe("completed");
+      expect(term.getAttribute("data-pane-source")).toBe(
+        JSON.stringify({ runId: "run-1", nodeId: "cop", iter: 1 }),
+      );
+    });
+  });
+
+  describe("Image port thumbnails", () => {
+    it("shows image thumbnails for image port type", async () => {
+      fetchNodeIOMock.mockResolvedValue({
+        inputs: [],
+        outputs: [
+          {
+            port: "screenshot",
+            repeated: false,
+            port_type: "image",
+            files: [{ path: "artifacts/node/iter-1/screenshot/capture.png", exists: true, size: 1024, frontmatter: null }],
+          },
+        ],
+      });
+
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </>,
+      );
+
+      await act(async () => {});
+      expect(screen.getByTestId("image-thumbnails")).toBeInTheDocument();
+    });
+
+    it("shows port-type badge for image ports", async () => {
+      fetchNodeIOMock.mockResolvedValue({
+        inputs: [],
+        outputs: [
+          {
+            port: "diagram",
+            repeated: false,
+            port_type: "image_list",
+            files: [{ path: "artifacts/node/iter-1/diagram/a.png", exists: true, size: 512, frontmatter: null }],
+          },
+        ],
+      });
+
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </>,
+      );
+
+      await act(async () => {});
+      expect(screen.getByTestId("port-type-badge")).toHaveTextContent("image_list");
+    });
+
+    // #796: an output on disk BEFORE the execution started is a previous
+    // execution's result — badged « inherited », its verdict chip withheld.
+    it("badges an inherited output and withholds its frontmatter verdict", async () => {
+      fetchNodeIOMock.mockResolvedValue({
+        inputs: [],
+        outputs: [
+          {
+            port: "out",
+            repeated: false,
+            port_type: "markdown",
+            files: [
+              {
+                path: "tester/iter-1/out/output.md",
+                exists: true,
+                size: 5500,
+                frontmatter: { Verdict: "Pass" },
+                inherited: true,
+              },
+            ],
+          },
+          {
+            port: "feature-screens",
+            repeated: false,
+            port_type: "image_list",
+            files: [
+              { path: "tester/iter-1/feature-screens/a.png", exists: true, size: 10, frontmatter: null, inherited: true },
+            ],
+          },
+        ],
+      });
+
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+
+      await act(async () => {});
+      expect(screen.getAllByTestId("inherited-badge")).toHaveLength(2);
+      expect(screen.queryByTestId("frontmatter-card")).not.toBeInTheDocument();
+      expect(screen.queryByText("Pass")).not.toBeInTheDocument();
+      // The file itself is still listed and its thumbnails shown — flagged, not hidden.
+      expect(screen.getByTestId("image-thumbnails")).toBeInTheDocument();
+    });
+
+    // #796: after a re-spawned agent writes fresh screenshots next to a stale
+    // one, the collapsed « 2 files » row counts the inherited ones and dims
+    // their thumbnails — the API flags them file by file, so does the panel.
+    it("counts inherited files on a mixed image list and dims their thumbnails", async () => {
+      fetchNodeIOMock.mockResolvedValue({
+        inputs: [],
+        outputs: [
+          {
+            port: "feature-screens",
+            repeated: false,
+            port_type: "image_list",
+            files: [
+              { path: "tester/iter-1/feature-screens/fresh.png", exists: true, size: 10, frontmatter: null },
+              { path: "tester/iter-1/feature-screens/stale.png", exists: true, size: 10, frontmatter: null, inherited: true },
+            ],
+          },
+        ],
+      });
+
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </>,
+      );
+
+      await act(async () => {});
+      expect(screen.getByTestId("inherited-badge")).toHaveTextContent("1 inherited");
+      expect(screen.getByText("2 files")).toBeInTheDocument();
+      expect(screen.getByTestId("thumbnail-0")).not.toHaveAttribute("data-inherited");
+      expect(screen.getByTestId("thumbnail-1")).toHaveAttribute("data-inherited", "true");
+    });
+
+    it("shows the frontmatter verdict of an output written by this execution", async () => {
+      fetchNodeIOMock.mockResolvedValue({
+        inputs: [],
+        outputs: [
+          {
+            port: "out",
+            repeated: false,
+            port_type: "markdown",
+            files: [
+              {
+                path: "tester/iter-1/out/output.md",
+                exists: true,
+                size: 5500,
+                frontmatter: { Verdict: "Pass" },
+              },
+            ],
+          },
+        ],
+      });
+
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </>,
+      );
+
+      await act(async () => {});
+      expect(screen.queryByTestId("inherited-badge")).not.toBeInTheDocument();
+      expect(screen.getByTestId("frontmatter-card")).toHaveTextContent("Pass");
+    });
+
+    // #779: a Start-sourced input carries the run's non-image attachments after
+    // the prompt — shown as « Input files » chips, never as thumbnails.
+    it("lists input files as chips under a start-sourced markdown input", async () => {
+      fetchNodeIOMock.mockResolvedValue({
+        inputs: [
+          {
+            port: "task",
+            repeated: false,
+            port_type: "markdown",
+            files: [
+              { path: "_input/output.md", exists: true, size: 100, frontmatter: null },
+              { path: "_input/SPEC-779.md", exists: true, size: 18_432, frontmatter: null },
+              { path: "_input/fixtures.json", exists: true, size: 402_432, frontmatter: null },
+            ],
+          },
+        ],
+        outputs: [],
+      });
+
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+
+      await act(async () => {});
+      const list = screen.getByTestId("input-files");
+      const chips = within(list).getAllByTestId("input-file-chip");
+      expect(chips).toHaveLength(2);
+      expect(chips[0]).toHaveTextContent("MD");
+      expect(chips[0]).toHaveTextContent("SPEC-779.md");
+      expect(chips[0]).toHaveTextContent("18.0 KB");
+      expect(chips[1]).toHaveTextContent("JSON");
+      expect(chips[1]).toHaveAttribute("href", expect.stringContaining("_input%2Ffixtures.json"));
+      expect(screen.queryByTestId("image-thumbnails")).not.toBeInTheDocument();
+    });
+
+    it("does not show thumbnails for markdown ports", async () => {
+      fetchNodeIOMock.mockResolvedValue({
+        inputs: [],
+        outputs: [
+          {
+            port: "out",
+            repeated: false,
+            port_type: "markdown",
+            files: [{ path: "artifacts/node/iter-1/out/output.md", exists: true, size: 100, frontmatter: null }],
+          },
+        ],
+      });
+
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </>,
+      );
+
+      await act(async () => {});
+      expect(screen.queryByTestId("image-thumbnails")).not.toBeInTheDocument();
+    });
+
+    it("opens the lightbox when a thumbnail is clicked", async () => {
+      fetchNodeIOMock.mockResolvedValue({
+        inputs: [],
+        outputs: [
+          {
+            port: "screenshot",
+            repeated: false,
+            port_type: "image",
+            files: [{ path: "artifacts/node/iter-1/screenshot/capture.png", exists: true, size: 1024, frontmatter: null }],
+          },
+        ],
+      });
+
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </>,
+      );
+
+      await act(async () => {});
+      expect(screen.queryByTestId("image-lightbox")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("thumbnail-0"));
+
+      expect(screen.getByTestId("image-lightbox")).toBeInTheDocument();
+      expect(screen.getByTestId("lightbox-image").getAttribute("src")).toContain(
+        "capture.png",
+      );
+    });
+  });
+
+  describe("New statuses (issue #112)", () => {
+    it("renders Stopped label in header", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({ status: "stopped", failure_reason: "user killed it" })}
+            runId="run-1"
+          />
+        </>,
+      );
+      expect(screen.getByTestId("node-status-badge")).toHaveTextContent("Stopped");
+      expect(screen.getByTestId("stopped-banner")).toHaveTextContent("Stopped — user killed it");
+    });
+
+    it("renders Skipped label and greyed banner with the prune reason (#620)", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "skipped",
+              skip_reason: "required input never arrived — branch not taken",
+            })}
+            runId="run-1"
+          />
+        </>,
+      );
+      // The header label distinguishes it from a green "Completed" node…
+      expect(screen.getByTestId("node-status-badge")).toHaveTextContent("Skipped");
+      // …and the banner carries *why* it was pruned, at node level.
+      expect(
+        screen.getByText(/required input never arrived — branch not taken/),
+      ).toBeInTheDocument();
+    });
+
+    it("skipped banner falls back to a default reason when none is given", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "skipped" })} runId="run-1" />
+        </>,
+      );
+      expect(screen.getByTestId("skipped-banner")).toHaveTextContent("Skipped — branch not taken");
+    });
+
+    it("renders Stale label in header and stale banner", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
+        </>,
+      );
+      expect(screen.getByTestId("node-status-badge")).toHaveTextContent("Stale");
+      expect(screen.getByTestId("stale-banner")).toHaveTextContent("Idle 2m+ — outputs incomplete");
+    });
+
+    it("offers Approve only where the daemon completes: never on a stale or interrupted node", () => {
+      // The completion guard takes a running, awaiting or failed iteration; the
+      // command field offers the same (paletteItems.test.ts).
+      for (const status of ["running", "failed"] as const) {
+        const { unmount } = render(<NodeDetailPanel node={makeNode({ status })} runId="run-1" />);
+        expect(screen.getByTestId("approve-btn")).toBeInTheDocument();
+        unmount();
+      }
+      for (const status of ["stale", "interrupted"] as const) {
+        const { unmount } = render(<NodeDetailPanel node={makeNode({ status })} runId="run-1" />);
+        expect(screen.queryByTestId("approve-btn")).not.toBeInTheDocument();
+        unmount();
+      }
+      // A paused Run is resumed before anything completes in it.
+      render(<NodeDetailPanel node={makeNode({ status: "failed" })} runId="run-1" runStatus="paused" />);
+      expect(screen.queryByTestId("approve-btn")).not.toBeInTheDocument();
+    });
+
+    it("stopped node does not show Approve", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "stopped" })} runId="run-1" />
+        </>,
+      );
+      expect(screen.queryByTestId("approve-btn")).not.toBeInTheDocument();
+    });
+
+    it("minimizes the terminal for a stopped node", () => {
+      // #346: a settled session (stopped) opens minimized — the terminal inset
+      // folds to a thin bar and is not mounted, so Outputs take the height.
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "stopped" })} runId="run-1" />
+        </>,
+      );
+      expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
+      expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+      expect(screen.queryByTestId("tmux-terminal")).not.toBeInTheDocument();
+    });
+
+    it("opens the terminal of another Run's live node that bears the same id", () => {
+      // Two Runs of one pipeline share their node ids: leaving a finished
+      // node for the live one of the next Run must not keep its folded,
+      // « ended » terminal.
+      const { rerender } = render(
+        <NodeDetailPanel node={makeNode({ node_id: "asker", status: "completed" })} runId="run-1" />,
+      );
+      expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
+      rerender(
+        <NodeDetailPanel node={makeNode({ node_id: "asker", status: "awaiting_user" })} runId="run-2" />,
+      );
+      expect(screen.queryByTestId("terminal-minimized")).not.toBeInTheDocument();
+      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+    });
+
+    it("renders terminal for stale node", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
+        </>,
+      );
+      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+    });
+  });
+
+  // #598 / ADR-0049: an interrupted node (session died on an infra incident) must
+  // offer a way back — before this it was a dead end (no Play, no Reopen, no Mark
+  // complete), the exact bug reported for an interactive node with a lost session.
+  describe("Interrupted node recovery (#598)", () => {
+    const interrupted = () =>
+      makeNode({ status: "interrupted", failure_reason: "session died — reopen or retry" });
+
+    it("renders the Interrupted label and banner", () => {
+      render(
+        <>
+          <NodeDetailPanel node={interrupted()} runId="run-1" />
+        </>,
+      );
+      expect(screen.getByTestId("node-status-badge")).toHaveTextContent("Interrupted");
+      expect(screen.getByTestId("interrupted-banner")).toBeInTheDocument();
+      expect(screen.getByTestId("interrupted-banner-title")).toHaveTextContent("Session died");
+    });
+
+    // FP of CORE-227: the early-death hint (« it ended within N s of its start,
+    // check that its harness is logged in… ») was cut before its useful half,
+    // in a one-line banner. The reason is given whole, under the banner's line.
+    it("gives the reason of a dead session whole, under the banner's line", () => {
+      const reason =
+        "session_died: it ended within 23 s of its start; check that its harness is logged in and knows the node's model";
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "interrupted", failure_reason: reason })} runId="run-1" />
+        </>,
+      );
+      expect(screen.getByTestId("interrupted-banner-message")).toHaveTextContent("work presumed intact");
+      expect(screen.getByTestId("interrupted-banner-reason")).toHaveTextContent(reason);
+    });
+
+    it("names a merge-back conflict instead of a dead session (ADR-0082)", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "interrupted",
+              failure_reason: "merge_conflict: conflict in shared.txt",
+            })}
+            runId="run-1"
+          />
+        </>,
+      );
+      const banner = screen.getByTestId("interrupted-banner");
+      expect(banner).toHaveTextContent(/Merge-back conflict — conflict in shared\.txt/);
+      expect(banner).not.toHaveTextContent(/session died/i);
+      expect(banner).not.toHaveTextContent("merge_conflict:");
+    });
+
+    it("offers a Play button in the node controls", () => {
+      render(
+        <>
+          <NodeDetailPanel node={interrupted()} runId="run-1" />
+        </>,
+      );
+      expect(screen.getByTestId("play-retry-btn")).toHaveAccessibleName("Retry");
+    });
+
+    it("Play re-drives the node via retryNode (daemon embeds the reopen)", async () => {
+      render(
+        <>
+          <NodeDetailPanel node={interrupted()} runId="run-1" />
+        </>,
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+      expect(retryNodeMock).toHaveBeenCalledWith("run-1", "test-node");
+    });
+
+    it("the banner Reopen button also re-drives the node", async () => {
+      render(
+        <>
+          <NodeDetailPanel node={interrupted()} runId="run-1" />
+        </>,
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("interrupted-reopen-btn"));
+      });
+      expect(retryNodeMock).toHaveBeenCalledWith("run-1", "test-node");
+    });
+
+    it("offers no Approve: the daemon refuses to complete an interrupted node, Reopen re-drives it", () => {
+      render(
+        <>
+          <NodeDetailPanel node={interrupted()} runId="run-1" />
+        </>,
+      );
+      expect(screen.queryByTestId("approve-btn")).not.toBeInTheDocument();
+      expect(screen.getByTestId("interrupted-reopen-btn")).toBeInTheDocument();
+    });
+
+    it("opens minimized — the dead session is never attached", () => {
+      render(
+        <>
+          <NodeDetailPanel node={interrupted()} runId="run-1" />
+        </>,
+      );
+      expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
+      expect(screen.queryByTestId("tmux-terminal")).not.toBeInTheDocument();
+    });
+
+    it("hides the recovery affordances for an archived run", () => {
+      render(
+        <>
+          <NodeDetailPanel node={interrupted()} runId="run-1" isArchived />
+        </>,
+      );
+      expect(screen.queryByTestId("node-controls")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("interrupted-reopen-btn")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("approve-btn")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Terminated-node default layout (#346)", () => {
+    it("defaults a completed node to a minimized terminal with Outputs visible", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </>,
+      );
+      expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
+      expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+      expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("tmux-terminal")).not.toBeInTheDocument();
+    });
+
+    it.each(["failed", "stopped"] as const)(
+      "minimizes the terminal for a %s node",
+      (status) => {
+        render(
+          <>
+            <NodeDetailPanel node={makeNode({ status })} runId="run-1" />
+          </>,
+        );
+        expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
+        expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+        expect(screen.queryByTestId("tmux-terminal")).not.toBeInTheDocument();
+      },
+    );
+
+    it("forces minimized for an archived node regardless of a live-ish status", () => {
+      // D1: `stale` alone stays split, but `isArchived` overrides — the run's
+      // worktree + tmux session are gone.
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({ status: "stale" })}
+            runId="run-1"
+            isArchived
+          />
+        </>,
+      );
+      expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
+      expect(screen.queryByTestId("tmux-terminal")).not.toBeInTheDocument();
+    });
+
+    it("keeps the terminal in split for a running node", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+      expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+      expect(screen.queryByTestId("terminal-minimized")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
+    });
+
+    it("keeps the terminal visible for an awaiting_user node", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "awaiting_user" })} runId="run-1" />
+        </>,
+      );
+      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+      expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+      expect(screen.queryByTestId("terminal-minimized")).not.toBeInTheDocument();
+    });
+
+    it("keeps the terminal visible for a non-archived stale node", () => {
+      // D1 lock: `stale` is NOT terminated (session typically still alive,
+      // recovery happens inside the terminal).
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
+        </>,
+      );
+      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+      expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+      expect(screen.queryByTestId("terminal-minimized")).not.toBeInTheDocument();
+    });
+
+    it("restores the terminal to split when clicking the minimized bar", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </>,
+      );
+      expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("term-restore"));
+
+      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+      expect(screen.getByTestId("details-pane")).toBeInTheDocument();
+      expect(screen.queryByTestId("terminal-minimized")).not.toBeInTheDocument();
+    });
+
+    it("re-shows the terminal after Retry on a completed node", async () => {
+      // affected_count 0 → no confirm dialog → retry fires and terminalView
+      // flips to split (session revives).
+      retryNodePreviewMock.mockResolvedValue({
+        downstream: [],
+        affected_count: 0,
+        with_artifacts: [],
+      });
+
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </>,
+      );
+      expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+
+      expect(retryNodeMock).toHaveBeenCalledWith("run-1", "test-node");
+      expect(screen.queryByTestId("terminal-minimized")).not.toBeInTheDocument();
+      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+    });
+
+    it("re-shows the terminal after a confirmed Retry on a completed node", async () => {
+      // affected_count > 0 → confirm dialog → confirming fires retry and flips
+      // to split (guards handleRetryConfirmed's setTerminalView).
+      retryNodePreviewMock.mockResolvedValue({
+        downstream: ["reviewer"],
+        affected_count: 1,
+        with_artifacts: ["reviewer"],
+      });
+
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </>,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+      // Still minimized: only the confirm dialog opened, no retry yet.
+      expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("retry-confirm-ok"));
+      });
+
+      expect(retryNodeMock).toHaveBeenCalledWith("run-1", "test-node");
+      expect(screen.queryByTestId("terminal-minimized")).not.toBeInTheDocument();
+      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+    });
+
+    it("renders the daemon's refusal when Retry is rejected (#487)", async () => {
+      // The whole point of the frontend slice: a swallowed 409 rendered as
+      // nothing. A refused Retry must show the daemon's "resume the run first".
+      retryNodePreviewMock.mockResolvedValue({
+        downstream: [],
+        affected_count: 0,
+        with_artifacts: [],
+      });
+      retryNodeMock.mockRejectedValueOnce(
+        new Error(
+          "run r is Failed: no scheduling on a non-running run — resume the run first",
+        ),
+      );
+
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "failed" })} runId="run-1" />
+        </>,
+      );
+
+      expect(screen.queryByTestId("action-verdict")).not.toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+
+      const verdict = screen.getByTestId("action-verdict");
+      expect(verdict).toBeInTheDocument();
+      expect(verdict).toHaveAttribute("data-action", "retry");
+      expect(verdict).toHaveTextContent("Retry refused");
+      expect(verdict).toHaveTextContent("resume the run first");
+    });
+  });
+
+  describe("Stale banner with Stop/Retry (issue #123)", () => {
+    it("shows stale banner with idle message", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
+        </>,
+      );
+      const banner = screen.getByTestId("stale-banner");
+      expect(banner).toBeInTheDocument();
+      expect(banner).toHaveTextContent("Idle 2m+");
+      expect(banner).toHaveTextContent("outputs incomplete");
+    });
+
+    it("shows Stop and Retry buttons on stale node", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
+        </>,
+      );
+      expect(screen.getByTestId("stale-stop-btn")).toBeInTheDocument();
+      expect(screen.getByTestId("stale-retry-btn")).toBeInTheDocument();
+    });
+
+    it("calls killNode when Stop is clicked", async () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
+        </>,
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("stale-stop-btn"));
+      });
+      expect(killNodeMock).toHaveBeenCalledWith("run-1", "test-node", 1);
+    });
+
+    it("calls restartNode when Retry is clicked", async () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
+        </>,
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("stale-retry-btn"));
+      });
+      expect(restartNodeMock).toHaveBeenCalledWith("run-1", "test-node", 1);
+    });
+
+    it("hides Stop/Retry buttons when archived", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" isArchived />
+        </>,
+      );
+      expect(screen.getByTestId("stale-banner")).toBeInTheDocument();
+      expect(screen.queryByTestId("stale-stop-btn")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("stale-retry-btn")).not.toBeInTheDocument();
+    });
+
+    it("stale indicator is distinct from failed", () => {
+      const { container: staleContainer } = render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
+        </>,
+      );
+
+      const { container: failedContainer } = render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "failed", failure_reason: "test" })} runId="run-2" />
+        </>,
+      );
+
+      const staleBanner = staleContainer.querySelector('[data-testid="stale-banner"]');
+      const failedBanner = failedContainer.querySelector('[data-testid="failed-banner"]') as HTMLElement | null;
+
+      // Each banner is tinted in its own tone: skipped grey, failed red.
+      expect(staleBanner).toBeInTheDocument();
+      expect((staleBanner as HTMLElement).style.getPropertyValue("--st")).toContain("--color-st-skipped");
+      expect(failedBanner?.style.getPropertyValue("--st")).toContain("--color-st-failed");
+    });
+  });
+
+  describe("Node control buttons", () => {
+    it("shows enabled Stop button when node is running", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      const stopBtn = screen.getByTestId("stop-btn");
+      expect(stopBtn).toBeInTheDocument();
+      expect(stopBtn).not.toBeDisabled();
+      expect(stopBtn).toHaveAccessibleName("Stop");
+    });
+
+    it("shows disabled Stop button when node is completed", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </>,
+      );
+      const stopBtn = screen.getByTestId("stop-btn");
+      expect(stopBtn).toBeDisabled();
+    });
+
+    it("shows disabled Stop button when node is failed", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "failed" })} runId="run-1" />
+        </>,
+      );
+      const stopBtn = screen.getByTestId("stop-btn");
+      expect(stopBtn).toBeDisabled();
+    });
+
+    it("shows disabled Stop button when node is stopped", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "stopped" })} runId="run-1" />
+        </>,
+      );
+      const stopBtn = screen.getByTestId("stop-btn");
+      expect(stopBtn).toBeDisabled();
+    });
+
+    it("shows controls with a disabled Stop and a Start button when node is pending (#204)", () => {
+      // Un-gating the controls bar for pending nodes (#204) exposes the Start
+      // button. The Stop button stays present but disabled (only `running` can
+      // be stopped).
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" />
+        </>,
+      );
+      expect(screen.getByTestId("node-controls")).toBeInTheDocument();
+      expect(screen.getByTestId("stop-btn")).toBeDisabled();
+      expect(screen.getByTestId("start-btn")).toBeInTheDocument();
+    });
+
+    it("an on-demand node not launched keeps its Start, greyed with why when refused (ADR-0086, CORE-205)", async () => {
+      const { unmount } = render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" isOnDemand />
+        </>,
+      );
+      expect(screen.getByTestId("start-btn")).toBeInTheDocument();
+      // No « Pending »: the node waits for the user's ▶, not for the runtime.
+      expect(screen.getByTestId("node-status-badge")).toHaveTextContent("On demand");
+      unmount();
+
+      // CORE-42: the view of the Run asks the rights once; CORE-205: a refused Start stays, greyed.
+      askAuthorizationMock.mockImplementationOnce((questions: unknown[]) =>
+        Promise.resolve(
+          questions.map(() => ({ decision: "deny", reason: "reader", sentence: "You can't start nodes in Project P." })),
+        ),
+      );
+      function RunView() {
+        useRunViewGestures("run-1", ["test-node"]);
+        return <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" isOnDemand />;
+      }
+      render(
+        <>
+          <RunView />
+        </>,
+      );
+      try {
+        await waitFor(() => expect(screen.getByTestId("start-btn")).toHaveAttribute("aria-disabled", "true"));
+        fireEvent.click(screen.getByTestId("start-btn"));
+        expect(startNodeMock).not.toHaveBeenCalled();
+      } finally {
+        useGestureRightsStore.setState({ rights: NOTHING_REFUSED, viewed: null, listed: new Set() });
+      }
+    });
+
+    it("a skipped node offers Play, which retries it (ADR-0086)", async () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "skipped" })} runId="run-1" />
+        </>,
+      );
+      const playBtn = screen.getByTestId("play-retry-btn");
+      expect(playBtn).toHaveAccessibleName("Retry");
+      fireEvent.click(playBtn);
+      await waitFor(() => expect(retryNodeMock).toHaveBeenCalledWith("run-1", expect.any(String)));
+    });
+
+    it("does not show controls for archived runs", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" isArchived />
+        </>,
+      );
+      expect(screen.queryByTestId("node-controls")).not.toBeInTheDocument();
+    });
+
+    it("shows Retry button with Retry label for running node", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      const retryBtn = screen.getByTestId("retry-btn");
+      expect(retryBtn).toHaveAccessibleName("Retry");
+    });
+
+    it("shows Play label for failed node", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "failed" })} runId="run-1" />
+        </>,
+      );
+      const playBtn = screen.getByTestId("play-retry-btn");
+      expect(playBtn).toHaveAccessibleName("Retry");
+    });
+
+    it("shows Play label for stopped node", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "stopped" })} runId="run-1" />
+        </>,
+      );
+      const playBtn = screen.getByTestId("play-retry-btn");
+      expect(playBtn).toHaveAccessibleName("Retry");
+    });
+
+    it("shows Retry label for completed node", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </>,
+      );
+      const playBtn = screen.getByTestId("play-retry-btn");
+      expect(playBtn).toHaveAccessibleName("Retry");
+    });
+
+    it("Stop button calls stopNode API", async () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("stop-btn"));
+      });
+      expect(stopNodeMock).toHaveBeenCalledWith("run-1", "test-node");
+    });
+
+    it("Retry button on running node calls retryNode API", async () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("retry-btn"));
+      });
+      expect(retryNodePreviewMock).toHaveBeenCalledWith("run-1", "test-node");
+      expect(retryNodeMock).toHaveBeenCalledWith("run-1", "test-node");
+    });
+
+    it("Play button on failed node calls retryNode API", async () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "failed" })} runId="run-1" />
+        </>,
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+      expect(retryNodePreviewMock).toHaveBeenCalledWith("run-1", "test-node");
+      expect(retryNodeMock).toHaveBeenCalledWith("run-1", "test-node");
+    });
+  });
+
+  describe("Start button (#204)", () => {
+    it("shows a Start button on a pending node", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" />
+        </>,
+      );
+      const startBtn = screen.getByTestId("start-btn");
+      expect(startBtn).toBeInTheDocument();
+      expect(startBtn).toHaveAccessibleName("Start");
+    });
+
+    it("clicking Start force-spawns the node via startNode API", async () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" />
+        </>,
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("start-btn"));
+      });
+      expect(startNodeMock).toHaveBeenCalledWith("run-1", "test-node");
+    });
+
+    it("does not show a Start button on a running node", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      expect(screen.queryByTestId("start-btn")).not.toBeInTheDocument();
+    });
+
+    it("does not show a Start button on a pending node of an archived run", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({ status: "pending" })}
+            runId="run-1"
+            isArchived
+          />
+        </>,
+      );
+      expect(screen.queryByTestId("start-btn")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("node-controls")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Retry confirmation dialog", () => {
+    it("shows confirmation dialog when downstream has artifacts", async () => {
+      retryNodePreviewMock.mockResolvedValue({
+        downstream: ["reviewer"],
+        affected_count: 1,
+        with_artifacts: ["reviewer"],
+      });
+
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </>,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+
+      expect(screen.getByTestId("retry-confirm-backdrop")).toBeInTheDocument();
+      expect(screen.getByText(/reset 1 downstream node/)).toBeInTheDocument();
+      expect(retryNodeMock).not.toHaveBeenCalled();
+    });
+
+    it("shows plural text for multiple downstream nodes", async () => {
+      retryNodePreviewMock.mockResolvedValue({
+        downstream: ["reviewer", "merger"],
+        affected_count: 2,
+        with_artifacts: ["reviewer", "merger"],
+      });
+
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </>,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+
+      expect(screen.getByText(/reset 2 downstream nodes/)).toBeInTheDocument();
+    });
+
+    it("proceeds with retry after confirmation", async () => {
+      retryNodePreviewMock.mockResolvedValue({
+        downstream: ["reviewer"],
+        affected_count: 1,
+        with_artifacts: ["reviewer"],
+      });
+
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </>,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+
+      expect(retryNodeMock).not.toHaveBeenCalled();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("retry-confirm-ok"));
+      });
+
+      expect(retryNodeMock).toHaveBeenCalledWith("run-1", "test-node");
+      expect(screen.queryByTestId("retry-confirm-backdrop")).not.toBeInTheDocument();
+    });
+
+    it("cancels retry when Cancel is clicked", async () => {
+      retryNodePreviewMock.mockResolvedValue({
+        downstream: ["reviewer"],
+        affected_count: 1,
+        with_artifacts: ["reviewer"],
+      });
+
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </>,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+
+      expect(screen.getByTestId("retry-confirm-backdrop")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("retry-confirm-cancel"));
+
+      expect(screen.queryByTestId("retry-confirm-backdrop")).not.toBeInTheDocument();
+      expect(retryNodeMock).not.toHaveBeenCalled();
+    });
+
+    it("skips confirmation when no downstream artifacts", async () => {
+      retryNodePreviewMock.mockResolvedValue({
+        downstream: ["reviewer"],
+        affected_count: 0,
+        with_artifacts: [],
+      });
+
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </>,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+
+      expect(screen.queryByTestId("retry-confirm-backdrop")).not.toBeInTheDocument();
+      expect(retryNodeMock).toHaveBeenCalledWith("run-1", "test-node");
+    });
+
+    it("dismisses dialog by clicking backdrop", async () => {
+      retryNodePreviewMock.mockResolvedValue({
+        downstream: ["reviewer"],
+        affected_count: 1,
+        with_artifacts: ["reviewer"],
+      });
+
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </>,
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("play-retry-btn"));
+      });
+
+      fireEvent.click(screen.getByTestId("retry-confirm-backdrop"));
+
+      expect(screen.queryByTestId("retry-confirm-backdrop")).not.toBeInTheDocument();
+      expect(retryNodeMock).not.toHaveBeenCalled();
+    });
+  });
+
+  // #490 / ADR-0035 — the refusal of a *Mark complete* click must be visible AT the
+  // gesture, and must never blink out. Before this issue `markNodeDone` was mocked
+  // as a bare `vi.fn()` resolving `undefined`, so not one of these paths had ever
+  // been exercised.
+  describe("declared wait banner (#588 / ADR-0069)", () => {
+    const awaitingNode = (awaiting: NodeState["awaiting"], over?: Partial<NodeState>) =>
+      makeNode({
+        status: "awaiting_user",
+        awaiting,
+        iterations: [
+          {
+            iter: 1,
+            status: "awaiting_user",
+            started_at: null,
+            completed_at: null,
+            interactive: true,
+            completion_released: false,
+          },
+        ],
+        ...over,
+      });
+
+    it("shows the agent's question verbatim with the Enter hint (A1)", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={awaitingNode({
+              cause: "declared",
+              message: "Which layout: strip or card?",
+              since: "2026-09-12T10:00:00Z",
+            })}
+            runId="run-1"
+          />
+        </>,
+      );
+      const banner = screen.getByTestId("awaiting-banner");
+      expect(banner).toHaveAttribute("data-cause", "declared");
+      expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent("Question");
+      expect(screen.getByTestId("awaiting-banner-message")).toHaveTextContent(
+        "Which layout: strip or card?",
+      );
+      expect(screen.getByTestId("awaiting-banner-hint")).toHaveTextContent(/press Enter/);
+      expect(screen.getByTestId("awaiting-banner-since")).toHaveTextContent(/waiting/);
+      // A declared wait points at no completion gesture: Approve ▾ stays unringed.
+      expect(screen.getByTestId("approve-btn-menu")).toBeInTheDocument();
+      expect(screen.getByTestId("approve")).not.toHaveAttribute("data-ring");
+    });
+
+    // #870: a spectator's Enter reaches nothing until it takes control.
+    it("tells a spectator to take control to reply, and the pilot to reply below", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={awaitingNode({
+              cause: "declared",
+              message: "Which layout: strip or card?",
+              since: "2026-09-12T10:00:00Z",
+            })}
+            runId="run-1"
+          />
+        </>,
+      );
+      const hint = () => screen.getByTestId("awaiting-banner-hint");
+      expect(hint()).toHaveTextContent(/Reply in the terminal/);
+      expect(hint()).not.toHaveTextContent(/take control to reply/);
+
+      fireEvent.click(screen.getByTestId("mock-become-spectator"));
+      expect(hint()).toHaveTextContent(/take control to reply/);
+      expect(hint()).not.toHaveTextContent(/Reply in the terminal/);
+      expect(screen.getByTestId("awaiting-banner")).toHaveAttribute(
+        "data-terminal-spectating",
+        "true",
+      );
+
+      fireEvent.click(screen.getByTestId("mock-become-pilot"));
+      expect(hint()).toHaveTextContent(/Reply in the terminal/);
+    });
+
+    it("tells a spectator to take control on a completion that is not released", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={awaitingNode({
+              cause: "completion_not_released",
+              message: "Completion not released.",
+              since: "2026-09-12T10:00:00Z",
+            })}
+            runId="run-1"
+          />
+        </>,
+      );
+      fireEvent.click(screen.getByTestId("mock-become-spectator"));
+      expect(screen.getByTestId("awaiting-banner-hint")).toHaveTextContent(
+        /take control to reply/,
+      );
+    });
+
+    it("says the agent waits for you when the wait carries no message (A2)", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={awaitingNode({ cause: "declared", since: "2026-09-12T10:00:00Z" }, {
+              iterations: [
+                {
+                  iter: 1,
+                  status: "awaiting_user",
+                  started_at: null,
+                  completed_at: null,
+                  interactive: false,
+                  completion_released: false,
+                },
+              ],
+            })}
+            runId="run-1"
+          />
+        </>,
+      );
+      expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent("Awaiting you");
+      expect(screen.queryByTestId("awaiting-banner-message")).toBeNull();
+      // Non-interactive: Approve without its chevron.
+      expect(screen.queryByTestId("approve-btn-menu")).toBeNull();
+      expect(screen.getByTestId("approve-btn")).toBeInTheDocument();
+    });
+
+    it("names the wait and brings Approve to the screen, ringed, from its banner (A3)", async () => {
+      const scrollIntoView = vi.fn();
+      Element.prototype.scrollIntoView = scrollIntoView;
+      render(
+        <>
+          <NodeDetailPanel
+            node={awaitingNode({
+              cause: "completion_not_released",
+              message: "Completion not released.",
+              since: "2026-09-12T10:00:00Z",
+            })}
+            runId="run-1"
+          />
+        </>,
+      );
+      const banner = screen.getByTestId("awaiting-banner");
+      expect(banner).toHaveAttribute("data-cause", "completion_not_released");
+      expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent("Done, awaiting approval");
+      // No completion gesture in the banner any more, and no « Mark ready » anywhere.
+      expect(within(banner).queryByText("Approve")).toBeNull();
+      expect(within(banner).queryByText("Mark ready")).toBeNull();
+      expect(screen.queryByTestId("release-completion-btn")).toBeNull();
+      expect(screen.queryByText("Mark ready")).toBeNull();
+      expect(screen.getByTestId("approve")).not.toHaveAttribute("data-ring");
+
+      fireEvent.click(screen.getByTestId("awaiting-banner-show-approve"));
+      expect(screen.getByTestId("approve")).toHaveAttribute("data-ring", "true");
+      await waitFor(() => expect(screen.getByTestId("approve-btn")).toHaveFocus());
+      expect(scrollIntoView).toHaveBeenCalled();
+    });
+
+    it("points at the awaiting child and gives no Enter hint on a derived wait (C)", () => {
+      const onOpenChildRun = vi.fn();
+      render(
+        <>
+          <NodeDetailPanel
+            node={awaitingNode({
+              cause: "child_awaiting",
+              message: "child run grill-588 is awaiting you",
+              since: "2026-09-12T10:00:00Z",
+              child_run_id: "child-42",
+            })}
+            runId="run-1"
+            isOrchestratorNode
+            onOpenChildRun={onOpenChildRun}
+          />
+        </>,
+      );
+      expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent(
+        "A child run is waiting for you",
+      );
+      expect(screen.getByTestId("awaiting-banner-message")).toHaveTextContent(
+        "child run grill-588 is awaiting you",
+      );
+      expect(screen.getByTestId("awaiting-banner-hint")).not.toHaveTextContent(/press Enter/);
+      fireEvent.click(screen.getByTestId("awaiting-open-child"));
+      expect(onOpenChildRun).toHaveBeenCalledWith("child-42");
+    });
+
+    it("renders banner C when only the node rollup is lifted by a derived child wait (FP #793)", () => {
+      // The read-time overlay lifts `node.status` and serves `node.awaiting`;
+      // the iteration row may still read `running`. The banner must not gate
+      // on the iteration alone.
+      const onOpenChildRun = vi.fn();
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "awaiting_user",
+              iter: 1,
+              awaiting: {
+                cause: "child_awaiting",
+                message: "child run fp793-child2 is awaiting you",
+                since: "2026-09-12T10:00:00Z",
+                child_run_id: "child-2",
+              },
+              iterations: [
+                {
+                  iter: 1,
+                  status: "running",
+                  started_at: null,
+                  completed_at: null,
+                  interactive: true,
+                  completion_released: false,
+                },
+              ],
+            })}
+            runId="run-1"
+            isOrchestratorNode
+            onOpenChildRun={onOpenChildRun}
+          />
+        </>,
+      );
+      const banner = screen.getByTestId("awaiting-banner");
+      expect(banner).toHaveAttribute("data-cause", "child_awaiting");
+      expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent(
+        "A child run is waiting for you",
+      );
+      fireEvent.click(screen.getByTestId("awaiting-open-child"));
+      expect(onOpenChildRun).toHaveBeenCalledWith("child-2");
+    });
+
+    it("shows no banner at all for a fresh interactive node that is simply running (A0)", () => {
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "running",
+              iterations: [
+                {
+                  iter: 1,
+                  status: "running",
+                  started_at: null,
+                  completed_at: null,
+                  interactive: true,
+                  completion_released: false,
+                },
+              ],
+            })}
+            runId="run-1"
+          />
+        </>,
+      );
+      expect(screen.queryByTestId("awaiting-banner")).toBeNull();
+      expect(screen.getByTestId("approve-btn-menu")).toBeInTheDocument();
+      expect(screen.getByTestId("approve-btn")).toBeInTheDocument();
+    });
+  });
+
+  // CORE-211: one completion gesture, Approve ▾, at the right of the detail tabs.
+  describe("Approve ▾ (CORE-211)", () => {
+    const out = (port: string, missing: boolean, port_type = "markdown") => ({
+      port,
+      repeated: false,
+      port_type,
+      files: missing ? [] : [{ path: `n/iter-1/${port}/output.md`, exists: true, size: 10, frontmatter: null }],
+      missing,
+    });
+    const interactive = (over?: Partial<NodeState>) =>
+      makeNode({
+        status: "running",
+        iterations: [
+          { iter: 1, status: "running", started_at: null, completed_at: null, interactive: true, completion_released: false },
+        ],
+        ...over,
+      });
+
+    it("sits at the right of the detail tabs; the header keeps the lifecycle gestures only", () => {
+      render(<NodeDetailPanel node={interactive()} runId="run-1" />);
+      const bar = screen.getByTestId("detail-tabs-bar");
+      expect(bar).toContainElement(screen.getByTestId("approve-btn"));
+      expect(bar).toContainElement(screen.getByTestId("approve-btn-menu"));
+      // Not among the tabs, which scroll: pinned beside them.
+      expect(screen.getByTestId("detail-tabs")).not.toContainElement(screen.getByTestId("approve-btn"));
+      const header = screen.getByTestId("node-controls");
+      expect(header).not.toContainElement(screen.getByTestId("approve-btn"));
+      expect(within(header).queryByRole("button", { name: /Mark ready|Mark complete|Approve|Completion released/ })).toBeNull();
+      expect(within(header).getByRole("button", { name: "Retry" })).toBeInTheDocument();
+      expect(within(header).getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    });
+
+    it("waits for the missing outputs, naming them, in a lighter ruby; the chevron stays live", async () => {
+      fetchNodeIOMock.mockResolvedValue({ inputs: [], outputs: [out("out", true), out("final", true, "image_list")] });
+      render(<NodeDetailPanel node={interactive()} runId="run-1" />);
+      await waitFor(() => expect(screen.getByTestId("approve-btn")).toHaveAttribute("data-pending", "true"));
+      const approve = screen.getByTestId("approve-btn");
+      expect(approve).toHaveAttribute("aria-disabled", "true");
+      expect(approve).toHaveClass("d-btn--primary");
+      expect(screen.getByTestId("approve-btn-menu")).not.toHaveAttribute("aria-disabled");
+      await act(async () => {
+        fireEvent.click(approve);
+      });
+      expect(markNodeDoneMock).not.toHaveBeenCalled();
+      fireEvent.pointerDown(approve);
+      expect(await screen.findByRole("tooltip")).toHaveTextContent("Missing outputs: out, final");
+    });
+
+    it("turns clickable once the outputs are written, and Approve completes without a success banner", async () => {
+      fetchNodeIOMock.mockResolvedValue({ inputs: [], outputs: [out("out", false)] });
+      render(<NodeDetailPanel node={interactive()} runId="run-1" />);
+      await waitFor(() => expect(fetchNodeIOMock).toHaveBeenCalled());
+      const approve = screen.getByTestId("approve-btn");
+      await waitFor(() => expect(approve).not.toHaveAttribute("aria-disabled"));
+      expect(approve).not.toHaveAttribute("data-pending");
+      await act(async () => {
+        fireEvent.click(approve);
+      });
+      expect(markNodeDoneMock).toHaveBeenCalledWith("run-1", "test-node", 1);
+      expect(screen.queryByTestId("mark-complete-verdict")).toBeNull();
+      expect(screen.queryByTestId("release-verdict")).toBeNull();
+    });
+
+    it("waits, inert, until the outputs of the iteration on screen are read", async () => {
+      let resolve: (v: unknown) => void = () => {};
+      fetchNodeIOMock.mockImplementation(() => new Promise((r) => (resolve = r)));
+      render(<NodeDetailPanel node={interactive()} runId="run-1" />);
+      const approve = screen.getByTestId("approve-btn");
+      expect(approve).toHaveAttribute("data-pending", "true");
+      fireEvent.click(approve);
+      expect(markNodeDoneMock).not.toHaveBeenCalled();
+      await act(async () => resolve({ inputs: [], outputs: [out("out", false)] }));
+      await waitFor(() => expect(screen.getByTestId("approve-btn")).not.toHaveAttribute("aria-disabled"));
+    });
+
+    it("is ruby on every completable status, without a chevron off an interactive live iteration", () => {
+      for (const status of ["running", "awaiting_user", "failed"] as const) {
+        const { unmount } = render(<NodeDetailPanel node={makeNode({ status })} runId="run-1" />);
+        expect(screen.getByTestId("approve-btn")).toHaveClass("d-btn--primary");
+        expect(screen.queryByTestId("approve-btn-menu")).toBeNull();
+        unmount();
+      }
+    });
+
+    it("hides on an older iteration and on an archived Run", async () => {
+      const node = makeNode({
+        status: "awaiting_user",
+        iter: 2,
+        iterations: [
+          { iter: 1, status: "completed", started_at: null, completed_at: null },
+          { iter: 2, status: "awaiting_user", started_at: null, completed_at: null },
+        ],
+      });
+      const { unmount } = render(<NodeDetailPanel node={node} runId="run-1" />);
+      expect(screen.getByTestId("approve-btn")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: /^Iteration 2 of/ }));
+      const option = await screen.findByTestId("iter-option-1");
+      await act(async () => {
+        fireEvent.click(option);
+      });
+      expect(screen.queryByTestId("approve-btn")).toBeNull();
+      unmount();
+
+      render(<NodeDetailPanel node={interactive()} runId="run-1" isArchived />);
+      expect(screen.queryByTestId("approve-btn")).toBeNull();
+    });
+  });
+
+  describe("Mark complete verdict (#490)", () => {
+    const awaitingNode = () => makeNode({ status: "awaiting_user" });
+
+    async function clickMarkComplete() {
+      // Approve waits for the outputs of the iteration on screen to be read.
+      await waitFor(() => expect(screen.getByTestId("approve-btn")).not.toHaveAttribute("aria-disabled"));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("approve-btn"));
+      });
+    }
+
+    it("gives the button a testid so a driver need not match the copy", () => {
+      render(
+        <>
+          <NodeDetailPanel node={awaitingNode()} runId="run-1" />
+        </>,
+      );
+      expect(screen.getByTestId("approve-btn")).toBeInTheDocument();
+    });
+
+    it("shows a recoverable refusal as still-your-turn, with the missing ports", async () => {
+      markNodeDoneMock.mockResolvedValue({
+        kind: "refused",
+        slug: "missing_outputs",
+        recoverable: true,
+        message: "outputs are incomplete",
+        missing: ["review"],
+        violations: [],
+        body: {},
+      });
+      render(
+        <>
+          <NodeDetailPanel node={awaitingNode()} runId="run-1" />
+        </>,
+      );
+      await clickMarkComplete();
+      const verdict = screen.getByTestId("mark-complete-verdict");
+      expect(verdict).toHaveAttribute("data-verdict", "refused");
+      expect(verdict).toHaveAttribute("data-slug", "missing_outputs");
+      expect(verdict).toHaveAttribute("data-recoverable", "true");
+      // The prefix is load-bearing: the gating e2e spec matches /^Missing outputs:/.
+      expect(screen.getByTestId("verdict-missing-list")).toHaveTextContent(
+        "Missing outputs: review",
+      );
+      expect(verdict).toHaveTextContent("still your turn");
+    });
+
+    it("shows a terminal refusal as the-node-is-now-failed", async () => {
+      markNodeDoneMock.mockResolvedValue({
+        kind: "refused",
+        slug: "frontmatter_retry_exhausted",
+        recoverable: false,
+        message: "still did not match after the retry",
+        missing: [],
+        violations: [{ port: "review", field: "verdict", reason: "not in enum" }],
+        body: {},
+      });
+      render(
+        <>
+          <NodeDetailPanel node={awaitingNode()} runId="run-1" />
+        </>,
+      );
+      await clickMarkComplete();
+      const verdict = screen.getByTestId("mark-complete-verdict");
+      expect(verdict).toHaveAttribute("data-recoverable", "false");
+      expect(verdict).toHaveTextContent("now failed");
+      expect(screen.getByTestId("verdict-violation-list")).toHaveTextContent(
+        "review.verdict",
+      );
+    });
+
+    it("shows the transition guard's refusal, which used to display nothing at all", async () => {
+      markNodeDoneMock.mockResolvedValue({
+        kind: "refused",
+        slug: "completion_rejected",
+        recoverable: false,
+        message: "run run-1 is Failed: resume the run first",
+        missing: [],
+        violations: [],
+        body: {},
+      });
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "failed", failure_reason: "boom" })} runId="run-1" />
+        </>,
+      );
+      await clickMarkComplete();
+      // Pre-#490: read as `missing_outputs` with an empty list, gated on
+      // `length > 0`, therefore invisible. This is THE symptom of the issue.
+      expect(screen.getByTestId("mark-complete-verdict")).toHaveTextContent(
+        "resume the run first",
+      );
+    });
+
+    it("does not blink the verdict out between two consecutive clicks", async () => {
+      markNodeDoneMock.mockResolvedValue({
+        kind: "refused",
+        slug: "missing_outputs",
+        recoverable: true,
+        message: "outputs are incomplete",
+        missing: ["review"],
+        violations: [],
+        body: {},
+      });
+      render(
+        <>
+          <NodeDetailPanel node={awaitingNode()} runId="run-1" />
+        </>,
+      );
+      await clickMarkComplete();
+      expect(screen.getByTestId("mark-complete-verdict")).toBeInTheDocument();
+
+      // The second click is the one that matters: the first has nothing to erase.
+      // The handler no longer clears before awaiting, so the region always has a
+      // tenant — `pending` occupies it and each outcome overwrites it.
+      let seenEmpty = false;
+      markNodeDoneMock.mockImplementation(async () => {
+        seenEmpty = seenEmpty || screen.queryByTestId("mark-complete-verdict") === null;
+        return {
+          kind: "refused",
+          slug: "missing_outputs",
+          recoverable: true,
+          message: "outputs are incomplete",
+          missing: ["review"],
+          violations: [],
+          body: {},
+        };
+      });
+      await clickMarkComplete();
+      expect(seenEmpty).toBe(false);
+      expect(screen.getByTestId("mark-complete-verdict")).toBeInTheDocument();
+    });
+
+    it("treats a legal duplicate as nothing alarming", async () => {
+      markNodeDoneMock.mockResolvedValue({ kind: "noop", reason: "already completed" });
+      render(
+        <>
+          <NodeDetailPanel node={awaitingNode()} runId="run-1" />
+        </>,
+      );
+      await clickMarkComplete();
+      const verdict = screen.getByTestId("mark-complete-verdict");
+      expect(verdict).toHaveAttribute("data-verdict", "noop");
+      expect(verdict).toHaveAttribute("data-recoverable", "");
+    });
+
+    it("surfaces a transport breakdown instead of swallowing it into console.error", async () => {
+      markNodeDoneMock.mockRejectedValue(new Error("Failed to fetch"));
+      render(
+        <>
+          <NodeDetailPanel node={awaitingNode()} runId="run-1" />
+        </>,
+      );
+      await clickMarkComplete();
+      const verdict = screen.getByTestId("mark-complete-verdict");
+      expect(verdict).toHaveAttribute("data-verdict", "error");
+      expect(verdict).toHaveTextContent("Failed to fetch");
+    });
+
+    it("scopes the verdict to the iteration it was produced for", async () => {
+      markNodeDoneMock.mockResolvedValue({
+        kind: "refused",
+        slug: "missing_outputs",
+        recoverable: true,
+        message: "outputs are incomplete",
+        missing: ["review"],
+        violations: [],
+        body: {},
+      });
+      render(
+        <>
+          <NodeDetailPanel
+            node={makeNode({
+              status: "awaiting_user",
+              iter: 2,
+              iterations: [
+                { iter: 1, status: "completed", started_at: null, completed_at: null },
+                { iter: 2, status: "awaiting_user", started_at: null, completed_at: null },
+              ],
+            })}
+            runId="run-1"
+          />
+        </>,
+      );
+      await clickMarkComplete();
+      expect(screen.getByTestId("mark-complete-verdict")).toBeInTheDocument();
+
+      // Switching iteration must not carry a verdict that belongs to another one.
+      fireEvent.click(screen.getByRole("button", { name: /^Iteration 2 of/ }));
+      const option = await screen.findByTestId("iter-option-1");
+      await act(async () => {
+        fireEvent.click(option);
+      });
+      expect(screen.queryByTestId("mark-complete-verdict")).not.toBeInTheDocument();
+    });
+
+    describe("release completion (#764)", () => {
+      const liveInteractive = (overrides?: Partial<NodeState>) =>
+        makeNode({
+          status: "awaiting_user",
+          iterations: [
+            {
+              iter: 1,
+              status: "awaiting_user",
+              started_at: null,
+              completed_at: null,
+              interactive: true,
+              completion_released: false,
+            },
+          ],
+          ...overrides,
+        });
+
+      async function openApproveMenu() {
+        await act(async () => {
+          fireEvent.click(screen.getByTestId("approve-btn-menu"));
+        });
+        return screen.findByRole("menu", { name: "Approve options" });
+      }
+
+      it("offers « Auto-approve when ready » under the chevron only for a live interactive iteration", async () => {
+        const { rerender } = render(
+          <>
+            <NodeDetailPanel node={liveInteractive()} runId="run-1" />
+          </>,
+        );
+        expect(screen.getByTestId("approve-btn")).toBeInTheDocument();
+        const menu = await openApproveMenu();
+        expect(
+          within(menu).getByRole("menuitemcheckbox", { name: "Auto-approve when ready" }),
+        ).toHaveAttribute("aria-checked", "false");
+
+        rerender(
+          <>
+            <NodeDetailPanel
+              node={liveInteractive({
+                iterations: [
+                  {
+                    iter: 1,
+                    status: "awaiting_user",
+                    started_at: null,
+                    completed_at: null,
+                    interactive: false,
+                    completion_released: false,
+                  },
+                ],
+              })}
+              runId="run-1"
+            />
+          </>,
+        );
+        expect(screen.queryByTestId("approve-btn-menu")).not.toBeInTheDocument();
+        expect(screen.getByTestId("approve-btn")).toBeInTheDocument();
+
+        rerender(
+          <>
+            <NodeDetailPanel
+              node={liveInteractive({ status: "completed" })}
+              runId="run-1"
+            />
+          </>,
+        );
+        expect(screen.queryByTestId("approve-btn")).not.toBeInTheDocument();
+        expect(screen.queryByTestId("approve-btn-menu")).not.toBeInTheDocument();
+      });
+
+      it("arms auto-approval: the entry checked and inert, a blue dot on the chevron, no success banner", async () => {
+        const { rerender } = render(
+          <>
+            <NodeDetailPanel node={liveInteractive()} runId="run-1" />
+          </>,
+        );
+        const menu = await openApproveMenu();
+        await act(async () => {
+          fireEvent.click(within(menu).getByRole("menuitemcheckbox", { name: "Auto-approve when ready" }));
+        });
+        expect(releaseNodeCompletionMock).toHaveBeenCalledWith("run-1", "test-node", 1);
+        expect(screen.queryByTestId("release-verdict")).not.toBeInTheDocument();
+        expect(screen.getByTestId("approve-btn-menu")).not.toHaveAttribute("data-indicator");
+
+        rerender(
+          <>
+            <NodeDetailPanel
+              node={liveInteractive({
+                status: "running",
+                iterations: [
+                  {
+                    iter: 1,
+                    status: "running",
+                    started_at: null,
+                    completed_at: null,
+                    interactive: true,
+                    completion_released: true,
+                  },
+                ],
+              })}
+              runId="run-1"
+            />
+          </>,
+        );
+        expect(screen.queryByTestId("release-verdict")).not.toBeInTheDocument();
+        const chevron = screen.getByTestId("approve-btn-menu");
+        expect(chevron).toHaveAttribute("data-indicator", "true");
+        const armed = await openApproveMenu();
+        const entry = within(armed).getByRole("menuitemcheckbox", { name: "Auto-approve when ready" });
+        expect(entry).toHaveAttribute("aria-checked", "true");
+        expect(entry).toHaveAttribute("aria-disabled", "true");
+        releaseNodeCompletionMock.mockClear();
+        fireEvent.click(entry);
+        expect(releaseNodeCompletionMock).not.toHaveBeenCalled();
+      });
+
+      it("says « Arming auto-approve… » in the entry while the request runs", async () => {
+        let resolve: (v: unknown) => void = () => {};
+        releaseNodeCompletionMock.mockImplementationOnce(() => new Promise((r) => (resolve = r)));
+        render(
+          <>
+            <NodeDetailPanel node={liveInteractive()} runId="run-1" />
+          </>,
+        );
+        let menu = await openApproveMenu();
+        await act(async () => {
+          fireEvent.click(within(menu).getByRole("menuitemcheckbox", { name: "Auto-approve when ready" }));
+        });
+        menu = await openApproveMenu();
+        expect(within(menu).getByRole("menuitemcheckbox", { name: "Arming auto-approve…" })).toHaveAttribute(
+          "aria-disabled",
+          "true",
+        );
+        expect(screen.queryByTestId("release-verdict")).not.toBeInTheDocument();
+        await act(async () => resolve({ kind: "released" }));
+      });
+
+      it("reads the armed state of the iteration on screen, not of an older one", () => {
+        render(
+          <>
+            <NodeDetailPanel
+              node={liveInteractive({
+                status: "running",
+                iter: 2,
+                iterations: [
+                  {
+                    iter: 1,
+                    status: "running",
+                    started_at: null,
+                    completed_at: null,
+                    interactive: true,
+                    completion_released: true,
+                  },
+                  {
+                    iter: 2,
+                    status: "awaiting_user",
+                    started_at: null,
+                    completed_at: null,
+                    interactive: true,
+                    completion_released: false,
+                  },
+                ],
+              })}
+              runId="run-1"
+            />
+          </>,
+        );
+        // The latest iteration is on screen: not armed.
+        expect(screen.getByTestId("approve-btn-menu")).not.toHaveAttribute("data-indicator");
+      });
+    });
+  });
+
+  // #44 (core #968): the « Terminal agrandi »: identity bar, status frame,
+  // compact completion gestures, verdict popover.
+  describe("Enlarged terminal bar (#44)", () => {
+    const awaitingNode = (over?: Partial<NodeState>) =>
+      makeNode({
+        status: "awaiting_user",
+        awaiting: {
+          cause: "completion_not_released",
+          message: "Completion not released.",
+          since: "2026-09-12T10:00:00Z",
+        },
+        iterations: [
+          {
+            iter: 1,
+            status: "awaiting_user",
+            started_at: null,
+            completed_at: null,
+            interactive: true,
+            completion_released: false,
+          },
+        ],
+        ...over,
+      });
+
+    function renderEnlarged(node: NodeState, props?: { isArchived?: boolean }) {
+      const utils = render(
+        <>
+          <NodeDetailPanel node={node} runId="run-1" nodeName="design" {...props} />
+        </>,
+      );
+      // A settled node opens folded: unfold it first, as the user would.
+      const restore = screen.queryByTestId("term-restore");
+      if (restore) fireEvent.click(restore);
+      fireEvent.click(screen.getByTestId("term-expand"));
+      return utils;
+    }
+
+    const toolbar = () => within(screen.getByTestId("mock-toolbar"));
+
+    it("shows nothing extra in the split toolbar", () => {
+      render(
+        <>
+          <NodeDetailPanel node={awaitingNode()} runId="run-1" nodeName="design" />
+        </>,
+      );
+      expect(screen.queryByTestId("term-identity")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("term-approve-btn")).not.toBeInTheDocument();
+    });
+
+    it("names the node, its iteration and its status, with the frame in the status colour", () => {
+      renderEnlarged(makeNode({ status: "running", iter: 3 }));
+      const identity = within(screen.getByTestId("mock-toolbar")).getByTestId("term-identity");
+      expect(within(identity).getByTestId("term-identity-name")).toHaveTextContent("design");
+      expect(within(identity).getByTestId("iter-mark")).toHaveTextContent("Iteration 3");
+      expect(screen.getByTestId("term-identity-status")).toHaveTextContent("Running");
+      const frame = screen.getByTestId("terminal-fullsize");
+      expect(frame.style.borderColor).toContain("--color-st-running");
+      expect(frame.style.boxShadow).not.toContain("color-mix");
+    });
+
+    it("falls back to the node id when the node has no name", () => {
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(screen.getByTestId("term-identity-name")).toHaveTextContent("test-node");
+    });
+
+    it("recolours the frame and the badge live when the status changes", () => {
+      const { rerender } = renderEnlarged(makeNode({ status: "running" }));
+      expect(screen.getByTestId("terminal-fullsize").style.borderColor).toContain("--color-st-running");
+
+      rerender(
+        <>
+          <NodeDetailPanel node={awaitingNode()} runId="run-1" nodeName="design" />
+        </>,
+      );
+
+      const frame = screen.getByTestId("terminal-fullsize");
+      expect(frame.style.borderColor).toContain("--color-st-await");
+      expect(frame.style.borderColor).not.toContain("--color-st-running");
+      // The awaiting halo joins the shadow.
+      expect(frame.style.boxShadow).toContain("color-mix");
+      expect(screen.getByTestId("term-identity-status")).toHaveTextContent("Awaiting you");
+      expect(screen.getByTestId("term-identity-status")).toHaveAttribute("data-status", "awaiting_user");
+    });
+
+    const termOut = (port: string, missing: boolean) => ({
+      port,
+      repeated: false,
+      port_type: "markdown",
+      files: missing ? [] : [{ path: `n/iter-1/${port}/output.md`, exists: true, size: 10, frontmatter: null }],
+      missing,
+    });
+    const liveIteration = (status: "running" | "awaiting_user", released = false) => ({
+      iter: 1,
+      status,
+      started_at: null,
+      completed_at: null,
+      interactive: true,
+      completion_released: released,
+    });
+
+    async function openTermMenu() {
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("term-approve-btn-menu"));
+      });
+      return screen.findByRole("menu", { name: "Approve options" });
+    }
+
+    it("carries Approve ▾ in the normal size, with its label and chevron, on a running node too", async () => {
+      fetchNodeIOMock.mockResolvedValue({ inputs: [], outputs: [termOut("out", false)] });
+      renderEnlarged(makeNode({ status: "running", iterations: [liveIteration("running")] }));
+      const approve = toolbar().getByTestId("term-approve-btn");
+      expect(approve).toHaveAccessibleName("Approve");
+      expect(approve).toHaveTextContent("Approve");
+      expect(approve).toHaveClass("d-btn--primary");
+      expect(approve).not.toHaveClass("d-btn--sm");
+      const chevron = toolbar().getByTestId("term-approve-btn-menu");
+      expect(chevron).not.toHaveClass("d-btn--sm");
+      // The old compact icons are gone.
+      expect(screen.queryByTestId("term-release-completion")).toBeNull();
+      expect(screen.queryByTestId("term-mark-complete")).toBeNull();
+      await waitFor(() => expect(approve).not.toHaveAttribute("aria-disabled"));
+    });
+
+    it("greys Approve while an output is missing, naming it; the chevron stays live", async () => {
+      fetchNodeIOMock.mockResolvedValue({ inputs: [], outputs: [termOut("out", true)] });
+      renderEnlarged(makeNode({ status: "running", iterations: [liveIteration("running")] }));
+      const approve = toolbar().getByTestId("term-approve-btn");
+      await waitFor(() => expect(fetchNodeIOMock).toHaveBeenCalled());
+      await waitFor(() => expect(approve).toHaveAttribute("data-pending", "true"));
+      expect(approve).toHaveAttribute("aria-disabled", "true");
+      expect(toolbar().getByTestId("term-approve-btn-menu")).not.toHaveAttribute("aria-disabled");
+      await act(async () => {
+        fireEvent.click(approve);
+      });
+      expect(markNodeDoneMock).not.toHaveBeenCalled();
+      fireEvent.pointerDown(approve);
+      expect(await screen.findByRole("tooltip")).toHaveTextContent("Missing outputs: out");
+    });
+
+    it.each(["completed", "stale", "interrupted"] as const)("has no Approve for a %s node", (status) => {
+      renderEnlarged(makeNode({ status }), {});
+      expect(screen.queryByTestId("term-approve-btn")).not.toBeInTheDocument();
+    });
+
+    it("has no Approve on an archived run", () => {
+      renderEnlarged(awaitingNode(), { isArchived: true });
+      expect(screen.queryByTestId("term-approve-btn")).not.toBeInTheDocument();
+    });
+
+    it("has no chevron when the iteration cannot be released (not interactive)", () => {
+      renderEnlarged(
+        awaitingNode({
+          iterations: [
+            {
+              iter: 1,
+              status: "awaiting_user",
+              started_at: null,
+              completed_at: null,
+              interactive: false,
+              completion_released: false,
+            },
+          ],
+        }),
+      );
+      expect(screen.queryByTestId("term-approve-btn-menu")).not.toBeInTheDocument();
+      expect(screen.getByTestId("term-approve-btn")).toBeInTheDocument();
+    });
+
+    it("arms Auto-approve through the panel's path, says so in a popover, then checks the entry", async () => {
+      let resolveRelease: (v: { kind: "released" }) => void = () => {};
+      releaseNodeCompletionMock.mockReturnValue(
+        new Promise((resolve) => {
+          resolveRelease = resolve;
+        }),
+      );
+      const { rerender } = renderEnlarged(awaitingNode());
+      const menu = await openTermMenu();
+      await act(async () => {
+        fireEvent.click(within(menu).getByRole("menuitemcheckbox", { name: "Auto-approve when ready" }));
+      });
+      expect(releaseNodeCompletionMock).toHaveBeenCalledWith("run-1", "test-node", 1);
+      const popover = screen.getByTestId("term-gesture-popover");
+      expect(screen.getByTestId("terminal-fullsize")).toContainElement(popover);
+      expect(within(popover).getByTestId("release-verdict")).toHaveAttribute("data-verdict", "pending");
+      expect(within(popover).getByTestId("release-verdict")).toHaveTextContent("Arming auto-approve…");
+      await act(async () => {
+        resolveRelease({ kind: "released" });
+      });
+
+      // The daemon's push: the iteration is released and runs again.
+      rerender(
+        <>
+          <NodeDetailPanel
+            node={makeNode({ status: "running", iterations: [liveIteration("running", true)] })}
+            runId="run-1"
+            nodeName="design"
+          />
+        </>,
+      );
+      // The release does not close the enlarged view; the frame follows.
+      const frame = screen.getByTestId("terminal-fullsize");
+      expect(frame.style.borderColor).toContain("--color-st-running");
+      const released = within(screen.getByTestId("term-gesture-popover")).getByTestId("release-verdict");
+      expect(released).toHaveAttribute("data-verdict", "released");
+      expect(released).toHaveTextContent("Auto-approve armed");
+      // The blue dot on the chevron, the entry checked and inert.
+      expect(screen.getByTestId("term-approve-btn-menu")).toHaveAttribute("data-indicator", "true");
+      const armed = await openTermMenu();
+      const entry = within(armed).getByRole("menuitemcheckbox", { name: "Auto-approve when ready" });
+      expect(entry).toHaveAttribute("aria-checked", "true");
+      expect(entry).toHaveAttribute("aria-disabled", "true");
+    });
+
+    it("keeps the entry checked when the view collapses back to the panel", async () => {
+      renderEnlarged(makeNode({ status: "running", iterations: [liveIteration("running", true)] }));
+      expect(screen.getByTestId("term-approve-btn-menu")).toHaveAttribute("data-indicator", "true");
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(screen.queryByTestId("term-approve-btn")).toBeNull();
+      expect(screen.getByTestId("approve-btn-menu")).toHaveAttribute("data-indicator", "true");
+    });
+
+    it("approves through the panel's path and shows a refusal in the popover", async () => {
+      fetchNodeIOMock.mockResolvedValue({ inputs: [], outputs: [termOut("out", false)] });
+      markNodeDoneMock.mockResolvedValue({
+        kind: "refused",
+        slug: "frontmatter_mismatch",
+        recoverable: true,
+        message: "the output guard rejected the artifacts",
+        missing: [],
+        violations: [{ port: "out", field: "mockup_link", reason: "missing required field" }],
+        body: {},
+      });
+      renderEnlarged(awaitingNode());
+      const approve = screen.getByTestId("term-approve-btn");
+      await waitFor(() => expect(approve).not.toHaveAttribute("aria-disabled"));
+      await act(async () => {
+        fireEvent.click(approve);
+      });
+      expect(markNodeDoneMock).toHaveBeenCalledWith("run-1", "test-node", 1);
+      const popover = screen.getByTestId("term-gesture-popover");
+      const verdict = within(popover).getByTestId("mark-complete-verdict");
+      expect(verdict).toHaveAttribute("data-verdict", "refused");
+      expect(verdict).toHaveTextContent("out.mockup_link: missing required field");
+    });
+
+    it("closes the popover on a press elsewhere, and when the view collapses", async () => {
+      fetchNodeIOMock.mockResolvedValue({ inputs: [], outputs: [termOut("out", false)] });
+      markNodeDoneMock.mockResolvedValue({
+        kind: "refused",
+        slug: null,
+        recoverable: true,
+        message: "nope",
+        missing: [],
+        violations: [],
+        body: {},
+      });
+      renderEnlarged(awaitingNode());
+      await waitFor(() => expect(screen.getByTestId("term-approve-btn")).not.toHaveAttribute("aria-disabled"));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("term-approve-btn"));
+      });
+      const popover = screen.getByTestId("term-gesture-popover");
+      // A press inside keeps it.
+      fireEvent.pointerDown(popover);
+      expect(screen.getByTestId("term-gesture-popover")).toBeInTheDocument();
+
+      fireEvent.pointerDown(screen.getByTestId("tmux-terminal"));
+      expect(screen.queryByTestId("term-gesture-popover")).not.toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("term-approve-btn"));
+      });
+      expect(screen.getByTestId("term-gesture-popover")).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(screen.queryByTestId("term-gesture-popover")).not.toBeInTheDocument();
+    });
+
+    it("never remounts the terminal across every way in and out", () => {
+      render(
+        <>
+          <NodeDetailPanel node={awaitingNode()} runId="run-1" nodeName="design" />
+        </>,
+      );
+      const first = screen.getByTestId("tmux-terminal");
+
+      fireEvent.click(screen.getByTestId("term-expand"));
+      act(() => {
+        (document.activeElement as HTMLElement | null)?.blur();
+      });
+      fireEvent.keyDown(document.body, { key: "Escape" });
+
+      fireEvent.click(screen.getByTestId("term-expand"));
+      const backdrop = screen.getByTestId("terminal-overlay-backdrop");
+      fireEvent.pointerDown(backdrop);
+      fireEvent.pointerUp(backdrop);
+
+      expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
+      expect(screen.getByTestId("tmux-terminal")).toBe(first);
+      expect(tmuxMountCount.current).toBe(1);
+      expect(tmuxUnmountCount.current).toBe(0);
+    });
+
+    it("turns the app's panel resizing off while enlarged", () => {
+      const { unmount } = render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </>,
+      );
+      expect(useTerminalOverlayStore.getState().openCount).toBe(0);
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(useTerminalOverlayStore.getState().openCount).toBe(1);
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(useTerminalOverlayStore.getState().openCount).toBe(0);
+
+      // Unmounting while enlarged (another node selected) releases it too.
+      fireEvent.click(screen.getByTestId("term-expand"));
+      unmount();
+      expect(useTerminalOverlayStore.getState().openCount).toBe(0);
+    });
+
+    it("works the same for a spectator", () => {
+      renderEnlarged(makeNode({ status: "running" }));
+      fireEvent.click(screen.getByTestId("mock-become-spectator"));
+      expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
+      expect(screen.getByTestId("term-identity")).toBeInTheDocument();
+    });
+  });
+
+  describe("copy raw file from a port row (#41)", () => {
+    function setClipboard(writeText: (text: string) => Promise<void>) {
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText },
+        configurable: true,
+        writable: true,
+      });
+    }
+
+    function port(
+      name: string,
+      files: { path: string; exists: boolean }[],
+      port_type?: "markdown" | "html" | "image" | "image_list",
+    ) {
+      return {
+        port: name,
+        repeated: false,
+        port_type,
+        files: files.map((f) => ({ ...f, size: 10, frontmatter: null })),
+      };
+    }
+
+    function ioFor(iter: number) {
+      return {
+        inputs: [port("task", [{ path: `n/iter-${iter}/task/output.md`, exists: true }])],
+        outputs: [
+          port("summary", [{ path: `n/iter-${iter}/summary/output.md`, exists: true }]),
+          port("report", [{ path: `n/iter-${iter}/report/output.html`, exists: true }], "html"),
+          port("shot", [{ path: `n/iter-${iter}/shot/output.png`, exists: true }], "image"),
+          port("missing", [{ path: `n/iter-${iter}/missing/output.md`, exists: false }]),
+        ],
+      };
+    }
+
+    function renderPanel(overrides?: Partial<NodeState>) {
+      return render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "completed", ...overrides })} runId="run-1" />
+        </>,
+      );
+    }
+
+    function row(name: string) {
+      return document.querySelector(
+        `[data-testid="port-row"][data-kind="output"][data-port="${name}"]`,
+      ) as HTMLElement;
+    }
+
+    beforeEach(() => {
+      fetchArtifactMock.mockReset();
+      fetchArtifactMock.mockImplementation(async (_run: string, path: string) => `---\nk: v\n---\nraw ${path}`);
+      fetchNodeIOMock.mockImplementation(async (_run: string, _node: string, iter: number) => ioFor(iter));
+    });
+
+    it("offers a « Copy raw file » button on markdown and html output rows only", async () => {
+      renderPanel();
+      await act(async () => {});
+      expect(within(row("summary")).getByRole("button", { name: "Copy raw file" })).toBeInTheDocument();
+      expect(within(row("report")).getByTestId("port-copy")).toBeInTheDocument();
+      expect(within(row("shot")).queryByTestId("port-copy")).not.toBeInTheDocument();
+      expect(within(row("missing")).queryByTestId("port-copy")).not.toBeInTheDocument();
+      const input = document.querySelector('[data-testid="port-row"][data-kind="input"]') as HTMLElement;
+      expect(within(input).queryByTestId("port-copy")).not.toBeInTheDocument();
+    });
+
+    it("copies the raw main file of the shown iter without opening the modal", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      setClipboard(writeText);
+      renderPanel();
+      await act(async () => {});
+
+      await act(async () => {
+        fireEvent.click(within(row("summary")).getByTestId("port-copy"));
+      });
+      expect(fetchArtifactMock).toHaveBeenCalledWith("run-1", "n/iter-1/summary/output.md");
+      expect(writeText).toHaveBeenCalledWith("---\nk: v\n---\nraw n/iter-1/summary/output.md");
+      expect(within(row("summary")).getByText("Copied!")).toBeInTheDocument();
+      expect(screen.queryByTestId("artifact-modal")).not.toBeInTheDocument();
+    });
+
+    it("the row's open target still opens the modal", async () => {
+      renderPanel();
+      await act(async () => {});
+      fireEvent.click(within(row("summary")).getByTestId("port-row-open"));
+      expect(screen.getByTestId("artifact-modal")).toHaveAttribute("data-port", "summary");
+    });
+
+    it("copies the iter picked in the panel's selector", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      setClipboard(writeText);
+      renderPanel({
+        iter: 2,
+        iterations: [
+          { iter: 1, status: "completed", started_at: null, completed_at: null },
+          { iter: 2, status: "completed", started_at: null, completed_at: null },
+        ],
+      });
+      await act(async () => {});
+      fireEvent.click(screen.getByRole("button", { name: /^Iteration 2 of/ }));
+      fireEvent.click(await screen.findByTestId("iter-option-1"));
+      await act(async () => {});
+
+      await act(async () => {
+        fireEvent.click(within(row("summary")).getByTestId("port-copy"));
+      });
+      expect(writeText).toHaveBeenCalledWith("---\nk: v\n---\nraw n/iter-1/summary/output.md");
+    });
+
+    it("shows Copy failed (never Copied!) when the clipboard refuses", async () => {
+      setClipboard(vi.fn().mockRejectedValue(new DOMException("NotAllowedError")));
+      renderPanel();
+      await act(async () => {});
+      await act(async () => {
+        fireEvent.click(within(row("summary")).getByTestId("port-copy"));
+      });
+      expect(within(row("summary")).getByText("Copy failed")).toBeInTheDocument();
+      expect(screen.queryByText("Copied!")).not.toBeInTheDocument();
+    });
+  });
+});
+
+// ADR-0064: the Orchestration tab and the waiting banner follow the node's real
+// child runs, Orchestrator toggle or not.
+describe("NodeDetailPanel of a parent node (ADR-0064)", () => {
+  function serveChildren(children: Array<{ run_id: string; status: string }>) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const body = String(url).endsWith("/children")
+          ? { run_id: "run-1", nodes: children.length > 0 ? [{ node_id: "test-node", children }] : [] }
+          : {};
+        return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+      }),
+    );
+  }
+  const waitingNode = () =>
+    makeNode({
+      status: "awaiting_user",
+      awaiting: { cause: "children_pending", since: "2026-09-12T10:00:00Z" },
+      iterations: [
+        { iter: 1, status: "awaiting_user", started_at: null, completed_at: null, interactive: false, completion_released: false },
+      ],
+    });
+
+  beforeEach(() => {
+    useGestureRightsStore.setState({ rights: NOTHING_REFUSED, viewed: null, listed: new Set() });
+    fetchNodeIOMock.mockResolvedValue({ inputs: [], outputs: [] });
+  });
+
+  it("adds the Orchestration tab on a first child, without the toggle, and keeps I/O open", async () => {
+    serveChildren([{ run_id: "child-1", status: "running" }]);
+    render(<NodeDetailPanel node={makeNode()} runId="run-1" />);
+    expect(await screen.findByTestId("detail-tab-orchestration")).toBeInTheDocument();
+    expect(screen.getByTestId("detail-tab-io")).toHaveAttribute("data-active", "true");
+    expect(screen.getByTestId("detail-tab-orchestration")).toHaveAttribute("data-active", "false");
+    expect(screen.getByTestId("tab-child-pills-running")).toHaveTextContent("1");
+    vi.unstubAllGlobals();
+  });
+
+  it("shows no Orchestration tab on a node without child nor toggle", async () => {
+    serveChildren([]);
+    render(<NodeDetailPanel node={makeNode()} runId="run-1" />);
+    await act(async () => {});
+    expect(screen.queryByTestId("detail-tab-orchestration")).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it("shows the tab from the start with the toggle, on its empty state", async () => {
+    serveChildren([]);
+    render(<NodeDetailPanel node={makeNode()} runId="run-1" isOrchestratorNode />);
+    fireEvent.click(screen.getByTestId("detail-tab-orchestration"));
+    expect(screen.getByTestId("orchestration-empty")).toHaveTextContent("No child run yet");
+    vi.unstubAllGlobals();
+  });
+
+  it("leads from the waiting banner to the Orchestration tab", async () => {
+    serveChildren([{ run_id: "child-1", status: "running" }]);
+    render(<NodeDetailPanel node={waitingNode()} runId="run-1" />);
+    expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent("Waiting on child runs");
+    fireEvent.click(await screen.findByTestId("awaiting-open-orchestration"));
+    expect(screen.getByTestId("detail-tab-orchestration")).toHaveAttribute("data-active", "true");
+    expect(screen.getAllByTestId("orchestration-child")).toHaveLength(1);
+    vi.unstubAllGlobals();
+  });
+
+  it("turns the waiting banner to the failed one once a child failed, Open leading to it", async () => {
+    serveChildren([
+      { run_id: "child-ok", status: "completed" },
+      { run_id: "child-ko", status: "failed" },
+    ]);
+    const onOpenChildRun = vi.fn();
+    render(<NodeDetailPanel node={waitingNode()} runId="run-1" onOpenChildRun={onOpenChildRun} />);
+    await waitFor(() => expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent("1 child run failed"));
+    expect(screen.getByTestId("awaiting-banner")).toHaveAttribute("data-failed-children", "1");
+    expect(screen.getByTestId("awaiting-banner-message")).toHaveTextContent("the node waits for you");
+    fireEvent.click(screen.getByTestId("awaiting-open-failed-child"));
+    expect(onOpenChildRun).toHaveBeenCalledWith("child-ko");
+    vi.unstubAllGlobals();
+  });
+});

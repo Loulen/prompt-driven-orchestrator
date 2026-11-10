@@ -30,18 +30,21 @@ import { completeDemoRun, stopDemoRun } from "./_live.mjs";
 /** A narrow window: the diff's file cards and the thread (720 px at most) fill
  *  its width, and the send bar ends inside the crop. Its height stops the
  *  frame after the commented hunk: the next file stays out of the poster. */
-const VIEWPORT = { width: 760, height: 430 };
-/** The Review toolbar's height (`grid-rows-[36px_1fr]`): the crop starts under it. */
-const TOOLBAR = 36;
-/** The send bar is sticky 8 px above the page's bottom (`bottom-2`): under it,
- *  the next file's rows scroll by, half cut. */
-const SEND_BAR_GAP = 8;
+const VIEWPORT = { width: 760, height: 462 };
+/** The Review toolbar's height, at the 100 % UI scale: two rows (the run and
+ *  its counts, then the two refs and the view switches). The crop starts under it. */
+const TOOLBAR = 68;
+/** The send bar is sticky at the page's very bottom (`.rv-sendbar`,
+ *  `bottom: 0`): the crop ends with the window. */
+const SEND_BAR_GAP = 0;
 /** The hunk and its thread, under the toolbar, from the file card's left edge
  *  to the send bar's right end, down to the send bar's bottom: ~720 px scaled
  *  up to 960. */
 const CROP = { x: 24, y: TOOLBAR + 8, width: 720, height: VIEWPORT.height - SEND_BAR_GAP - TOOLBAR - 8 };
 /** Unified view, file list closed (both remembered by the browser). */
-const LAYOUT = { "pdo.review.view": "unified", "pdo.review.list": "closed" };
+// The page at the 100 % UI scale (the front's default is 120 %): the crop and
+// the thread's line length below are measured at 1:1.
+const LAYOUT = { "pdo.review.view": "unified", "pdo.review.list": "closed", "pdo.ui.scale": "100" };
 /** Where the commented line sits on screen: a few lines of its hunk above it,
  *  the editor, the comment and the answer unfolding below it. */
 const LINE_TOP = CROP.y + 74;

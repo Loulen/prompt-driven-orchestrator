@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { shouldAutoSnapToLiveNode } from "./autoSnap";
-import type { SelectionKind } from "../stores/editStore";
-import type { RunStatus } from "../types";
+import type { SelectionKind } from "../pipeline/store/editState";
+import type { RunStatus } from "../shared/generated/RunStatus";
 
 describe("shouldAutoSnapToLiveNode", () => {
   it("snaps on a running/awaiting run with nothing selected", () => {

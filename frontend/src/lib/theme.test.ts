@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
-  loadThemePreference,
-  saveThemePreference,
-  resolveTheme,
+  applyThemeChoice,
+  currentMode,
+  loadThemeChoice,
+  saveMode,
+  saveTheme,
   systemPrefersDark,
-  applyResolvedTheme,
-  currentTheme,
 } from "./theme";
 
 beforeEach(() => {
@@ -17,57 +17,100 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("theme preference — persistence (#759)", () => {
-  it("round-trips each of the three preferences", () => {
-    for (const pref of ["light", "dark", "system"] as const) {
-      saveThemePreference(pref);
-      expect(loadThemePreference()).toBe(pref);
+describe("Theme and Dark mode: persistence (ADR-0093)", () => {
+  it("default to Acogni and dark when nothing is stored", () => {
+    expect(loadThemeChoice(false)).toEqual({ theme: "acogni", mode: "dark" });
+  });
+
+  it("round-trip each Theme and each mode, independently", () => {
+    for (const theme of ["acogni", "classic"] as const) {
+      for (const mode of ["dark", "light"] as const) {
+        saveTheme(theme);
+        saveMode(mode);
+        expect(loadThemeChoice()).toEqual({ theme, mode });
+      }
     }
+    expect(localStorage.getItem("pdo.ui.theme")).toBe("classic");
+    expect(localStorage.getItem("pdo.ui.mode")).toBe("light");
   });
 
-  it("persists under the pdo.ui.theme key", () => {
-    saveThemePreference("light");
-    expect(localStorage.getItem("pdo.ui.theme")).toBe("light");
-  });
-
-  it("defaults to dark when nothing is stored (#781)", () => {
-    expect(loadThemePreference()).toBe("dark");
-  });
-
-  it("defaults to dark for an unknown stored value", () => {
+  it("fall back to the default for an unknown stored value, each on its own", () => {
     localStorage.setItem("pdo.ui.theme", "solarized");
-    expect(loadThemePreference()).toBe("dark");
+    localStorage.setItem("pdo.ui.mode", "light");
+    expect(loadThemeChoice()).toEqual({ theme: "acogni", mode: "light" });
+    localStorage.setItem("pdo.ui.theme", "classic");
+    localStorage.setItem("pdo.ui.mode", "dim");
+    expect(loadThemeChoice()).toEqual({ theme: "classic", mode: "dark" });
   });
 
-  it("degrades to dark when getItem throws (private mode)", () => {
+  it("rewrite an unknown stored value as the default, as a migrated one is", () => {
+    localStorage.setItem("pdo.ui.theme", "garbage");
+    localStorage.setItem("pdo.ui.mode", "light");
+    expect(loadThemeChoice()).toEqual({ theme: "acogni", mode: "light" });
+    expect([localStorage.getItem("pdo.ui.theme"), localStorage.getItem("pdo.ui.mode")]).toEqual(["acogni", "light"]);
+    localStorage.setItem("pdo.ui.mode", "dim");
+    loadThemeChoice();
+    expect(localStorage.getItem("pdo.ui.mode")).toBe("dark");
+  });
+
+  it("write nothing when nothing is stored", () => {
+    loadThemeChoice();
+    expect([localStorage.getItem("pdo.ui.theme"), localStorage.getItem("pdo.ui.mode")]).toEqual([null, null]);
+  });
+
+  it("degrade to the defaults when the store throws (private mode)", () => {
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new Error("SecurityError");
     });
-    expect(loadThemePreference()).toBe("dark");
+    expect(loadThemeChoice()).toEqual({ theme: "acogni", mode: "dark" });
   });
 
-  it("swallows a throwing setItem (quota / disabled) without raising", () => {
+  it("swallow a throwing setItem (quota / disabled) without raising", () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("QuotaExceededError");
     });
-    expect(() => saveThemePreference("dark")).not.toThrow();
+    expect(() => saveTheme("classic")).not.toThrow();
+    expect(() => saveMode("light")).not.toThrow();
   });
 });
 
-describe("theme resolution — system defers to the OS (#759)", () => {
-  it("pins light and dark whatever the OS says", () => {
-    expect(resolveTheme("light", true)).toBe("light");
-    expect(resolveTheme("light", false)).toBe("light");
-    expect(resolveTheme("dark", true)).toBe("dark");
-    expect(resolveTheme("dark", false)).toBe("dark");
+describe("migration of the preference stored before 2.68", () => {
+  it("keeps light and dark as the mode, under the Acogni Theme", () => {
+    for (const mode of ["light", "dark"] as const) {
+      for (const osDark of [true, false]) {
+        localStorage.clear();
+        localStorage.setItem("pdo.ui.theme", mode);
+        expect(loadThemeChoice(osDark)).toEqual({ theme: "acogni", mode });
+      }
+    }
   });
 
-  it("follows the OS when the preference is system", () => {
-    expect(resolveTheme("system", true)).toBe("dark");
-    expect(resolveTheme("system", false)).toBe("light");
+  it("turns System into the mode the OS asks for at the migration", () => {
+    localStorage.setItem("pdo.ui.theme", "system");
+    expect(loadThemeChoice(false)).toEqual({ theme: "acogni", mode: "light" });
+    localStorage.setItem("pdo.ui.theme", "system");
+    expect(loadThemeChoice(true)).toEqual({ theme: "acogni", mode: "dark" });
   });
 
-  it("reads prefers-color-scheme: dark for the OS answer", () => {
+  it("stores the result, so a later change of the OS no longer moves it", () => {
+    localStorage.setItem("pdo.ui.theme", "system");
+    loadThemeChoice(false);
+    expect(localStorage.getItem("pdo.ui.theme")).toBe("acogni");
+    expect(localStorage.getItem("pdo.ui.mode")).toBe("light");
+    expect(loadThemeChoice(true)).toEqual({ theme: "acogni", mode: "light" });
+  });
+
+  it("migrates even when the store refuses the write, for this session", () => {
+    localStorage.setItem("pdo.ui.theme", "light");
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("QuotaExceededError");
+    });
+    expect(loadThemeChoice()).toEqual({ theme: "acogni", mode: "light" });
+  });
+});
+
+describe("the OS answer", () => {
+  it("reads prefers-color-scheme: dark", () => {
     vi.stubGlobal(
       "matchMedia",
       vi.fn((q: string) => ({ matches: q.includes("dark"), media: q })),
@@ -77,45 +120,31 @@ describe("theme resolution — system defers to the OS (#759)", () => {
     expect(systemPrefersDark()).toBe(false);
   });
 
-  it("stays dark when matchMedia is unavailable (preserves the existing look)", () => {
+  it("is dark when matchMedia is unavailable", () => {
     vi.stubGlobal("matchMedia", undefined);
     expect(systemPrefersDark()).toBe(true);
   });
 });
 
-describe("theme application — the root element carries the resolved theme (#759)", () => {
-  it("stamps data-theme with the resolved value, never with 'system'", () => {
+describe("the attributes of the document", () => {
+  it("carry the Theme on data-theme and the mode on data-mode, with color-scheme", () => {
     const root = document.documentElement;
-    applyResolvedTheme("light", root);
-    expect(root.getAttribute("data-theme")).toBe("light");
-    applyResolvedTheme("dark", root);
-    expect(root.getAttribute("data-theme")).toBe("dark");
-  });
-
-  it("sets color-scheme so native widgets and scrollbars follow", () => {
-    const root = document.documentElement;
-    applyResolvedTheme("light", root);
+    applyThemeChoice({ theme: "classic", mode: "light" }, root);
+    expect(root.getAttribute("data-theme")).toBe("classic");
+    expect(root.getAttribute("data-mode")).toBe("light");
     expect(root.style.colorScheme).toBe("light");
-    applyResolvedTheme("dark", root);
+    applyThemeChoice({ theme: "acogni", mode: "dark" }, root);
+    expect(root.getAttribute("data-theme")).toBe("acogni");
+    expect(root.getAttribute("data-mode")).toBe("dark");
     expect(root.style.colorScheme).toBe("dark");
   });
-});
 
-describe("currentTheme — what is painted right now (#759)", () => {
-  it("reads back what applyResolvedTheme stamped", () => {
-    applyResolvedTheme("light");
-    expect(currentTheme()).toBe("light");
-    applyResolvedTheme("dark");
-    expect(currentTheme()).toBe("dark");
-  });
-
-  it("answers dark when nothing has been stamped, matching the historical look", () => {
-    document.documentElement.removeAttribute("data-theme");
-    expect(currentTheme()).toBe("dark");
-  });
-
-  it("answers dark for a value it does not recognise", () => {
-    document.documentElement.setAttribute("data-theme", "sepia");
-    expect(currentTheme()).toBe("dark");
+  it("read back the mode painted, dark when none or an unknown one", () => {
+    applyThemeChoice({ theme: "classic", mode: "light" });
+    expect(currentMode()).toBe("light");
+    document.documentElement.removeAttribute("data-mode");
+    expect(currentMode()).toBe("dark");
+    document.documentElement.setAttribute("data-mode", "sepia");
+    expect(currentMode()).toBe("dark");
   });
 });

@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { cascadableTwin, isStarred, libraryOnly, libraryTwins } from "./libraryTwins";
-import type { LibraryPipelineEntry, LibraryPipelineScope } from "../api";
-import type { PipelineListEntry, PipelineScope } from "../types";
+import type { LibraryPipelineEntry, LibraryPipelineScope } from "../pipeline/api/libraryPipelines";
+import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
+import type { PipelineScope } from "../pipeline/model/pipeline";
+import { legacyScope } from "../test/legacy";
 
 function lib(
   id: string,
@@ -28,11 +30,12 @@ function working(
   return {
     id,
     name,
-    scope,
+    scope: legacyScope(scope),
     path: `/repo/.pdo/pipelines/${id}.yaml`,
     node_count: 3,
     modified: null,
     variables: {},
+    prompt_required: true, validation: { kind: "all" },
   };
 }
 

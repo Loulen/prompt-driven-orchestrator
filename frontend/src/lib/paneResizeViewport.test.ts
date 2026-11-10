@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reframeOnPaneResize } from "./paneResizeViewport";
+import { MOUNT_FIT_WINDOW_MS, paneResizeAction, reframeOnPaneResize } from "./paneResizeViewport";
 
 describe("reframeOnPaneResize (#949)", () => {
   it("keeps the graph's visual centre when the pane unfolds", () => {
@@ -80,5 +80,52 @@ describe("reframeOnPaneResize (#949)", () => {
   it("does not bound the pan when the pane folds back", () => {
     const graph = { x: 0, y: 0, width: 500, height: 100 };
     expect(reframeOnPaneResize({ x: 0, y: 0, zoom: 1 }, 800, 1400, 600, null, graph).x).toBe(300);
+  });
+});
+
+describe("paneResizeAction (#949, FP iteration 2 of #43)", () => {
+  const base = { prevWidth: 1358, width: 958, msSinceMount: 5000, paneToggled: false };
+
+  it("ignores a zero width, and a first measure once the mount window is over", () => {
+    expect(paneResizeAction({ ...base, prevWidth: null })).toBeNull();
+    expect(paneResizeAction({ ...base, prevWidth: null, width: 0, msSinceMount: 0 })).toBeNull();
+    expect(paneResizeAction({ ...base, width: 0, msSinceMount: 0 })).toBeNull();
+    expect(paneResizeAction({ ...base, prevWidth: 0, paneToggled: true })).toBeNull();
+  });
+
+  it("ignores a measure that did not change the width", () => {
+    expect(paneResizeAction({ ...base, width: 1358, msSinceMount: 0, paneToggled: true })).toBeNull();
+  });
+
+  it("fits the view again when the canvas narrows right after it mounted", () => {
+    // Opening a run with no tab mounts the canvas while the run pane unfolds:
+    // React Flow's initial fit may have measured the full width.
+    expect(paneResizeAction({ ...base, msSinceMount: 40 })).toBe("fit");
+    expect(paneResizeAction({ ...base, msSinceMount: 40, paneToggled: true })).toBe("fit");
+  });
+
+  it("fits the view on the first measure inside the mount window", () => {
+    // #43 (FP iteration 2): the run pane may have unfolded before the observer
+    // started, so no width change is ever seen — while React Flow measured the
+    // nodes, and fitted them, before its own width caught up.
+    expect(paneResizeAction({ ...base, prevWidth: null, msSinceMount: 40 })).toBe("fit");
+  });
+
+  it("re-frames, without fitting, on a pane toggle once the mount window is over", () => {
+    expect(paneResizeAction({ ...base, msSinceMount: MOUNT_FIT_WINDOW_MS, paneToggled: true })).toBe("reframe");
+  });
+
+  it("fits again on a pane toggle while the view is still the fit nobody moved", () => {
+    // A graph fitted on the full-width canvas does not fit beside the pane: a
+    // half-width pan keeps its zoom, and its right end lands under the pane.
+    expect(
+      paneResizeAction({ ...base, msSinceMount: MOUNT_FIT_WINDOW_MS, paneToggled: true, viewFitted: true }),
+    ).toBe("fit");
+    // Not on a drag of the handle or a window resize: React Flow's anchoring stays.
+    expect(paneResizeAction({ ...base, msSinceMount: MOUNT_FIT_WINDOW_MS + 1, viewFitted: true })).toBeNull();
+  });
+
+  it("leaves a later drag or window resize to React Flow's own anchoring", () => {
+    expect(paneResizeAction({ ...base, msSinceMount: MOUNT_FIT_WINDOW_MS + 1 })).toBeNull();
   });
 });

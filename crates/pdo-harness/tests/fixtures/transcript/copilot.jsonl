@@ -1,0 +1,12 @@
+{"type":"session.start","data":{"selectedModel":"gpt-5.6-sol","reasoningEffort":"medium"},"id":"e0","timestamp":"2026-10-19T10:42:00.000Z","parentId":null}
+{"type":"system.message","data":{"content":"You are the GitHub Copilot CLI.","role":"system"},"id":"e1","timestamp":"2026-10-19T10:42:00.100Z","parentId":"e0"}
+{"type":"user.message","data":{"content":"Implement the search filter described in spec.md.","transformedContent":"<x>Implement</x>","interactionId":"i1"},"id":"e2","timestamp":"2026-10-19T10:42:03.000Z","parentId":"e1"}
+{"type":"assistant.turn_start","data":{"turnId":"0"},"id":"e3","timestamp":"2026-10-19T10:42:04.000Z","parentId":"e2"}
+{"type":"assistant.message","data":{"messageId":"m1","model":"gpt-5.6-sol","content":"","reasoningText":"SECRET-THOUGHT read the spec first","reasoningOpaque":"b64","toolRequests":[{"toolCallId":"call_view","name":"view","arguments":{"path":"/repo/spec.md"},"type":"function"},{"toolCallId":"call_grep","name":"grep","arguments":{"pattern":"useSearch"},"type":"function"}]},"id":"e4","timestamp":"2026-10-19T10:42:06.000Z","parentId":"e3"}
+{"type":"tool.execution_start","data":{"toolCallId":"call_view","toolName":"view","arguments":{"path":"/repo/spec.md"}},"id":"e5","timestamp":"2026-10-19T10:42:06.100Z","parentId":"e4"}
+{"type":"tool.execution_complete","data":{"toolCallId":"call_view","success":true,"result":{"content":"# Spec\nAdd a debounce."}},"id":"e6","timestamp":"2026-10-19T10:42:06.200Z","parentId":"e5"}
+{"type":"tool.execution_complete","data":{"toolCallId":"call_grep","success":false,"error":{"message":"Path does not exist","code":"failure"}},"id":"e7","timestamp":"2026-10-19T10:42:06.300Z","parentId":"e5"}
+{"type":"assistant.message","data":{"messageId":"m2","model":"gpt-5.6-sol","content":"The spec asks for a debounce on the input.","reasoningText":"SECRET-THOUGHT done","toolRequests":[]},"id":"e8","timestamp":"2026-10-19T10:43:40.000Z","parentId":"e7"}
+{"type":"assistant.turn_end","data":{"turnId":"0"},"id":"e9","timestamp":"2026-10-19T10:43:41.000Z","parentId":"e8"}
+{"type":"user.message","data":{"content":"Only to typing."},"id":"e10","timestamp":"2026-10-19T10:53:05.000Z","parentId":"e9"}
+{"type":"session.usage_checkpoint","data":{"totalNanoAiu":2823580000},"id":"e11","timestamp":"2026-10-19T10:53:06.000Z","parentId":"e10"}

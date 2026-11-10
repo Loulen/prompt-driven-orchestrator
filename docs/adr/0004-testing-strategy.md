@@ -1,5 +1,7 @@
 # Pyramide de tests inversée + agent en couche 5
 
+> **Superseded by ADR-0080** : pyramide de tests en six étages, use cases testés avec des adaptateurs en mémoire.
+
 **Aucune AC n'est fermée sans un test de couche ≥ 3 : le centre de gravité est l'intégration réelle, pas l'unitaire.** 186 unit tests verts n'avaient rien empêché — au premier lancement du binaire, bundle frontend stale, session tmux morte à la naissance, Edit mode qui s'écrasait tout seul. Chaque slice avait validé son module en isolation, jamais l'effet utilisateur. La règle est écrite ici, **pas enforcée par CI** : elle dépend de la review humaine.
 
 1. **Unit** (`#[cfg(test)]` inline) — logique pure : parser, condition evaluator, prompt augmenter, serializer.

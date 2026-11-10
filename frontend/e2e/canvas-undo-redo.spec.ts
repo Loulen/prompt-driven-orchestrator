@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { openPipelineForEdit } from "./helpers";
 
 // Layer 3b — canvas undo/redo (ADR-0014 / #226), the durable CI gate.
@@ -14,10 +14,9 @@ import { openPipelineForEdit } from "./helpers";
 // a clean segment whose hit area sits in the gap between the two nodes — making
 // the right-click target deterministic.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-undo-redo-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// The instance registry (`~/.pdo/pipelines`), where the daemon lists pipelines.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
@@ -29,31 +28,31 @@ nodes:
     name: Start
     type: start
     outputs:
-      - { name: user_prompt, side: right }
+      - { name: user_prompt }
     view: { x: 0, y: 100 }
   - id: alpha
     name: alpha
     type: agent
     isolated_worktree: false
     inputs:
-      - { name: in, side: left }
+      - { name: in }
     outputs:
-      - { name: out, side: right }
+      - { name: out }
     view: { x: 250, y: 100 }
   - id: beta
     name: beta
     type: agent
     isolated_worktree: false
     inputs:
-      - { name: in, side: left }
+      - { name: in }
     outputs:
-      - { name: out, side: right }
+      - { name: out }
     view: { x: 520, y: 100 }
   - id: end
     name: End
     type: end
     inputs:
-      - { name: result, side: left }
+      - { name: result }
     view: { x: 790, y: 100 }
 edges:
   - source: { node: start, port: user_prompt }
@@ -76,7 +75,7 @@ test.afterAll(async () => {
 
 test("delete edge → Ctrl+Z restores → Ctrl+Y re-deletes; toolbar reflects the stack", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   await openPipelineForEdit(page, PIPELINE_NAME);
 
@@ -94,6 +93,7 @@ test("delete edge → Ctrl+Z restores → Ctrl+Y re-deletes; toolbar reflects th
   await expect(undoBtn).toBeDisabled();
   await expect(redoBtn).toBeDisabled();
   await expect(tabTitle).toHaveText(`${PIPELINE_NAME}.yaml`);
+  await expect(tabTitle.locator("xpath=ancestor::button[1]")).not.toHaveAttribute("data-dirty", "true");
 
   // The daemon's file watcher emits one delayed `pipeline_changed` for the seed
   // file we created in beforeAll. If it lands AFTER the destructive edit (while
@@ -115,7 +115,7 @@ test("delete edge → Ctrl+Z restores → Ctrl+Y re-deletes; toolbar reflects th
 
   // Edge gone, tab dirty, undo now possible, redo still not.
   await expect(edges).toHaveCount(2);
-  await expect(tabTitle).toHaveText(`• ${PIPELINE_NAME}.yaml`);
+  await expect(tabTitle.locator("xpath=ancestor::button[1]")).toHaveAttribute("data-dirty", "true");
   await expect(undoBtn).toBeEnabled();
   await expect(redoBtn).toBeDisabled();
 

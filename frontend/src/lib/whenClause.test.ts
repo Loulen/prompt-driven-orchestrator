@@ -7,6 +7,8 @@ import {
   splitFieldKey,
   fieldKey,
   isPortlessField,
+  conditionKey,
+  inShownOrder,
   OPERATORS,
 } from "./whenClause";
 
@@ -29,9 +31,9 @@ describe("whenToRows", () => {
     ]);
   });
 
-  it("renders a boolean value as the canonical string", () => {
+  it("renders a boolean value as the canonical string, typed bool", () => {
     expect(whenToRows({ is_blocking: { eq: true } }, ONE)).toEqual([
-      { port: "out", field: "is_blocking", op: "eq", value: "true" },
+      { port: "out", field: "is_blocking", op: "eq", value: "true", valueType: "bool" },
     ]);
   });
 
@@ -43,7 +45,7 @@ describe("whenToRows", () => {
 
   it("reads the output off a qualified key on a multi-port edge (#843)", () => {
     expect(whenToRows({ "design.has_design_work": { eq: true } }, TWO)).toEqual([
-      { port: "design", field: "has_design_work", op: "eq", value: "true" },
+      { port: "design", field: "has_design_work", op: "eq", value: "true", valueType: "bool" },
     ]);
   });
 
@@ -148,6 +150,26 @@ describe("rowsToWhen", () => {
     const when = { verdict: { eq: "FAIL" }, iter: { gte: 2 } };
     expect(rowsToWhen(whenToRows(when, ONE), ONE)).toEqual(when);
   });
+
+  // The type of every value survives rows <-> clause: re-committing the rows
+  // (another condition added or edited) must not turn `true` into `"true"`,
+  // nor a numeric-looking string into a number.
+  it.each([
+    ["a bool", { has_design_work: { eq: true }, verdict: { eq: "FAIL" } }],
+    ["a false bool", { is_blocking: { neq: false } }],
+    ["an int", { attempts: { gte: 2 } }],
+    ["a float", { score: { gt: 0.75 } }],
+    ["a negative number", { delta: { lt: -3 } }],
+    ["a string that reads as a bool", { flag: { eq: "true" } }],
+    ["a string that reads as a number", { code: { eq: "42" } }],
+    ["a string that reads as a float", { ratio: { neq: "0.5" } }],
+    ["a list", { verdict: { in: ["PASS", "APPROVED"] } }],
+  ])("round-trips %s with its type", (_label, when) => {
+    expect(rowsToWhen(whenToRows(when, ONE), ONE)).toEqual(when);
+    expect(rowsToWhen(whenToRows(when, TWO), TWO)).toEqual(
+      Object.fromEntries(Object.entries(when).map(([k, v]) => [`out.${k}`, v])),
+    );
+  });
 });
 
 describe("splitFieldKey / fieldKey", () => {
@@ -207,6 +229,14 @@ describe("requalifyWhen", () => {
   });
 });
 
+describe("a `when` that is not the grammar's map", () => {
+  it("passes through a port change as written, never walked key by key", () => {
+    const when = "iter >= max" as unknown as Record<string, unknown>;
+    expect(requalifyWhen(when, ["a"], ["b"])).toBe("iter >= max");
+    expect(renameWhenPorts(when, ["a"], new Map([["a", "b"]]))).toBe("iter >= max");
+  });
+});
+
 describe("renameWhenPorts", () => {
   it("follows a renamed output rather than letting the clause jump elsewhere", () => {
     expect(
@@ -229,5 +259,22 @@ describe("renameWhenPorts", () => {
 describe("OPERATORS", () => {
   it("is the ADR-0002 mechanical predicate set", () => {
     expect(OPERATORS).toEqual(["eq", "neq", "lt", "lte", "gt", "gte", "in", "not_in"]);
+  });
+});
+
+describe("inShownOrder", () => {
+  const row = (field: string, op: "eq" | "neq" | "gte") => ({ port: "out", field, op, value: "1" });
+
+  it("puts a condition added on a used field last, not next to its field", () => {
+    const shown = [row("verdict", "eq"), row("iter", "gte"), row("verdict", "neq")];
+    const decoded = whenToRows(rowsToWhen(shown), []).map((r) => ({ ...r, port: "out" }));
+    expect(decoded.map(conditionKey)).not.toEqual(shown.map(conditionKey));
+    expect(inShownOrder(decoded, shown.map(conditionKey)).map(conditionKey)).toEqual(shown.map(conditionKey));
+  });
+
+  it("puts the rows it does not know after, in the clause's order", () => {
+    const rows = [row("a", "eq"), row("b", "eq"), row("c", "eq")];
+    expect(inShownOrder(rows, [conditionKey(rows[2])]).map((r) => r.field)).toEqual(["c", "a", "b"]);
+    expect(inShownOrder(rows, []).map((r) => r.field)).toEqual(["a", "b", "c"]);
   });
 });

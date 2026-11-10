@@ -1,0 +1,606 @@
+/*
+ * The welcome modal and the guided tours: the Acogni Driver lockup, the tour
+ * rows, the step card beside its target with its caret, the cards that open
+ * and close a tour; the update's confirm and waiting cards share their frame.
+ * Tokens only (`public/shared/tokens.css`), like the kit.
+ */
+
+@layer components {
+  /* ---------------------------------------------------------------- the lockup */
+  .tr-lockup {
+    display: flex;
+    align-items: center;
+    gap: var(--g-5);
+    margin: 0;
+    color: var(--text);
+  }
+  .tr-lockup__logo {
+    flex: none;
+    width: auto;
+    height: 26px;
+    aspect-ratio: 6970 / 2100;
+  }
+  /* PDO's lockup: its mark, then its name in Geist Mono (CORE-225). */
+  .tr-lockup--pdo {
+    gap: var(--g-4);
+  }
+  .tr-lockup__mark {
+    flex: none;
+    width: 26px;
+    height: 26px;
+  }
+  .tr-lockup__word {
+    font-family: var(--font-code);
+    font-size: calc(var(--fs-xl) * 1.5);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+  .tr-lockup__rule {
+    align-self: stretch;
+    width: 1px;
+    background: var(--line-strong);
+  }
+  .tr-lockup__product {
+    padding: var(--g-2) var(--g-4);
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    font-size: var(--fs-sm);
+    letter-spacing: var(--tracking-caps-ui);
+    text-transform: uppercase;
+  }
+
+  /* ---------------------------------------------------------------- shared frame */
+  .tr-scrim {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    background: var(--scrim);
+  }
+  .tr-frame {
+    display: flex;
+    flex-direction: column;
+    background: var(--surface-0);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-ui);
+    box-shadow: 0 12px 32px -12px var(--shadow);
+    color: var(--text);
+  }
+
+  /* ---------------------------------------------------------------- welcome */
+  .tr-welcome {
+    width: 440px;
+    max-width: calc(100% - 32px);
+    font-size: var(--fs-md);
+  }
+  .tr-welcome__brand {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--g-3);
+    padding: var(--g-7) var(--g-6) var(--g-5);
+  }
+  /* With the signature under it, the block keeps its height: the modal does not grow. */
+  .tr-welcome__brand[data-brand="pdo"] {
+    gap: var(--g-2);
+    padding-top: var(--g-5);
+    padding-bottom: var(--g-3);
+  }
+  .tr-welcome__body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--g-2);
+    padding: 0 var(--g-5) var(--g-4);
+  }
+  .tr-cap {
+    margin: var(--g-4) 0 var(--g-1);
+  }
+  .tr-foot {
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    height: 40px;
+    padding: 0 var(--g-5);
+    border-top: 1px solid var(--line);
+  }
+  .tr-full {
+    display: flex;
+    align-items: center;
+    gap: var(--g-4);
+    min-width: 0;
+    height: 36px;
+    padding: 0 var(--g-4);
+    border: 1px solid var(--selected-edge);
+    border-radius: var(--radius-ui);
+    background: var(--selected);
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .tr-full:hover {
+    background: color-mix(in oklab, var(--primary) 20%, transparent);
+  }
+  .tr-full > svg {
+    flex: none;
+    color: var(--primary);
+  }
+  .tr-full__t {
+    flex: none;
+    font-weight: var(--w-strong);
+  }
+  .tr-min {
+    flex: none;
+    color: var(--text-3);
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+    white-space: nowrap;
+  }
+  .tr-row {
+    display: flex;
+    align-items: center;
+    gap: var(--g-4);
+    width: 100%;
+    min-width: 0;
+    min-height: 40px;
+    padding: var(--g-2) var(--g-4);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-ui);
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .tr-row:hover:not(:disabled) {
+    border-color: var(--text-3);
+    background: var(--hover);
+  }
+  .tr-row:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+  .tr-row__ic {
+    flex: none;
+    color: var(--text-2);
+  }
+  .tr-row__text {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.3;
+  }
+  .tr-row__t {
+    font-weight: var(--w-medium);
+  }
+  .tr-row__x {
+    overflow: hidden;
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ---------------------------------------------------------------- step card */
+  .tr-card {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    gap: var(--g-3);
+    padding: var(--g-4) var(--g-5);
+    font-size: var(--fs-sm);
+    pointer-events: auto;
+  }
+  .tr-caret {
+    position: absolute;
+    width: 9px;
+    height: 9px;
+    border: 1px solid var(--line);
+    background: var(--surface-0);
+    transform: rotate(45deg);
+  }
+  [data-side="bottom"] > .tr-caret {
+    top: -5px;
+    left: 50%;
+    margin-left: -5px;
+    border-right: 0;
+    border-bottom: 0;
+  }
+  [data-side="top"] > .tr-caret {
+    bottom: -5px;
+    left: 50%;
+    margin-left: -5px;
+    border-top: 0;
+    border-left: 0;
+  }
+  [data-side="right"] > .tr-caret {
+    top: 50%;
+    left: -5px;
+    margin-top: -5px;
+    border-top: 0;
+    border-right: 0;
+  }
+  [data-side="left"] > .tr-caret {
+    top: 50%;
+    right: -5px;
+    margin-top: -5px;
+    border-bottom: 0;
+    border-left: 0;
+  }
+  .tr-head {
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+  }
+  .tr-name {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--primary);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tr-name--warn {
+    color: var(--color-st-await);
+  }
+  .tr-head > svg {
+    flex: none;
+  }
+  .tr-quit {
+    margin-right: -4px;
+  }
+  .tr-title {
+    color: var(--text);
+    font-size: var(--fs-md);
+    font-weight: var(--w-strong);
+    overflow-wrap: anywhere;
+  }
+  .tr-body {
+    margin: 0;
+    color: var(--text-2);
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+  /* A name the tour prepared (`my-first-run-k3x9`): the Identité de tour only
+     shows in names, so a name reads as one — bold mono, no chip, and free to
+     wrap on a narrow card rather than push it wider. */
+  .tr-body .d-code {
+    padding: 0;
+    background: none;
+    font-size: inherit;
+    font-weight: 600;
+    white-space: normal;
+  }
+  .tr-note {
+    margin: 0;
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+  .tr-check {
+    display: flex;
+    flex-direction: column;
+    gap: var(--g-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--fs-xs);
+  }
+  .tr-check li {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--g-2);
+    min-width: 0;
+    color: var(--text-3);
+  }
+  .tr-check li > svg {
+    flex: none;
+    margin-top: 2px;
+  }
+  .tr-check li[data-done="true"] {
+    color: var(--color-st-done);
+  }
+  .tr-check__text {
+    display: flex;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+  }
+  .tr-check__label {
+    min-width: 0;
+    overflow: hidden;
+    font-family: var(--font-code);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tr-check__badge {
+    padding: 0 var(--g-2);
+    border-radius: var(--radius-ui);
+    background: color-mix(in oklab, var(--color-st-failed) 14%, transparent);
+    color: var(--color-st-failed);
+    font-family: var(--font-code);
+    font-size: var(--fs-2xs);
+  }
+  .tr-check__note {
+    color: var(--color-st-await);
+  }
+  .tr-copy {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--g-2);
+    padding: var(--g-2) var(--g-2) var(--g-2) var(--g-3);
+    border: 1px solid var(--line-soft);
+    background: var(--surface-1);
+  }
+  .tr-copy pre {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    color: var(--text-2);
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .tr-wait {
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+  }
+  .tr-wait > svg {
+    flex: none;
+    color: var(--primary);
+  }
+  .tr-prog {
+    display: block;
+    height: 2px;
+    background: var(--hover);
+  }
+  .tr-prog > span {
+    display: block;
+    height: 100%;
+    background: var(--primary);
+  }
+  .tr-cfoot {
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+  }
+  /* The first ghost of the row bleeds into the card's padding: Skip alone, or
+     Previous before it (wrapped in its tooltip's `display: contents` span). */
+  .tr-cfoot > .d-btn--ghost:first-child,
+  .tr-cfoot > :first-child > .d-btn--ghost {
+    margin-left: -6px;
+  }
+  /* Wraps rather than cuts: the hint is the only word on what the step waits for. */
+  .tr-hint {
+    min-width: 0;
+    color: var(--text-3);
+    font-family: var(--font-code);
+    font-size: var(--fs-2xs);
+    line-height: 1.3;
+    text-align: right;
+  }
+
+  /* An example inside a step: a legend of the Status icon, framed as a small panel. */
+  .tr-illus {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    background: var(--surface-1);
+    list-style: none;
+  }
+  .tr-illus li {
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    height: var(--h-row);
+    padding: 0 var(--pad-x);
+    border-bottom: 1px solid var(--line-soft);
+    font-size: var(--fs-xs);
+  }
+  .tr-illus li:last-child {
+    border-bottom: 0;
+  }
+
+  /* A side note pinned beside part of a panel: no controls, pointer-transparent. */
+  .tr-aside {
+    position: absolute;
+    padding: var(--g-3) var(--g-4);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-ui);
+    background: var(--surface-2);
+    box-shadow: 0 6px 18px -6px var(--shadow);
+    color: var(--text-2);
+    font-size: var(--fs-xs);
+    line-height: 1.45;
+    pointer-events: none;
+  }
+  .tr-aside > .tr-caret {
+    background: var(--surface-2);
+  }
+
+  /* ---------------------------------------------------------------- intro, end and stop cards */
+  .tr-bcard {
+    gap: var(--g-4);
+    width: 440px;
+    max-width: calc(100% - 32px);
+    padding: var(--g-5) var(--g-5) 0;
+    font-size: var(--fs-sm);
+    pointer-events: auto;
+  }
+  /* A card with no footer keeps its bottom padding. */
+  .tr-bcard--open {
+    padding-bottom: var(--g-5);
+  }
+  .tr-bcard__title {
+    margin: 0;
+    font-size: var(--fs-xl);
+    font-weight: var(--w-strong);
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+  }
+  .tr-head .tr-bcard__title {
+    font-size: var(--fs-lg);
+  }
+  .tr-bcard > .tr-foot {
+    margin: 0 calc(-1 * var(--g-5));
+  }
+  .tr-prep {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .tr-prep li {
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    color: var(--text-3);
+  }
+  .tr-prep li > svg {
+    flex: none;
+  }
+  .tr-prep li[data-done="true"] {
+    color: var(--text-2);
+  }
+  .tr-prep li[data-done="true"] > svg {
+    color: var(--color-st-done);
+  }
+  .tr-reason {
+    margin: 0;
+    padding: var(--g-3) var(--g-4);
+    border: 1px solid var(--line-soft);
+    background: var(--surface-1);
+    color: var(--text-2);
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .tr-chain {
+    display: flex;
+    gap: 3px;
+  }
+  .tr-chain > span {
+    flex: 1;
+    height: 2px;
+    background: var(--hover);
+  }
+  .tr-chain > span[data-done="true"] {
+    background: var(--primary);
+  }
+  .tr-recap {
+    display: flex;
+    flex-direction: column;
+    gap: var(--g-2);
+    margin: 0;
+  }
+  .tr-recap > div {
+    display: grid;
+    grid-template-columns: 88px minmax(0, 1fr);
+    gap: var(--g-4);
+  }
+  /* The label wraps rather than clips: the recap is where the reader learns
+     the name of the Run they launched (FP of CORE-227). */
+  .tr-recap dt {
+    min-width: 0;
+    color: var(--text);
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+  .tr-recap dd {
+    margin: 0;
+    color: var(--text-2);
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+  .tr-tidy {
+    display: flex;
+    flex-direction: column;
+    gap: var(--g-2);
+    padding: var(--g-3) var(--g-4);
+    border: 1px solid color-mix(in oklab, var(--color-st-await) 40%, transparent);
+    background: color-mix(in oklab, var(--color-st-await) 8%, transparent);
+    font-size: var(--fs-xs);
+  }
+  .tr-tidy__t {
+    display: flex;
+    align-items: center;
+    gap: var(--g-2);
+    color: var(--color-st-await);
+    font-weight: var(--w-medium);
+  }
+  .tr-tidy pre {
+    margin: 0;
+    color: var(--text-3);
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  /* ---------------------------------------------------------------- update cards */
+  .tr-cmd {
+    display: block;
+    overflow: hidden;
+    padding: var(--g-3) var(--g-4);
+    border: 1px solid var(--line-soft);
+    background: var(--surface-1);
+    font-family: var(--font-code);
+    font-size: var(--fs-sm);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tr-facts {
+    display: flex;
+    flex-direction: column;
+    gap: var(--g-2);
+    color: var(--text-2);
+    font-size: var(--fs-sm);
+  }
+  .tr-facts > span {
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+  }
+  .tr-facts > span > svg {
+    flex: none;
+  }
+  .tr-facts > span[data-tone="await"] {
+    color: var(--color-st-await);
+  }
+  .tr-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    margin: 0 calc(-1 * var(--g-5));
+    padding: var(--g-3) var(--g-5);
+    border-top: 1px solid var(--line-soft);
+    background: color-mix(in oklab, var(--color-st-await) 8%, transparent);
+    color: var(--color-st-await);
+    font-size: var(--fs-sm);
+  }
+  .tr-banner > svg {
+    flex: none;
+  }
+}

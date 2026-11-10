@@ -1,0 +1,277 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Check, ChevronDown, Search } from "lucide-react";
+import type { RunRefs } from "../../shared/generated/RunRefs";
+import { pairOfDelivery, refById, shortSha } from "../../run/model/runRefs";
+import type { RefPair } from "../../run/model/runRefs";
+
+/**
+ * One side of the Review page's `source → destination` pair (#749, design
+ * option A): a button showing the chosen Run ref, opening a popover with the
+ * **Run** group (fork point, Run tip, Working tree while the Run's worktree
+ * exists — #835) and the **Deliveries** group — one row per
+ * node delivery, whose `before`/`after` (or `● live`) buttons pick that side,
+ * and whose header sets **both** sides to the delivery in one click.
+ *
+ * A ref already used on the other side is disabled: "same ref twice" is an
+ * empty state, not a choice worth offering.
+ */
+
+interface Props {
+  side: "from" | "to";
+  value: string;
+  /** The ref chosen on the other side (disabled here). */
+  other: string;
+  refs: RunRefs | null;
+  disabled?: boolean;
+  onPick: (id: string) => void;
+  onPickPair: (pair: RefPair) => void;
+}
+
+export default function RefPicker({ side, value, other, refs, disabled, onPick, onPickPair }: Props) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const current = refs ? refById(refs, value) : undefined;
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey, true);
+    const t = window.setTimeout(() => inputRef.current?.focus(), 0);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey, true);
+      window.clearTimeout(t);
+    };
+  }, [open]);
+
+  const q = query.trim().toLowerCase();
+  const matches = (text: string) => !q || text.toLowerCase().includes(q);
+
+  const runRefs = useMemo(
+    () => (refs ? refs.refs.filter((r) => r.kind === "fork" || r.kind === "tip" || r.kind === "worktree") : []),
+    [refs],
+  );
+
+  const close = () => {
+    setOpen(false);
+    setQuery("");
+  };
+
+  const pick = (id: string) => {
+    if (id === other) return;
+    close();
+    onPick(id);
+  };
+
+  const isNode = current && current.kind !== "fork" && current.kind !== "tip" && current.kind !== "worktree";
+  const isLive = current?.kind === "live";
+  const isWorktree = current?.kind === "worktree";
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => (open ? close() : setOpen(true))}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        data-testid={`review-${side}`}
+        data-ref={value}
+        title={current ? `${current.label}${current.sha ? ` · ${current.sha}` : ""}` : value}
+        className="rv-ref"
+      >
+        {isNode && (
+          <span className="uppercase tracking-wider text-text-3 text-2xs">
+            node
+          </span>
+        )}
+        {(isLive || isWorktree) && (
+          <span
+            className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-st-running"
+            aria-hidden
+          />
+        )}
+        <span className="rv-ref__label">{current?.label ?? (refs ? value : "…")}</span>
+        {current && (
+          <span className="rv-ref__sha">
+            {shortSha(current.sha ?? (current.kind === "live" ? current.git_ref : null))}
+          </span>
+        )}
+        <ChevronDown size={12} strokeWidth={1.5} className="rv-ref__chev" />
+      </button>
+
+      {open && refs && (
+        <div
+          role="listbox"
+          data-testid={`review-ref-popover-${side}`}
+          className="rv-refpop"
+        >
+          <div className="flex items-center gap-1.5 border-b border-line px-2 py-1.5">
+            <Search size={11} className="text-text-3" />
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Filter refs by node or sha…"
+              data-testid={`review-ref-filter-${side}`}
+              className="d-input d-input--sm flex-1"
+            />
+          </div>
+
+          <div className="py-1">
+            <div
+              className="d-caps px-2.5 pb-0.5 pt-1"
+            >
+              Run
+            </div>
+            {runRefs
+              .filter((r) => matches(`${r.label} ${r.sha ?? ""} ${r.git_ref}`))
+              .map((r) => {
+                const dis = r.id === other;
+                const sel = r.id === value;
+                return (
+                  <button
+                    key={r.id}
+                    type="button"
+                    role="option"
+                    aria-selected={sel}
+                    disabled={dis}
+                    onClick={() => pick(r.id)}
+                    data-testid={`review-ref-option-${r.id}`}
+                    title={dis ? "Already used on the other side" : r.git_ref}
+                    className={`text-xs grid w-full grid-cols-[14px_1fr_auto] items-center gap-2 px-2.5 py-1 text-left ${
+                      sel ? "bg-selected" : ""
+                    } ${dis ? "cursor-not-allowed opacity-45" : "cursor-pointer hover:bg-hover"}`}
+                  >
+                    <span className="text-primary">{sel && <Check size={11} />}</span>
+                    <span className="truncate">
+                      <span className="text-text">{r.label}</span>
+                      <span className="text-text-3 text-2xs">
+                        {" "}
+                        · {r.git_ref}
+                      </span>
+                    </span>
+                    <span className="font-mono text-text-3 text-2xs">
+                      {shortSha(r.sha)}
+                    </span>
+                  </button>
+                );
+              })}
+          </div>
+
+          <div className="border-t border-line py-1">
+            <div
+              className="d-caps flex items-center justify-between px-2.5 pb-0.5 pt-1"
+            >
+              <span>Deliveries</span>
+            </div>
+            {refs.deliveries.length === 0 && (
+              <div className="px-2.5 py-1 text-text-3 text-xs">
+                No node has delivered yet.
+              </div>
+            )}
+            {refs.deliveries
+              .filter((d) => matches(`${d.node_name} ${d.node_id} iter ${d.iter}`))
+              .map((d) => {
+                const before = refById(refs, d.before);
+                const after = d.after ? refById(refs, d.after) : undefined;
+                const live = d.live ? refById(refs, d.live) : undefined;
+                const pair = pairOfDelivery(d);
+                const sideBtn = (
+                  id: string,
+                  label: string,
+                  sha: string,
+                  liveStyle = false,
+                ) => {
+                  const dis = id === other;
+                  const sel = id === value;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      role="option"
+                      aria-selected={sel}
+                      disabled={dis}
+                      onClick={() => pick(id)}
+                      data-testid={`review-ref-option-${id}`}
+                      title={dis ? "Already used on the other side" : id}
+                      className={`text-2xs flex items-center gap-1 rounded border px-1.5 py-px ${
+                        sel
+                          ? "border-primary/30 bg-selected text-primary"
+                          : liveStyle
+                            ? "border-st-running/40 bg-st-running/14 text-st-running"
+                            : "border-line-strong bg-surface-2 text-text-3 hover:border-text-3 hover:text-text"
+                      } ${dis ? "cursor-not-allowed opacity-40" : "cursor-pointer"}`}
+                    >
+                      {liveStyle && (
+                        <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current" aria-hidden />
+                      )}
+                      {label}
+                      <span className="font-mono text-text-3">{sha}</span>
+                    </button>
+                  );
+                };
+                return (
+                  <div key={`${d.node_id}:${d.iter}`}>
+                    <button
+                      type="button"
+                      disabled={!pair}
+                      onClick={() => {
+                        if (!pair) return;
+                        close();
+                        onPickPair(pair);
+                      }}
+                      data-testid={`review-delivery-${d.node_id}-${d.iter}`}
+                      title={
+                        d.status === "delivered"
+                          ? "Review this delivery: before → after"
+                          : "Review the live branch: Run tip → live"
+                      }
+                      className="flex w-full cursor-pointer items-center gap-1.5 px-2.5 pb-px pt-0.5 text-left text-text-3 hover:bg-hover text-xs"
+                    >
+                      <span className="text-text-2">{d.node_name}</span>
+                      <span className="font-mono text-text-3 text-2xs">
+                        {d.node_id}
+                      </span>
+                      <span className="text-text-3">iter {d.iter}</span>
+                      <span
+                        className={`text-2xs rounded-full border px-1.5 ${
+                          d.status === "delivered"
+                            ? "border-primary/30 bg-selected text-primary"
+                            : "border-st-running/40 bg-st-running/14 text-st-running"
+                        }`}
+                      >
+                        {d.status}
+                      </span>
+                    </button>
+                    <div className="flex gap-1 px-2.5 pb-1 pl-8">
+                      {before && sideBtn(d.before, "before", shortSha(before.sha))}
+                      {after && d.after && sideBtn(d.after, "after", shortSha(after.sha))}
+                      {live && d.live && sideBtn(d.live, "live", live.git_ref, true)}
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+
+        </div>
+      )}
+    </div>
+  );
+}

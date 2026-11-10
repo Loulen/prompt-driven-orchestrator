@@ -8,7 +8,7 @@
 // grid (xyflow `Background`, drawn at the same pitch) which is pure chrome.
 
 import type { Point } from "./orthogonalRouter";
-import type { GridSize } from "../types";
+import type { GridSize } from "../shared/generated/GridSize";
 
 export type { GridSize };
 
@@ -19,7 +19,7 @@ export type { GridSize };
  * The step a canvas draws with is resolved by `resolveGridSize`: the pipeline's
  * own `grid_size` (stored in the file, next to the `waypoints` drawn on it, so a
  * shared pipeline renders the same everywhere) wins over the reader's global
- * default (Settings › General › Interface), which falls back to `M`.
+ * default (Settings › Appearance › Interface), which falls back to `M`.
  *
  * 40px — the #840 prototype's pick and the only step before #877 — turned out too
  * coarse in use: a node card (35px tall) was shorter than one cell, and the
@@ -48,6 +48,29 @@ export function resolveGridSize(
 /** The step, in flow px, of a grid size. */
 export function gridStep(size: GridSize): number {
   return GRID_SIZE_STEPS[size];
+}
+
+/** The smallest on-screen cell, in screen px, a gesture snaps to. */
+export const MIN_SNAP_CELL_PX = 16;
+
+/**
+ * The lattice a gesture snaps to at `zoom` (CORE-88, option A): the pipeline's
+ * step multiplied by 2, 4, 8… until one cell is at least {@link MIN_SNAP_CELL_PX}
+ * on screen. Zoomed in, it stays the pipeline's step — never a half-step — so
+ * every point a gesture places, whatever the zoom, sits on the pipeline's own
+ * lattice, and nothing persisted depends on the zoom it was drawn at (ADR-0076).
+ */
+export function snapStepAtZoom(step: number, zoom: number): { step: number; factor: number } {
+  if (!(zoom > 0) || !(step > 0)) return { step, factor: 1 };
+  let factor = 1;
+  while (step * factor * zoom < MIN_SNAP_CELL_PX && factor < 1024) factor *= 2;
+  return { step: step * factor, factor };
+}
+
+/** The cursor badge of a gesture: the multiple in use, and the cell it makes
+ *  when it is not the pipeline's own step (« snap ×4 · 120px »). */
+export function snapBadgeText(factor: number, step: number): string {
+  return factor > 1 ? `snap ×${factor} · ${step}px` : "snap ×1";
 }
 
 export type Axis = "horizontal" | "vertical";

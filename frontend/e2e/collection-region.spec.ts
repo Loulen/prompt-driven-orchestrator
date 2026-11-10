@@ -115,7 +115,7 @@ test("single-member collection region renders the ⇉ badge on the member card",
   });
 
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -144,7 +144,7 @@ test("toolbar has no ForEach add-button (fan-out is a region, not a node)", asyn
   });
 
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -152,7 +152,7 @@ test("toolbar has no ForEach add-button (fan-out is a region, not a node)", asyn
   await page.waitForTimeout(500);
 
   // The edit toolbar is present, with the add button — and no Merge button:
-  // the laps converge on the node downstream of the region (ADR-0079).
+  // the laps converge on the node downstream of the region (ADR-0082).
   await expect(page.getByTestId("edit-toolbar")).toBeVisible({ timeout: 3_000 });
   await expect(page.getByTestId("toolbar-add")).toBeVisible();
   await expect(page.getByTestId("toolbar-merge")).toHaveCount(0);
@@ -173,7 +173,7 @@ test("fan-out gesture on an eligible member creates the collection region", asyn
   });
 
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 

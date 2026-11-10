@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanupRuns } from "./helpers";
@@ -7,7 +8,8 @@ import { cleanupRuns } from "./helpers";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-recent-repos-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// The instance pipelines the daemon watches.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 const createdRunIds: string[] = [];
@@ -62,7 +64,7 @@ test("a recent repo is pre-filled when runs exist", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // Seed a run with a target_repo via API
   const resp = await page.request.post(`${baseURL}/runs`, {
@@ -80,10 +82,10 @@ test("a recent repo is pre-filled when runs exist", async ({
 
   // Re-navigate so the app fetches recent repos on mount
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // Open New Run modal
-  await page.getByRole("button", { name: "New Run" }).click();
+  await page.getByTestId("new-run-button").click();
   await expect(page.getByTestId("target-repo-input")).toBeVisible();
 
   const repoInput = page.getByTestId("target-repo-input");
@@ -101,7 +103,7 @@ test("clicking a dropdown item fills the input", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // Seed runs with two different repos
   const resp1 = await page.request.post(`${baseURL}/runs`, {
@@ -116,10 +118,10 @@ test("clicking a dropdown item fills the input", async ({
 
   // Re-navigate to pick up the store
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // Open New Run modal
-  await page.getByRole("button", { name: "New Run" }).click();
+  await page.getByTestId("new-run-button").click();
   await expect(page.getByTestId("target-repo-input")).toBeVisible();
 
   // Clear the input to see all dropdown items
@@ -145,7 +147,7 @@ test("typing non-matching path closes the dropdown", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // Seed a run
   const resp = await page.request.post(`${baseURL}/runs`, {
@@ -159,9 +161,9 @@ test("typing non-matching path closes the dropdown", async ({
   createdRunIds.push(((await resp.json()) as { run_id: string }).run_id);
 
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  await page.getByRole("button", { name: "New Run" }).click();
+  await page.getByTestId("new-run-button").click();
   await expect(page.getByTestId("target-repo-input")).toBeVisible();
 
   // Clear and type a non-matching path

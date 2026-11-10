@@ -3,8 +3,10 @@
  *
  * Order and content come from the ticket: create a pipeline, build an
  * **implementer** and a **tester**, give the tester a `verdict` enum and an
- * annotated screenshot, then wire the loop (`verdict eq fail` back to the
- * implementer, `verdict eq pass` to End), save, and decide whether to keep it.
+ * annotated screenshot, then wire Start to the implementer (CORE-241) and the
+ * loop (`verdict = fail` back to the implementer, `verdict = pass` to End),
+ * save, validate it for the projects that should see it, and decide whether to
+ * keep it.
  *
  * Copy rules the implementer of a new step must keep (design round 1):
  * - Title is an imperative, body is two sentences at most.
@@ -14,289 +16,32 @@
  *   it will wait on your answers along the way.
  */
 
-import type { EdgeDef, NodeDef, PipelineDef } from "../../types";
-import type { TourAppState, TourDef, TourObservation, TourStep } from "../tour";
-import { carriedPorts, carries } from "../edgePorts";
-import { splitFieldKey } from "../whenClause";
-import { withTourIdentity } from "../tourMemory";
+import type { TourDef, TourStep } from "../tourDef";
+import {
+  ADD_MENU_NODE,
+  NAME_INPUT,
+  NEW_PIPELINE_DIALOG,
+  NEW_PIPELINE_ERROR,
+  NEW_PIPELINE_NAME,
+  PROMPT_INPUT,
+  agent,
+  agents,
+  filled,
+  nodeSel,
+  outputSlot,
+  pipelineCreated,
+  selected,
+  tutorialPipelineName,
+} from "./firstPipelineReading";
+import { TESTER_STEPS } from "./firstPipelineTesterSteps";
+import { workspaceButton } from "../nodeIsolation";
 
-/** The pipeline's name, before this browser's identité de tour. */
-export const TUTORIAL_PIPELINE_ID = "tutorial-implement-test";
-
-/**
- * The name the tour asks the user to paste for the pipeline itself:
- * `tutorial-implement-test-k3x9` (#987). Two people building it on one instance
- * would otherwise both ask for the same YAML file, and the second Create would
- * be refused.
- */
-export function tutorialPipelineName(): string {
-  return withTourIdentity(TUTORIAL_PIPELINE_ID);
-}
+export { TUTORIAL_PIPELINE_ID, tutorialPipelineName } from "./firstPipelineReading";
 
 const IMPLEMENTER_PROMPT = `Implement what the user asked for, then run the project's tests.
 Write the test results and a mermaid diagram of your change into your output file.`;
 
-const TESTER_PROMPT = `Review the implementer's change and exercise the feature yourself.
-Put verdict: pass in your output's frontmatter when it holds up, verdict: fail otherwise, and attach an annotated screenshot.`;
-
 const IMPLEMENTER_OUT = "Test results and a mermaid diagram of the change";
-const TESTER_OUT = "A short verdict, and what failed if anything did";
-const TESTER_SHOT = "Annotated screenshot of the feature";
-
-// ---- reading the observed pipeline ---------------------------------------
-// Every target below is resolved from state rather than hard-coded, because the
-// nodes the tour points at do not exist until the user creates them — and they are
-// born with generated ids.
-
-/** The agent nodes, in creation order: [0] is the implementer, [1] the tester. */
-function agents(app: TourAppState): NodeDef[] {
-  return (app.pipeline?.nodes ?? []).filter((n) => n.type === "agent");
-}
-
-function agent(app: TourAppState, i: number): NodeDef | null {
-  return agents(app)[i] ?? null;
-}
-
-function endNode(app: TourAppState): NodeDef | null {
-  return (app.pipeline?.nodes ?? []).find((n) => n.type === "end") ?? null;
-}
-
-/** xyflow stamps `data-id` with the node id — the one canvas target that is stable. */
-function nodeSel(node: NodeDef | null): string[] {
-  return node ? [`.react-flow__node[data-id="${cssEscape(node.id)}"]`] : [];
-}
-
-/**
- * Edges are keyed `e-<index>` on the canvas (`deriveEditEdges`), so an edge target
- * is its index in the document — which is also what `selection.edgeIndex` holds.
- *
- * `fromPort` matters once the source has more than one: the tester carries `out`
- * AND `image_list`, and only `out` holds the `verdict` the next step conditions
- * on. An edge that carries only another port is a dead end two steps later —
- * the When editor offers the fields of the ports it carries, and there is no
- * `verdict` in a screenshot (#825, FP iteration 2). So the step does not count it
- * as done, and sends the reader to the edge's Outputs section (#846).
- */
-function edgeIndex(
-  pipeline: PipelineDef | null,
-  from: NodeDef | null,
-  to: NodeDef | null,
-  fromPort?: string,
-): number {
-  if (!pipeline || !from || !to) return -1;
-  return pipeline.edges.findIndex(
-    (e) =>
-      e.source.node === from.id &&
-      e.target.node === to.id &&
-      (fromPort == null || carries(e.source, fromPort)),
-  );
-}
-
-/** The tester's verdict port — the one every condition in this tour reads. */
-const OUT_PORT = "out";
-
-function edgeSel(
-  app: TourAppState,
-  from: NodeDef | null,
-  to: NodeDef | null,
-  fromPort?: string,
-): string[] {
-  const i = edgeIndex(app.pipeline, from, to, fromPort);
-  return i < 0 ? [] : [`.react-flow__edge[data-id="e-${i}"]`];
-}
-
-/**
- * The tester → `to` edge the user drew without `out` on it, or -1 (#846). A
- * drawn edge carries the first declared output (ADR-0073), so this is the edge
- * whose outputs were changed in the panel, or a tester whose outputs were
- * reordered. The panel's Outputs section is where it is fixed — a redraw would
- * carry the same port again. Only counted while no tester → `to` edge carries
- * `out`: once one does, a stray one next to it is not the step's business.
- */
-function strayEdge(app: TourAppState, to: NodeDef | null): number {
-  const from = agent(app, 1);
-  if (edgeIndex(app.pipeline, from, to, OUT_PORT) >= 0) return -1;
-  return edgeIndex(app.pipeline, from, to);
-}
-
-/** The tester → `to` edge carrying `out` is the selected one. */
-function edgeSelected(app: TourAppState, to: NodeDef | null): boolean {
-  const i = edgeIndex(app.pipeline, agent(app, 1), to, OUT_PORT);
-  return i >= 0 && app.selection.kind === "edge" && app.selection.edgeIndex === i;
-}
-
-/** The edge panel's Outputs section — one checkbox per output of the source. */
-const OUTPUTS_SECTION = '[data-testid="outputs-section"]';
-
-/**
- * A step that draws an edge out of the tester and must end with `out` on it
- * (#846). It advances on the output the edge *carries*, not on how it was
- * drawn. When the edge carries another port, the same card re-aims: onto the
- * edge until it is selected, then onto the Outputs section, where ticking `out`
- * satisfies the step.
- */
-function carryOutEdgeStep(def: {
-  id: string;
-  title: string;
-  to: (app: TourAppState) => NodeDef | null;
-  body: string;
-  note: string;
-  waitingFor: string;
-}): TourStep {
-  const stray = (o: TourObservation) => strayEdge(o.app, def.to(o.app));
-  const straySelected = (o: TourObservation, i: number) =>
-    o.app.selection.kind === "edge" && o.app.selection.edgeIndex === i;
-  return {
-    id: def.id,
-    title: def.title,
-    body: (o) => {
-      const i = stray(o);
-      if (i < 0) return def.body;
-      const ports = carriedPorts(o.app.pipeline!.edges[i].source).join(" and ");
-      return straySelected(o, i)
-        ? `Tick out in the Outputs section on the right. This edge carries ${ports}, and only out holds the verdict the condition reads.`
-        : `This edge carries ${ports}, not out. Click it, then tick out in the Outputs section of its inspector.`;
-    },
-    note: (o) => (stray(o) < 0 ? def.note : null),
-    target: (o) => {
-      const i = stray(o);
-      if (i < 0) return [...nodeSel(agent(o.app, 1)), ...nodeSel(def.to(o.app))];
-      return straySelected(o, i) ? [OUTPUTS_SECTION] : [`.react-flow__edge[data-id="e-${i}"]`];
-    },
-    waitingFor: def.waitingFor,
-    done: (o) => edgeIndex(o.app.pipeline, agent(o.app, 1), def.to(o.app), OUT_PORT) >= 0,
-  };
-}
-
-/** Attribute selectors here only ever carry ids the daemon already sanitised, but a
- *  quote in one would silently break the selector rather than fail loudly. */
-function cssEscape(value: string): string {
-  return value.replace(/["\\]/g, "\\$&");
-}
-
-function filled(o: TourObservation, selector: string): boolean {
-  return (o.value(selector) ?? "").trim().length > 0;
-}
-
-const NAME_INPUT = '[data-testid="node-name-input"]';
-const PROMPT_INPUT = '[data-testid="node-prompt-input"]';
-const ADD_MENU_NODE = '[data-testid="add-menu-node"]';
-const NEW_PIPELINE_DIALOG = '[data-testid="new-pipeline-dialog"]';
-const NEW_PIPELINE_NAME = '[data-testid="new-pipeline-name"]';
-/** The dialog's own sentence when the daemon refused — quoted, never paraphrased. */
-const NEW_PIPELINE_ERROR = '[data-testid="new-pipeline-error"]';
-/** An output card, addressed by its slot rather than its (editable) port name. */
-const outputSlot = (i: number) => `[data-output-index="${i}"]`;
-/** The delete confirmation's box — the dialog itself, not its full-screen backdrop. */
-const DELETE_CONFIRM = '[data-testid="confirm-delete-modal"]';
-/** #974: Validate, next to Save, and the modal it opens. */
-const VALIDATE_BUTTON = '[data-testid="validate-button"]';
-const VALIDATE_MODAL = '[data-testid="validate-pipeline-modal"]';
-/** The tab bar's indicator once the pipeline is offered to somebody. */
-const VALIDATED_FOR_ALL = '[data-testid="toolbar-validation-indicator"][data-validation="all"]';
-const VALIDATED_FOR_PROJECTS =
-  '[data-testid="toolbar-validation-indicator"][data-validation="projects"]';
-
-/** The dialog is gone and a pipeline is open: Create (or Enter) did its job. */
-function pipelineCreated(o: TourObservation): boolean {
-  return !o.present(NEW_PIPELINE_DIALOG) && o.app.pipeline != null;
-}
-
-/**
- * The pipeline this tour built, while the Library still lists it: the name the
- * tour handed out to paste, or — for a reader who typed a name of their own —
- * the active tab, as long as it holds the tour's loop (tester → implementer and
- * tester → End). Deleting the pipeline closes its tab and activates whichever is
- * left; that one is not the tour's, even when the Library lists it. `null` once
- * the built pipeline is gone from the Library.
- */
-function builtPipelineId(o: TourObservation): string | null {
-  const library = o.app.libraryPipelineIds;
-  const mine = tutorialPipelineName();
-  if (library.includes(mine)) return mine;
-  const active = o.app.pipelineId;
-  if (!active || !library.includes(active)) return null;
-  const [implementer, tester] = [agent(o.app, 0), agent(o.app, 1)];
-  const isTheLoop =
-    edgeIndex(o.app.pipeline, tester, implementer) >= 0 &&
-    edgeIndex(o.app.pipeline, tester, endNode(o.app)) >= 0;
-  return isTheLoop ? active : null;
-}
-
-function selected(app: TourAppState, node: NodeDef | null): boolean {
-  return !!node && app.selection.kind === "node" && app.selection.id === node.id;
-}
-
-/**
- * Whether the edge's condition reads `field eq value` on the `out` port. The key
- * is resolved against the ports the edge carries, the way the daemon and the
- * When editor read it: bare `verdict` on an edge that carries only `out`,
- * `out.verdict` once it carries `out` and `image_list` — which is what every
- * edge fixed in the Outputs section carries (#846, FP iteration 1: the step read
- * the bare key only, and the correction path dead-ended here).
- */
-function whenEquals(edge: EdgeDef | undefined, field: string, value: string): boolean {
-  if (!edge?.when) return false;
-  const ports = carriedPorts(edge.source);
-  return Object.entries(edge.when).some(([key, predicate]) => {
-    const at = splitFieldKey(key, ports);
-    return (
-      at.port === OUT_PORT &&
-      at.field === field &&
-      !!predicate &&
-      typeof predicate === "object" &&
-      (predicate as Record<string, unknown>).eq === value
-    );
-  });
-}
-
-/**
- * A step that writes `verdict eq <value>` on the tester → `to` edge. While the
- * edge holds some other condition, the body says what the step is waiting for,
- * so a reader whose clause is off by one field or value is not left staring at
- * a card that never moves (#846, FP iteration 1).
- *
- * It lights the When editor only while THIS edge is the selected one; otherwise
- * it lights the edge itself. Replayed with Previous (PDO-10, #1030), the step
- * comes back with whatever edge the reader last selected — the tester → End one,
- * for « Only loop back on a failure » — and a generic When editor would have
- * pointed at the wrong edge's condition. And once the condition holds, the body
- * says so instead of « Not there yet » next to a live Next.
- */
-function conditionStep(def: {
-  id: string;
-  title: string;
-  to: (app: TourAppState) => NodeDef | null;
-  value: string;
-  /** Why the condition matters — the second sentence of both bodies. */
-  why: string;
-}): TourStep {
-  const edge = (app: TourAppState): EdgeDef | undefined => {
-    const i = edgeIndex(app.pipeline, agent(app, 1), def.to(app), OUT_PORT);
-    return i < 0 ? undefined : app.pipeline?.edges[i];
-  };
-  const done = (o: TourObservation) => whenEquals(edge(o.app), "verdict", def.value);
-  return {
-    id: def.id,
-    title: def.title,
-    body: (o) => {
-      if (done(o)) return `Already set: the condition reads verdict eq ${def.value}. ${def.why}`;
-      if (!edgeSelected(o.app, def.to(o.app)))
-        return `Click the edge first, then add the condition verdict eq ${def.value} in its inspector. ${def.why}`;
-      const when = edge(o.app)?.when;
-      return !when || Object.keys(when).length === 0
-        ? `Add the condition verdict eq ${def.value}. ${def.why}`
-        : `Not there yet: the condition must read verdict eq ${def.value}, on the out output. ${def.why}`;
-    },
-    target: (o) =>
-      edgeSelected(o.app, def.to(o.app))
-        ? ['[data-testid="when-editor"]']
-        : edgeSel(o.app, agent(o.app, 1), def.to(o.app), OUT_PORT),
-    waitingFor: "the edge and its When editor",
-    failureHint: "The edge was deleted before the condition was saved.",
-    done,
-  };
-}
 
 // ---- the steps ------------------------------------------------------------
 
@@ -338,22 +83,22 @@ const STEPS: TourStep[] = [
     done: (o) => pipelineCreated(o) || filled(o, NEW_PIPELINE_NAME),
     // That condition holds for good once the pipeline exists, but the step's
     // whole point is a field that leaves with the dialog: `Previous` from
-    // `Create it` is greyed out rather than replaying « paste the name » over
-    // a screen where there is nothing to paste into (PDO-10 FP, #1029).
+    // `Create it` is greyed out rather than replaying « paste the name » over a
+    // screen with nothing to paste into (CONTEXT.md § « Rejeu d'étape »).
     replayNeedsTarget: true,
   },
   {
     id: "create-pipeline",
     title: "Create it",
     // Entered satisfied when Enter already did the work (see the step above),
-    // or replayed with `Previous` after the click (PDO-10): the card then says
-    // what happened rather than instructing a click that nobody can make — the
+    // or replayed with `Previous` after the click: the card then says what
+    // happened rather than instructing a click that nobody can make — the
     // button is gone. It does not say HOW it was created: on a replay that was
-    // the click, and « Enter already created it » was false (#1030).
+    // the click, and « Enter already created it » would be false.
     body: (o) =>
       pipelineCreated(o)
-        ? "Already created: PDO wrote the file and opened it in the editor, with a Start and an End marker already in place."
-        : "Click Create. PDO writes the file and opens it in the editor, with a Start and an End marker already in place.",
+        ? "Already created: the file is written and open in the editor, with a Start and an End marker already in place."
+        : "Click Create. The file is written and opened in the editor, with a Start and an End marker already in place.",
     target: () => ['[data-testid="new-pipeline-create"]'],
     waitingFor: "the Create button",
     // A reader who kept the pipeline at the end of a previous run of this tour
@@ -382,6 +127,9 @@ const STEPS: TourStep[] = [
     waitingFor: "the Node entry of the Add menu",
     soft: true,
     done: (o) => agents(o.app).length >= 1,
+    // « Pick Node in the menu » only makes sense with the menu open, and it
+    // closes on the pick: replayed without it, the card would point at nothing.
+    replayNeedsTarget: true,
   },
   {
     id: "select-implementer",
@@ -394,7 +142,7 @@ const STEPS: TourStep[] = [
   {
     id: "name-implementer",
     title: "Name it implementer",
-    body: "PDO already called it implementer, which is the name this tour uses. This field is where you would change it.",
+    body: "It is already called implementer, which is the name this tour uses. This field is where you would change it.",
     target: () => [NAME_INPUT],
     waitingFor: "the Name field of the selected node",
     failureHint: "This usually means the node was deselected or the pane was closed.",
@@ -412,8 +160,10 @@ const STEPS: TourStep[] = [
   },
   {
     id: "implementer-worktree",
-    title: "Put it in the Run worktree",
-    body: "Pick Run worktree. This node then works in the branch the Run itself owns, so what it writes is what the Run carries.",
+    title: "Share the Run's worktree",
+    // Named the way the button reads (FP of CORE-227): the segmented control
+    // says Isolated and Shared; « Run worktree » is only its tooltip.
+    body: `Pick ${workspaceButton(false)}, under Worktree. This node then works in the Run's own worktree, the branch the Run owns, so what it writes is what the Run carries.`,
     target: () => ['[data-testid="workspace-shared"]'],
     waitingFor: "the Workspace choice",
     done: (o) => agent(o.app, 0)?.isolated_worktree === false,
@@ -439,251 +189,13 @@ const STEPS: TourStep[] = [
     confirm: true,
     done: (o) => !!agent(o.app, 0)?.outputs[0]?.instructions?.trim(),
   },
-  {
-    id: "open-add-menu-2",
-    title: "Add the second node",
-    body: "Open the + menu again. The tester is a second agent, not a second job for the first one.",
-    target: () => ['[data-testid="toolbar-add"]'],
-    waitingFor: "the canvas toolbar",
-    done: (o) => o.present(ADD_MENU_NODE),
-  },
-  {
-    id: "choose-node-2",
-    title: "Choose Node again",
-    body: "Pick Node. A second agent card lands on the canvas.",
-    target: () => [ADD_MENU_NODE],
-    waitingFor: "the Node entry of the Add menu",
-    soft: true,
-    done: (o) => agents(o.app).length >= 2,
-  },
-  {
-    id: "select-tester",
-    title: "Select the second node",
-    body: "Click the new card so the inspector follows it. Both cards look alike until you name them.",
-    target: (o) => nodeSel(agent(o.app, 1)),
-    waitingFor: "the second node on the canvas",
-    done: (o) => selected(o.app, agent(o.app, 1)),
-  },
-  {
-    id: "name-tester",
-    title: "Name it tester",
-    body: "Replace the name with the block below, then press Next. A node's name is how edges and conditions refer to it.",
-    target: () => [NAME_INPUT],
-    waitingFor: "the Name field of the selected node",
-    failureHint: "This usually means the node was deselected or the pane was closed.",
-    copyBlock: "tester",
-    confirm: true,
-    done: (o) => (o.value(NAME_INPUT) ?? "").trim() === "tester",
-  },
-  {
-    id: "tester-interactive",
-    title: "Make the tester interactive too",
-    body: "Turn on Interactive. It cannot complete until you release it, and it will wait on your answers along the way.",
-    target: () => ['[data-testid="node-interactive-toggle"]'],
-    waitingFor: "the Interactive toggle",
-    done: (o) => agent(o.app, 1)?.interactive === true,
-  },
-  {
-    id: "tester-worktree",
-    title: "Leave it in an isolated worktree",
-    body: "An isolated worktree gives this node its own copy of the repo, so the tester reads the change instead of sitting in the middle of it. That is already the default for a new agent — compare it with the implementer you just moved.",
-    target: () => ['[data-testid="workspace-isolated"]'],
-    waitingFor: "the Workspace choice",
-    done: (o) => agent(o.app, 1)?.isolated_worktree === true,
-  },
-  {
-    id: "tester-prompt",
-    title: "Give the tester its prompt",
-    body: "Paste the block below into Prompt. It asks for a verdict and a screenshot — the two things the rest of the graph reads.",
-    target: () => [PROMPT_INPUT],
-    waitingFor: "the Prompt field of the selected node",
-    failureHint: "This usually means the node was deselected or the pane was closed.",
-    copyBlock: TESTER_PROMPT,
-    confirm: true,
-    done: (o) => filled(o, PROMPT_INPUT),
-  },
-  {
-    id: "tester-out",
-    title: "Say what the tester's out must contain",
-    body: "Open Expected content on out and paste the block below. Same contract as the implementer's, different job.",
-    target: () => [outputSlot(0)],
-    waitingFor: "the out output of the tester",
-    copyBlock: TESTER_OUT,
-    confirm: true,
-    done: (o) => !!agent(o.app, 1)?.outputs[0]?.instructions?.trim(),
-  },
-  {
-    id: "tester-verdict",
-    title: "Declare the verdict field",
-    body: "Add a field named verdict, set its type to enum, and allow pass and fail. Edges read this frontmatter to decide where the Run goes next.",
-    target: () => [`${outputSlot(0)} [data-testid="output-schema-editor"]`],
-    waitingFor: "the output schema editor",
-    done: (o) => {
-      const decl = agent(o.app, 1)?.outputs[0]?.frontmatter?.verdict;
-      const allowed = decl?.allowed ?? [];
-      return decl?.type === "enum" && allowed.includes("pass") && allowed.includes("fail");
-    },
-  },
-  {
-    id: "add-image-port",
-    title: "Add a second output",
-    body: "Click + Add on Outputs. One port per kind of thing a node produces — the screenshot is not the verdict.",
-    target: () => ['[data-testid="add-output-port"]'],
-    waitingFor: "the Outputs section of the inspector",
-    done: (o) => (agent(o.app, 1)?.outputs.length ?? 0) >= 2,
-  },
-  {
-    id: "name-image-port",
-    title: "Name it image_list and set its type",
-    body: "Rename the new port to image_list and pick Image List as its Type. A typed port is what lets the UI show the screenshots instead of a path.",
-    target: () => [outputSlot(1)],
-    waitingFor: "the second output of the tester",
-    copyBlock: "image_list",
-    done: (o) => {
-      const port = agent(o.app, 1)?.outputs[1];
-      return port?.name === "image_list" && port?.port_type === "image_list";
-    },
-  },
-  {
-    id: "image-port-expected",
-    title: "Say what the screenshot must show",
-    body: "Open Expected content on image_list and paste the block below. Without it the agent guesses what to capture.",
-    target: () => [outputSlot(1)],
-    waitingFor: "the second output of the tester",
-    copyBlock: TESTER_SHOT,
-    confirm: true,
-    done: (o) => !!agent(o.app, 1)?.outputs[1]?.instructions?.trim(),
-  },
-  {
-    id: "edge-implementer-tester",
-    title: "Connect implementer to tester",
-    // #846 — there is no output dot any more (#844, ADR-0071): the whole border
-    // of a card is the drag-source. The card is the target, rim included, so
-    // the hole lights the very strip the press has to land on.
-    body: "Press anywhere on the border of the implementer's card — it glows amber — and drag onto tester. The edge is the hand-off: when the first finishes, the second starts.",
-    target: (o) => [...nodeSel(agent(o.app, 0)), ...nodeSel(agent(o.app, 1))],
-    waitingFor: "the two agent cards",
-    done: (o) => edgeIndex(o.app.pipeline, agent(o.app, 0), agent(o.app, 1)) >= 0,
-  },
-  carryOutEdgeStep({
-    id: "edge-tester-implementer",
-    title: "Draw the way back",
-    to: (app) => agent(app, 0),
-    body: "Now press on the border of the tester's card and drag onto implementer. That second edge is what makes this a loop rather than a line.",
-    // The tester grew a second output a few steps ago. A new edge carries the
-    // FIRST declared one (ADR-0073), which is `out`; an edge carrying only
-    // `image_list` would leave the next condition no verdict to read (#825).
-    note: "A new edge carries the tester's first output, out — not image_list, the screenshot, which has no verdict to route on.",
-    waitingFor: "the two agent cards",
-  }),
-  {
-    id: "select-loop-edge",
-    title: "Select the edge back to implementer",
-    body: (o) =>
-      edgeSelected(o.app, agent(o.app, 0))
-        ? "The edge is already selected. Its inspector on the right is where a condition is authored."
-        : "Click the edge you just drew. Its inspector opens on the right, where a condition is authored.",
-    target: (o) => edgeSel(o.app, agent(o.app, 1), agent(o.app, 0), OUT_PORT),
-    waitingFor: "the tester → implementer edge",
-    done: (o) => edgeSelected(o.app, agent(o.app, 0)),
-  },
-  conditionStep({
-    id: "loop-condition",
-    title: "Only loop back on a failure",
-    to: (app) => agent(app, 0),
-    value: "fail",
-    why: "The edge now fires only when the tester's frontmatter says the change did not hold up.",
-  }),
-  carryOutEdgeStep({
-    id: "edge-tester-end",
-    title: "Connect tester to End",
-    to: endNode,
-    body: "Press on the border of the tester's card again and drag onto the End marker. End is where a Run stops, and it needs a route in.",
-    // Same two outputs, same consequence: the `verdict eq pass` of the next
-    // step can only be written on an edge that carries the verdict (#825).
-    note: "Again the edge carries out, the first output: the condition below it reads the verdict in out's frontmatter.",
-    waitingFor: "the tester card and the End marker",
-  }),
-  {
-    id: "select-end-edge",
-    title: "Select the edge to End",
-    body: (o) =>
-      edgeSelected(o.app, endNode(o.app))
-        ? "The edge is already selected. Same inspector, one more condition to write."
-        : "Click that last edge. Same inspector, one more condition to write.",
-    target: (o) => edgeSel(o.app, agent(o.app, 1), endNode(o.app), OUT_PORT),
-    waitingFor: "the tester → End edge",
-    done: (o) => edgeSelected(o.app, endNode(o.app)),
-  },
-  conditionStep({
-    id: "end-condition",
-    title: "Finish only on a pass",
-    to: endNode,
-    value: "pass",
-    why: "Both routes out of the tester are now explicit: pass ends the Run, fail sends it round again.",
-  }),
-  {
-    id: "save",
-    title: "Save the pipeline",
-    body: "Click Save. Until you do, all of this lives only in this browser tab.",
-    target: () => ['[data-testid="save-button"]'],
-    waitingFor: "the Save button",
-    // Not skippable: everything after this reads the saved file.
-    done: (o) => !o.app.dirty && !!o.app.pipelineId && o.app.libraryPipelineIds.includes(o.app.pipelineId),
-  },
-  {
-    // #974: a pipeline PDO creates is born a test pipeline — New Run offers it
-    // only behind « Show test pipelines ». Validating it is what makes the one
-    // just built show up at launch.
-    id: "validate",
-    title: "Validate the pipeline",
-    // Two beats, one card: the button, then the modal it opens.
-    body: (o) =>
-      o.present(VALIDATE_MODAL)
-        ? "Tick All projects, or the projects that should see it, then Save validation. Leaving everything unticked keeps it a test pipeline."
-        : "Click Validate, next to Save. A new pipeline is a test pipeline: New Run hides it until you validate it for a project, or for all of them.",
-    target: (o) => (o.present(VALIDATE_MODAL) ? [VALIDATE_MODAL] : [VALIDATE_BUTTON]),
-    soft: (o) => o.present(VALIDATE_MODAL),
-    waitingFor: "the Validate button, next to Save",
-    failureHint: "It appears in the tab bar once the pipeline is saved.",
-    // A reader who wants to keep it as a test pipeline skips; the recap says so.
-    skippable: true,
-    advanceHint: "advances once validated",
-    done: (o) =>
-      !o.present(VALIDATE_MODAL) &&
-      (o.present(VALIDATED_FOR_ALL) || o.present(VALIDATED_FOR_PROJECTS)),
-  },
-  {
-    id: "keep-or-delete",
-    title: "Keep it, or delete it",
-    // Two beats, one card: the trash, then the confirmation it opens.
-    body: (o) =>
-      o.present(DELETE_CONFIRM)
-        ? "Delete removes the YAML and its prompt files from disk, for good. Cancel leaves the row alone, and Skip ends the tour without deleting anything."
-        : "The row is yours now: open it again later, or use its trash to remove it. Skip keeps it.",
-    // Re-aims onto the confirmation, the way `open-output` re-aims onto the
-    // artifact. Without it the card instructs a click it then prevents: the
-    // dialog is drawn centred, outside the hole, and both of its buttons come
-    // back as the projecteur's blocker (FP finding, #825).
-    target: (o) => {
-      if (o.present(DELETE_CONFIRM)) return [DELETE_CONFIRM];
-      const id = builtPipelineId(o);
-      return id ? [`[data-testid="library-row-${cssEscape(id)}"]`] : [];
-    },
-    waitingFor: "the pipeline's row in the Library",
-    skippable: true,
-    // Gone from the Library. Not read off the active tab: deleting the pipeline
-    // closes its tab in the same store update, so a tour whose pipeline was the
-    // only open tab saw `pipelineId` go null and waited five seconds on a row
-    // that was already gone (#1030 FP, F1).
-    done: (o) => builtPipelineId(o) === null,
-  },
+  ...TESTER_STEPS,
 ];
 
 export const FIRST_PIPELINE_TOUR: TourDef = {
   id: "first-pipeline",
   title: "First pipeline",
-  blurb: "Two agents in a loop: an implementer and a tester that hands back a verdict.",
+  blurb: "An implementer and a tester in a loop, with a verdict.",
   minutes: 8,
   steps: STEPS,
   recapIntro: () =>
@@ -691,15 +203,19 @@ export const FIRST_PIPELINE_TOUR: TourDef = {
   recap: [
     {
       label: "implementer",
-      text: "agent in the Run worktree, implements the request and runs the tests; interactive, so it completes only on your go.",
+      text: `agent in the Run's own worktree (${workspaceButton(false)}), implements the request and runs the tests; interactive, so it completes only on your go.`,
     },
     {
       label: "tester",
-      text: "agent in an isolated worktree, also interactive, returns a verdict (pass | fail) and an annotated screenshot.",
+      text: `agent in its own worktree (${workspaceButton(true)}), also interactive, returns a verdict (pass | fail) and an annotated screenshot.`,
+    },
+    {
+      label: "Start",
+      text: "hands your prompt to implementer, the node every Run of it starts with.",
     },
     {
       label: "Loop",
-      text: "tester → implementer when verdict eq fail; tester → End when verdict eq pass.",
+      text: "tester → implementer when verdict = fail; tester → End when verdict = pass.",
     },
     {
       label: "Validate",

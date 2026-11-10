@@ -1,9 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { edgeConditionFields, operatorsForField, clampOperator } from "./edgeFields";
-import { OPERATORS } from "./whenClause";
-import type { PipelineDef, EdgeDef } from "../types";
+import {
+  edgeConditionFields,
+  operatorsForField,
+  clampOperator,
+  nextFreeCondition,
+  declaredValueType,
+  type EdgeConditionField,
+} from "./edgeFields";
+import { OPERATORS, type Operator } from "./whenClause";
+import type { EdgeDef } from "../shared/generated/EdgeDef";
+import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 
-function pipeline(): PipelineDef {
+function pipeline(): EditorPipelineDef {
   return {
     name: "t",
     version: "1.0",
@@ -47,6 +55,29 @@ const guardedEdge: EdgeDef = {
 };
 
 describe("edgeConditionFields", () => {
+  it("groups each field by where its value comes from: the output, the loop, the pipeline", () => {
+    const fields = edgeConditionFields(pipeline(), guardedEdge);
+    expect(fields.map((f) => [f.name, f.group])).toEqual([
+      ["verdict", "Output · verdict"],
+      ["is_blocking", "Output · verdict"],
+      ["iter", "Loop"],
+      ["$threshold", "Pipeline variables"],
+    ]);
+  });
+
+  it("hints each field with its type and its allowed values", () => {
+    const p = pipeline();
+    p.variables.branch = { type: "string", default: null };
+    const hints = Object.fromEntries(edgeConditionFields(p, guardedEdge).map((f) => [f.name, f.hint]));
+    expect(hints).toEqual({
+      verdict: "enum · PASS | FAIL",
+      is_blocking: "bool",
+      iter: "int · loop iteration",
+      $threshold: "int · default 5",
+      $branch: "string",
+    });
+  });
+
   it("exposes the source port's frontmatter fields with their declarations", () => {
     const fields = edgeConditionFields(pipeline(), guardedEdge);
     const verdict = fields.find((f) => f.name === "verdict");
@@ -91,6 +122,36 @@ describe("isBoolField helper", () => {
   });
 });
 
+describe("declaredValueType", () => {
+  const field = (name: string, type: string | null): EdgeConditionField => ({
+    name,
+    decl: type ? { type } : null,
+    group: "Output · out",
+    hint: type ?? "",
+  });
+  const fields = [
+    field("ok", "bool"),
+    field("label", "string"),
+    field("level", "enum"),
+    field("count", "int"),
+    field("score", "float"),
+    field("loose", null),
+  ];
+
+  it("writes a declared bool as a boolean, a declared string or enum as a string", () => {
+    expect(declaredValueType(fields, "ok")).toBe("bool");
+    expect(declaredValueType(fields, "label")).toBe("string");
+    expect(declaredValueType(fields, "level")).toBe("string");
+  });
+
+  it("leaves numbers and undeclared fields to inference", () => {
+    expect(declaredValueType(fields, "count")).toBeUndefined();
+    expect(declaredValueType(fields, "score")).toBeUndefined();
+    expect(declaredValueType(fields, "loose")).toBeUndefined();
+    expect(declaredValueType(fields, "missing")).toBeUndefined();
+  });
+});
+
 // #456: the operator set is a function of the field's type. A bool admits only
 // equality — `approved >= true` was authorable before this, and the engine has no
 // useful ordering to apply to it.
@@ -124,5 +185,36 @@ describe("clampOperator", () => {
     const fields = edgeConditionFields(pipeline(), guardedEdge);
     expect(clampOperator(fields, "is_blocking", "neq")).toBe("neq");
     expect(clampOperator(fields, "iter", "gte")).toBe("gte");
+  });
+});
+
+describe("nextFreeCondition", () => {
+  const fields = [
+    { name: "verdict", decl: { type: "enum", allowed: ["pass", "fail"] } },
+    { name: "approved", decl: { type: "bool" } },
+    { name: "iter", decl: null, isIter: true },
+  ] as Parameters<typeof nextFreeCondition>[2];
+  const row = (field: string, op: Operator = "eq") => ({ port: "out", field, op, value: "x" });
+
+  it("takes the first field when no row reads it", () => {
+    expect(nextFreeCondition([], "out", fields)).toEqual({ field: "verdict", op: "eq" });
+  });
+
+  it("skips a field a row already reads with that operator", () => {
+    expect(nextFreeCondition([row("verdict")], "out", fields)).toEqual({ field: "approved", op: "eq" });
+  });
+
+  it("takes another operator once every field is read", () => {
+    const rows = [row("verdict"), row("approved"), row("iter")];
+    expect(nextFreeCondition(rows, "out", fields)).toEqual({ field: "verdict", op: "neq" });
+  });
+
+  it("reads the rows of its own output only", () => {
+    expect(nextFreeCondition([{ ...row("verdict"), port: "design" }], "out", fields)).toEqual({ field: "verdict", op: "eq" });
+  });
+
+  it("says when nothing is left", () => {
+    const rows = fields.flatMap((f) => operatorsForField(fields, f.name).map((op) => row(f.name, op)));
+    expect(nextFreeCondition(rows, "out", fields)).toBeNull();
   });
 });

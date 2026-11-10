@@ -1,0 +1,267 @@
+/*
+ * The command field's palette (Ctrl+K): a box under the top bar, centred on
+ * the field, its query field, then its groups. A group: a caps header with
+ * its icon (an extension's for its group), its rows, « Show all n », and the
+ * state of its sources (searching, or failed with Retry). Tokens only.
+ */
+
+@layer components {
+  .sh-pal-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+  }
+  .sh-pal {
+    position: absolute;
+    top: calc(var(--h-topbar) + 4px);
+    left: 50%;
+    display: flex;
+    flex-direction: column;
+    width: min(640px, calc(100% - 32px));
+    max-height: min(560px, calc(100% - 64px));
+    border: 1px solid var(--line);
+    border-radius: var(--radius-ui);
+    background: var(--surface-1);
+    box-shadow: 0 8px 24px -8px var(--shadow);
+    transform: translateX(-50%);
+  }
+  .sh-pal__field {
+    position: relative;
+    display: flex;
+    flex: none;
+    align-items: center;
+    padding: 6px;
+    border-bottom: 1px solid var(--line);
+  }
+  .sh-pal__field > svg {
+    position: absolute;
+    left: calc(6px + var(--pad-x));
+    color: var(--text-3);
+    pointer-events: none;
+  }
+  .sh-pal__input {
+    box-sizing: border-box;
+    width: 100%;
+    height: 28px;
+    padding: 0 var(--pad-x) 0 calc(var(--pad-x) + 14px + var(--g-3));
+    border: 1px solid var(--focus-ring);
+    border-radius: var(--radius-ui);
+    background: var(--surface-0);
+    color: var(--text);
+    font: inherit;
+    font-size: var(--fs-md);
+    outline: none;
+  }
+  .sh-pal__input::placeholder {
+    color: var(--text-3);
+  }
+  .sh-pal__list {
+    min-height: 0;
+    padding: var(--g-2) 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+  .sh-pal__empty {
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    height: 28px;
+    padding: 0 10px;
+    color: var(--text-3);
+    font-size: var(--fs-sm);
+  }
+
+  /* group header: icon, caps title */
+  .sh-pal__head {
+    display: flex;
+    align-items: center;
+    gap: var(--g-2);
+    height: 22px;
+    padding: 0 10px;
+    color: var(--text-3);
+  }
+  .sh-pal__sec + .sh-pal__sec .sh-pal__head {
+    margin-top: 4px;
+  }
+  .sh-pal__head .d-caps {
+    min-width: 0;
+    overflow: hidden;
+    font-size: var(--fs-2xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* a row: icon, label, entity, facts, shortcut */
+  .sh-pal__row {
+    display: flex;
+    align-items: center;
+    gap: var(--g-4);
+    min-width: 0;
+    height: 28px;
+    padding: 0 10px;
+    color: var(--text);
+    font-size: var(--fs-md);
+    cursor: pointer;
+  }
+  .sh-pal__row[aria-selected="true"] {
+    background: var(--selected);
+    box-shadow: inset 2px 0 0 var(--selected-edge);
+  }
+  .sh-pal__ico {
+    display: inline-grid;
+    flex: none;
+    place-items: center;
+    width: 14px;
+    color: var(--text-2);
+  }
+  .sh-pal__ico--av {
+    width: 16px;
+  }
+  .sh-pal__label {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sh-pal__label mark {
+    background: transparent;
+    color: var(--selected-edge);
+    font-weight: var(--w-strong);
+  }
+  .sh-pal__fill {
+    flex: 1 1 0;
+    min-width: 4px;
+  }
+  /* The facts stay whole beside a long title: the title gives way first. */
+  .sh-pal__meta {
+    flex: none;
+    max-width: 45%;
+    overflow: hidden;
+    color: var(--text-3);
+    font-size: var(--fs-sm);
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* A global Action's counter: a mono chip, tinted while something waits. */
+  .sh-pal__count {
+    height: 16px;
+  }
+  .sh-pal__count[data-accent] {
+    background: color-mix(in oklab, var(--color-st-await) 16%, transparent);
+    color: var(--color-st-await);
+  }
+  .sh-pal__check {
+    flex: none;
+    color: var(--text-2);
+  }
+  .sh-pal__row .d-kbd {
+    flex: none;
+  }
+  /* A gesture the caller may not make (CORE-205): greyed, why in place of its shortcut. */
+  .sh-pal__row--refused .sh-pal__label,
+  .sh-pal__row--refused .sh-pal__ico {
+    opacity: 0.45;
+  }
+  .sh-pal__row--refused {
+    cursor: not-allowed;
+  }
+  .sh-pal__why {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--g-2);
+    font-size: var(--fs-xs);
+  }
+  .sh-pal__why svg {
+    flex: none;
+    color: var(--color-st-await);
+  }
+  .sh-pal__row--danger .sh-pal__label,
+  .sh-pal__row--danger .sh-pal__ico {
+    color: var(--color-st-failed);
+  }
+  .sh-pal__entity {
+    display: inline-flex;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+    max-width: 45%;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: var(--radius-ui);
+    background: var(--hover);
+    color: var(--text-2);
+    font-size: var(--fs-xs);
+  }
+  .sh-pal__entity > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sh-pal__src {
+    display: inline-grid;
+    flex: none;
+    place-items: center;
+    width: 14px;
+    color: var(--text-3);
+  }
+  .sh-pal__ref {
+    flex: none;
+    color: var(--text-3);
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+  }
+
+  /* « Show all n » */
+  .sh-pal__more {
+    color: var(--text-3);
+    font-size: var(--fs-sm);
+  }
+  .sh-pal__more[aria-selected="true"] {
+    color: var(--text);
+  }
+
+  /* a source searching, or failed */
+  .sh-pal__state {
+    color: var(--text-3);
+    cursor: default;
+  }
+  .sh-pal__state[role="option"] {
+    cursor: pointer;
+  }
+  .sh-pal__state-text {
+    flex: none;
+    font-size: var(--fs-sm);
+  }
+  .sh-pal__state-err {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-3);
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sh-pal__state-ico--err {
+    color: var(--color-st-failed);
+  }
+  .sh-pal__retry {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 3px;
+    height: 20px;
+    padding: 0 var(--g-3);
+    border-radius: var(--radius-ui);
+    color: var(--text-2);
+    font-size: var(--fs-sm);
+  }
+  .sh-pal__row[aria-selected="true"] .sh-pal__retry,
+  .sh-pal__row:hover .sh-pal__retry {
+    background: var(--hover);
+    color: var(--text);
+  }
+}

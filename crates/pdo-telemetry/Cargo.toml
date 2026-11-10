@@ -1,0 +1,48 @@
+[package]
+# The `telemetry` bounded context (ADR-0079, ADR-0090): the metrics and traces
+# of the instance, pushed over OTLP to the organisation's collector or read on
+# `/metrics`. It reads the Run events off the kernel's bus and the run context's
+# types. Hexagonal inside: `domain/`, `application/` (ports + the hub),
+# `adapters/`.
+name = "pdo-telemetry"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "PDO's telemetry context: OTLP export and /metrics of the instance's metrics and traces"
+publish = false
+autotests = false
+
+[lib]
+name = "pdo_telemetry"
+path = "src/lib.rs"
+
+[dependencies]
+pdo-kernel.workspace = true
+pdo-run.workspace = true
+async-trait = "0.1"
+axum.workspace = true
+chrono.workspace = true
+libc = "0.2"
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp.workspace = true
+opentelemetry-http.workspace = true
+opentelemetry-prometheus.workspace = true
+prometheus.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+ts-rs.workspace = true
+
+[[test]]
+name = "telemetry"
+path = "tests/main.rs"
+
+[dev-dependencies]
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
+pretty_assertions.workspace = true
+tempfile.workspace = true

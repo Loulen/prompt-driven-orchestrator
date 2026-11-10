@@ -1,9 +1,10 @@
 /**
  * What this browser remembers about tours (#823, spec #821).
  *
- * Two keys, in the `pdo.*` localStorage namespace the rest of the client uses
+ * Three keys, in the `pdo.*` localStorage namespace the rest of the client uses
  * (`lib/uiPrefs.ts`, `lib/dismissedBanners.ts`): whether the welcome modal has
- * already been answered, and which tours have been *finished*. Deliberately
+ * already been answered, which tours have been *finished*, and this browser's
+ * Identité de tour. Deliberately
  * per-browser and not `instance_config` — the same reasoning as ADR-0015 in
  * `uiPrefs.ts`: two browsers pointed at one daemon would fight over one row, and
  * "have I seen the welcome?" is a fact about a reader, not about an instance.
@@ -81,7 +82,7 @@ export function markTourDone(tourId: string, at: Date = new Date()): Record<stri
   return loadToursDone();
 }
 
-/** Settings › Tutorials › « Reset tutorial memory »: forget the checkmarks AND the
+/** Settings › General › Tutorials › « Reset »: forget the checkmarks AND the
  *  welcome prompt, so the next load proposes the modal again on a Run-less instance.
  *  The {@link tourIdentity} stays: forgetting it would orphan every object the
  *  tours already gave this browser (ADR-0071 §5). */
@@ -94,32 +95,33 @@ export function resetTourMemory(): void {
   }
 }
 
-// ---- identité de tour (CONTEXT.md, ADR-0071 §5) ----------------------------
+// ---- Identité de tour (CONTEXT.md, ADR-0071 §5) ----------------------------
 
 /**
- * This browser's **identité de tour**: four base36 characters, drawn once. PDO has
- * no notion of a user, and an instance is shared (the Dojo plays the tours in a
- * group), so the identity is the tours' only « self »: every object a tour puts on
- * the instance, or has the reader paste, carries it as a name suffix, and a tour
- * only reuses and tidies up its own.
+ * This browser's **Identité de tour**: four base36 characters, drawn once. An
+ * instance is shared, and a tour knows no user, so the identity is the tours'
+ * only « self »: every object a tour prepares, or has the reader paste, carries
+ * it as a name suffix, and a tour only points at, advances on and tidies up its
+ * own.
  */
 const IDENTITY_KEY = "pdo.tour.identity";
 
-/** The identity's shape — anything else in the store is redrawn, never trusted. */
+/** The identity's shape: anything else in the store is redrawn, never trusted. */
 export const TOUR_IDENTITY_FORMAT = /^[0-9a-z]{4}$/;
 
 const BASE36 = "0123456789abcdefghijklmnopqrstuvwxyz";
 
 /**
- * The identity drawn when the store could not keep it (private mode, quota): held
- * for the session, so the tour's objects do not change names under the reader.
+ * The identity drawn when the store could not keep it (private mode, quota):
+ * held for the session, so the tour's objects do not change names under the
+ * reader.
  */
 let sessionIdentity: string | null = null;
 
 /**
  * Draw a fresh identity. `crypto.getRandomValues`, not `randomUUID`: a shared
  * instance is often served over plain http on a LAN, where `randomUUID` does not
- * exist. The modulo bias over 36 is irrelevant for four characters of a name.
+ * exist. The modulo bias over 36 does not matter for four characters of a name.
  */
 export function drawTourIdentity(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(4));
@@ -127,7 +129,7 @@ export function drawTourIdentity(): string {
 }
 
 /**
- * This browser's identity — read from the store, or drawn once and kept there.
+ * This browser's identity: read from the store, or drawn once and kept there.
  * Stable across reloads; a cleared store or another browser draws a new one, and
  * the old objects stay behind as orphans (the price ADR-0071 §5 accepts).
  */
@@ -149,8 +151,8 @@ export function tourIdentity(): string {
 
 /**
  * A name that belongs to this browser: `base-<id>`, e.g. `tour-overview-k3x9`.
- * Every tour names what it puts or has pasted through here, so they all suffix
- * the same way.
+ * Every tour names what it prepares or has pasted through here, so they all
+ * suffix the same way.
  */
 export function withTourIdentity(base: string, identity: string = tourIdentity()): string {
   return `${base}-${identity}`;

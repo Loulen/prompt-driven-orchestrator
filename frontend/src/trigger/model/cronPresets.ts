@@ -1,0 +1,91 @@
+/**
+ * Cron-preset utilities (#160). Friendly presets compile to a 5-field cron
+ * expression on the frontend; the daemon stores and schedules on the raw cron.
+ * A raw-expression escape hatch covers everything the presets don't.
+ */
+
+export type CronPresetId = "every_15_min" | "hourly" | "daily" | "custom";
+
+export interface CronPreset {
+  id: Exclude<CronPresetId, "custom">;
+  label: string;
+}
+
+/** The presets offered in the New Run modal's Trigger mode. */
+export const CRON_PRESETS: CronPreset[] = [
+  { id: "every_15_min", label: "Every 15 min" },
+  { id: "hourly", label: "Hourly" },
+  { id: "daily", label: "Daily" },
+];
+
+/** Time-of-day for the daily preset. */
+export interface DailyTime {
+  hour: number;
+  minute: number;
+}
+
+/** Compile a preset (plus optional daily time) into a 5-field cron expression. */
+export function presetToCron(
+  id: Exclude<CronPresetId, "custom">,
+  time: DailyTime = { hour: 9, minute: 0 },
+): string {
+  switch (id) {
+    case "every_15_min":
+      return "*/15 * * * *";
+    case "hourly":
+      return "0 * * * *";
+    case "daily":
+      return `${time.minute} ${time.hour} * * *`;
+  }
+}
+
+/** Identify which preset a cron expression corresponds to, or `custom`. */
+export function cronToPreset(cron: string): CronPresetId {
+  const norm = cron.trim().replace(/\s+/g, " ");
+  if (norm === "*/15 * * * *") return "every_15_min";
+  if (norm === "0 * * * *") return "hourly";
+  // Daily: `<min> <hour> * * *`.
+  if (/^\d{1,2} \d{1,2} \* \* \*$/.test(norm)) return "daily";
+  return "custom";
+}
+
+/**
+ * Extract the daily preset's time-of-day from a cron expression, or `null` if
+ * it isn't a daily cron. Whitespace is normalized the same way `cronToPreset`
+ * does, so any cron `cronToPreset` calls `daily` yields a non-null time here.
+ */
+export function parseDailyTime(cron: string): DailyTime | null {
+  const norm = cron.trim().replace(/\s+/g, " ");
+  const m = norm.match(/^(\d{1,2}) (\d{1,2}) \* \* \*$/);
+  if (!m) return null;
+  return { hour: Number(m[2]), minute: Number(m[1]) };
+}
+
+/** The time zone the daemon reads every cron in (`pdo-trigger`'s schedule runs on UTC). */
+export const CRON_TIME_ZONE = "UTC";
+
+/**
+ * Whether the time zone changes when `cron` fires: it names an hour or a day
+ * (`0 3 * * *`, `0 * * * 1`). One on minutes only fires alike everywhere.
+ */
+export function cronDependsOnZone(cron: string): boolean {
+  const fields = cron.trim().split(/\s+/);
+  return fields.length === 5 && fields.slice(1).some((field) => field !== "*");
+}
+
+/**
+ * A short human-readable label for a cron expression (UI rows). A schedule
+ * the time zone changes names the one it is read in.
+ */
+export function humanizeCron(cron: string): string {
+  const norm = cron.trim().replace(/\s+/g, " ");
+  if (norm === "*/15 * * * *") return "every 15 min";
+  if (norm === "0 * * * *") return "hourly";
+  const daily = parseDailyTime(norm);
+  if (daily) {
+    const hour = String(daily.hour).padStart(2, "0");
+    const minute = String(daily.minute).padStart(2, "0");
+    return `daily at ${hour}:${minute} ${CRON_TIME_ZONE}`;
+  }
+  return cronDependsOnZone(norm) ? `${norm} ${CRON_TIME_ZONE}` : norm;
+}

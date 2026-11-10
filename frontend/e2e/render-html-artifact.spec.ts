@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import * as os from "node:os";
 import { fileURLToPath } from "node:url";
 import { runBody } from "./helpers";
 
@@ -18,7 +19,9 @@ import { runBody } from "./helpers";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-render-html-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
@@ -109,7 +112,7 @@ async function createRunAndSeedArtifact(baseURL: string) {
   runId = json.run_id;
 
   // The daemon resolves an html output port to
-  // `<node>/iter-1/<port>/output.html` (crates/pdo-daemon/src/blackboard.rs).
+  // `<node>/iter-1/<port>/output.html` (crates/pdo-run/src/domain/blackboard.rs).
   const portDir = path.join(
     WORKSPACE_ROOT,
     ".pdo",
@@ -129,7 +132,7 @@ async function createRunAndSeedArtifact(baseURL: string) {
 
 async function openNode(page: Page) {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
   await page
@@ -177,7 +180,7 @@ test("renders an html artifact in a scriptless sandboxed iframe", async ({
     .locator('.port-row:has([data-testid="port-row-open"])')
     .filter({ hasText: /^report/ });
   await expect(portRow).toBeVisible({ timeout: 5_000 });
-  await portRow.click();
+  await portRow.locator(".ri-port__where").click();
 
   // The artifact renders inside the sandboxed iframe.
   const frame = page.locator('[data-testid="html-artifact-frame"]');

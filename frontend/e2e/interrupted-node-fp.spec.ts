@@ -3,13 +3,15 @@ import type { Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import * as os from "node:os";
 import { fileURLToPath } from "node:url";
 import { cleanupRuns, runMultipart } from "./helpers";
 
 // FP validation — #598 / ADR-0049: an interactive node whose tmux session dies
 // parks `interrupted` (recoverable) and the panel must now offer a way out:
-// Play + Reopen banner + Mark complete + a minimized (no "can't find session")
-// terminal; a Reopen revives the session; and an archived run shows none of it.
+// Play + Reopen banner + a minimized (no "can't find session") terminal, and no
+// Mark complete (the daemon does not complete an interrupted node); a Reopen
+// revives the session; and an archived run shows none of it.
 //
 // This drives the REAL system end to end: a real daemon (webServer), a real
 // tmux session per node, killed for real, and the real stale-detector sweep
@@ -23,7 +25,9 @@ const SOCKET = `pdo-${PORT}`;
 const SHOTS = process.env.PDO_FP_SHOTS_DIR ?? path.join(WORKSPACE_ROOT, "fp-shots");
 
 const PIPELINE_NAME = `e2e-interrupted-fp-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 // A single worker node with a live session. The stale detector only probes
@@ -119,10 +123,9 @@ async function createRun(page: Page, baseURL: string): Promise<string> {
 
 // Select a run in the left panel, its worker node, and switch to the Run tab.
 async function openWorker(page: Page, runId: string) {
-  await page
-    .getByText(runId.slice(0, 20))
-    .first()
-    .click({ timeout: 5_000, position: { x: 5, y: 5 } });
+  // The row itself: the run id also shows in the hidden `<title>` of a status
+  // mark (« session_died: tmux session pdo-<run>… »), which a text match finds.
+  await page.locator(`[data-run-row="${runId}"]`).click({ timeout: 5_000, position: { x: 5, y: 5 } });
   await page.waitForTimeout(400);
   const node = page.getByText("worker", { exact: true }).first();
   await expect(node).toBeVisible({ timeout: 5_000 });
@@ -187,13 +190,13 @@ async function annotateAndShoot(
   await page.evaluate(() => document.getElementById("__fp_annot__")?.remove());
 }
 
-test("interrupted node offers Play + Reopen + Mark complete, revives on Reopen, and hides all of it when archived", async ({
+test("interrupted node offers Play + Reopen, revives on Reopen, and hides all of it when archived", async ({
   page,
   baseURL,
 }) => {
   test.setTimeout(150_000);
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 15_000 });
 
   // Two runs: one to exercise the recovery affordances (+ Reopen), one to leave
   // archived-while-interrupted for the archived variant. Kill both sessions,
@@ -214,23 +217,24 @@ test("interrupted node offers Play + Reopen + Mark complete, revives on Reopen, 
   const banner = page.getByTestId("interrupted-banner");
   await expect(banner).toBeVisible({ timeout: 8_000 });
   await expect(banner).toContainText("Session died");
-  await expect(banner).toContainText("the work is presumed intact");
+  await expect(banner).toContainText("work presumed intact");
   await expect(page.getByTestId("interrupted-reopen-btn")).toBeVisible();
   await expect(page.getByTestId("play-retry-btn")).toBeVisible();
-  await expect(page.getByTestId("play-retry-btn")).toContainText("Play");
-  await expect(page.getByTestId("mark-complete-btn")).toBeVisible();
+  await expect(page.getByTestId("play-retry-btn")).toHaveAccessibleName("Retry");
+  // The daemon does not complete an interrupted node (it re-drives on Reopen):
+  // Approve is not offered on it (`isMarkCompletable`).
+  await expect(page.getByTestId("approve-btn")).toHaveCount(0);
   await expect(page.getByTestId("terminal-minimized")).toBeVisible();
   await expect(page.getByTestId("tmux-terminal")).toHaveCount(0);
   await expect(page.getByText(/can't find session/i)).toHaveCount(0);
 
   await annotateAndShoot(page, "1-interrupted-affordances.png", [
     "Etape 1 — Node Interrupted : session tmux tuee, detectee par la sweep stale-detector (meme etat NodeInterrupted qu'au redemarrage daemon).",
-    "Le volet offre desormais une sortie : banniere Reopen, bouton Play, Mark complete ; terminal minimise (plus de \"can't find session\").",
+    "Le volet offre une sortie : banniere Reopen, bouton Play ; terminal minimise (plus de \"can't find session\").",
   ].join("\n"), [
     { testid: "interrupted-banner", label: "Banniere: Session died - the work is presumed intact" },
     { testid: "interrupted-reopen-btn", label: "Bouton Reopen (geste retry)" },
     { testid: "play-retry-btn", label: "Bouton Play dans node-controls" },
-    { testid: "mark-complete-btn", label: "Mark complete de nouveau atteignable" },
     { testid: "terminal-minimized", label: "Terminal minimise (session definitivement morte)" },
   ]);
 
@@ -257,12 +261,12 @@ test("interrupted node offers Play + Reopen + Mark complete, revives on Reopen, 
   // `worker` node lingers on the canvas and `getByText("worker")` can select it
   // before the canvas switches to the archived run — a stale-selection race.
   await page.reload();
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 15_000 });
   // Archived runs live in a collapsed "Archived" section — expand it if the run
   // row isn't already on screen, then select the archived run's worker node.
-  const archivedToggle = page.getByTestId("run-archived-toggle");
+  const archivedToggle = page.getByTestId("run-archived-chevron");
   await expect(archivedToggle).toBeVisible({ timeout: 8_000 });
-  const archivedRow = page.getByText(archiveRun.slice(0, 20)).first();
+  const archivedRow = page.locator(`[data-run-row="${archiveRun}"]`);
   if (!(await archivedRow.isVisible().catch(() => false))) {
     await archivedToggle.click();
     await expect(archivedRow).toBeVisible({ timeout: 5_000 });
@@ -272,7 +276,7 @@ test("interrupted node offers Play + Reopen + Mark complete, revives on Reopen, 
   await expect(page.getByTestId("node-controls")).toHaveCount(0);
   await expect(page.getByTestId("interrupted-reopen-btn")).toHaveCount(0);
   await expect(page.getByTestId("play-retry-btn")).toHaveCount(0);
-  await expect(page.getByTestId("mark-complete-btn")).toHaveCount(0);
+  await expect(page.getByTestId("approve-btn")).toHaveCount(0);
 
   await annotateAndShoot(page, "3-archived-no-affordances.png", [
     "Etape 3 — Variante archivee : sur un run archive (worktree + session detruits),",

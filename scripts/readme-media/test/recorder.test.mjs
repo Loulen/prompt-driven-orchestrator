@@ -7,24 +7,29 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { sleep } from "../lib/demo-instance.mjs";
-import { Recorder } from "../lib/recorder.mjs";
+import { Recorder, withLayoutWidth } from "../lib/recorder.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..", "..", "..");
+
+test("a stored Workbench layout is given the CSS width of its window, at the scene's UI scale", () => {
+  const layout = { left: 18, center: 57, right: 25 };
+  // The front's default UI scale is 120 %: 1200 viewport px are 1000 CSS px.
+  assert.deepEqual(withLayoutWidth({ "pdo.layout.run": layout }, { width: 1200, height: 760 }), {
+    "pdo.layout.run": layout,
+    "pdo.layout.run.width": "1000",
+  });
+  assert.equal(withLayoutWidth({ "pdo.layout.run": layout, "pdo.ui.scale": "100" }, { width: 1100 })["pdo.layout.run.width"], "1100");
+  // Nothing to restore: nothing added; a width the scene sets is kept.
+  assert.deepEqual(withLayoutWidth({ "pdo.tour.offered": "1" }, { width: 1100 }), { "pdo.tour.offered": "1" });
+  assert.equal(withLayoutWidth({ "pdo.layout.run": layout, "pdo.layout.run.width": "900" }, { width: 1100 })["pdo.layout.run.width"], "900");
+});
 
 let chromium = null;
 try {
   ({ chromium } = createRequire(path.join(repoRoot, "frontend", "package.json"))("@playwright/test"));
 } catch {
   // frontend dependencies not installed
-}
-
-// The frames are read back with ffmpeg, like the montage encodes them.
-let ffmpeg = true;
-try {
-  execFileSync("ffmpeg", ["-version"], { stdio: "ignore" });
-} catch {
-  ffmpeg = false;
 }
 
 // The cuts are planned on the recorder's clock and applied to the video: the
@@ -39,7 +44,7 @@ function colorAt(video, t) {
   return [...raw.subarray(0, 3)];
 }
 
-test("the video and the timeline share their 0, even when the scene waits before its first page", { skip: !chromium ? "run `pnpm install` in frontend/" : !ffmpeg ? "no ffmpeg on PATH" : false }, async (t) => {
+test("the video and the timeline share their 0, even when the scene waits before its first page", { skip: chromium ? false : "run `pnpm install` in frontend/" }, async (t) => {
   const videoDir = fs.mkdtempSync(path.join(os.tmpdir(), "readme-media-recorder-"));
   t.after(() => fs.rmSync(videoDir, { recursive: true, force: true }));
   const browser = await chromium.launch();

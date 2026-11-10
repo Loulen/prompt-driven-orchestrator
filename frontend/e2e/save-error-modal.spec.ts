@@ -1,19 +1,18 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
-import { openPipelineForEdit } from "./helpers";
+import { confirmSaveVersion, openPipelineForEdit } from "./helpers";
 
 // Layer 3b — Save error modal (#74, refs #1).
 // Verifies:
 // 1. Stubbing the daemon PUT endpoint to return an error → modal appears.
 // 2. Modal shows the error message.
-// 3. Clicking "Voir le YAML" opens the info panel on the YAML tab.
+// 3. Clicking "View YAML" opens the info panel on the YAML tab.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-save-err-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// The instance pipelines the daemon watches.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
@@ -63,9 +62,9 @@ test.afterAll(async () => {
   await fs.rm(PROMPTS_DIR, { recursive: true, force: true });
 });
 
-test("save error shows modal, Voir le YAML opens YAML tab", async ({ page }) => {
+test("save error shows modal, View YAML opens YAML tab", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // Open pipeline in the edit canvas
   await openPipelineForEdit(page, PIPELINE_NAME);
@@ -75,11 +74,11 @@ test("save error shows modal, Voir le YAML opens YAML tab", async ({ page }) => 
 
   // Make a change to dirty the tab
   await page.getByText("alpha", { exact: true }).first().click();
-  const promptArea = page.getByPlaceholder("Enter the node's role prompt...");
+  const promptArea = page.getByTestId("node-prompt-input");
   await expect(promptArea).toBeVisible();
   await promptArea.fill("DIRTY_SAVE_ERROR");
 
-  await expect(tabTitle).toHaveText(`• ${PIPELINE_NAME}.yaml`);
+  await expect(tabTitle.locator("xpath=ancestor::button[1]")).toHaveAttribute("data-dirty", "true");
 
   // Intercept the PUT endpoint to return a structured error
   await page.route("**/pipelines/**", (route) => {
@@ -100,6 +99,7 @@ test("save error shows modal, Voir le YAML opens YAML tab", async ({ page }) => 
   // Click Save
   const saveBtn = page.getByTestId("save-button");
   await saveBtn.click();
+  await confirmSaveVersion(page);
 
   // Assert save error modal appears
   const modal = page.getByTestId("save-error-modal");
@@ -110,9 +110,9 @@ test("save error shows modal, Voir le YAML opens YAML tab", async ({ page }) => 
   await expect(errorMsg).toContainText("missing field");
 
   // Assert the modal title
-  await expect(modal).toContainText("Impossible de sauvegarder");
+  await expect(modal).toContainText("Save failed");
 
-  // Click "Voir le YAML"
+  // Click "View YAML"
   const viewYamlBtn = page.getByTestId("save-error-view-yaml");
   await viewYamlBtn.click();
 
@@ -124,7 +124,7 @@ test("save error shows modal, Voir le YAML opens YAML tab", async ({ page }) => 
   await expect(infoPanel).toBeVisible({ timeout: 3_000 });
 
   const yamlTab = page.getByTestId("info-tab-yaml");
-  await expect(yamlTab).toHaveClass(/border-acc/);
+  await expect(yamlTab).toHaveAttribute("aria-selected", "true");
 
   // YAML content should be visible
   const yamlContent = page.getByTestId("info-yaml-content");
@@ -133,7 +133,7 @@ test("save error shows modal, Voir le YAML opens YAML tab", async ({ page }) => 
 
 test("save error modal dismiss closes modal without opening info panel", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   await openPipelineForEdit(page, PIPELINE_NAME);
 
@@ -141,7 +141,7 @@ test("save error modal dismiss closes modal without opening info panel", async (
   await expect(tabTitle).toBeVisible();
 
   await page.getByText("alpha", { exact: true }).first().click();
-  const promptArea = page.getByPlaceholder("Enter the node's role prompt...");
+  const promptArea = page.getByTestId("node-prompt-input");
   await expect(promptArea).toBeVisible();
   await promptArea.fill("DIRTY_DISMISS_TEST");
 
@@ -160,6 +160,7 @@ test("save error modal dismiss closes modal without opening info panel", async (
   });
 
   await page.getByTestId("save-button").click();
+  await confirmSaveVersion(page);
 
   const modal = page.getByTestId("save-error-modal");
   await expect(modal).toBeVisible({ timeout: 3_000 });

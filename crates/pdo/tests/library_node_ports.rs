@@ -1,0 +1,156 @@
+//! Layer 3a — POST a library node with fully-typed ports (frontmatter schemas,
+//! instructions, when clauses) → GET /library → assert every field round-trips
+//! through the daemon and on-disk YAML.  Regression test for #71. A port's retired
+//! `side` and `repeated`, still sent by an old client, are dropped.
+
+use crate::common::TestDaemon;
+
+#[tokio::test]
+async fn library_node_preserves_all_port_fields() {
+    let daemon = TestDaemon::spawn(|_repo_root| Ok(())).await.unwrap();
+    let client = reqwest::Client::new();
+
+    let payload = serde_json::json!({
+        "name": "Typed Reviewer",
+        "type": "agent",
+        "inputs": [
+            {
+                "name": "code",
+                "repeated": false,
+                "side": "left"
+            },
+            {
+                "name": "reviews",
+                "repeated": true,
+                "side": "top"
+            }
+        ],
+        "outputs": [
+            {
+                "name": "review",
+                "repeated": false,
+                "side": "right",
+                "frontmatter": {
+                    "verdict": {
+                        "type": "enum",
+                        "allowed": ["PASS", "FAIL"]
+                    },
+                    "score": {
+                        "type": "int"
+                    }
+                },
+                "when": {
+                    "verdict": { "eq": "PASS" }
+                },
+                "instructions": "Return a verdict and explain the main risk."
+            }
+        ],
+        "interactive": true,
+        // #296/#424: the two per-node agent knobs. `POST /library` → GET →
+        // `instantiate` is the only daemon-real test of the node library, so it is
+        // the one place a dropped field surfaces end-to-end.
+        "model": "opus",
+        "effort": "low",
+        "prompt": "You are a code reviewer."
+    });
+
+    let resp = client
+        .post(format!("{}/library", daemon.url()))
+        .json(&payload)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201, "POST /library should return 201");
+
+    let created: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(created["name"], "Typed Reviewer");
+
+    let resp = client
+        .get(format!("{}/library", daemon.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let entries: Vec<serde_json::Value> = resp.json().await.unwrap();
+    let entry = entries
+        .iter()
+        .find(|e| e["name"] == "Typed Reviewer")
+        .expect("entry should exist in GET /library");
+
+    let inputs = entry["inputs"].as_array().unwrap();
+    assert_eq!(inputs.len(), 2);
+    assert_eq!(inputs[0]["name"], "code");
+    assert_eq!(inputs[1]["name"], "reviews");
+    for port in inputs {
+        assert!(port.get("side").is_none(), "{port}");
+        assert!(port.get("repeated").is_none(), "{port}");
+    }
+
+    let outputs = entry["outputs"].as_array().unwrap();
+    assert_eq!(outputs.len(), 1);
+    let output = &outputs[0];
+    assert_eq!(output["name"], "review");
+    assert!(output.get("side").is_none(), "{output}");
+    assert!(output.get("repeated").is_none(), "{output}");
+
+    let frontmatter = &output["frontmatter"];
+    assert!(!frontmatter.is_null(), "frontmatter should be present");
+    assert_eq!(frontmatter["verdict"]["type"], "enum");
+    let allowed = frontmatter["verdict"]["allowed"].as_array().unwrap();
+    assert_eq!(allowed.len(), 2);
+    assert!(allowed.contains(&serde_json::json!("PASS")));
+    assert!(allowed.contains(&serde_json::json!("FAIL")));
+    assert_eq!(frontmatter["score"]["type"], "int");
+
+    let when = &output["when"];
+    assert!(!when.is_null(), "when clause should be present");
+    assert_eq!(when["verdict"]["eq"], "PASS");
+    assert_eq!(
+        output["instructions"],
+        "Return a verdict and explain the main risk."
+    );
+
+    assert_eq!(entry["interactive"], true);
+    assert_eq!(entry["model"], "opus");
+    assert_eq!(
+        entry["effort"], "low",
+        "#424: the library must be effort-aware"
+    );
+    assert_eq!(entry["prompt"], "You are a code reviewer.");
+
+    let resp = client
+        .post(format!(
+            "{}/library/{}/instantiate",
+            daemon.url(),
+            "Typed Reviewer"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let instantiated: serde_json::Value = resp.json().await.unwrap();
+
+    let spec = &instantiated["spec"];
+    let inst_outputs = spec["outputs"].as_array().unwrap();
+    let inst_output = &inst_outputs[0];
+    assert!(
+        !inst_output["frontmatter"].is_null(),
+        "instantiated output should have frontmatter"
+    );
+    assert_eq!(inst_output["frontmatter"]["verdict"]["type"], "enum");
+    assert!(
+        !inst_output["when"].is_null(),
+        "instantiated output should have when"
+    );
+    assert_eq!(inst_output["when"]["verdict"]["eq"], "PASS");
+    assert_eq!(
+        inst_output["instructions"],
+        "Return a verdict and explain the main risk."
+    );
+    assert_eq!(spec["model"], "opus");
+    assert_eq!(
+        spec["effort"], "low",
+        "#424: instantiating must restore the effort, not the default"
+    );
+    assert_eq!(instantiated["prompt"], "You are a code reviewer.");
+}

@@ -27,29 +27,32 @@ import {
   startTour,
   stepBody,
   stepNote,
+  stepReadOnly,
   stepSoft,
-  type TourAppState,
-  type TourObservation,
   type TourRun,
-  type TourRunNode,
-  type TourRunSummary,
-  type TourStep,
 } from "../tour";
+import type {
+  TourAppState,
+  TourObservation,
+  TourRunNode,
+  TourRunSummary,
+  TourStep,
+} from "../tourDef";
+import { FIRST_RUN_TOUR } from "./firstRun";
 import {
-  FIRST_RUN_TOUR,
-  firstRunName,
   TUTORIAL_PROJECT_NAME,
   TUTORIAL_PROMPT,
   TUTORIAL_REPO_PATH,
   TUTORIAL_RUN_PIPELINE_ID,
   TUTORIAL_TERMINAL_LINE,
-} from "./firstRun";
+  firstRunName,
+} from "./firstRunPreparation";
 import { CARD_HEIGHT, CARD_WIDTH } from "../nodePlacement";
 import { probeReplay, type ReplayOutcome } from "../../test/tourReplay";
 
 const TOUR = FIRST_RUN_TOUR;
 
-/** This browser's identité de tour, pinned for every test (#987). */
+/** This browser's Identité de tour, pinned for every test. */
 const ME = "k3x9";
 const MY_RUN_NAME = `my-first-run-${ME}`;
 
@@ -64,7 +67,8 @@ const t = (id: string) => `[data-testid="${id}"]`;
 const RUNS_TAB = t("left-tab-runs");
 const NEW_RUN = t("new-run-button");
 const NAME_INPUT = t("run-name-input");
-const AUTO_NAME = t("auto-name-checkbox");
+/** The whole Auto control, box and word (FP of CORE-227). */
+const AUTO_NAME = t("auto-name");
 const REPO_INPUT = t("target-repo-input");
 const BROWSE = t("repo-browse-trigger");
 const EXPLORER = t("repo-browser-modal");
@@ -89,7 +93,13 @@ const NODE_ID = "assistant";
 const NODE_CARD = `.react-flow__node[data-id="${NODE_ID}"]`;
 const INSPECTOR_RUN = t("inspector-pane-run");
 const TERMINAL = t("tmux-terminal");
-const RELEASE = t("release-completion-btn");
+const ENLARGED_TERMINAL = t("terminal-fullsize");
+const COLLAPSE_TERMINAL = `${ENLARGED_TERMINAL} ${t("term-expand")}`;
+const INTERRUPTED_BANNER = t("interrupted-banner");
+const REOPEN = t("interrupted-reopen-btn");
+const RELEASE = t("approve-btn-menu");
+const APPROVE_MENU = '[role="menu"][aria-label="Approve options"]';
+const AUTO_APPROVE_ENTRY = `${APPROVE_MENU} [role="menuitemcheckbox"]`;
 const OUT_ROW = `${t("port-row")}[data-kind="output"][data-port="out"]`;
 const OUT_MODAL = `${t("artifact-modal")}[data-port="out"]`;
 const LAUNCH = t("launch-button");
@@ -119,9 +129,9 @@ const EMPTY_APP: TourAppState = {
  *
  * It starts with **two Runs already in the list**: this instance is not empty, so
  * a last step that merely asked "is there a Run?" would be satisfied before the
- * user pressed anything. And the instance is **shared** (#987): {@link
- * foreignLaunch} is a neighbour's Launch, which puts a newer Run at the head of
- * the list without being this browser's.
+ * user pressed anything. And the instance is **shared**: {@link foreignLaunch}
+ * is a neighbour's Launch, which puts a newer Run at the head of the list
+ * without being this browser's.
  */
 class FakeApp {
   app: TourAppState = {
@@ -238,8 +248,8 @@ class FakeApp {
     this.show(runRow(id));
   }
 
-  /** Somebody else's Launch on the same instance (#987): a newer Run heads the
-   *  list, and nothing this browser holds changes. */
+  /** Somebody else's Launch on the same instance: a newer Run heads the list,
+   *  and nothing this browser holds changes. */
   foreignLaunch(name = "my-first-run-zzzz", id = "r-foreign") {
     this.app = {
       ...this.app,
@@ -279,7 +289,13 @@ class FakeApp {
     this.app = { ...this.app, selection: { kind: "node", id: NODE_ID, edgeIndex: null } };
   }
 
+  /** Clicking Approve ▾'s chevron: its menu opens, in a portal. */
+  openApproveMenu() {
+    this.show(APPROVE_MENU, AUTO_APPROVE_ENTRY);
+  }
+
   releaseCompletion() {
+    this.hide(APPROVE_MENU, AUTO_APPROVE_ENTRY);
     this.patchNode({ released: true });
   }
 
@@ -338,7 +354,10 @@ function gestures(fake: FakeApp): Record<string, () => void> {
     // Nothing observable: what happens in tmux is a pane of text. The walk's
     // `Next` is the gesture.
     "talk-to-agent": () => {},
-    "release-completion": () => fake.releaseCompletion(),
+    "release-completion": () => {
+      fake.openApproveMenu();
+      fake.releaseCompletion();
+    },
     "wait-for-node": () => fake.finishNode("completed"),
     "open-output": () => fake.openOutput(),
   };
@@ -348,7 +367,7 @@ function gestures(fake: FakeApp): Record<string, () => void> {
 function walk(
   fake: FakeApp,
   script: Record<string, () => void>,
-  /** Called on entering each step, before its gesture (PDO-10's replay probe). */
+  /** Called on entering each step, before its gesture (the replay probe). */
   onStep?: (run: TourRun, now: number) => void,
 ) {
   let run = startTour(TOUR, fake.obs());
@@ -420,10 +439,18 @@ describe("targets that re-aim as the user works", () => {
     const fake = new FakeApp();
     fake.hide(NEW_RUN);
     expect(stepById("open-new-run").target(fake.obs())).toEqual([RUNS_TAB]);
+    // The card says the tab it lights (CORE-232).
+    expect(stepBody(stepById("open-new-run"), fake.obs())).toMatch(/^Open the Runs tab, then click New Run\./);
     fake.show(NEW_RUN);
     expect(stepById("open-new-run").target(fake.obs())).toEqual([NEW_RUN]);
+    expect(stepBody(stepById("open-new-run"), fake.obs())).toMatch(/^Click New Run\./);
   });
 
+  /**
+   * FP of CORE-227: card 1/15 said « Click New Run » while the Runs tab was
+   * what was lit — the full tour arrives from the Pipelines tab. The body names
+   * the lit thing.
+   */
   it.each([
     ["pick-pipeline", PIPELINE_TRIGGER, () => {}, PIPELINE_OPTION],
     ["pick-profile", AGENT_TRIGGER, () => {}, AGENT_DEFAULT_ROW],
@@ -652,8 +679,8 @@ describe("the Launch step", () => {
     expect(step.done!(fake.obs())).toBe(true);
   });
 
-  /** #987: on a shared instance a neighbour's Launch adds a Run too — one more
-   *  Run in the list is not yours. */
+  /** On a shared instance a neighbour's Launch adds a Run too: one more Run in
+   *  the list is not yours. */
   it("does not advance on another browser's Launch", () => {
     const fake = new FakeApp();
     const step = stepById("launch");
@@ -773,7 +800,7 @@ describe("finding the Run, and opening its node", () => {
     const fake = new FakeApp();
     fake.launch();
     const run = at(fake, "find-run");
-    expect(stepBody(stepById("find-run"), fake.obs())).toContain(`Click ${MY_RUN_NAME} in the list on the left.`);
+    expect(stepBody(stepById("find-run"), fake.obs())).toContain(`Click \`${MY_RUN_NAME}\` in the list on the left.`);
     expect(canAdvance(TOUR, run, fake.obs())).toBe(false);
     // …and no dead `Next` in the way of the instruction: the footer keeps the
     // waiting line the design drew, until there is something to confirm.
@@ -850,8 +877,8 @@ describe("finding the Run, and opening its node", () => {
   });
 
   /**
-   * #987: a neighbour launched a second after you, so THEIR Run heads the list.
-   * The frame goes to yours wherever it sits, and the card never claims a « top
+   * A neighbour launched a second after you, so THEIR Run heads the list. The
+   * frame goes to yours wherever it sits, and the card never claims a « top
    * row » it cannot see.
    */
   it("follows the Run this browser launched, even with a newer foreign Run on top", () => {
@@ -865,15 +892,14 @@ describe("finding the Run, and opening its node", () => {
     expect(step.target(fake.obs())).toEqual([runRow("r-new")]);
     const asked = stepBody(step, fake.obs());
     expect(asked).toBe(
-      `Click ${MY_RUN_NAME} in the list on the left. Every Run is a row here; the dot is its status, blue while it runs.`,
+      `Click \`${MY_RUN_NAME}\` in the list on the left. Every Run is a row here; the icon is its status.`,
     );
     expect(asked).not.toMatch(/top/i);
 
     fake.openRun();
     expect(step.done!(fake.obs())).toBe(true);
-    const opened = stepBody(step, fake.obs());
-    expect(opened).toBe(
-      `Your Run, ${MY_RUN_NAME}, is lit in the list on the left, and Launch already opened its tab. Every Run is a row here; the dot is its status, blue while it runs.`,
+    expect(stepBody(step, fake.obs())).toBe(
+      `Your Run, \`${MY_RUN_NAME}\`, is lit in the list on the left, and Launch already opened its tab. Every Run is a row here; the icon is its status.`,
     );
   });
 
@@ -889,7 +915,7 @@ describe("finding the Run, and opening its node", () => {
   it("names the Run by what the reader typed, suffixed or not", () => {
     const fake = new FakeApp();
     fake.launch("release-check");
-    expect(stepBody(stepById("find-run"), fake.obs())).toContain("Click release-check in the list");
+    expect(stepBody(stepById("find-run"), fake.obs())).toContain("Click `release-check` in the list");
   });
 
   it("says « your Run » while this browser has launched nothing", () => {
@@ -923,12 +949,38 @@ describe("the completion guard", () => {
 
     expect(step.target(fake.obs())).toEqual([RELEASE]);
     expect(step.done!(fake.obs())).toBe(false);
+    fake.openApproveMenu();
+    expect(step.done!(fake.obs())).toBe(false);
     fake.releaseCompletion();
     expect(step.done!(fake.obs())).toBe(true);
   });
 
+  it("points at Approve ▾'s chevron, then at « Auto-approve when ready » once its menu is open", () => {
+    const fake = new FakeApp();
+    const step = stepById("release-completion");
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    const soft = step.soft as (o: ReturnType<typeof fake.obs>) => boolean;
+    expect(step.target(fake.obs())).toEqual([RELEASE]);
+    expect(soft(fake.obs())).toBe(false);
+    fake.openApproveMenu();
+    expect(step.target(fake.obs())).toEqual([AUTO_APPROVE_ENTRY]);
+    // A zone, so the open menu stays clickable.
+    expect(soft(fake.obs())).toBe(true);
+  });
+
+  it("speaks of Approve ▾ and « Auto-approve when ready », never of Mark ready / Mark complete", () => {
+    const step = stepById("release-completion");
+    const obs = new FakeApp().obs();
+    const text = [stepBody(step, obs), stepNote(step, obs), step.waitingFor, step.failureHint].join(" ");
+    expect(text).toContain("Approve ▾");
+    expect(text).toContain("Auto-approve when ready");
+    expect(text).not.toMatch(/Mark (ready|complete)/);
+  });
+
   /**
-   * « Mark complete » is the other button, and it ends the node without ever
+   * Approve is the other gesture, and it ends the node without ever
    * setting the flag. Reading only the flag would strand the tour on a card about
    * a gesture whose button is no longer on screen.
    */
@@ -941,10 +993,30 @@ describe("the completion guard", () => {
     expect(stepById("release-completion").done!(fake.obs())).toBe(true);
   });
 
-  it("names the look-alike button it is NOT about", () => {
+  it("names the look-alike gesture it is NOT about", () => {
     expect(stepNote(stepById("release-completion"), new FakeApp().obs())).toContain(
-      "Mark complete",
+      "Approve itself completes the node now",
     );
+  });
+});
+
+/**
+ * FP of CORE-227: the node's session died during the tour, and « Reopen » —
+ * the one gesture that brings it back — sat under the dim while the step lit
+ * the node's terminal. On the steps about that node, its interrupted banner is
+ * lit beside the target and Reopen stays live.
+ */
+describe("a node whose session died during the tour", () => {
+  it.each(["talk-to-agent", "release-completion"])("leaves Reopen reachable on %s", (id) => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    const step = stepById(id);
+    expect(stepReadOnly(step, fake.obs())).toEqual([]);
+    fake.show(INTERRUPTED_BANNER, REOPEN);
+    expect(stepReadOnly(step, fake.obs())).toEqual([INTERRUPTED_BANNER]);
+    expect(step.explore).toContain(REOPEN);
   });
 });
 
@@ -982,7 +1054,8 @@ describe("waiting for the node to finish", () => {
     fake.releaseCompletion();
 
     expect(stepBody(waitStep(), fake.obs())).not.toContain("Nothing to do");
-    expect(stepNote(waitStep(), fake.obs())).toContain("answer it");
+    // The release tells the agent nothing: the reader is the one who says it may finish (CORE-232).
+    expect(stepNote(waitStep(), fake.obs())).toContain("tell it in the terminal above that it can finish now");
   });
 
   it("lights the whole inspector as a zone to roam in", () => {
@@ -993,6 +1066,22 @@ describe("waiting for the node to finish", () => {
     expect(waitStep().target(fake.obs())).toEqual([INSPECTOR_RUN]);
     expect(waitStep().soft).toBe(true);
     expect(waitStep().waitingNote).toContain("no time limit");
+  });
+
+  /**
+   * FP of CORE-227: with the terminal enlarged over the whole app, the zone
+   * stayed the inspector's box — a dashed outline and a dim drawn across the
+   * enlarged terminal. The zone follows the terminal the reader enlarged.
+   */
+  it("follows the terminal the reader enlarged, instead of drawing across it", () => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    fake.show(ENLARGED_TERMINAL);
+    expect(waitStep().target(fake.obs())).toEqual([ENLARGED_TERMINAL]);
+    fake.hide(ENLARGED_TERMINAL);
+    expect(waitStep().target(fake.obs())).toEqual([INSPECTOR_RUN]);
   });
 
   it("slides on by itself when the node completes", () => {
@@ -1044,7 +1133,8 @@ describe("waiting for the node to finish", () => {
 
     const [released, finished] = waitStep().checklist!(fake.obs());
     expect(released).toMatchObject({ done: false });
-    expect(released.note).toContain("Mark ready for completion");
+    expect(released.note).toContain("Auto-approve when ready");
+    expect(released.note).not.toMatch(/Mark (ready|complete)/);
     expect(finished).toMatchObject({ done: false, badge: undefined });
 
     fake.releaseCompletion();
@@ -1109,6 +1199,34 @@ describe("opening the output", () => {
     expect(confirmStep(TOUR, run, fake.obs()).phase).toBe("finished");
   });
 
+  /**
+   * FP of CORE-227 (F3-13): a reader who enlarged the terminal at the wait step
+   * finds the out row buried under it — the hole lit the terminal's screen, and
+   * its collapse button sat under the dim. The step aims at that button first,
+   * and says so; once the terminal is back in the inspector it aims at the row.
+   */
+  it("has the reader collapse an enlarged terminal before pointing at the row", () => {
+    const fake = new FakeApp();
+    const step = stepById("open-output");
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    fake.finishNode("completed");
+    fake.show(ENLARGED_TERMINAL, COLLAPSE_TERMINAL);
+
+    expect(step.target(fake.obs())).toEqual([COLLAPSE_TERMINAL]);
+    expect(stepSoft(step, fake.obs())).toBe(false);
+    expect(stepBody(step, fake.obs())).toContain("Collapse terminal");
+    let run = at(fake, "open-output");
+    for (const clock of [0, 20_000]) run = observeTour(TOUR, run, fake.obs(), clock);
+    expect(run.phase).not.toBe("failed");
+    expect(currentStep(TOUR, run)?.id).toBe("open-output");
+
+    fake.hide(ENLARGED_TERMINAL, COLLAPSE_TERMINAL);
+    expect(step.target(fake.obs())).toEqual([OUT_ROW]);
+    expect(stepBody(step, fake.obs())).not.toContain("Collapse terminal");
+  });
+
   /** A node that failed writes nothing: the tour stops on the usual card, with a
    *  hint that says why the row is not there. */
   it("stops cleanly when a failed node left no output", () => {
@@ -1139,7 +1257,7 @@ describe("the recap", () => {
     expect(first.text).toContain(TUTORIAL_REPO_PATH);
   });
 
-  /** #987: the recap reads YOUR Run, never the head of the list. */
+  /** The recap reads YOUR Run, never the head of the list. */
   it("never names the Run somebody else launched after you", () => {
     const fake = new FakeApp();
     fake.launch();
@@ -1246,28 +1364,34 @@ describe("the definition holds the copy rules", () => {
     expect(stepById("talk-to-agent").copyBlock).toBe(TUTORIAL_TERMINAL_LINE);
   });
 
-  /** #987: the name to paste carries this browser's identité de tour, and the
-   *  card says why in the one place the suffix is pasted. */
+  /** The card is placed beside its hole: the word « Auto » the copy points at
+   *  must be inside the hole, not under the card (FP of CORE-227). */
+  it("lights the Name field and the whole Auto control, word included", () => {
+    expect(stepById("name-run").target(new FakeApp().obs())).toEqual([NAME_INPUT, AUTO_NAME]);
+  });
+
+  /** The name to paste carries this browser's Identité de tour, and the card
+   *  says why in the one place the suffix is pasted. */
   it("suggests a Run name suffixed with this browser's identity", () => {
     const step = stepById("name-run");
     expect(copyBlockOf(step)).toBe(MY_RUN_NAME);
     expect(firstRunName()).toBe(MY_RUN_NAME);
     expect(stepBody(step, new FakeApp().obs())).toBe(
-      "Untick Auto-generated by manager, then paste the name. A name you chose is easier to find in the list; the four characters at the end are this browser's, so yours stays apart from other people's on a shared instance.",
+      "Untick Auto, next to the Name field, then paste the name. A name you chose is easier to find in the list; the four characters at the end are this browser's, so yours stays apart from other people's on a shared instance.",
     );
   });
 
   /**
-   * The ticket says "Start"; the button says **Launch** (design Q1). The copy
+   * The ticket says "Start"; the button says **Run** (design Q1). The copy
    * names what is on screen — a tour that told someone to press a button that is
    * not there is worse than no tour. Same correction for "the session": the UI
    * calls it the terminal, inside the Run inspector (#825).
    */
-  it("says Launch, because that is what the button says", () => {
+  it("says Run, because that is what the button says", () => {
     const fake = new FakeApp();
     const step = stepById("launch");
     expect(step.title).toContain("Launch");
-    expect(stepBody(step, fake.obs())).toContain("Launch");
+    expect(stepBody(step, fake.obs())).toContain("Click Run.");
     const says = (s: TourStep, re: RegExp) =>
       re.test(stepBody(s, fake.obs())) || re.test(s.title);
     expect(STEPS.some((s) => says(s, /\bStart\b/))).toBe(false);
@@ -1300,38 +1424,57 @@ describe("the definition holds the copy rules", () => {
 
 // ---- the preparations -----------------------------------------------------
 
-vi.mock("../../api", async () => {
-  const actual = await vi.importActual<typeof import("../../api")>("../../api");
+vi.mock("../../settings/api/settings", async () => {
+  const actual = await vi.importActual<typeof import("../../settings/api/settings")>("../../settings/api/settings");
   return {
     ...actual,
-    createRepo: vi.fn(async () => ({ path: "/tmp/pdo-tutorial", created: true })),
     fetchPipelines: vi.fn(async () => [] as unknown[]),
     createPipeline: vi.fn(async () => ({ id: TUTORIAL_RUN_PIPELINE_ID, scope: "instance", path: "p" })),
     savePipeline: vi.fn(async () => ({ ok: true })),
-    fetchProjects: vi.fn(async () => [] as unknown[]),
-    createProject: vi.fn(async (name: string) => ({ id: "prj-tuto", name, members: [] })),
-    addProjectMember: vi.fn(async (id: string, path: string) => ({
-      id,
-      name: "Tutorial",
-      members: [path],
-    })),
     setPipelineValidation: vi.fn(async () => ({ ok: true, id: "x", validation: { kind: "all" } })),
   };
 });
+// The agentic profiles' API answers with the mock of `../../settings/api/settings` too.
+vi.mock("../../settings/api/agentProfiles", async () => await import("../../settings/api/settings"));
+// The pipeline context's API answers with the mock of `../../settings/api/settings` above.
+vi.mock("../../pipeline/api/pipelines", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  ...(await import("../../settings/api/settings")),
+}));
+
+vi.mock("../../workspace/api/repos", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../workspace/api/repos")>()),
+  createRepo: vi.fn(async () => ({ path: "/tmp/pdo-tutorial", created: true })),
+}));
+
+vi.mock("../../workspace/api/projects", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../workspace/api/projects")>()),
+  fetchProjects: vi.fn(async () => [] as unknown[]),
+  createProject: vi.fn(async (name: string, members: string[] = []) => ({
+    id: "prj-tuto",
+    name,
+    members,
+  })),
+  addProjectMember: vi.fn(async (id: string, path: string) => ({
+    id,
+    name: "Tutorial",
+    members: [path],
+  })),
+}));
 
 describe("what the intro card prepares", () => {
   it("creates the training repository under /tmp with a README and notes.txt", async () => {
-    const api = await import("../../api");
+    const repos = await import("../../workspace/api/repos");
     await TOUR.intro!.prepare[0].run();
 
-    expect(api.createRepo).toHaveBeenCalledWith("/tmp", "pdo-tutorial", [
+    expect(repos.createRepo).toHaveBeenCalledWith("/tmp", "pdo-tutorial", [
       expect.objectContaining({ path: "README.md" }),
       expect.objectContaining({ path: "notes.txt" }),
     ]);
   });
 
   it("writes the tutorial pipeline when the Library does not have it", async () => {
-    const api = await import("../../api");
+    const api = await import("../../pipeline/api/pipelines");
     vi.mocked(api.fetchPipelines).mockResolvedValueOnce([]);
 
     await TOUR.intro!.prepare[1].run();
@@ -1353,7 +1496,7 @@ describe("what the intro card prepares", () => {
    * Start and End out itself, in a column that ran straight under it.
    */
   it("gives every node of the tutorial pipeline a place of its own", async () => {
-    const api = await import("../../api");
+    const api = await import("../../pipeline/api/pipelines");
     vi.mocked(api.fetchPipelines).mockResolvedValueOnce([]);
     await TOUR.intro!.prepare[1].run();
     const [, yaml] = vi.mocked(api.savePipeline).mock.calls.at(-1)!;
@@ -1378,7 +1521,7 @@ describe("what the intro card prepares", () => {
    * free, and a user who edited the tutorial pipeline keeps their edit.
    */
   it("leaves an existing tutorial pipeline exactly as the user left it", async () => {
-    const api = await import("../../api");
+    const api = await import("../../pipeline/api/pipelines");
     vi.mocked(api.createPipeline).mockClear();
     vi.mocked(api.savePipeline).mockClear();
     vi.mocked(api.fetchPipelines).mockResolvedValueOnce([
@@ -1392,8 +1535,8 @@ describe("what the intro card prepares", () => {
   });
 
   it("lets a refusal through, so the card can quote it", async () => {
-    const api = await import("../../api");
-    vi.mocked(api.createRepo).mockRejectedValueOnce(
+    const repos = await import("../../workspace/api/repos");
+    vi.mocked(repos.createRepo).mockRejectedValueOnce(
       new Error("/tmp/pdo-tutorial exists and is not a git repository"),
     );
 
@@ -1404,42 +1547,67 @@ describe("what the intro card prepares", () => {
 });
 
 /**
- * #974 — the First run tour keeps its pipeline out of everybody else's launch form:
- * a Projet « Tutorial » holds the training repository, and `tutorial-interactive` is
- * validated for it alone.
+ * CONTEXT.md « Pipeline validé » — the First run tour keeps its pipeline out of
+ * everybody else's launch form: a Projet « Tutorial » holds the training
+ * repository, and `tutorial-interactive` is validated for it alone.
  */
 describe("the Tutorial project the intro card prepares", () => {
   const project = () => TOUR.intro!.prepare.find((p) => p.id === "project")!;
 
-  it("creates the Projet, attaches the training repository, and validates the pipeline for it only", async () => {
-    const api = await import("../../api");
-    vi.mocked(api.fetchProjects).mockResolvedValueOnce([]);
+  it("creates the Projet with the training repository, and validates the pipeline for it only", async () => {
+    const api = await import("../../pipeline/api/pipelines");
+    const projects = await import("../../workspace/api/projects");
+    vi.mocked(projects.fetchProjects).mockResolvedValueOnce([]);
     vi.mocked(api.fetchPipelines).mockResolvedValueOnce([{ id: TUTORIAL_RUN_PIPELINE_ID } as never]);
-    vi.mocked(api.createProject).mockClear();
+    vi.mocked(projects.createProject).mockClear();
+    vi.mocked(projects.addProjectMember).mockClear();
 
     await project().run();
 
-    expect(api.createProject).toHaveBeenCalledWith(TUTORIAL_PROJECT_NAME);
-    expect(api.addProjectMember).toHaveBeenCalledWith("prj-tuto", TUTORIAL_REPO_PATH);
+    expect(projects.createProject).toHaveBeenCalledWith(TUTORIAL_PROJECT_NAME, [TUTORIAL_REPO_PATH]);
+    expect(projects.addProjectMember).not.toHaveBeenCalled();
     expect(api.setPipelineValidation).toHaveBeenLastCalledWith(TUTORIAL_RUN_PIPELINE_ID, {
       kind: "projects",
       project_ids: ["prj-tuto"],
     });
+    // ADR-0087: New Run opens on the Tutorial Projet.
+    expect(window.localStorage.getItem("pdo.newRun.lastProject")).toBe("prj-tuto");
   });
 
-  it("reuses the Projet that already holds the training repository, without a second one", async () => {
-    const api = await import("../../api");
-    vi.mocked(api.fetchProjects).mockResolvedValueOnce([
+  it("prefers the Projet named Tutorial when the training repository is in several", async () => {
+    const api = await import("../../pipeline/api/pipelines");
+    const projects = await import("../../workspace/api/projects");
+    vi.mocked(projects.fetchProjects).mockResolvedValueOnce([
       { id: "prj-mine", name: "Sandbox", members: [TUTORIAL_REPO_PATH] },
+      { id: "prj-tuto-old", name: TUTORIAL_PROJECT_NAME, members: [TUTORIAL_REPO_PATH] },
     ]);
     vi.mocked(api.fetchPipelines).mockResolvedValueOnce([{ id: TUTORIAL_RUN_PIPELINE_ID } as never]);
-    vi.mocked(api.createProject).mockClear();
-    vi.mocked(api.addProjectMember).mockClear();
+    vi.mocked(projects.addProjectMember).mockClear();
 
     await project().run();
 
-    expect(api.createProject).not.toHaveBeenCalled();
-    expect(api.addProjectMember).not.toHaveBeenCalled();
+    expect(projects.addProjectMember).not.toHaveBeenCalled();
+    expect(api.setPipelineValidation).toHaveBeenLastCalledWith(TUTORIAL_RUN_PIPELINE_ID, {
+      kind: "projects",
+      project_ids: ["prj-tuto-old"],
+    });
+    expect(window.localStorage.getItem("pdo.newRun.lastProject")).toBe("prj-tuto-old");
+  });
+
+  it("reuses the Projet that already holds the training repository, without a second one", async () => {
+    const api = await import("../../pipeline/api/pipelines");
+    const projects = await import("../../workspace/api/projects");
+    vi.mocked(projects.fetchProjects).mockResolvedValueOnce([
+      { id: "prj-mine", name: "Sandbox", members: [TUTORIAL_REPO_PATH] },
+    ]);
+    vi.mocked(api.fetchPipelines).mockResolvedValueOnce([{ id: TUTORIAL_RUN_PIPELINE_ID } as never]);
+    vi.mocked(projects.createProject).mockClear();
+    vi.mocked(projects.addProjectMember).mockClear();
+
+    await project().run();
+
+    expect(projects.createProject).not.toHaveBeenCalled();
+    expect(projects.addProjectMember).not.toHaveBeenCalled();
     expect(api.setPipelineValidation).toHaveBeenLastCalledWith(TUTORIAL_RUN_PIPELINE_ID, {
       kind: "projects",
       project_ids: ["prj-mine"],
@@ -1447,17 +1615,38 @@ describe("the Tutorial project the intro card prepares", () => {
   });
 
   it("reuses a Projet named Tutorial and attaches the repository to it", async () => {
-    const api = await import("../../api");
-    vi.mocked(api.fetchProjects).mockResolvedValueOnce([
+    const api = await import("../../pipeline/api/pipelines");
+    const projects = await import("../../workspace/api/projects");
+    vi.mocked(projects.fetchProjects).mockResolvedValueOnce([
       { id: "prj-tuto-old", name: TUTORIAL_PROJECT_NAME, members: [] },
     ]);
     vi.mocked(api.fetchPipelines).mockResolvedValueOnce([{ id: TUTORIAL_RUN_PIPELINE_ID } as never]);
-    vi.mocked(api.createProject).mockClear();
+    vi.mocked(projects.createProject).mockClear();
 
     await project().run();
 
-    expect(api.createProject).not.toHaveBeenCalled();
-    expect(api.addProjectMember).toHaveBeenLastCalledWith("prj-tuto-old", TUTORIAL_REPO_PATH);
+    expect(projects.createProject).not.toHaveBeenCalled();
+    expect(projects.addProjectMember).toHaveBeenLastCalledWith("prj-tuto-old", TUTORIAL_REPO_PATH);
+    expect(api.setPipelineValidation).toHaveBeenLastCalledWith(TUTORIAL_RUN_PIPELINE_ID, {
+      kind: "projects",
+      project_ids: ["prj-tuto-old"],
+    });
+  });
+
+  it("writes the pipeline first when it is not there yet", async () => {
+    const api = await import("../../pipeline/api/pipelines");
+    const projects = await import("../../workspace/api/projects");
+    vi.mocked(projects.fetchProjects).mockResolvedValueOnce([]);
+    vi.mocked(api.fetchPipelines).mockResolvedValueOnce([]);
+    vi.mocked(api.createPipeline).mockClear();
+    vi.mocked(api.setPipelineValidation).mockClear();
+
+    await project().run();
+
+    expect(api.createPipeline).toHaveBeenCalledWith(TUTORIAL_RUN_PIPELINE_ID);
+    const created = vi.mocked(api.createPipeline).mock.invocationCallOrder[0];
+    const validated = vi.mocked(api.setPipelineValidation).mock.invocationCallOrder[0];
+    expect(validated).toBeGreaterThan(created);
   });
 
   it("names the pipeline's section in the Pick step", () => {
@@ -1466,15 +1655,15 @@ describe("the Tutorial project the intro card prepares", () => {
   });
 });
 
-// ---- PDO-10 (#1030) — replaying a step with Previous -----------------------
+// ---- Rejeu d'étape: replaying a step with Previous -------------------------
 
 /**
- * The replay review of #1030, as a property of the walk: from every step a
- * reader can press Previous on, the step before is replayed — held, then left
- * with Next, or live on its own target — and the tour never stops on a failure
- * card for it (CONTEXT.md « Rejeu d'étape »).
+ * As a property of the walk: from every step a reader can press Previous on,
+ * the step before is replayed (held, then left with Next, or live on its own
+ * target) and the tour never stops on a failure card for it (CONTEXT.md §
+ * « Rejeu d'étape »).
  */
-describe("replaying a step with Previous (PDO-10, #1030)", () => {
+describe("replaying a step with Previous", () => {
   function replays() {
     const fake = new FakeApp();
     const outcomes: Array<ReplayOutcome & { from: string }> = [];
@@ -1488,11 +1677,28 @@ describe("replaying a step with Previous (PDO-10, #1030)", () => {
     const { run, outcomes } = replays();
     expect(run.phase).toBe("finished");
     expect(outcomes.flatMap((o) => (o.problem ? [o.problem] : []))).toEqual([]);
-    // Offered from every step but the first, which has nothing before it.
-    expect(outcomes.filter((o) => !o.offered).map((o) => o.from)).toEqual([STEPS[0].id]);
   });
 
-  /** Play the walk's gestures for every step before \`stepId\`, and enter it. */
+  it("offers Previous from every step but the first, and those after a screen that is gone", () => {
+    const { outcomes } = replays();
+    expect(outcomes.filter((o) => !o.offered).map((o) => o.from)).toMatchInlineSnapshot(`
+      [
+        "open-new-run",
+      ]
+    `);
+  });
+
+  /** Each one read and judged: its card still makes sense without its screen. */
+  it("replays off screen only the steps that say what was done", () => {
+    const { outcomes } = replays();
+    expect(outcomes.filter((o) => o.offScreen).map((o) => o.from)).toMatchInlineSnapshot(`
+      [
+        "find-run",
+      ]
+    `);
+  });
+
+  /** Play the walk's gestures for every step before `stepId`, and enter it. */
   function at(fake: FakeApp, stepId: string): TourRun {
     const script = gestures(fake);
     const index = STEPS.findIndex((s) => s.id === stepId);
@@ -1501,9 +1707,9 @@ describe("replaying a step with Previous (PDO-10, #1030)", () => {
   }
 
   /**
-   * FP step 3: back on Launch once the Run is launched. The form is gone, so
-   * the step is held, centred, saying what the click did — and Next walks on
-   * to the Run that was launched, up to the end card.
+   * Back on Launch once the Run is launched. The form is gone, so the step is
+   * held, saying what the click did, and Next walks on to the Run that was
+   * launched.
    */
   it("replays Launch after the launch, saying it happened, and goes on with the same Run", () => {
     const fake = new FakeApp();
@@ -1521,9 +1727,9 @@ describe("replaying a step with Previous (PDO-10, #1030)", () => {
   });
 
   /**
-   * The accepted side effect (#1030): on the replayed Launch the reader may open
-   * New Run again and launch a second Run. The tour then follows THAT one — the
-   * id this browser's last Launch received (identité de tour, #987).
+   * The accepted side effect: on the replayed Launch the reader may open New
+   * Run again and launch a second Run. The tour then follows THAT one, the id
+   * this browser's last Launch received (Identité de tour).
    */
   it("follows a Run launched anew from the replayed Launch step", () => {
     const fake = new FakeApp();
@@ -1545,7 +1751,7 @@ describe("replaying a step with Previous (PDO-10, #1030)", () => {
     const fake = new FakeApp();
     let run = at(fake, "find-run");
     // The fake keeps what was typed; the DOM has no value left to read once the
-    // textarea is gone (`useTour`'s `value` answers null).
+    // textarea is gone (the hook's `value` answers null).
     fake.type(PROMPT_INPUT, "");
     run = goBack(TOUR, run, fake.obs());
     expect(currentStep(TOUR, run)?.id).toBe("launch");

@@ -5,12 +5,14 @@ import {
   isNodeIsolated,
   nodeIsolation,
   resolveIsolation,
+  workspaceButton,
   workspaceLabel,
   worktreePathFor,
 } from "./nodeIsolation";
-import type { NodeDef, NodeType } from "../types";
+import type { NodeType } from "../shared/generated/NodeType";
+import type { EditorNodeDef } from "../pipeline/model/pipeline";
 
-function node(type: NodeType, isolated?: boolean): NodeDef {
+function node(type: NodeType, isolated?: boolean): EditorNodeDef {
   return {
     id: "n1",
     name: "n1",
@@ -75,6 +77,9 @@ describe("resolveIsolation — the library's door (#655)", () => {
   it("names each workspace once, for every surface that shows one", () => {
     expect(workspaceLabel(true)).toBe("Isolated worktree");
     expect(workspaceLabel(false)).toBe("Run worktree");
+    // The segmented control's buttons, which the tours name.
+    expect(workspaceButton(true)).toBe("Isolated");
+    expect(workspaceButton(false)).toBe("Shared");
     expect(WORKSPACE_CHOICES.map((c) => c.isolated)).toEqual([true, false]);
   });
 });

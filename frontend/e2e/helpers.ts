@@ -39,16 +39,25 @@ export function runMultipart(fields: Record<string, string>): Record<string, str
 
 /**
  * Open a repo/user pipeline into the edit canvas via the post-refonte
- * UnifiedLeftPanel: switch to the Library tab (labelled « Pipelines »; aimed at by
- * its stable test id, not its label), then click the entry by name.
+ * UnifiedLeftPanel: switch to the Pipelines tab, then click the entry by name.
  *
  * Replaces the pre-canvas-refonte `[data-testid='edit-toggle']` flow, which no
- * longer exists — pipelines are opened from the left panel's pipelines tab
- * (#146). Targeted by test id, not label: the tab reads « Pipelines » now.
+ * longer exists — pipelines are opened from the Pipelines tab now (#146, renamed by #651).
  */
 export async function openPipelineForEdit(page: Page, name: string): Promise<void> {
-  await page.getByTestId("left-tab-library").click();
+  await page.getByRole("tab", { name: "Pipelines" }).click();
   await page.getByText(name).first().click({ timeout: 5_000 });
+}
+
+/**
+ * ADR-0088: the Save of a shared draft opens the « Save… » window; confirm it
+ * as the next version under its default title.
+ */
+export async function confirmSaveVersion(page: Page): Promise<void> {
+  const modal = page.getByTestId("save-version-modal");
+  await expect(modal).toBeVisible();
+  await page.getByTestId("save-version-confirm").click();
+  await expect(modal).toHaveCount(0);
 }
 
 /**
@@ -62,8 +71,8 @@ export async function openPipelineForEdit(page: Page, name: string): Promise<voi
 export async function pickPipeline(page: Page, pipelineId: string): Promise<void> {
   await page.getByTestId("pipeline-select").click();
   const option = page.getByTestId(`pipeline-select-option-${pipelineId}`);
-  // #974: a pipeline created through the API is born a test pipeline, folded
-  // behind « Show test pipelines » until somebody validates it.
+  // A pipeline created through the API is born a test pipeline, folded behind
+  // « Show test pipelines » until somebody validates it.
   const showTests = page.getByTestId("pipeline-select-show-tests");
   if (!(await option.isVisible()) && (await showTests.isVisible())) {
     if ((await showTests.getAttribute("aria-expanded")) !== "true") await showTests.click();
@@ -73,7 +82,7 @@ export async function pickPipeline(page: Page, pipelineId: string): Promise<void
 
 /**
  * Select a run, select one of its nodes, and reveal the **Run inspector**
- * details pane (Inputs/Outputs sections, Mark complete, the failure banner).
+ * details pane (Inputs/Outputs sections, Approve, the failure banner).
  *
  * Post-refonte the run inspector is split into a Run/Edit tab pair, and for an
  * active run the Run pane auto-expands the live terminal to full height — which
@@ -107,7 +116,7 @@ export async function openRunNodeDetails(
   }
 
   // An active run opens with the terminal expanded to full height, which hides
-  // the details pane (Inputs/Outputs + Mark complete) below it. Wait for the run
+  // the details pane (Inputs/Outputs + Approve) below it. Wait for the run
   // pane to render, then — if the details pane isn't present — toggle the
   // terminal's expand button once to reveal it.
   await runPane

@@ -1,0 +1,52 @@
+[package]
+# The `skill` bounded context (ADR-0079): the Banque de skills (index, folders,
+# content on disk), the import from a Source, the skills selected per tier and
+# their delivery into a worktree — git through the workspace context's adapter.
+name = "pdo-skill"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "PDO's skill context: the skills bank, its import from a source, selection and delivery"
+publish = false
+autotests = false
+
+[lib]
+name = "pdo_skill"
+path = "src/lib.rs"
+
+[dependencies]
+pdo-kernel.workspace = true
+pdo-platform.workspace = true
+pdo-workspace.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+clap.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+ts-rs.workspace = true
+uuid.workspace = true
+# The skills sidecar of a portable pipeline document (#673 / ADR-0062): a zip of
+# `<pipeline>.skills/<id>/…`. Deflate only — nothing to read in bzip2/zstd/lzma.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[[test]]
+name = "use_cases"
+path = "tests/use_cases/main.rs"
+
+[[test]]
+name = "adapters"
+path = "tests/adapters/main.rs"
+
+[dev-dependencies]
+# The in-memory extension host of the use-case tests implements the kernel's
+# `ExtensionHost`, whose signature names the API's types.
+pdo-extension-api.workspace = true
+tempfile.workspace = true

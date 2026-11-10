@@ -1,0 +1,459 @@
+//! The way a one-shot command reaches the running daemon: one blocking request
+//! per call, as the operator (`X-PDO-Actor: cli`) or as the node session the
+//! command runs in, with `PDO_TOKEN` when set.
+//!
+//! A command of an operator is a thin client of a route (ADR draft « chaque
+//! route a sa commande CLI ») : it sends what the UI sends and prints what the
+//! daemon answers. The rules stay behind the route.
+//!
+//! Write a call so the route coverage of the CLI can tie it to its route:
+//! `daemon.post(&format!("/projects/{id}/members"), Some(&body))`, the path a
+//! literal argument of the verb.
+
+use std::fmt;
+use std::path::{Component, Path, PathBuf};
+use std::process::ExitCode;
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use pdo_kernel::actor::{SESSION_NODE_HEADER, SESSION_RUN_HEADER};
+use reqwest::blocking::{Client, RequestBuilder};
+use reqwest::{Method, StatusCode};
+use serde_json::Value;
+
+use crate::domain::service_unit::DEFAULT_DAEMON_URL;
+
+pub use super::text::{assignment, referent_lines, rules_lines};
+
+/// Exit code of a command whose subject the daemon does not know (`404`), the
+/// one `pdo run status` gives an unknown Run.
+pub const EXIT_NOT_FOUND: u8 = 4;
+
+/// The daemon answered `404`: the subject of the command does not exist.
+#[derive(Debug)]
+pub struct NotFound(pub String);
+
+impl fmt::Display for NotFound {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for NotFound {}
+
+/// `0` on success; `4` with the daemon's sentence when it knows no such
+/// subject; `1` with the error otherwise (unreachable daemon, refusal, invalid
+/// request).
+pub fn exit_code(result: Result<()>) -> ExitCode {
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => match e.downcast_ref::<NotFound>() {
+            Some(not_found) => {
+                eprintln!("Error: {not_found}");
+                ExitCode::from(EXIT_NOT_FOUND)
+            }
+            None => {
+                eprintln!("Error: {e:?}");
+                ExitCode::FAILURE
+            }
+        },
+    }
+}
+
+/// A client of the running daemon (`PDO_DAEMON_URL`, else the default port).
+pub struct Daemon {
+    url: String,
+    client: Client,
+    session: Option<(String, String)>,
+}
+
+/// The daemon's answer to one request: its status and its body, as bytes (an
+/// archive) or as text ([`Answer::text`]).
+#[derive(Debug)]
+pub struct Answer {
+    pub status: StatusCode,
+    pub bytes: Vec<u8>,
+}
+
+impl Daemon {
+    /// The daemon of this process's environment, called as the node session
+    /// the command runs in when it does.
+    pub fn from_env() -> Self {
+        let url =
+            std::env::var("PDO_DAEMON_URL").unwrap_or_else(|_| DEFAULT_DAEMON_URL.to_string());
+        // No overall timeout: a call can last as long as the daemon's own work
+        // on it (`pdo trigger fire` waits for its guard, up to the instance's
+        // guard timeout). An unreachable daemon still fails at once.
+        let client = Client::builder()
+            .default_headers(pdo_kernel::env::cli_headers())
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(None::<Duration>)
+            .build()
+            .unwrap_or_default();
+        Self {
+            url: url.trim_end_matches('/').to_string(),
+            client,
+            session: session_env_claim(),
+        }
+    }
+
+    pub fn get(&self, path: &str) -> Result<Answer> {
+        self.send(Method::GET, path, None)
+    }
+
+    pub fn post(&self, path: &str, body: Option<&Value>) -> Result<Answer> {
+        self.send(Method::POST, path, body)
+    }
+
+    pub fn put(&self, path: &str, body: &Value) -> Result<Answer> {
+        self.send(Method::PUT, path, Some(body))
+    }
+
+    pub fn patch(&self, path: &str, body: &Value) -> Result<Answer> {
+        self.send(Method::PATCH, path, Some(body))
+    }
+
+    pub fn delete(&self, path: &str, body: Option<&Value>) -> Result<Answer> {
+        self.send(Method::DELETE, path, body)
+    }
+
+    /// A `POST` whose body is not JSON: an archive, under its content type.
+    pub fn post_bytes(&self, path: &str, content_type: &str, body: Vec<u8>) -> Result<Answer> {
+        self.send_raw(Method::POST, path, content_type, body)
+    }
+
+    /// The bytes a `GET` answers (an artifact, a zip), once it succeeded; a
+    /// refusal reads as [`Answer::ok`] reads it.
+    pub fn get_bytes(&self, path: &str) -> Result<Vec<u8>> {
+        Ok(self.get(path)?.ok()?.bytes)
+    }
+
+    /// A multipart `POST` (files, as a browser uploads them), answered as
+    /// [`Daemon::post`].
+    pub fn post_multipart(
+        &self,
+        path: &str,
+        form: reqwest::blocking::multipart::Form,
+    ) -> Result<Answer> {
+        answer(self.request(Method::POST, path).multipart(form))
+    }
+
+    /// A `PUT` whose body is plain text: a file's content, as the editor saves it.
+    pub fn put_text(&self, path: &str, text: String) -> Result<Answer> {
+        self.send_raw(
+            Method::PUT,
+            path,
+            "text/plain; charset=utf-8",
+            text.into_bytes(),
+        )
+    }
+
+    fn send(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Answer> {
+        let mut request = self.request(method, path);
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        answer(request)
+    }
+
+    fn send_raw(
+        &self,
+        method: Method,
+        path: &str,
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> Result<Answer> {
+        answer(
+            self.request(method, path)
+                .header(reqwest::header::CONTENT_TYPE, content_type)
+                .body(body),
+        )
+    }
+
+    fn request(&self, method: Method, path: &str) -> RequestBuilder {
+        self.identified(self.client.request(method, format!("{}{path}", self.url)))
+    }
+
+    fn identified(&self, request: RequestBuilder) -> RequestBuilder {
+        let mut request = request.header("X-PDO-Actor", "cli");
+        if let Some((run_id, node_id)) = &self.session {
+            request = request
+                .header(SESSION_RUN_HEADER, run_id)
+                .header(SESSION_NODE_HEADER, node_id);
+        }
+        request
+    }
+}
+
+fn answer(request: RequestBuilder) -> Result<Answer> {
+    let response = request.send().context("failed to reach daemon")?;
+    let status = response.status();
+    let bytes = response.bytes().map(|b| b.to_vec()).unwrap_or_default();
+    Ok(Answer { status, bytes })
+}
+
+impl Answer {
+    /// The body as text, any invalid UTF-8 replaced.
+    pub fn text(&self) -> String {
+        String::from_utf8_lossy(&self.bytes).into_owned()
+    }
+
+    /// The answer when it is a success; [`NotFound`] for a `404`; the daemon's
+    /// sentence for any other refusal.
+    pub fn ok(self) -> Result<Self> {
+        if self.status.is_success() {
+            return Ok(self);
+        }
+        let sentence = refusal_sentence(&self.text());
+        if self.status == StatusCode::NOT_FOUND {
+            return Err(NotFound(if sentence.is_empty() {
+                "not found".to_string()
+            } else {
+                sentence
+            })
+            .into());
+        }
+        anyhow::bail!("daemon returned {}: {sentence}", self.status)
+    }
+
+    /// The body as JSON (`null` for an empty body, a `204`).
+    pub fn json(&self) -> Result<Value> {
+        let text = self.text();
+        if text.trim().is_empty() {
+            return Ok(Value::Null);
+        }
+        serde_json::from_str(&text).context("the daemon's answer is not JSON")
+    }
+}
+
+/// The daemon's sentence for a refusal: for a refused Operation, the
+/// sentence a person reads followed by the technical cause in parentheses;
+/// otherwise its `message`, else its `error`, else the body as it is.
+pub fn refusal_sentence(body: &str) -> String {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| {
+            if let Some(denied) = pdo_kernel::authorization::Denied::from_body(&v) {
+                return Some(denied.for_an_agent());
+            }
+            v["message"]
+                .as_str()
+                .or_else(|| v["error"].as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| body.trim().to_string())
+}
+
+/// The node session this CLI runs in, when it does: both `PDO_RUN_ID` and
+/// `PDO_NODE_ID`, non-blank.
+pub fn session_env_claim() -> Option<(String, String)> {
+    let clean = |v: Result<String, std::env::VarError>| {
+        v.ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let run_id = clean(std::env::var("PDO_RUN_ID"))?;
+    let node_id = clean(std::env::var("PDO_NODE_ID"))?;
+    Some((run_id, node_id))
+}
+
+/// A path segment as it travels in a URL: every byte outside the unreserved
+/// set percent-encoded.
+pub fn segment(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for byte in raw.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+/// A repository path as the UI sends it: absolute, without `.`, `..` or a
+/// trailing `/`. A relative one is resolved from the working directory. The
+/// normalisation is lexical, symlinks are not followed: the daemon compares
+/// repository paths verbatim.
+pub fn absolute_path(raw: &str) -> Result<String> {
+    let path = Path::new(raw.trim());
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .context("cannot read the working directory")?
+            .join(path)
+    };
+    let mut normal = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normal.pop();
+            }
+            other => normal.push(other.as_os_str()),
+        }
+    }
+    Ok(normal.display().to_string())
+}
+
+/// The agentic-profile union a Projet or a Trigger carries, from the flags of
+/// its command: a profile, or an inline harness with its model and effort.
+/// `None` when neither is given.
+pub fn agent_choice(
+    profile: Option<String>,
+    harness: Option<String>,
+    model: Option<String>,
+    effort: Option<String>,
+) -> Option<Value> {
+    if let Some(profile) = profile {
+        return Some(serde_json::json!({ "mode": "profile", "profile_id": profile }));
+    }
+    let mut custom = serde_json::json!({ "mode": "custom", "harness": harness? });
+    if let Some(model) = model {
+        custom["model"] = model.into();
+    }
+    if let Some(effort) = effort {
+        custom["effort"] = effort.into();
+    }
+    Some(custom)
+}
+
+/// `value` pretty-printed, as `--json` prints it.
+pub fn print_json(value: &Value) {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+    );
+}
+
+/// The bytes a `--file <path>` names, `-` for the standard input.
+pub fn read_file_bytes(path: &str) -> Result<Vec<u8>> {
+    if path == "-" {
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut std::io::stdin(), &mut bytes)
+            .context("cannot read the standard input")?;
+        return Ok(bytes);
+    }
+    std::fs::read(path).with_context(|| format!("cannot read {path}"))
+}
+
+/// The text of `path`, `-` for the standard input.
+pub fn read_text(path: &str) -> Result<String> {
+    if path == "-" {
+        return std::io::read_to_string(std::io::stdin()).context("cannot read the standard input");
+    }
+    std::fs::read_to_string(path).with_context(|| format!("cannot read {path}"))
+}
+
+/// The JSON a `--file <path>` names, `-` for the standard input.
+pub fn read_json_file(path: &str) -> Result<Value> {
+    let text = if path == "-" {
+        std::io::read_to_string(std::io::stdin()).context("cannot read the standard input")?
+    } else {
+        std::fs::read_to_string(path).with_context(|| format!("cannot read {path}"))?
+    };
+    serde_json::from_str(&text).with_context(|| format!("{path} is not JSON"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn answer(status: u16, body: &str) -> Answer {
+        Answer {
+            status: StatusCode::from_u16(status).unwrap(),
+            bytes: body.as_bytes().to_vec(),
+        }
+    }
+
+    #[test]
+    fn a_404_is_not_found_with_the_daemon_s_sentence() {
+        let err = answer(404, r#"{"error":"trigger not found"}"#)
+            .ok()
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<NotFound>().unwrap().0,
+            "trigger not found"
+        );
+        let err = answer(404, "no such project").ok().unwrap_err();
+        assert_eq!(err.downcast_ref::<NotFound>().unwrap().0, "no such project");
+    }
+
+    #[test]
+    fn another_refusal_carries_its_status_and_sentence() {
+        let err = answer(400, r#"{"error":"invalid cron expression: x"}"#)
+            .ok()
+            .unwrap_err();
+        assert!(err.downcast_ref::<NotFound>().is_none());
+        assert_eq!(
+            err.to_string(),
+            "daemon returned 400 Bad Request: invalid cron expression: x"
+        );
+        let err = answer(403, r#"{"error":"forbidden","message":"you may not"}"#)
+            .ok()
+            .unwrap_err();
+        assert!(err.to_string().ends_with("you may not"), "{err}");
+    }
+
+    #[test]
+    fn a_refused_operation_reads_its_sentence_then_its_cause() {
+        let body = r#"{"error":"operation_refused","message":"operation refused: the test rules refuse stop","reason":"the test rules refuse stop","sentence":"You can't stop Runs in Project P. Ask an administrator of P."}"#;
+        assert_eq!(
+            refusal_sentence(body),
+            "You can't stop Runs in Project P. Ask an administrator of P. (the test rules refuse stop)"
+        );
+        let older =
+            r#"{"error":"operation_refused","message":"operation refused: no","reason":"no"}"#;
+        assert_eq!(
+            refusal_sentence(older),
+            "You don't have the rights to do this. (no)"
+        );
+    }
+
+    #[test]
+    fn an_empty_body_reads_as_null() {
+        assert_eq!(answer(204, "").json().unwrap(), Value::Null);
+    }
+
+    #[test]
+    fn a_segment_is_percent_encoded() {
+        assert_eq!(segment("prj-1"), "prj-1");
+        assert_eq!(segment("a b/c"), "a%20b%2Fc");
+    }
+
+    #[test]
+    fn a_path_is_made_absolute_and_normal() {
+        assert_eq!(absolute_path("/srv/web/").unwrap(), "/srv/web");
+        assert_eq!(absolute_path("/srv/./api/../web").unwrap(), "/srv/web");
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(absolute_path(".").unwrap(), cwd.display().to_string());
+        assert_eq!(
+            absolute_path("../web").unwrap(),
+            cwd.parent().unwrap().join("web").display().to_string()
+        );
+    }
+
+    #[test]
+    fn an_agent_choice_is_a_profile_or_an_inline_combination() {
+        assert_eq!(agent_choice(None, None, None, None), None);
+        assert_eq!(
+            agent_choice(Some("reviewer".into()), None, None, None),
+            Some(serde_json::json!({ "mode": "profile", "profile_id": "reviewer" }))
+        );
+        assert_eq!(
+            agent_choice(None, Some("claude".into()), None, Some("high".into())),
+            Some(serde_json::json!({ "mode": "custom", "harness": "claude", "effort": "high" }))
+        );
+    }
+
+    #[test]
+    fn the_exit_code_of_a_not_found_is_4() {
+        assert_eq!(
+            exit_code(Err(NotFound("x".into()).into())),
+            ExitCode::from(EXIT_NOT_FOUND)
+        );
+        assert_eq!(exit_code(Ok(())), ExitCode::SUCCESS);
+        assert_eq!(exit_code(Err(anyhow::anyhow!("x"))), ExitCode::FAILURE);
+    }
+}

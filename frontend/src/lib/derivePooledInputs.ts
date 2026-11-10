@@ -1,5 +1,5 @@
-import type { PipelineDef } from "../types";
 import { carriedPorts, emergentInputs } from "./edgePorts";
+import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 
 /** One source node contributing to a pooled input. */
 export interface PooledInputSource {
@@ -45,7 +45,7 @@ export interface PooledInput {
  * Derives the pooled, emergent inputs of a node from a pipeline's edges. The
  * inspector renders this read-only list — the node itself declares no inputs.
  */
-export function derivePooledInputs(pipeline: PipelineDef, nodeId: string): PooledInput[] {
+export function derivePooledInputs(pipeline: EditorPipelineDef, nodeId: string): PooledInput[] {
   const labelOf = (id: string): string => {
     const n = pipeline.nodes.find((nd) => nd.id === id);
     return n?.name ?? id;

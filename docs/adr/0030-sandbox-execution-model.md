@@ -84,6 +84,9 @@ n'est pas *pur*, il est *minimal*.
    exports d'env de base restent côté **hôte** — d'où l'invariant `off` **byte-identique** quand le
    wrapping est absent. Le catalogue d'env dynamique d'un nœud `script` traverse l'exec en `-e KEY=VALUE`
    **explicites** (un `-e` nu ne forwarderait que la valeur du shell hôte) — jamais l'URL du daemon.
+   *Amendé* (ADR-0098) :
+   le catalogue est exporté côté hôte et traverse l'exec par son nom (`-e KEY`), aucune valeur
+   dans l'argv du client `docker`.
 
 6. **Kill ciblé.** Un kill de session est doublé d'un exec séparé qui retrouve, via un marqueur de session
    dans l'environnement des process, le seul arbre porteur et le termine ; les sessions sœurs survivent

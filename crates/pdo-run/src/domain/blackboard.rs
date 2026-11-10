@@ -1,0 +1,184 @@
+use std::path::{Path, PathBuf};
+
+pub fn port_dir(artifacts_dir: &Path, node_id: &str, iter: i64, port_name: &str) -> PathBuf {
+    artifacts_dir
+        .join(node_id)
+        .join(format!("iter-{iter}"))
+        .join(port_name)
+}
+
+pub fn artifact_path(artifacts_dir: &Path, node_id: &str, iter: i64, port_name: &str) -> PathBuf {
+    port_dir(artifacts_dir, node_id, iter, port_name).join("output.md")
+}
+
+/// Path of an `html` output port's file. A dedicated helper localizes the
+/// `output.html` choice to the output sites that emit it, keeping the
+/// type-blind input side (which always reads `output.md`) untouched.
+pub fn artifact_path_html(
+    artifacts_dir: &Path,
+    node_id: &str,
+    iter: i64,
+    port_name: &str,
+) -> PathBuf {
+    port_dir(artifacts_dir, node_id, iter, port_name).join("output.html")
+}
+
+#[allow(dead_code)]
+pub fn artifact_exists(artifacts_dir: &Path, node_id: &str, iter: i64, port_name: &str) -> bool {
+    artifact_path(artifacts_dir, node_id, iter, port_name).exists()
+}
+
+/// `<artifacts>/<node>/iter-<n>/live/`: where the node publishes its live
+/// artifacts while it works (ADR-0089).
+pub fn live_dir(artifacts_dir: &Path, node_id: &str, iter: i64) -> PathBuf {
+    artifacts_dir
+        .join(node_id)
+        .join(format!("iter-{iter}"))
+        .join(pdo_pipeline::domain::pipeline::LIVE_DIR)
+}
+
+pub fn input_path(artifacts_dir: &Path) -> PathBuf {
+    artifacts_dir.join("_input").join("output.md")
+}
+
+/// The Blackboard folder of the files a user imported into a running node, a
+/// sibling of `_input/`: inside the artifacts, so never committed and removed
+/// with the Run.
+const ATTACHMENTS_DIR: &str = "_attachments";
+
+/// `<artifacts>/_attachments/<node-id>/`: one folder per node, so who received
+/// what stays readable.
+pub fn node_attachments_dir(artifacts_dir: &Path, node_id: &str) -> PathBuf {
+    artifacts_dir.join(ATTACHMENTS_DIR).join(node_id)
+}
+
+/// The `n`-th variant of a name already taken: `contrat.pdf` -> `contrat-1.pdf`,
+/// `README` -> `README-1`, `.env` -> `.env-1`.
+pub fn suffixed_name(name: &str, n: u32) -> String {
+    match name.rfind('.') {
+        Some(dot) if dot > 0 => format!("{}-{n}{}", &name[..dot], &name[dot..]),
+        _ => format!("{name}-{n}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use std::fs;
+
+    #[test]
+    fn node_attachments_dir_is_a_sibling_of_input() {
+        let dir = Path::new("/repo/.pdo/artifacts");
+        assert_eq!(
+            node_attachments_dir(dir, "grill"),
+            PathBuf::from("/repo/.pdo/artifacts/_attachments/grill")
+        );
+    }
+
+    #[test]
+    fn suffixed_name_goes_before_the_extension() {
+        assert_eq!(suffixed_name("contrat.pdf", 1), "contrat-1.pdf");
+        assert_eq!(suffixed_name("archive.tar.gz", 2), "archive.tar-2.gz");
+        assert_eq!(suffixed_name("README", 2), "README-2");
+        assert_eq!(suffixed_name(".env", 1), ".env-1");
+    }
+
+    #[test]
+    fn single_port_single_iter_path() {
+        let dir = Path::new("/repo/.pdo/artifacts");
+        let path = artifact_path(dir, "planner", 1, "plan");
+        assert_eq!(
+            path,
+            PathBuf::from("/repo/.pdo/artifacts/planner/iter-1/plan/output.md")
+        );
+    }
+
+    #[test]
+    fn multi_iter_path() {
+        let dir = Path::new("/repo/.pdo/artifacts");
+        let path = artifact_path(dir, "reviewer", 3, "review");
+        assert_eq!(
+            path,
+            PathBuf::from("/repo/.pdo/artifacts/reviewer/iter-3/review/output.md")
+        );
+    }
+
+    #[test]
+    fn html_artifact_path_uses_output_html() {
+        let dir = Path::new("/repo/.pdo/artifacts");
+        let path = artifact_path_html(dir, "designer", 1, "report");
+        assert_eq!(
+            path,
+            PathBuf::from("/repo/.pdo/artifacts/designer/iter-1/report/output.html")
+        );
+    }
+
+    #[test]
+    fn html_artifact_path_honors_iteration() {
+        let dir = Path::new("/repo/.pdo/artifacts");
+        let path = artifact_path_html(dir, "designer", 4, "report");
+        assert_eq!(
+            path,
+            PathBuf::from("/repo/.pdo/artifacts/designer/iter-4/report/output.html")
+        );
+    }
+
+    #[test]
+    fn html_and_markdown_paths_share_a_port_dir_but_differ_in_filename() {
+        let dir = Path::new("/repo/.pdo/artifacts");
+        let md = artifact_path(dir, "designer", 1, "report");
+        let html = artifact_path_html(dir, "designer", 1, "report");
+        assert_eq!(md.parent(), html.parent());
+        assert_ne!(md, html);
+        assert_eq!(html.file_name().unwrap(), "output.html");
+    }
+
+    #[test]
+    fn port_dir_returns_directory_for_port() {
+        let dir = Path::new("/repo/.pdo/artifacts");
+        let pd = port_dir(dir, "reviewer", 3, "review");
+        assert_eq!(
+            pd,
+            PathBuf::from("/repo/.pdo/artifacts/reviewer/iter-3/review")
+        );
+    }
+
+    #[test]
+    fn input_path_points_to_directory_based_output_md() {
+        let dir = Path::new("/repo/.pdo/artifacts");
+        assert_eq!(
+            input_path(dir),
+            PathBuf::from("/repo/.pdo/artifacts/_input/output.md")
+        );
+    }
+
+    #[test]
+    fn artifact_exists_returns_false_for_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts_dir = tmp.path().join("artifacts");
+        fs::create_dir_all(&artifacts_dir).unwrap();
+        assert!(!artifact_exists(&artifacts_dir, "planner", 1, "plan"));
+    }
+
+    #[test]
+    fn artifact_exists_returns_true_when_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts_dir = tmp.path().join("artifacts");
+        let port_d = artifacts_dir.join("planner").join("iter-1").join("plan");
+        fs::create_dir_all(&port_d).unwrap();
+        fs::write(port_d.join("output.md"), "# Plan").unwrap();
+        assert!(artifact_exists(&artifacts_dir, "planner", 1, "plan"));
+    }
+
+    #[test]
+    fn path_arithmetic_matches_canonical_schema() {
+        let base =
+            Path::new("/home/user/repo/.pdo/runs/20260506-1200-abc1234/worktree/.pdo/artifacts");
+        let path = artifact_path(base, "implementer-1", 2, "summary");
+        assert_eq!(
+            path.to_str().unwrap(),
+            "/home/user/repo/.pdo/runs/20260506-1200-abc1234/worktree/.pdo/artifacts/implementer-1/iter-2/summary/output.md"
+        );
+    }
+}

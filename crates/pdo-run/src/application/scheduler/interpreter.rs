@@ -1,0 +1,688 @@
+//! The single interpreter of `SchedulerAction` effects (#357).
+//!
+//! ADR-0009 splits scheduling into **decision** and **effect**. The pure
+//! producers in `scheduler.rs` compute a `Vec<SchedulerAction>` without touching
+//! the world; this module executes that list, exactly once, for the three drivers
+//! (`handle_node_completion`, `re_evaluate_after_command`, the loop-seed match in
+//! `run_advance::advance_run`) that used to copy it.
+//!
+//! - [`interpret`] runs ONE [`SchedulerAction`] as a linear sequence of Layer-2
+//!   primitives. It NEVER re-enters the scheduler (no `advance_run` /
+//!   `re_evaluate_after_command` / self call, no reload/re-projection — that stays
+//!   in the drivers), so it is a convenience seam, not a fourth scheduling entry
+//!   point.
+//! - [`admit_spawn`] carries the sole divergence between the drivers as a typed
+//!   argument ([`SpawnDedup`]) instead of a silently-desynchronised code copy.
+//!
+//! Don't unify the two policies onto `GuardSuperfluous`: the latent same-iter
+//! double-spawn on the completion path (the `nonloop_node_respawned_per_loop_lap`
+//! incident) is deliberately *frozen* behind [`SpawnDedup::InternalOnly`], and
+//! fixing it is a behaviour change tracked as a separate follow-up.
+
+use crate::domain::{event, projection};
+
+use crate::application::events::emit_collection_action;
+use crate::application::events::emit_loop_action;
+use crate::application::events::emit_run_event;
+use crate::application::node::spawn::{spawn_node, SpawnContext, SpawnDeps, SpawnOutcome};
+use crate::application::scheduler::frontmatter::deposit_collection_items;
+use crate::application::scheduler::frontmatter::passthrough_switch_artifact;
+use crate::domain::scheduler::SchedulerAction;
+use crate::domain::state::RunState;
+use crate::domain::transition_guard;
+use crate::Runs;
+
+/// Whether to re-apply the scheduler-side spawn dedup
+/// ([`transition_guard::spawn_superfluous`]) before executing a `Spawn`. This is
+/// the ONLY behavioural divergence between the three drivers.
+///
+/// Don't rename this to `AdmissionPolicy`: "admission" already means the
+/// *concurrent session cap* in this crate (`admission.rs`,
+/// `SpawnDeps::admission_lock`, CONTEXT.md §749), a distinct concept.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpawnDedup {
+    /// Re-evaluation paths (`resume_run`, `extend_cycle`, region routes): reject
+    /// a spawn whose node already has a live iteration (at any iter) or whose
+    /// proposed iteration has already completed.
+    GuardSuperfluous,
+    /// Completion / advance / loop-seed paths: no scheduler-side dedup; the
+    /// transition guard inside `spawn_node` is the only net (a same-iter-live
+    /// spawn is a legal restart there).
+    InternalOnly,
+}
+
+/// The pure decision of [`admit_spawn`]: let the `Spawn` proceed, or skip it
+/// with a human-readable reason (fed into `ReEvalSummary.skipped`, ADR-0025).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SpawnAdmission {
+    Admit,
+    Skip { reason: String },
+}
+
+/// PURE decision: should this `Spawn { node_id, iter }` proceed under `policy`?
+/// No `Runs`, no IO, no async — this is the exact point where the two
+/// policies diverge, so it carries the net test (`skip vs restart`).
+pub fn admit_spawn(
+    policy: SpawnDedup,
+    run_state: &RunState,
+    node_id: &str,
+    iter: i64,
+) -> SpawnAdmission {
+    match policy {
+        SpawnDedup::GuardSuperfluous => {
+            match transition_guard::spawn_superfluous(run_state, node_id, iter) {
+                Some(reason) => SpawnAdmission::Skip { reason },
+                None => SpawnAdmission::Admit,
+            }
+        }
+        SpawnDedup::InternalOnly => SpawnAdmission::Admit,
+    }
+}
+
+/// What one [`SchedulerAction`] actually produced, so `re_evaluate_after_command`
+/// can rebuild its `ReEvalSummary` (ADR-0025) and the fire-and-forget drivers
+/// (`handle_node_completion`, `advance_run`) know when to stop dispatching.
+///
+/// Not `#[must_use]`: the fire-and-forget drivers intentionally drop
+/// [`ActionOutcome::Spawned`].
+pub enum ActionOutcome {
+    /// An effect was emitted / routed / deposited (Switch, Loop*, Collection*,
+    /// or a `Spawn` whose target node is absent from the pipeline): nothing for
+    /// the caller to fold.
+    Progressed,
+    /// `spawn_node` ran; carries the raw [`SpawnOutcome`] for `record_spawn`.
+    Spawned {
+        node_id: String,
+        iter: i64,
+        outcome: SpawnOutcome,
+    },
+    /// `GuardSuperfluous` skipped the spawn before any effect. Never produced
+    /// under [`SpawnDedup::InternalOnly`].
+    SpawnSkipped { reason: String },
+    /// `RunCompleted` was emitted — the driver must stop dispatching and return.
+    Completed,
+    /// `RunHalted` was emitted — the driver must stop dispatching and return.
+    Halted { message: String },
+    /// `RunInterrupted` was emitted for an `unrouted` convergence (ADR-0049) —
+    /// the run is parked `AwaitingUser`, not terminal. The driver stops
+    /// dispatching this pass (there is nothing left to route), exactly like
+    /// `Halted`; a human reopens or routes it.
+    Interrupted { message: String },
+}
+
+/// Interpret ONE [`SchedulerAction`], never re-entering the scheduler (ADR-0009).
+///
+/// `run_state` is the driver's per-pass snapshot (INV-2) and is *never* reloaded
+/// or re-projected here. `source_iter` is consulted only by `SwitchRouted`
+/// (INV-3). `emit_collection_action` runs *before* `deposit_collection_items`
+/// (INV-7).
+pub async fn interpret(
+    state: &Runs,
+    ctx: &SpawnContext<'_>,
+    run_state: &RunState,
+    policy: SpawnDedup,
+    source_iter: i64,
+    action: &SchedulerAction,
+) -> ActionOutcome {
+    let run_id = ctx.run_id;
+    match action {
+        SchedulerAction::Spawn { node_id, iter } => {
+            match admit_spawn(policy, run_state, node_id, *iter) {
+                SpawnAdmission::Skip { reason } => ActionOutcome::SpawnSkipped { reason },
+                SpawnAdmission::Admit => {
+                    // Same silent no-op as the drivers: a node absent from the
+                    // pipeline is skipped without effect (nothing to record).
+                    let Some(node) = ctx.pipeline.nodes.iter().find(|n| n.id == *node_id) else {
+                        return ActionOutcome::Progressed;
+                    };
+                    let outcome = spawn_node(SpawnDeps::from_state(state), ctx, node, *iter).await;
+                    ActionOutcome::Spawned {
+                        node_id: node_id.clone(),
+                        iter: *iter,
+                        outcome,
+                    }
+                }
+            }
+        }
+        SchedulerAction::Halt { message } => {
+            // ADR-0086: the halt at `End` waits for the started nodes too.
+            if ctx.pipeline.wait_for_started_nodes
+                && crate::domain::on_demand::started_nodes_alive(run_state) > 0
+            {
+                return ActionOutcome::Progressed;
+            }
+            emit_run_event(
+                state,
+                run_id,
+                event::EventKind::RunHalted,
+                Some(serde_json::json!({ "message": message })),
+            )
+            .await;
+            ActionOutcome::Halted {
+                message: message.clone(),
+            }
+        }
+        SchedulerAction::Interrupt {
+            reason_code,
+            message,
+            region_id,
+        } => {
+            // Already parked for this very reason (the sweep's pruning and the
+            // producer's routing can both find `End` dead): park once.
+            if run_state.is_parked_by_routing()
+                && run_state.awaiting_reason_code.as_deref() == Some(reason_code.as_str())
+                && run_state.awaiting_region_id == *region_id
+            {
+                return ActionOutcome::Interrupted {
+                    message: message.clone(),
+                };
+            }
+            // ADR-0049: `unrouted` parks the run `AwaitingUser`, never terminal.
+            // The payload carries both a machine `reason_code` and a human
+            // `reason` (#601), the shape `run_event_reason{,_code}` reads into
+            // `awaiting_reason{,_code}`.
+            emit_run_event(
+                state,
+                run_id,
+                event::EventKind::RunInterrupted,
+                Some({
+                    let mut payload = projection::interrupt_payload(reason_code, message);
+                    // The region a region park is about (`awaiting_region_id`).
+                    if let Some(region_id) = region_id {
+                        payload["region_id"] = serde_json::json!(region_id);
+                    }
+                    payload
+                }),
+            )
+            .await;
+            ActionOutcome::Interrupted {
+                message: message.clone(),
+            }
+        }
+        SchedulerAction::Complete => {
+            // A Run its routing parked (`unrouted`, an exhausted region) has no
+            // branch reaching `End`: nothing ends it but the gesture that lifts
+            // the park (`force_route`, a raised cap, a resume), which re-opens
+            // it first.
+            if run_state.is_parked_by_routing() {
+                return ActionOutcome::Progressed;
+            }
+            // ADR-0086: a Run that waits for its started nodes stays `Running`
+            // while one is alive; the last completion ends it.
+            if ctx.pipeline.wait_for_started_nodes
+                && crate::domain::on_demand::started_nodes_alive(run_state) > 0
+            {
+                return ActionOutcome::Progressed;
+            }
+            // The branches the Run did not take end `Skipped`, not pending: a
+            // completed Run says which of its nodes will never run, and a
+            // skipped node keeps its ▶ (ADR-0086, « Forcer un nœud skipped »).
+            let frontmatter =
+                crate::application::scheduler::frontmatter::resolve_completed_frontmatter(
+                    ctx.pipeline,
+                    run_state,
+                    ctx.artifacts_dir,
+                );
+            let skips = crate::domain::scheduler::unreachable_nodes(
+                ctx.pipeline,
+                run_state,
+                &frontmatter,
+                ctx.resolved_vars,
+            );
+            crate::application::scheduler::prune::append_auto_skips(
+                state,
+                run_id,
+                ctx.pipeline,
+                ctx.artifacts_dir,
+                &skips,
+            )
+            .await;
+            emit_run_event(state, run_id, event::EventKind::RunCompleted, None).await;
+            ActionOutcome::Completed
+        }
+        SchedulerAction::SwitchRouted {
+            node_id,
+            chosen_branch,
+        } => {
+            emit_run_event(
+                state,
+                run_id,
+                event::EventKind::SwitchRouted,
+                Some(serde_json::json!({
+                    "node_id": node_id,
+                    "chosen_branch": chosen_branch,
+                })),
+            )
+            .await;
+            passthrough_switch_artifact(ctx, node_id, chosen_branch, source_iter);
+            ActionOutcome::Progressed
+        }
+        SchedulerAction::LoopIterStarted { .. }
+        | SchedulerAction::LoopBreakReceived { .. }
+        | SchedulerAction::LoopMaxReached { .. }
+        | SchedulerAction::LoopDone { .. } => {
+            emit_loop_action(state, run_id, action).await;
+            ActionOutcome::Progressed
+        }
+        SchedulerAction::CollectionStarted { entry, items, .. } => {
+            // INV-7: emit BEFORE depositing.
+            emit_collection_action(state, run_id, action).await;
+            deposit_collection_items(ctx.artifacts_dir, entry, items);
+            ActionOutcome::Progressed
+        }
+        SchedulerAction::CollectionEmpty { .. } | SchedulerAction::CollectionDone { .. } => {
+            emit_collection_action(state, run_id, action).await;
+            ActionOutcome::Progressed
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::event::Event;
+    use crate::domain::event::EventKind;
+    use crate::domain::projection::project;
+    use pdo_kernel::clock::now_iso;
+
+    fn ev(kind: EventKind, node_id: Option<&str>, iter: Option<i64>) -> Event {
+        let payload = if kind == EventKind::RunStarted {
+            Some(serde_json::json!({ "pipeline_name": "test" }))
+        } else {
+            None
+        };
+        Event {
+            id: None,
+            run_id: "run-1".into(),
+            ts: now_iso(),
+            kind,
+            node_id: node_id.map(String::from),
+            iter,
+            payload,
+        }
+    }
+
+    fn state_from(events: &[Event]) -> RunState {
+        project(events).expect("projected state")
+    }
+
+    #[test]
+    fn same_iter_live_respawn_skipped_under_guard_admitted_under_internal() {
+        // This IS the frozen divergence (INV-1): under InternalOnly, spawn_node's
+        // own guard treats same-iter-live as a legal restart.
+        let state = state_from(&[
+            ev(EventKind::RunStarted, None, None),
+            ev(EventKind::NodeStarted, Some("x"), Some(1)),
+        ]);
+        assert!(matches!(
+            admit_spawn(SpawnDedup::GuardSuperfluous, &state, "x", 1),
+            SpawnAdmission::Skip { .. }
+        ));
+        assert_eq!(
+            admit_spawn(SpawnDedup::InternalOnly, &state, "x", 1),
+            SpawnAdmission::Admit
+        );
+    }
+
+    #[test]
+    fn completed_iter_skipped_but_fresh_lap_admitted_under_guard() {
+        // A fresh lap at iter 2 is legitimate work (extend_cycle / region laps).
+        let state = state_from(&[
+            ev(EventKind::RunStarted, None, None),
+            ev(EventKind::NodeStarted, Some("x"), Some(1)),
+            ev(EventKind::NodeCompleted, Some("x"), Some(1)),
+        ]);
+        assert!(matches!(
+            admit_spawn(SpawnDedup::GuardSuperfluous, &state, "x", 1),
+            SpawnAdmission::Skip { .. }
+        ));
+        assert_eq!(
+            admit_spawn(SpawnDedup::GuardSuperfluous, &state, "x", 2),
+            SpawnAdmission::Admit
+        );
+    }
+
+    #[test]
+    fn internal_only_admits_regardless_of_liveness_or_completion() {
+        // Locks the "no guard on the completion/advance paths" half of INV-1:
+        // spawn_node's transition guard is the sole net.
+        let state = state_from(&[
+            ev(EventKind::RunStarted, None, None),
+            ev(EventKind::NodeStarted, Some("x"), Some(2)),
+            ev(EventKind::NodeCompleted, Some("done"), Some(1)),
+        ]);
+        // Another iter live (GuardSuperfluous would skip).
+        assert_eq!(
+            admit_spawn(SpawnDedup::InternalOnly, &state, "x", 3),
+            SpawnAdmission::Admit
+        );
+        // Same iter live (legal restart downstream).
+        assert_eq!(
+            admit_spawn(SpawnDedup::InternalOnly, &state, "x", 2),
+            SpawnAdmission::Admit
+        );
+        // Already-completed iter (GuardSuperfluous would skip).
+        assert_eq!(
+            admit_spawn(SpawnDedup::InternalOnly, &state, "done", 1),
+            SpawnAdmission::Admit
+        );
+    }
+
+    #[test]
+    fn guard_admits_fresh_node() {
+        let state = state_from(&[ev(EventKind::RunStarted, None, None)]);
+        assert_eq!(
+            admit_spawn(SpawnDedup::GuardSuperfluous, &state, "fresh", 1),
+            SpawnAdmission::Admit
+        );
+    }
+
+    // #453 — THE SEAM: N `Spawn` on the same node → guard → projected state.
+    //
+    // A collection region fans its entry out with `Spawn { entry, iter: 1..=N }`
+    // in ONE burst, awaited one at a time. `interpret` never re-projects (INV-2),
+    // but `spawn_node` does: lap 2's guard probe meets lap 1's freshly-appended
+    // `NodeStarted`, and until #453 the guard refused it as "iter 1 is still
+    // live: refusing concurrent iter 2".
+    //
+    // Both halves were unit-tested and both were right on their own; the bug
+    // lived only in their sequencing. Hence these tests replay the *composition*
+    // — real scheduler actions, real payload builder, real projection, real
+    // guard — rather than asserting on either half.
+
+    use crate::domain::scheduler::{self, SchedulerAction};
+    use std::collections::HashMap;
+
+    /// The repro pipeline of #453, reduced to its skeleton: an external producer
+    /// feeding a single-member `kind: collection` region over a frontmatter list.
+    const COLLECTION_YAML: &str = r#"
+name: collection-seam
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: producer
+    name: Producer
+    type: agent
+    isolated_worktree: false
+    inputs:
+      - name: task
+    outputs:
+      - name: plan
+        frontmatter:
+          topics:
+            type: list
+  - id: itemizer
+    name: Itemizer
+    type: agent
+    isolated_worktree: false
+    inputs:
+      - name: plan
+    outputs:
+      - name: item_note
+  - id: sibling
+    name: Sibling
+    type: agent
+    isolated_worktree: false
+    inputs:
+      - name: in
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: producer, port: task }
+  - source: { node: producer, port: plan }
+    target: { node: itemizer, port: plan }
+  - source: { node: itemizer, port: item_note }
+    target: { node: end, port: result }
+loops:
+  - id: topics_fanout
+    kind: collection
+    over: topics
+    members: [itemizer]
+"#;
+
+    fn ev_with(kind: EventKind, node_id: Option<&str>, payload: serde_json::Value) -> Event {
+        Event {
+            id: None,
+            run_id: "run-1".into(),
+            ts: now_iso(),
+            kind,
+            node_id: node_id.map(String::from),
+            iter: None,
+            payload: Some(payload),
+        }
+    }
+
+    /// Run the fan-out of `topics` through the REAL scheduler and return the
+    /// event log it would produce, plus every guard refusal met on the way.
+    /// Only tmux and the DB are faked: the `Spawn` arm performs exactly the two
+    /// steps `spawn_node` takes before touching the world (project the log, probe
+    /// the guard) and appends the same `NodeStarted` reservation.
+    fn replay_fanout(topics: &[&str]) -> (Vec<Event>, Vec<String>) {
+        let pipeline = pdo_pipeline::domain::pipeline::parse_pipeline(COLLECTION_YAML)
+            .expect("fixture parses")
+            .pipeline;
+
+        let mut events = vec![
+            ev(EventKind::RunStarted, None, None),
+            ev(EventKind::NodeStarted, Some("producer"), Some(1)),
+            ev(EventKind::NodeCompleted, Some("producer"), Some(1)),
+        ];
+
+        let mut frontmatter = HashMap::new();
+        frontmatter.insert(
+            "topics".to_string(),
+            serde_yaml::Value::Sequence(
+                topics
+                    .iter()
+                    .map(|t| serde_yaml::Value::String((*t).to_string()))
+                    .collect(),
+            ),
+        );
+
+        let actions = scheduler::evaluate_outgoing_edges_full(
+            &pipeline,
+            &project(&events).expect("projected"),
+            "producer",
+            &HashMap::new(),
+            &frontmatter,
+            &HashMap::new(),
+        );
+
+        let mut refusals = Vec::new();
+        for action in &actions {
+            match action {
+                SchedulerAction::CollectionStarted { .. } => {
+                    events.push(ev_with(
+                        EventKind::CollectionStarted,
+                        None,
+                        scheduler::collection_started_payload(action).expect("payload"),
+                    ));
+                }
+                SchedulerAction::Spawn { node_id, iter } => {
+                    let projected = project(&events).expect("projected");
+                    let probe = ev(EventKind::NodeStarted, Some(node_id), Some(*iter));
+                    match transition_guard::validate_transition(Some(&projected), &probe) {
+                        transition_guard::Verdict::Allow => events.push(probe),
+                        transition_guard::Verdict::NoOp { reason } => refusals.push(reason),
+                        transition_guard::Verdict::Reject { reason } => {
+                            refusals.push(reason.to_string())
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        (events, refusals)
+    }
+
+    fn live_iters(events: &[Event], node_id: &str) -> Vec<i64> {
+        let state = project(events).expect("projected");
+        let mut iters: Vec<i64> = state
+            .nodes
+            .get(node_id)
+            .map(|n| n.iterations.iter().map(|i| i.iter).collect())
+            .unwrap_or_default();
+        iters.sort_unstable();
+        iters
+    }
+
+    #[test]
+    fn collection_fanout_starts_every_lap_through_the_spawn_guard() {
+        // THE regression test. Before the fix this failed on `refusals`:
+        //   ["node itemizer iter 1 is still live: refusing concurrent iter 2"]
+        // and on the lap set, which was `[1]` instead of `[1, 2]`.
+        let (events, refusals) = replay_fanout(&["alpha", "beta"]);
+        assert!(
+            refusals.is_empty(),
+            "every item lap must clear the spawn guard; refused: {refusals:?}"
+        );
+        assert_eq!(live_iters(&events, "itemizer"), vec![1, 2]);
+    }
+
+    #[test]
+    fn collection_fanout_scales_past_two_laps() {
+        // 3 items produced TWO refusals before the fix, so the bug was never
+        // about the second lap specifically.
+        let (events, refusals) = replay_fanout(&["alpha", "beta", "gamma"]);
+        assert!(refusals.is_empty(), "refused: {refusals:?}");
+        assert_eq!(live_iters(&events, "itemizer"), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn single_item_collection_still_starts_its_only_lap() {
+        // The control that passed BEFORE the fix too (issue #453 §5): a green
+        // 1-item run proves nothing on its own, so it is pinned as a control.
+        let (events, refusals) = replay_fanout(&["alpha"]);
+        assert!(refusals.is_empty(), "refused: {refusals:?}");
+        assert_eq!(live_iters(&events, "itemizer"), vec![1]);
+    }
+
+    #[test]
+    fn every_lap_completing_fires_the_barrier_and_completes_the_run() {
+        // The end of the causal chain the issue describes: laps → barrier →
+        // CollectionDone → the run may complete. Without the guard fix lap 2
+        // never exists, `collection_barrier_reached` stays false and
+        // `should_complete_run` can never fire.
+        let pipeline = pdo_pipeline::domain::pipeline::parse_pipeline(COLLECTION_YAML)
+            .expect("fixture parses")
+            .pipeline;
+        let (mut events, _) = replay_fanout(&["alpha", "beta"]);
+        for iter in [1, 2] {
+            events.push(ev(EventKind::NodeCompleted, Some("itemizer"), Some(iter)));
+        }
+
+        let state = project(&events).expect("projected");
+        let region = &pipeline.loops[0];
+        let actions = scheduler::evaluate_collection_barrier(
+            &pipeline,
+            &state,
+            region,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
+        assert!(
+            actions.contains(&SchedulerAction::CollectionDone {
+                region_id: "topics_fanout".into(),
+            }),
+            "the barrier must fire once both laps completed; got {actions:?}"
+        );
+        // The region's only exit is `End`, so the barrier completes the run.
+        assert!(actions.contains(&SchedulerAction::Complete));
+    }
+
+    #[test]
+    fn the_exemption_does_not_leak_to_a_node_outside_the_region() {
+        // ADR-0026 buys the fan-out a NARROW exemption, and #212's chokepoint is
+        // shared with restart_node, the liveness sweep and boot recovery. This is
+        // the negative control the arbitration demands: with a collection region
+        // WIDE OPEN in the very same run, a restart-shaped `NodeStarted` on a
+        // non-member node with a live iteration is still refused.
+        let (mut events, _) = replay_fanout(&["alpha", "beta"]);
+        events.push(ev(EventKind::NodeStarted, Some("sibling"), Some(1)));
+        let state = project(&events).expect("projected");
+        assert!(!state.collection_states["topics_fanout"].done);
+
+        let probe = ev(EventKind::NodeStarted, Some("sibling"), Some(2));
+        match transition_guard::validate_transition(Some(&state), &probe) {
+            transition_guard::Verdict::Reject { reason } => {
+                let reason = reason.to_string();
+                assert!(reason.contains("refusing concurrent iter 2"), "{reason}")
+            }
+            other => panic!("a non-member must keep the #212 refusal, got {other:?}"),
+        }
+    }
+
+    /// One live lap on `itemizer`, inside a 2-item region that is open or closed.
+    fn region_state(done: bool) -> Vec<Event> {
+        let mut events = vec![
+            ev(EventKind::RunStarted, None, None),
+            ev_with(
+                EventKind::CollectionStarted,
+                None,
+                serde_json::json!({
+                    "region_id": "topics_fanout",
+                    "entry": "itemizer",
+                    "members": ["itemizer"],
+                    "total_items": 2,
+                }),
+            ),
+            ev(EventKind::NodeStarted, Some("itemizer"), Some(1)),
+        ];
+        if done {
+            events.push(ev_with(
+                EventKind::CollectionDone,
+                None,
+                serde_json::json!({ "region_id": "topics_fanout" }),
+            ));
+        }
+        events
+    }
+
+    #[test]
+    fn the_exemption_closes_again_once_the_barrier_has_fired() {
+        // Membership is not a permanent licence. Same node, same probe, the ONLY
+        // difference being whether the barrier has fired — open admits the
+        // sibling lap, closed restores the #212 refusal.
+        let probe = ev(EventKind::NodeStarted, Some("itemizer"), Some(2));
+
+        let open = project(&region_state(false)).expect("projected");
+        assert_eq!(
+            transition_guard::validate_transition(Some(&open), &probe),
+            transition_guard::Verdict::Allow
+        );
+
+        let closed = project(&region_state(true)).expect("projected");
+        assert!(
+            matches!(
+                transition_guard::validate_transition(Some(&closed), &probe),
+                transition_guard::Verdict::Reject { .. }
+            ),
+            "a closed region must not keep exempting its members"
+        );
+    }
+
+    #[test]
+    fn an_iteration_beyond_the_collection_size_is_not_a_lap() {
+        // The exemption is bounded by the resolved collection: `iter` outside
+        // `1..=total_items` is not an item lap and keeps the refusal, so a stray
+        // proposal can never smuggle a concurrent iteration through the region.
+        let open = project(&region_state(false)).expect("projected");
+        let probe = ev(EventKind::NodeStarted, Some("itemizer"), Some(3));
+        assert!(
+            matches!(
+                transition_guard::validate_transition(Some(&open), &probe),
+                transition_guard::Verdict::Reject { .. }
+            ),
+            "iter 3 of a 2-item region is not a lap"
+        );
+    }
+}

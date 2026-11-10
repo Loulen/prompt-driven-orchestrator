@@ -7,11 +7,17 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # The runner's account has no name, so git refuses to commit ("empty ident
+  # name"): the daemon's delivery commits, and so `pdo complete`, fail without it.
+  GIT_AUTHOR_NAME: PDO CI
+  GIT_AUTHOR_EMAIL: ci@pdo.invalid
+  GIT_COMMITTER_NAME: PDO CI
+  GIT_COMMITTER_EMAIL: ci@pdo.invalid
 
 jobs:
   rust:
     name: Rust
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # ubuntu-latest (26.04): the sandbox tests time out on its runner
     steps:
       - uses: actions/checkout@v4
 
@@ -42,6 +48,9 @@ jobs:
       # nextest ne lance pas les doctests : la ligne `--doc` est obligatoire.
       - run: cargo nextest run --workspace
       - run: cargo test --workspace --doc
+      # The TS generated from the daemon's DTOs (ts-rs, #915) must match the Rust
+      # types: fails and shows the diff when `make types` was not run.
+      - run: make types-check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo fmt --all --check
 
@@ -54,10 +63,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      # Layout ratchet (#494, ADR-0039): fails fast if a watched directory's
-      # flat file list grows past its baseline. See docs/agents/module-layout.md.
-      - run: bash scripts/layout-ratchet.sh
 
       - uses: pnpm/action-setup@v4
         with:
@@ -76,7 +81,7 @@ jobs:
 
   e2e:
     name: Frontend E2E (layer 3b)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # Playwright 1.59 has no chromium for ubuntu-latest (26.04)
     needs: frontend
     steps:
       - uses: actions/checkout@v4

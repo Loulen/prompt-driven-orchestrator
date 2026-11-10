@@ -1,6 +1,6 @@
-import { defineConfig, devices } from "@playwright/test";
-import * as path from "node:path";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { defineConfig, devices } from "@playwright/test";
 
 // Layer 3b config (testing pyramid per ADR 0004). Boots the real daemon
 // via `cargo run` and points the browser at it. Daemon spawns frontend
@@ -10,12 +10,10 @@ import { fileURLToPath } from "node:url";
 const PORT = Number(process.env.PDO_E2E_PORT ?? 5273);
 const HOST = "127.0.0.1";
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-// #1011: the binary the `webServer` below builds and runs is the `pdo` CLI itself
-// (the package's only `[[bin]]`) — the stub's `waiter` branch calls it.
+// The binary the `webServer` below builds and runs is the `pdo` CLI itself: the
+// stub's `waiter` branch calls it.
 const PDO_BIN = path.join(
-  process.env.CARGO_TARGET_DIR
-    ? path.resolve(REPO_ROOT, process.env.CARGO_TARGET_DIR)
-    : path.join(REPO_ROOT, "target"),
+  process.env.CARGO_TARGET_DIR ? path.resolve(REPO_ROOT, process.env.CARGO_TARGET_DIR) : path.join(REPO_ROOT, "target"),
   "debug",
   "pdo",
 );
@@ -40,16 +38,22 @@ export default defineConfig({
   use: {
     baseURL: `http://${HOST}:${PORT}`,
     trace: "retain-on-failure",
-    // The onboarding welcome modal (#823) covers the whole app on a fresh
-    // browser and intercepts every click. Specs start as a reader who already
-    // answered it (`lib/tourMemory.ts`); a spec about the welcome itself would
-    // clear this key.
+    // #823: a daemon with no Run at all offers the guided tour in a modal that
+    // covers the whole app — and a fresh e2e database has no Run until a spec
+    // creates one. Mark the tour as already offered (`pdo.tour.offered`, see
+    // `src/lib/tourMemory.ts`) so no spec meets the modal; none is about it.
     storageState: {
       cookies: [],
       origins: [
         {
           origin: `http://${HOST}:${PORT}`,
-          localStorage: [{ name: "pdo.tour.offered", value: "1" }],
+          // The UI scale at 100 %: the specs measure the interface in CSS
+          // pixels as drawn at 1:1. The design-system spec covers the 120 %
+          // the interface opens at by default (`lib/uiScale.ts`).
+          localStorage: [
+            { name: "pdo.tour.offered", value: "1" },
+            { name: "pdo.ui.scale", value: "100" },
+          ],
         },
       ],
     },
@@ -92,9 +96,9 @@ export default defineConfig({
     //                   arrow-key translation activates (xterm-scroll-wheel).
     //   - `echoer`    → `cat`, so typed input echoes back through the PTY bridge
     //                   (terminal-preview's keystroke-echo assertion).
-    //   - `waiter`    → #1011: after a beat (the node is running), declares a wait
-    //                   on its user with the real CLI — `pdo wait-user --message
-    //                   …` — then keeps the PTY alive (waiting-alert.spec.ts).
+    //   - `waiter`    → after a beat (the node is running), declares a wait on
+    //                   its user with the real CLI, `pdo wait-user --message …`,
+    //                   then keeps the PTY alive (waiting-alert.spec.ts).
     //   - everything else → `sleep 600`, a live PTY with the node kept "running".
     env: {
       ...process.env,
@@ -111,6 +115,9 @@ export default defineConfig({
       // the environment (armed by default). Disarm it: the suite must never depend
       // on models.dev being reachable, and CI must never egress for a UI test.
       PDO_PRICE_SYNC: "off",
+      // Same for the boot version check: the vanilla channel asks the public
+      // repository's releases, and this daemon shares the real home's cache.
+      PDO_UPDATE_CHECK: "off",
       PDO_TMUX_CMD_OVERRIDE:
         'case "$PDO_NODE_ID" in ' +
         "scroller) " +

@@ -4,7 +4,7 @@ Sans cet ADR, un agent garderait un assistant `claude` par pipeline, dont la dur
 de l'onglet affiché — jetant la conversation à chaque aller-retour entre deux templates, et laissant
 fuir la session quand le navigateur se recharge.
 
-> Statut : **accepted** (grilling du 2026-08-27, issue #594). **Amende ADR-0048** : ses décisions 1,
+> Statut : **accepted** (grilling du 2026-08-27, issue #594). **Amendé par ADR-0088** : le save de l'assistant s'applique au brouillon partagé, plus au fichier. **Amende ADR-0048** : ses décisions 1,
 > 3 et 4 sont remplacées par celles ci-dessous ; le reste d'ADR-0048 (mécanisme de session,
 > write-on-save, pas de MCP custom) tient. Vocabulaire : CONTEXT.md §*Assistant de bibliothèque*.
 
@@ -80,3 +80,20 @@ lent » et « ne pas reap tant qu'on édite ». Ils disent la même chose : **l'
 - **« Quitter toute vue d'édition » se lit sur les onglets ouverts, pas sur l'onglet actif.** Aller
   voir un Run pendant qu'une template reste ouverte n'est pas quitter l'édition ; y reaper la session
   coûterait la conversation, c'est-à-dire le reproche à l'origine de l'issue.
+
+## Amendement CORE-61 : un assistant par Acteur
+
+Une instance partagée par une équipe fait agir chaque session avec les Droits de qui l'a démarrée.
+Un assistant unique pour tout le démon ferait écrire tout le monde au nom d'une seule personne, et
+mélangerait les conversations. L'assistant devient donc **un par Acteur** :
+
+- `POST /sessions/libassist` ouvre l'assistant de l'appelant (`pdo-libassist-shared` pour
+  l'opérateur local, si bien qu'un démon sans Extension qui identifie ses appelants garde son
+  unique assistant) ; l'ouvrir est l'Opération `pipeline` × `open_assistant`.
+- Le focus, le save et la fermeture sont ceux de l'Acteur appelant ; le sweep juge chaque
+  assistant sur le focus de son Acteur.
+- Les hooks de lancement des Extensions sont demandés pour lui, avec l'Acteur qui l'ouvre.
+
+Le reste de cette décision tient pour chaque assistant : un seul par Acteur, keyé sur rien
+d'autre, son historique partagé entre toutes les templates de son Acteur.
+

@@ -9,7 +9,7 @@
 // The router is intentionally a deep module with a tiny surface: callers hand
 // it geometry and get back a polyline, never the internal grid/search details.
 
-import type { PortSide } from "../types";
+import type { PortSide } from "../shared/generated/PortSide";
 
 export interface Point {
   x: number;
@@ -58,6 +58,14 @@ export interface RouteInput {
    * snapped bend lands short of the leg and draws a spur. Absent ⇒ `LEAD_IN`.
    */
   sourceStub?: number;
+  /**
+   * The target card. It is not an obstacle (the wire lands on it), so a route
+   * reaching the anchored side from the far side of the card — a left arrival
+   * on a target below and to the left of its source — ran straight through it.
+   * Given, such a route goes around the card to its lead-in point instead.
+   * Absent ⇒ the legacy behaviour.
+   */
+  targetRect?: Rect;
 }
 
 const DEFAULT_MARGIN = 16;
@@ -88,33 +96,47 @@ export function routeOrthogonal(input: RouteInput): Point[] {
     ? (routeViaGrid(source, target, obstacles, margin) ?? simple)
     : simple;
 
-  const { sourceSide, sourceRect } = input;
-  if (sourceSide && sourceRect && polylineHitsRect(path, sourceRect)) {
+  const { sourceSide, sourceRect, targetRect } = input;
+  const crossesSource = sourceSide != null && sourceRect != null && polylineHitsRect(path, sourceRect);
+  const crossesTarget = targetRect != null && reachesTargetThrough(path, targetSide, targetRect);
+  if (crossesSource || crossesTarget) {
     const stub = input.sourceStub ?? LEAD_IN;
-    const around = aroundSource(source, target, targetSide, sourceSide, sourceRect, stub, obstacles, margin);
+    const cards = [sourceSide ? sourceRect : undefined, targetRect].filter((r): r is Rect => r != null);
+    const around = aroundCards(source, target, targetSide, sourceSide ?? null, stub, obstacles, cards, margin);
     if (around) return around;
   }
   return path;
 }
 
-// A route that would cross its own source card, re-planned from a stub outside
-// the anchored source side to the target's lead-in point, with the source card
-// as one more obstacle. The grid search then turns away from the card (out,
-// along, back in) rather than doubling back through it. Null when no such path
-// exists, so the caller keeps the legacy route.
-function aroundSource(
+// Whether a route crosses its target card before landing: every segment but
+// the last, and the last one measured from its start to just outside the
+// anchored side — a landing that comes from inside the card, or across it,
+// counts; one that runs in from outside does not.
+function reachesTargetThrough(path: Point[], targetSide: PortSide, targetRect: Rect): boolean {
+  if (path.length < 2) return false;
+  const outside = leadInPoint(path[path.length - 1], targetSide, 2);
+  return polylineHitsRect([...path.slice(0, -1), outside], targetRect);
+}
+
+// A route that would cross its own source card or its target card, re-planned
+// from a stub outside the anchored source side (the source itself when the side
+// is unknown) to the target's lead-in point, with those cards as more
+// obstacles. The grid search then turns away from the card (out, along, back
+// in) rather than through it. Null when no such path exists, so the caller
+// keeps the legacy route.
+function aroundCards(
   source: Point,
   target: Point,
   targetSide: PortSide,
-  sourceSide: PortSide,
-  sourceRect: Rect,
+  sourceSide: PortSide | null,
   stub: number,
   obstacles: Rect[],
+  cards: Rect[],
   margin: number,
 ): Point[] | null {
-  const out = leadInPoint(source, sourceSide, stub);
+  const out = sourceSide ? leadInPoint(source, sourceSide, stub) : source;
   const lead = leadInPoint(target, targetSide, LEAD_IN);
-  const routed = routeViaGrid(out, lead, [...obstacles, sourceRect], margin);
+  const routed = routeViaGrid(out, lead, [...obstacles, ...cards], margin);
   return routed ? simplify([source, ...routed, target]) : null;
 }
 

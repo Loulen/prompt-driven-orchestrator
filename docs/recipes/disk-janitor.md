@@ -20,7 +20,7 @@ Two pieces, **both now shipped as tracked artifacts** (they used to be prose her
 
 1. **`GET /runs/reapable`** — the runtime *surfaces* candidates (read-only, never
    deletes). Lists every **terminal, non-`archived`** Run whose worktree(s) are
-   still on disk. (`list_reapable_runs`, `crates/pdo-daemon/src/lib.rs`.)
+   still on disk. (`crates/pdo-run/src/application/list/reapable.rs`.)
 2. **The `disk-janitor` pipeline + a cron Trigger** — a one-node **`script`**
    pipeline (`.pdo/pipelines/disk-janitor.yaml` + its `.prompts/reap.md` body) runs
    `pdo reap`, which applies a graded-TTL policy and reclaims each match via the

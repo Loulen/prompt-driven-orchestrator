@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import * as os from "node:os";
 import { fileURLToPath } from "node:url";
 import { expectNonZeroBBox } from "./assertions";
 import { runBody } from "./helpers";
@@ -16,12 +17,14 @@ import { runBody } from "./helpers";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-render-mermaid-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
 // A valid pipeline needs exactly one `start` node (one `user_prompt` output) and
-// one `end` node (one `result` input); see crates/pdo-daemon/src/pipeline.rs. The
+// one `end` node (one `result` input); see crates/pdo-pipeline/src/domain/pipeline/. The
 // `start` auto-emits the prompt so `diagrammer` spawns (stubbed by sleep); we seed
 // its output artifacts on disk and read them back through the node-IO API.
 const SEED_YAML = `name: ${PIPELINE_NAME}
@@ -63,7 +66,7 @@ edges:
 const ROLE_PROMPT = "You draw diagrams.\n";
 
 // Per-port artifact bodies. The daemon resolves a markdown output port to
-// `<node>/iter-1/<port>/output.md` (see crates/pdo-daemon/src/blackboard.rs);
+// `<node>/iter-1/<port>/output.md` (see crates/pdo-run/src/domain/blackboard.rs);
 // the flat `<port>.md` layout in older specs does NOT match that resolver.
 const ARTIFACTS: Record<string, string> = {
   good: `## Flow
@@ -163,7 +166,7 @@ async function createRunAndSeedArtifacts(baseURL: string) {
 
 async function openNode(page: Page) {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
   await page.getByText(runId.slice(0, 20)).first().click({ timeout: 5_000, position: { x: 5, y: 5 } });
@@ -193,7 +196,7 @@ async function openPort(page: Page, port: string) {
     .locator('.port-row:has([data-testid="port-row-open"])')
     .filter({ hasText: new RegExp(`^${port}`) });
   await expect(card).toBeVisible({ timeout: 5_000 });
-  await card.click();
+  await card.locator(".ri-port__where").click();
   await expect(page.locator(".artifact-markdown")).toBeVisible({
     timeout: 3_000,
   });

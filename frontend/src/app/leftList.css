@@ -1,0 +1,670 @@
+/*
+ * The lists of the left panel (Runs, Triggers, Pipelines): two-line rows of
+ * 46 px with a hairline under each but the last of a group, caps group headers
+ * with their count, hover actions in a floating bar, the floating bulk bar and
+ * the empty states. Tokens only (`public/shared/tokens.css`), like the kit.
+ *
+ * A row paints an opaque `--row-bg`, so the floating hover bar covers the end
+ * of its lines without moving them.
+ */
+
+@layer components {
+  .lp-pane {
+    --lp-indent: 12px;
+    --row-bg: var(--surface-1);
+    --row-hover: color-mix(in oklch, var(--surface-1), var(--text) 6%);
+    --row-open: color-mix(in oklab, var(--surface-1), var(--color-accent) 12%);
+    --row-checked: color-mix(in oklch, var(--surface-1), var(--text) 10%);
+    --row-await: color-mix(in oklch, var(--surface-1), var(--color-st-await) 9%);
+    position: relative;
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    background: var(--surface-1);
+    color: var(--text);
+    font-size: var(--fs-md);
+  }
+  .lp-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    outline: none;
+    /* Room under the last row for the floating bulk bar. */
+    padding-bottom: 40px;
+    container: lplist / inline-size;
+  }
+
+  /* ---------------------------------------------------------------- small bits */
+  .lp-num {
+    color: var(--text-2);
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .lp-muted,
+  .lp-num.lp-muted {
+    color: var(--text-3);
+  }
+  .lp-dim {
+    flex: none;
+    color: var(--text-3);
+  }
+  .lp-name {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    font-weight: var(--w-medium);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .lp-pipe {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .lp-mono {
+    font-family: var(--font-code);
+    font-size: var(--fs-sm);
+  }
+  .lp-more {
+    flex: none;
+    color: var(--text-3);
+    font-family: var(--font-code);
+    font-size: var(--fs-2xs);
+  }
+  @keyframes lp-pulse {
+    50% {
+      opacity: 0.35;
+    }
+  }
+
+  /* ---------------------------------------------------------------- group headers, 22 px, sticky */
+  .lp-group {
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    gap: var(--g-2);
+    width: 100%;
+    height: 22px;
+    padding: 0 var(--g-4) 0 2px;
+    border: 0;
+    border-top: 1px solid var(--line-soft);
+    background: var(--surface-1);
+    color: var(--text);
+    font: inherit;
+    font-size: var(--fs-sm);
+    text-align: left;
+    cursor: pointer;
+    user-select: none;
+  }
+  .lp-section:first-child > .lp-group {
+    border-top: 0;
+  }
+  .lp-group:hover {
+    background: var(--row-hover);
+  }
+  .lp-group:focus-visible {
+    outline: 1px solid var(--focus-ring);
+    outline-offset: -1px;
+  }
+  .lp-group__caret {
+    flex: none;
+    color: var(--text-3);
+  }
+  .lp-group__name {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .lp-group__name[data-deleted] {
+    font-style: italic;
+  }
+  .lp-group__push {
+    flex: 1 1 auto;
+  }
+  .lp-group__count {
+    height: 16px;
+    padding: 0 4px;
+    font-family: var(--font-code);
+    font-size: var(--fs-2xs);
+  }
+  .lp-group__await {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--color-st-await);
+  }
+
+  /* The select-all control of a group header, round like a row's: a neutral
+     14 px ring, a full 16 px round of the accent when on. */
+  .lp-box {
+    display: inline-grid;
+    flex: none;
+    place-items: center;
+    box-sizing: border-box;
+    width: 14px;
+    height: 14px;
+    margin: 0 2px;
+    padding: 0;
+    border: 2px solid var(--text-3);
+    border-radius: 50%;
+    background: transparent;
+    color: var(--primary-ink);
+    cursor: pointer;
+  }
+  .lp-box[aria-checked="true"] {
+    width: 16px;
+    height: 16px;
+    margin: 0 1px;
+    border: 0;
+    background: var(--primary);
+  }
+
+  /* ---------------------------------------------------------------- rows */
+  .lp-row {
+    position: relative;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: 20px 18px;
+    align-content: center;
+    column-gap: var(--g-3);
+    row-gap: 2px;
+    width: 100%;
+    min-width: 0;
+    /* 40 px + 3 px above and below: a ringed avatar of line 2 never touches the hairline. */
+    height: calc(var(--h-row-2) + 6px);
+    padding: 0 var(--g-4) 0 calc(4px + var(--depth, 0) * var(--lp-indent));
+    border: 0;
+    background: var(--row-bg);
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    outline: none;
+  }
+  /* Its whole second line hidden by the Apparence: one line, on every row alike. */
+  .lp-row[data-lines="1"] {
+    grid-template-rows: 20px;
+    height: calc(var(--h-row) + 6px);
+  }
+  .lp-row:hover {
+    --row-bg: var(--row-hover);
+  }
+  .lp-row[data-await] {
+    --row-bg: var(--row-await);
+    box-shadow: inset 2px 0 0 var(--color-st-await);
+  }
+  .lp-row[data-await]:hover {
+    --row-bg: color-mix(in oklch, var(--row-await), var(--text) 6%);
+  }
+  .lp-row[data-checked] {
+    --row-bg: var(--row-checked);
+  }
+  .lp-row[data-open] {
+    --row-bg: var(--row-open);
+    box-shadow: inset 2px 0 0 var(--selected-edge);
+  }
+  .lp-row:focus-visible {
+    outline: 1px solid var(--focus-ring);
+    outline-offset: -1px;
+  }
+  .lp-row[data-await] .lp-name {
+    font-weight: var(--w-strong);
+  }
+  .lp-row[data-archived] .lp-name,
+  .lp-row[data-off] .lp-name {
+    color: var(--text-3);
+  }
+  .lp-row[data-archived] {
+    opacity: 0.75;
+  }
+  /* A very light hairline under every row, drawn inside it (no height change);
+     none under the last row of a group. */
+  .lp-row::after {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: 1px;
+    background: var(--line-soft);
+    content: "";
+    pointer-events: none;
+  }
+  .lp-rows > .lp-row:last-child::after {
+    display: none;
+  }
+  .lp-row > .lp-lead {
+    grid-row: 1;
+    align-self: center;
+  }
+  .lp-l1,
+  .lp-l2 {
+    display: flex;
+    grid-column: 2;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+  }
+  .lp-l2 {
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+  }
+  .lp-end {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: var(--g-2);
+    margin-left: auto;
+  }
+  .lp-l2 .lp-end {
+    gap: var(--g-3);
+  }
+
+  /* lead: the chevron slot, then the status mark */
+  .lp-lead {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+  }
+  .lp-chev {
+    display: inline-grid;
+    place-items: center;
+    width: 12px;
+    height: 16px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-3);
+    cursor: pointer;
+  }
+  .lp-chev:hover {
+    color: var(--text);
+  }
+  .lp-chev--none {
+    cursor: default;
+  }
+  .lp-row--flat > .lp-lead {
+    padding-left: 12px;
+  }
+
+  /* ---------------------------------------------------------------- the status mark, the select control */
+  .lp-mark {
+    position: relative;
+    display: inline-grid;
+    flex: none;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+  }
+  .lp-mark--mini {
+    width: 11px;
+    height: 11px;
+  }
+  .lp-mark__glyph {
+    display: inline-grid;
+    place-items: center;
+  }
+  /* The select control, round (CONTEXT.md « Contrôle de sélection d'une liste »):
+     a 14 px ring of the status's colour while the row is hovered or some row is
+     ticked, a full 16 px round of the accent with its check once ticked. */
+  .lp-mark__box {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    display: none;
+    place-items: center;
+    box-sizing: border-box;
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--mark-tone, var(--text-3));
+    border-radius: 50%;
+    background: transparent;
+    color: var(--primary-ink);
+    transform: translate(-50%, -50%);
+  }
+  .lp-mark:is(:hover, :focus-visible, [data-selecting], [aria-checked="true"]) .lp-mark__glyph,
+  .lp-row:hover .lp-mark .lp-mark__glyph {
+    visibility: hidden;
+  }
+  .lp-mark:is(:hover, :focus-visible, [data-selecting], [aria-checked="true"]) .lp-mark__box,
+  .lp-row:hover .lp-mark .lp-mark__box {
+    display: grid;
+  }
+  .lp-mark[aria-checked="true"] .lp-mark__box {
+    width: 16px;
+    height: 16px;
+    border: 0;
+    background: var(--primary);
+  }
+  .lp-mark:focus-visible {
+    outline: 1px solid var(--focus-ring);
+    outline-offset: 1px;
+  }
+
+  /* ---------------------------------------------------------------- inline cues */
+  .lp-trig {
+    display: inline-grid;
+    flex: none;
+    place-items: center;
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-3);
+    cursor: pointer;
+  }
+  .lp-trig:hover {
+    color: var(--text);
+  }
+  .lp-pills {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    padding: 0 2px;
+    border: 0;
+    background: none;
+    font: inherit;
+  }
+  .lp-pills[role="button"] {
+    border-radius: var(--radius-ui);
+    cursor: pointer;
+  }
+  .lp-pills[role="button"]:hover {
+    background: var(--hover);
+  }
+  .lp-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    color: var(--text-2);
+    font-family: var(--font-code);
+    font-size: var(--fs-2xs);
+  }
+  .lp-parent {
+    display: inline-flex;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+    padding: 0 2px;
+    border-radius: var(--radius-ui);
+    color: var(--text-3);
+    cursor: pointer;
+  }
+  .lp-parent:hover {
+    background: var(--hover);
+    color: var(--selected-edge);
+  }
+  .lp-parent > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* node progress: one square per working node, the live one pulsing, an awaiting one hollow */
+  .lp-pips {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 2px;
+  }
+  .lp-pips i {
+    width: 6px;
+    height: 6px;
+    border-radius: 1px;
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--line);
+  }
+  .lp-pips i[data-st="completed"] {
+    background: var(--color-st-done);
+    box-shadow: none;
+  }
+  .lp-pips i[data-st="running"] {
+    background: var(--color-st-running);
+    box-shadow: none;
+    animation: lp-pulse 1.4s ease-in-out infinite;
+  }
+  .lp-pips i:is([data-st="awaiting_user"], [data-st="interrupted"]) {
+    box-shadow: inset 0 0 0 1.5px var(--color-st-await);
+  }
+  .lp-pips i[data-st="failed"] {
+    background: var(--color-st-failed);
+    box-shadow: none;
+  }
+  .lp-pips i:is([data-st="skipped"], [data-st="stopped"], [data-st="stale"]) {
+    background: var(--color-st-skipped);
+    box-shadow: none;
+    opacity: 0.55;
+  }
+  .lp-pips__more {
+    margin-left: 2px;
+    color: var(--text-3);
+    font-family: var(--font-code);
+    font-size: var(--fs-2xs);
+  }
+
+  /* the extensions' marks on a row: they never wrap, the pipeline gives way first */
+  .lp-deco {
+    display: inline-flex;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    overflow: hidden;
+  }
+  .lp-deco:empty {
+    display: none;
+  }
+
+  /* ---------------------------------------------------------------- hover actions: a floating bar */
+  .lp-hover {
+    position: absolute;
+    top: 50%;
+    right: 4px;
+    z-index: 3;
+    display: none;
+    align-items: center;
+    gap: 0;
+    padding: 1px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-pop);
+    background: var(--surface-2);
+    box-shadow: 0 4px 12px -4px var(--shadow);
+    transform: translateY(-50%);
+  }
+  .lp-hover .d-icon {
+    border-radius: calc(var(--radius-pop) - 2px);
+  }
+  :is(.lp-row, .lp-group):is(:hover, :focus-within) .lp-hover,
+  .lp-hover:has([data-popup-open]) {
+    display: inline-flex;
+  }
+  .lp-group .lp-hover-in {
+    display: none;
+  }
+  .lp-group:is(:hover, :focus-within) .lp-hover-in,
+  .lp-group .lp-box[aria-checked="true"] {
+    display: inline-grid;
+  }
+
+  /* ---------------------------------------------------------------- triggers */
+  .lp-row > .lp-lead--trigger {
+    justify-content: center;
+    padding-left: 4px;
+  }
+  /* One line: the last result beside the enable switch. */
+  .lp-row[data-lines="1"] > .lp-lead--trigger {
+    gap: var(--g-3);
+  }
+  .lp-row > .lp-lead--l2 {
+    grid-row: 2;
+    grid-column: 1;
+    justify-self: center;
+    padding-left: 4px;
+  }
+  .lp-switch {
+    display: inline-flex;
+    flex: none;
+  }
+  .lp-modes {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-3);
+  }
+  .lp-modes > span {
+    display: inline-grid;
+    place-items: center;
+  }
+  .lp-trow__last {
+    gap: 4px;
+  }
+  .lp-row[data-suspended] {
+    --row-bg: color-mix(in oklch, var(--surface-1), var(--color-st-await) 5%);
+  }
+  .lp-suspended {
+    display: inline-flex;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+    height: 14px;
+    padding: 0 4px;
+    overflow: hidden;
+    border-radius: var(--radius-ui);
+    background: color-mix(in oklch, var(--color-st-await) 18%, transparent);
+    color: var(--color-st-await);
+    font-size: var(--fs-2xs);
+    white-space: nowrap;
+  }
+  .lp-suspended > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* ---------------------------------------------------------------- pipelines */
+  .lp-lint {
+    display: inline-grid;
+    flex: none;
+    place-items: center;
+    color: var(--color-st-failed);
+  }
+  .lp-row[data-invalid] .lp-name {
+    color: var(--color-st-failed);
+  }
+  .lp-valid {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 3px;
+    color: var(--text-3);
+    font-size: var(--fs-2xs);
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .lp-valid[data-validation="none"] {
+    opacity: 0.7;
+  }
+  .lp-rename {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 20px;
+    padding: 0 var(--g-2);
+    border: 1px solid var(--selected-edge);
+    border-radius: var(--radius-ui);
+    background: var(--surface-0);
+    color: var(--text);
+    font: inherit;
+    font-size: var(--fs-md);
+    outline: none;
+  }
+  .lp-rename--mono {
+    font-family: var(--font-code);
+    font-size: var(--fs-sm);
+  }
+
+  /* ---------------------------------------------------------------- the floating bulk bar */
+  .lp-bulk {
+    position: absolute;
+    bottom: var(--g-4);
+    left: 50%;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 0;
+    max-width: calc(100% - 16px);
+    height: 28px;
+    padding: 0 var(--g-2);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--surface-2);
+    box-shadow: 0 6px 18px var(--shadow);
+    font-size: var(--fs-sm);
+    white-space: nowrap;
+    transform: translateX(-50%);
+  }
+  .lp-bulk__count {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--g-3);
+    padding: 0 6px;
+    font-weight: var(--w-strong);
+  }
+  .lp-bulk__count .lp-num {
+    color: inherit;
+    font-size: var(--fs-sm);
+    font-weight: var(--w-strong);
+  }
+  .lp-bulk__live {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    color: var(--color-st-running);
+    font-family: var(--font-code);
+    font-size: var(--fs-2xs);
+    font-weight: var(--w-regular);
+  }
+  .lp-bulk__acts {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .lp-bulk__sep {
+    flex: none;
+    width: 1px;
+    height: 16px;
+    margin: 0 var(--g-2);
+    background: var(--line);
+  }
+
+  /* ---------------------------------------------------------------- empty states */
+  .lp-empty {
+    flex: none;
+  }
+  .lp-empty .d-btn {
+    margin-top: var(--g-1);
+  }
+}

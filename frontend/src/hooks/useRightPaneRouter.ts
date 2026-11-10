@@ -1,16 +1,14 @@
 import { useState } from "react";
 import { rightPaneCollapsed, rightPaneOwner } from "../lib/rightPaneOwner";
 import type { RightPaneOwner } from "../lib/rightPaneOwner";
-import { shouldClearTriggerOnCanvasFocus } from "../lib/triggerCanvasReconcile";
+import { shouldClearTriggerOnCanvasFocus } from "../trigger/model/triggerCanvasReconcile";
 import { shouldCloseInfoOnTabChange } from "../lib/infoPanelReconcile";
-import type { Selection } from "../stores/editStore";
-import type {
-  Trigger,
-  PipelineListEntry,
-  RunState,
-  NodeState,
-} from "../types";
-import { isLiveRun } from "../types";
+import type { Selection } from "../pipeline/store/editState";
+import type { Trigger } from "../shared/generated/Trigger";
+import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
+import type { RunState } from "../shared/generated/RunState";
+import type { NodeState } from "../shared/generated/NodeState";
+import { isLiveRun } from "../run/model/runStatus";
 
 export interface RightPaneRouterArgs {
   /** The current canvas selection (`editStore.selection`). */
@@ -41,6 +39,10 @@ export interface RightPaneRouterArgs {
   pipelines: PipelineListEntry[];
   /** The selected run — used to synthesize a pending run-pane node. */
   selectedRun: RunState | null;
+  /** A mounted page's tab is shown in the centre: the pane is its guide. */
+  pageOpen?: boolean;
+  /** That page has a guide, unfolded. */
+  guideShown?: boolean;
 }
 
 export interface RightPaneRouterResult {
@@ -93,6 +95,8 @@ export function useRightPaneRouter(
     triggers,
     pipelines,
     selectedRun,
+    pageOpen = false,
+    guideShown = false,
   } = args;
 
   // #320 canvas-reclaim. A Trigger detail and a canvas selection compete for the
@@ -182,6 +186,7 @@ export function useRightPaneRouter(
     triggerSelected: selectedTrigger != null,
     infoPanelOpen,
     hasEditTab,
+    pageOpen,
   });
 
   // The Run-pane node. A node present in the pipeline (canvas) but absent from
@@ -191,13 +196,19 @@ export function useRightPaneRouter(
   // pending NodeState so the inspector renders NodeDetailPanel (with its
   // force-start Start button, #204) instead of the passive RunTabPlaceholder —
   // the daemon's force_spawn_node already accepts a node absent from run state.
-  // Terminal runs and start/end pseudo-nodes stay null.
+  // Terminal runs (except for an on-demand node, ADR-0086) and start/end
+  // pseudo-nodes stay null.
   const runNode: NodeState | null = (() => {
     if (selection.kind !== "node" || !selection.id || !selectedRun) return null;
     const existing = selectedRun.nodes[selection.id];
     if (existing) return existing;
-    if (!isLiveRun(selectedRun.status)) return null;
     const def = selectedRun.node_defs?.find((d) => d.id === selection.id);
+    // ADR-0086: an on-demand node can still be launched on a finished Run —
+    // its ▶ re-opens it — so it keeps its panel there, archived Runs aside.
+    const launchable =
+      isLiveRun(selectedRun.status) ||
+      (def?.on_demand === true && selectedRun.status !== "archived");
+    if (!launchable) return null;
     if (!def || def.node_type === "start" || def.node_type === "end")
       return null;
     return {
@@ -207,6 +218,7 @@ export function useRightPaneRouter(
       started_at: null,
       completed_at: null,
       failure_reason: null,
+      frontmatter_retries: 0,
       iterations: [],
     };
   })();
@@ -231,6 +243,7 @@ export function useRightPaneRouter(
     selectionKind: selection.kind,
     runPanelShown: isRunTab && selectedRun != null,
     legacyHasContent,
+    guideShown,
   });
 
   return { paneOwner, selectedTrigger, triggerPromptRequired, runNode, collapsed };

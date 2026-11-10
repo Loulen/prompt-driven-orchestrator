@@ -10,15 +10,14 @@
 // and the target is reinstalled off camera: the poster is the maintainer's
 // drawing.
 //
-//   a — (the published one) focused on the loop, camera zoomed in: the drag,
-//       then each condition lands on the canvas. The inspector is out of frame.
+//   a — (the published one) focused on the loop, camera zoomed in (×1.15): the
+//       drag, then each condition lands on the canvas. The inspector is out of frame.
 //   b — the same, with the edge inspector in frame: the loop condition's value
 //       is picked in the panel.
 
 import { sleep } from "../lib/demo-instance.mjs";
 import { targetPipeline } from "../lib/targets.mjs";
 import {
-  choose,
   clearSides,
   clearToolbar,
   dragLabelTo,
@@ -40,7 +39,7 @@ const quick = { duration: 150, pause: 40 };
 
 /** Flow px the loop region reaches left of its members' cards, and half the
  *  widest condition pill (`review.verdict = fail`), measured on the canvas. */
-const REGION_PAD = 28;
+const REGION_PAD = 20;
 const PILL_HALF = 66;
 
 /** What the take draws, left to right (flow px): the loop region around the
@@ -66,9 +65,30 @@ async function selectEdge(ctx, id, { film, at = 0.5 }) {
   await sleep(film ? 400 : 250);
 }
 
+/** The operators as the condition row's Operator list labels them
+ *  (frontend/src/pipeline/components/EdgeWhenControls.tsx). */
+const OP_LABELS = { eq: "=", neq: "≠", lt: "<", lte: "≤", gt: ">", gte: "≥" };
+
+/** Pick `label` in one of the condition row's lists (the kit's Select: a
+ *  button, then a listbox of options). A list already on it is left alone: the
+ *  camera only sees the picks that matter. `film` moves the cursor through. */
+async function pick(ctx, cell, label, film) {
+  const { page } = ctx;
+  const trigger = cell.locator("button.d-sel");
+  if ((await trigger.getAttribute("title")) === label) return;
+  await ctx.click(trigger, film ? { duration: 550 } : quick);
+  const list = page.getByRole("listbox", { name: await trigger.getAttribute("aria-label") });
+  await list.waitFor();
+  await sleep(film ? 200 : 60);
+  const option = list.getByRole("option").filter({ has: page.locator(".d-pop__label").getByText(label, { exact: true }) });
+  await ctx.click(option.first(), film ? { duration: 450 } : quick);
+  await list.waitFor({ state: "detached" });
+  await sleep(film ? 250 : 60);
+}
+
 /** Add a condition row to the selected edge: `port` (a multi-port edge names
  *  the carried output), field `verdict`, `op`, `value`. `film` moves the cursor
- *  through the panel; otherwise the page picks the values. */
+ *  through the panel; otherwise the same picks run quick, off camera. */
 async function setCondition(ctx, { port, op, value, film }) {
   const { page } = ctx;
   const panel = page.getByTestId("edge-detail-panel");
@@ -78,16 +98,10 @@ async function setCondition(ctx, { port, op, value, film }) {
   const row = panel.getByTestId("condition-row").first();
   await row.waitFor();
   await sleep(150);
-  // A control already on its value (the row defaults to the first port, its
-  // only field, `=`) is left alone: the camera only sees the picks that matter.
-  const pick = async (select, v) => {
-    if ((await select.inputValue()) === v) return;
-    await (film ? choose(ctx, select, v) : select.selectOption(v));
-  };
-  if (port) await pick(row.getByTestId("condition-port-dropdown"), port);
-  await pick(row.getByTestId("field-dropdown"), "verdict");
-  await pick(row.getByTestId("op-dropdown"), op);
-  await pick(row.getByTestId("value-dropdown"), value);
+  if (port) await pick(ctx, row.getByTestId("condition-port-dropdown"), port, film);
+  await pick(ctx, row.getByTestId("field-dropdown"), "verdict", film);
+  await pick(ctx, row.getByTestId("op-dropdown"), OP_LABELS[op] ?? op, film);
+  await pick(ctx, row.getByTestId("value-dropdown"), value, film);
   await sleep(300);
 }
 
@@ -122,11 +136,15 @@ async function play(ctx, { film, zoom, pace }) {
   const exitId = `e-${start.edges.findIndex((e) => e.source.node === "reviewer" && e.target.node === "end")}`;
   const loopId = `e-${start.edges.length}`;
   await openPipeline(ctx);
+  // Off camera: the exit edge selected, so the edge inspector is open from the
+  // start. An empty inspector folds (#949) and the drawn loop edge would open
+  // it mid-take, narrowing the canvas over the loop's pill.
+  await selectEdge(ctx, exitId, { film: false, at: 0.4 });
   if (zoom) {
-    // Off camera: the camera zooms on implementer → reviewer, and the loop's room on their right.
+    // Off camera: the camera zooms on implementer → reviewer (×1.15), and the loop's room on their right.
     const a = await page.getByTestId("rf__node-implementer").boundingBox();
     const b = await page.getByTestId("rf__node-reviewer").boundingBox();
-    await zoomCanvas(ctx, { x: a.x + a.width / 2 + 30, y: (a.y + b.y + b.height) / 2 + 25 });
+    await zoomCanvas(ctx, { x: a.x + a.width / 2 + 30, y: (a.y + b.y + b.height) / 2 + 25 }, { dy: -100 });
   }
   await clearSides(ctx, drawnSpan(target));
   await clearToolbar(ctx);
@@ -166,6 +184,15 @@ async function play(ctx, { film, zoom, pace }) {
   // Off camera: save, record the drift, the target back in place.
   await saveCanvas(ctx);
   await landOnTarget(ctx, TARGET);
+  // Nothing selected on the final shot (the poster), the canvas unmoved:
+  // Pipeline info first keeps the inspector open (an empty one folds, and the
+  // wider canvas re-centres the view), then a click on the canvas' empty
+  // top-right corner (its bottom-left holds the zoom badge) deselects the edge.
+  await ctx.click(page.getByTestId("toolbar-info"), quick);
+  await page.getByTestId("info-panel-name").waitFor();
+  const pane = await page.getByTestId("rf__wrapper").boundingBox();
+  await ctx.click({ x: pane.x + pane.width - 30, y: pane.y + 70 }, quick);
+  await sleep(400);
   await ctx.hold(pace.end);
 }
 
@@ -181,8 +208,10 @@ export default {
       label: "Loop edge reviewer → implementer, then verdict = fail and verdict = pass land on the canvas (zoomed on the loop)",
       viewport: { width: 1100, height: 760 },
       localStorage: { "pdo.layout.run": { left: 17, center: 52, right: 31 } },
-      // The canvas' full width, from above Start to below End; the toolbar is above the frame.
-      crop: { x: 188, y: 150, width: 570, height: 470 },
+      // The canvas, between the left panel (at its 200 CSS px floor) and the
+      // edge inspector, from the loop region's top to the exit's pill (the
+      // « Draft » line that shows from the loop edge on moves it down by 24 px).
+      crop: { x: 242, y: 215, width: 516, height: 450 },
       markers: ["edge-dropped", "condition-set", "condition-saved"],
       play: (ctx) => play(ctx, { film: false, zoom: true, pace: PACE.a }),
     },
@@ -190,9 +219,10 @@ export default {
       id: "b",
       label: "The same, with the edge inspector: the loop condition picked in the panel",
       viewport: { width: 1100, height: 760 },
-      localStorage: { "pdo.layout.run": { left: 17, center: 44, right: 39 } },
+      // The same canvas as a: a narrower one puts the loop's bend under the inspector.
+      localStorage: { "pdo.layout.run": { left: 17, center: 52, right: 31 } },
       // Canvas and inspector, from the tab bar (the edge panel's header reads whole).
-      crop: { x: 188, y: 44, width: 912, height: 656 },
+      crop: { x: 242, y: 44, width: 858, height: 656 },
       markers: ["edge-dropped", "condition-set", "condition-saved"],
       play: (ctx) => play(ctx, { film: true, zoom: true, pace: PACE.b }),
     },

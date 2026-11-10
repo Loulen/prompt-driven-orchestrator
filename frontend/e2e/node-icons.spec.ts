@@ -8,7 +8,7 @@ import * as path from "node:path";
 // Post canvas-refonte (ADR-0011 / #146 / #151 / #171) the first-class node
 // types are only start / end — `switch`, `loop` and `for-each` were removed as
 // node TYPES (a fan-out / cycle is now a loop *region*, not a node), and `merge`
-// followed (ADR-0079: convergence is carried by any node).
+// followed (ADR-0082: convergence is carried by any node).
 // The backend still parses the legacy variants but migrates them onto generic
 // agent nodes, so they render with the agent icon and no code/doc marker.
 //
@@ -106,7 +106,7 @@ test("each node type renders its structural icon", async ({ page }) => {
   });
 
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -116,7 +116,7 @@ test("each node type renders its structural icon", async ({ page }) => {
   // First-class structural icons.
   await expect(page.locator("[data-testid='node-icon-start']").first()).toBeVisible({ timeout: 3_000 });
   await expect(page.locator("[data-testid='node-icon-end']").first()).toBeVisible({ timeout: 3_000 });
-  // No Merge type any more (ADR-0079), hence no Merge icon.
+  // No Merge type any more (ADR-0082), hence no Merge icon.
   await expect(page.locator("[data-testid='node-icon-merge']")).toHaveCount(0);
 
   // Every Agent renders the agent icon, whatever its workspace — the
@@ -129,7 +129,7 @@ test("each node type renders its structural icon", async ({ page }) => {
 
 test("no text pills are present on any node", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -152,7 +152,7 @@ test("no text pills are present on any node", async ({ page }) => {
     // Count elements that exactly match the pill text — this catches pills
     // but not node labels like "Review Loop" which contain "loop" as substring.
     const exactPills = page.locator(
-      `span.border:has-text("${pillText}"), span.border-acc:has-text("${pillText}")`
+      `span.border:has-text("${pillText}"), span.border-primary:has-text("${pillText}")`
     );
     await expect(exactPills).toHaveCount(0);
   }
@@ -162,7 +162,7 @@ test("the isolation marker rides only the nodes that fork a worktree (#653)", as
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 

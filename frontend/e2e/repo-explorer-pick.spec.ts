@@ -40,9 +40,9 @@ test("explorer lists dirs-only, navigates, and picks a git repo through validati
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  await page.getByRole("button", { name: "New Run" }).click();
+  await page.getByTestId("new-run-button").click();
   await expect(page.getByTestId("target-repo-input")).toBeVisible();
 
   // Open-at (Option B): type the seed root, then open the explorer there.
@@ -83,9 +83,9 @@ test("picking a non-git folder validates red (any folder pickable, git gates)", 
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  await page.getByRole("button", { name: "New Run" }).click();
+  await page.getByTestId("new-run-button").click();
   await expect(page.getByTestId("target-repo-input")).toBeVisible();
 
   await page.getByTestId("target-repo-input").fill(ROOT);
@@ -106,9 +106,9 @@ test("nested modal: Escape closes only the explorer, never the parent", async ({
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  await page.getByRole("button", { name: "New Run" }).click();
+  await page.getByTestId("new-run-button").click();
   await expect(page.getByTestId("target-repo-input")).toBeVisible();
 
   await page.getByTestId("target-repo-input").fill(ROOT);

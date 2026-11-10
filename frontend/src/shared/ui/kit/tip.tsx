@@ -111,9 +111,9 @@ export function TooltipLayer({
           setAnchor(firstBox(wrap.current));
         } else hide();
       }}
-      onFocus={() => {
-        // A click focuses too, and a menu gives the focus back: only a keyboard focus opens it.
-        if (!pressed.current && !givenBack()) show();
+      onFocus={(e) => {
+        // A click focuses too, and a menu or a dialog gives the focus back: only a keyboard focus opens it.
+        if (!pressed.current && !givenBack(e.target)) show();
         pressed.current = false;
       }}
       onBlur={hide}

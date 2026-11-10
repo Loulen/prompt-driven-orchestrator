@@ -85,7 +85,7 @@ export function Modal({
         if (typeof d.close === "function") d.close();
         else d.removeAttribute("open");
       }
-      markFocusGivenBack();
+      markFocusGivenBack(opener);
       opener?.focus?.({ preventScroll: true });
     };
   }, []);

@@ -152,7 +152,8 @@ New Run, Settings and the folder explorer:
 - A staging profile's hidden Delete button waits at the end of its row, so a click sent to it no
   longer selects the row instead.
 - The editor tells the assistant which pipeline is open once per change, not on every view switch.
-- Closing a dialog no longer leaves the opening button's tooltip on screen.
+- Closing a dialog no longer leaves the opening button's tooltip on screen; a focus moved to another
+  control right after still opens that control's tooltip.
 - Scrolled to the bottom of a Settings page, the section column lights the section that fills the
   view, not a short last one under it.
 

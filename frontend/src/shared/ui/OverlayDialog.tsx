@@ -70,7 +70,7 @@ export default function OverlayDialog({
     watch.observe(d, { subtree: true, childList: true, attributes: true, attributeFilter: ["disabled"] });
     return () => {
       watch.disconnect();
-      markFocusGivenBack();
+      markFocusGivenBack(opener);
       opener?.focus?.({ preventScroll: true });
     };
   }, []);

@@ -28,12 +28,13 @@ function withoutNotices(tab: OpenPipeline, ids: ReadonlySet<number>): OpenPipeli
 
 export function saveSlice(set: Set, get: Get): Partial<EditState> {
   // The lint above the canvas is the daemon's parse of the file as it was
-  // opened: once a save has written the fix (a broken edge deleted, CORE-88),
-  // re-read it, or the banner keeps naming what is gone until a reload. Only
-  // when there is lint to clear; a failed read keeps it, the save stands.
+  // opened: once a save has written a change, re-read it. Otherwise the banner
+  // keeps naming what the save fixed (a broken edge deleted, CORE-88), and
+  // says nothing of what it broke (Start left wired to no node, CORE-241)
+  // until a reload. A failed read keeps it, the save stands.
   const refreshStaleLint = async (id: string) => {
     const tab = get().openTabs.find((t) => t.id === id);
-    if (!tab || tab.diagnostics.length === 0) return;
+    if (!tab) return;
     try {
       const detail = tab.runId ? await fetchRunPipeline(tab.runId) : await fetchPipeline(id, tab.scope);
       set((s) => ({

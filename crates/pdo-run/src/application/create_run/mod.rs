@@ -9,7 +9,8 @@
 //! order: the session claim (ADR-0064), the repositories ([`target`]), the
 //! pipeline, the Projet ([`project`], ADR-0087), the provisioning and the isolation ([`freeze`]), the `RunStarted`
 //! payload ([`payload`]), the Run on disk ([`materialize`]), the extensions'
-//! attributes, then its start ([`launch`]).
+//! attributes, then its start ([`launch`]), or its failure when nothing would
+//! start it (CORE-241).
 
 pub mod freeze;
 mod launch;
@@ -37,8 +38,10 @@ pub use request::{
     PatchRunReposRequest, TargetRepoInput, CREATE_RUN_FIELDS,
 };
 
+use crate::application::events::emit_run_event;
 use crate::application::run_id::generate_run_id;
 use crate::application::session_claim::{verify_session_claim, SessionClaim};
+use crate::domain::event::EventKind;
 use crate::Runs;
 use target::Refusal;
 
@@ -210,15 +213,31 @@ impl Runs {
             .defaults()
             .await
             .is_some_and(|d| d.manager_enabled);
-        launch::launch(
-            self,
-            &run_id,
-            &worktree_dir,
-            !sandbox.mode.is_off(),
-            started.name_hint,
-            manager_enabled,
-        )
-        .await;
+        // CORE-241: a pipeline nothing starts (Start wired to no node, no root,
+        // no on-demand node) would leave the Run `running` for good with no
+        // node live. It fails at once instead, saying why, and nothing is
+        // started for it: no container, no node, no Manager.
+        if let Some(reason) =
+            pdo_pipeline::domain::pipeline::start_leads_nowhere(&launchable.pipeline)
+        {
+            emit_run_event(
+                self,
+                &run_id,
+                EventKind::RunFailed,
+                Some(serde_json::json!({ "reason": reason })),
+            )
+            .await;
+        } else {
+            launch::launch(
+                self,
+                &run_id,
+                &worktree_dir,
+                !sandbox.mode.is_off(),
+                started.name_hint,
+                manager_enabled,
+            )
+            .await;
+        }
 
         info!(
             "Run {run_id} started for pipeline {}",

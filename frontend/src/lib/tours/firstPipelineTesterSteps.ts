@@ -1,7 +1,8 @@
 /**
  * The second half of the *First pipeline* tour (#823): the tester node, its
- * verdict and screenshot outputs, the loop that wires it back to the implementer
- * and on to End, then save, validate and keep-or-delete. Pure data, spliced after the
+ * verdict and screenshot outputs, the edge from Start (CORE-241), the loop that
+ * wires the tester back to the implementer and on to End, then save, validate
+ * and keep-or-delete. Pure data, spliced after the
  * first half in `firstPipeline.ts`; the copy rules there apply here too.
  */
 
@@ -31,6 +32,7 @@ import {
   nodeSel,
   outputSlot,
   selected,
+  startNode,
 } from "./firstPipelineReading";
 
 const TESTER_PROMPT = `Review the implementer's change and exercise the feature yourself.
@@ -168,12 +170,23 @@ export const TESTER_STEPS: TourStep[] = [
     done: (o) => !!agent(o.app, 1)?.outputs[1]?.instructions?.trim(),
   },
   {
+    // CORE-241: the daemon's scaffold puts Start and End on the canvas with no
+    // edge, and a Run starts only the nodes Start is wired to. Without this
+    // step the tour ended on a pipeline whose Runs never started anything.
+    id: "edge-start-implementer",
+    title: "Connect Start to implementer",
+    // #846 — there is no output dot any more (#844, ADR-0071): the whole border
+    // of a card is the drag-source. Both cards are the target, rim included, so
+    // the hole lights the very strip the press has to land on.
+    body: "Press anywhere on the border of the Start marker (it glows amber) and drag onto implementer. A Run hands its prompt to the nodes Start is wired to and starts them: without this edge, it would start nothing.",
+    target: (o) => [...nodeSel(startNode(o.app)), ...nodeSel(agent(o.app, 0))],
+    waitingFor: "the Start marker and the implementer card",
+    done: (o) => edgeIndex(o.app.pipeline, startNode(o.app), agent(o.app, 0)) >= 0,
+  },
+  {
     id: "edge-implementer-tester",
     title: "Connect implementer to tester",
-    // #846 — there is no output dot any more (#844, ADR-0071): the whole border
-    // of a card is the drag-source. The card is the target, rim included, so
-    // the hole lights the very strip the press has to land on.
-    body: "Press anywhere on the border of the implementer's card — it glows amber — and drag onto tester. The edge is the hand-off: when the first finishes, the second starts.",
+    body: "Now press on the border of the implementer's card and drag onto tester. The edge is the hand-off: when the first finishes, the second starts.",
     target: (o) => [...nodeSel(agent(o.app, 0)), ...nodeSel(agent(o.app, 1))],
     waitingFor: "the two agent cards",
     done: (o) => edgeIndex(o.app.pipeline, agent(o.app, 0), agent(o.app, 1)) >= 0,

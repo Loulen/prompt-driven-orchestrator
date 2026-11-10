@@ -356,19 +356,22 @@ function gestures(fake: FakeApp): Record<string, () => void> {
           },
         ],
       }),
+    // Edge 0: what a Run hands its prompt to (CORE-241).
+    "edge-start-implementer": () =>
+      fake.addEdge({ source: { node: "start", port: "user_prompt" }, target: { node: "n1", port: "in" } }),
     "edge-implementer-tester": () =>
       fake.addEdge({ source: { node: "n1", port: "out" }, target: { node: "n2", port: "in" } }),
     "edge-tester-implementer": () =>
       fake.addEdge({ source: { node: "n2", port: "out" }, target: { node: "n1", port: "in" } }),
     "select-loop-edge": () => {
-      fake.selectEdge(1);
+      fake.selectEdge(2);
       fake.show('[data-testid="when-editor"]');
     },
-    "loop-condition": () => fake.writeCondition(1, "verdict", "fail"),
+    "loop-condition": () => fake.writeCondition(2, "verdict", "fail"),
     "edge-tester-end": () =>
       fake.addEdge({ source: { node: "n2", port: "out" }, target: { node: "end", port: "result" } }),
-    "select-end-edge": () => fake.selectEdge(2),
-    "end-condition": () => fake.writeCondition(2, "verdict", "pass"),
+    "select-end-edge": () => fake.selectEdge(3),
+    "end-condition": () => fake.writeCondition(3, "verdict", "pass"),
     // Saved, the pipeline is in the Library and Validate appears next to Save.
     save: () => {
       fake.save();
@@ -435,8 +438,8 @@ describe("walking the whole tour", () => {
 
   it("produces the pipeline the ticket describes", () => {
     // The same script, read as a result rather than as a path: two interactive
-    // agents, opposite isolation, a verdict enum, an image_list port, and three
-    // edges of which two are conditional.
+    // agents, opposite isolation, a verdict enum, an image_list port, and four
+    // edges of which two are conditional: Start's first (CORE-241).
     const fake = new FakeApp();
     const script = gestures(fake);
     for (const step of STEPS) script[step.id]();
@@ -450,11 +453,72 @@ describe("walking the whole tour", () => {
       allowed: ["pass", "fail"],
     });
     expect(tester.outputs[1]).toMatchObject({ name: "image_list", port_type: "image_list" });
+    expect(fake.app.pipeline?.edges[0]).toMatchObject({ source: { node: "start" }, target: { node: "n1" } });
     expect(fake.app.pipeline?.edges.map((e) => e.when)).toEqual([
+      undefined,
       undefined,
       { verdict: { eq: "fail" } },
       { verdict: { eq: "pass" } },
     ]);
+  });
+});
+
+/**
+ * CORE-241 — the daemon's scaffold puts Start and End on the canvas with no
+ * edge, and a Run starts only the nodes Start is wired to. The tour wired the
+ * loop and End but never Start, so the pipeline it ended on never started.
+ */
+describe("the edge from Start", () => {
+  const step = STEPS.find((s) => s.id === "edge-start-implementer")!;
+
+  function upTo(fake: FakeApp, stepId: string) {
+    const script = gestures(fake);
+    for (const s of STEPS) {
+      if (s.id === stepId) return;
+      script[s.id]();
+    }
+  }
+
+  it("comes before the first edge between the two agents", () => {
+    const ids = STEPS.map((s) => s.id);
+    expect(ids.indexOf("edge-implementer-tester")).toBe(ids.indexOf("edge-start-implementer") + 1);
+  });
+
+  it("lights the Start marker and the implementer, the two ends of the drag", () => {
+    const fake = new FakeApp();
+    upTo(fake, "edge-start-implementer");
+    expect(step.target(fake.obs())).toEqual([
+      '.react-flow__node[data-id="start"]',
+      '.react-flow__node[data-id="n1"]',
+    ]);
+    expect(stepBody(step, fake.obs())).toContain("border of the Start marker");
+  });
+
+  it("advances on an edge from Start to the implementer, not to the tester", () => {
+    const fake = new FakeApp();
+    upTo(fake, "edge-start-implementer");
+    expect(step.done!(fake.obs())).toBe(false);
+    fake.addEdge({ source: { node: "start", port: "user_prompt" }, target: { node: "n2", port: "in" } });
+    expect(step.done!(fake.obs()), "Start wired to the tester").toBe(false);
+    fake.addEdge({ source: { node: "start", port: "user_prompt" }, target: { node: "n1", port: "in" } });
+    expect(step.done!(fake.obs())).toBe(true);
+  });
+
+  it("is replayed with Previous from the next step, held for Next", () => {
+    const fake = new FakeApp();
+    const script = gestures(fake);
+    const index = STEPS.findIndex((s) => s.id === "edge-implementer-tester");
+    for (const s of STEPS.slice(0, index)) script[s.id]();
+    let run: TourRun = { ...startTour(FIRST_PIPELINE_TOUR, fake.obs()), index };
+    expect(canGoBack(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(true);
+    run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs());
+    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("edge-start-implementer");
+    expect(needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(true);
+  });
+
+  it("says in its recap where a Run starts", () => {
+    const recap = Array.isArray(FIRST_PIPELINE_TOUR.recap) ? FIRST_PIPELINE_TOUR.recap : [];
+    expect(recap.find((r) => r.label === "Start")?.text).toContain("implementer");
   });
 });
 
@@ -502,9 +566,9 @@ describe("the accidents a reader can have", () => {
     fake.addEdge({ source: { node: "n2", port: "image_list" }, target: { node: "n1", port: "in" } });
     fake.addEdge({ source: { node: "n2", port: "out" }, target: { node: "n1", port: "in" } });
 
-    fake.selectEdge(1); // the image_list one
+    fake.selectEdge(2); // the image_list one
     expect(step.done!(fake.obs())).toBe(false);
-    fake.selectEdge(2); // the out one
+    fake.selectEdge(3); // the out one
     expect(step.done!(fake.obs())).toBe(true);
   });
 
@@ -597,8 +661,8 @@ describe("an edge that carries the wrong output", () => {
   }
 
   it.each([
-    ["edge-tester-implementer", { node: "n1", port: "in" }, 1],
-    ["edge-tester-end", { node: "end", port: "result" }, 2],
+    ["edge-tester-implementer", { node: "n1", port: "in" }, 2],
+    ["edge-tester-end", { node: "end", port: "result" }, 3],
   ] as const)("%s guides to the Outputs section, and advances once out is ticked", (stepId, target, index) => {
     const fake = new FakeApp();
     const step = upTo(fake, stepId);
@@ -637,7 +701,7 @@ describe("an edge that carries the wrong output", () => {
       "edge-tester-end": () =>
         fake.addEdge({ source: { node: "n2", port: "image_list" }, target: { node: "end", port: "result" } }),
     };
-    const fix: Record<string, number> = { "edge-tester-implementer": 1, "edge-tester-end": 2 };
+    const fix: Record<string, number> = { "edge-tester-implementer": 2, "edge-tester-end": 3 };
     let run = startTour(FIRST_PIPELINE_TOUR, fake.obs());
     let clock = 0;
     const tick = () => (run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), (clock += 200)));
@@ -676,6 +740,7 @@ describe("an edge that carries the wrong output", () => {
     expect(run.phase).toBe("finished");
     // Both edges carry out AND image_list, so the editor qualified the key.
     expect(fake.app.pipeline?.edges.map((e) => e.when)).toEqual([
+      undefined,
       undefined,
       { "out.verdict": { eq: "fail" } },
       { "out.verdict": { eq: "pass" } },
@@ -829,7 +894,7 @@ describe("the shape of every step", () => {
         script[s.id]();
       }
       fake.addEdge({ source: { node: "n2", port: "image_list" }, target: { node: "n1", port: "in" } });
-      if (selectIt) fake.selectEdge(1);
+      if (selectIt) fake.selectEdge(2);
       states.push(fake.obs());
     }
     for (const step of STEPS.filter((s) => s.id.startsWith("edge-"))) {
@@ -872,8 +937,8 @@ describe("a condition on an edge that carries two outputs", () => {
   }
 
   it.each([
-    ["loop-condition", 1, "fail"],
-    ["end-condition", 2, "pass"],
+    ["loop-condition", 2, "fail"],
+    ["end-condition", 3, "pass"],
   ] as const)("%s advances on the out.verdict key the editor writes", (stepId, index, value) => {
     const fake = new FakeApp();
     const step = upTo(fake, stepId);
@@ -890,24 +955,24 @@ describe("a condition on an edge that carries two outputs", () => {
   it("does not count a verdict read on another output", () => {
     const fake = new FakeApp();
     const step = upTo(fake, "loop-condition");
-    fake.setEdgePorts(1, ["out", "image_list"]);
-    fake.setEdgeWhen(1, { "image_list.verdict": { eq: "fail" } });
+    fake.setEdgePorts(2, ["out", "image_list"]);
+    fake.setEdgeWhen(2, { "image_list.verdict": { eq: "fail" } });
     expect(step.done!(fake.obs())).toBe(false);
   });
 
   it("keeps a condition written before the port was ticked", () => {
     const fake = new FakeApp();
     const step = upTo(fake, "loop-condition");
-    fake.writeCondition(1, "verdict", "fail");
-    fake.setEdgePorts(1, ["out", "image_list"]);
-    expect(fake.app.pipeline?.edges[1].when).toEqual({ "out.verdict": { eq: "fail" } });
+    fake.writeCondition(2, "verdict", "fail");
+    fake.setEdgePorts(2, ["out", "image_list"]);
+    expect(fake.app.pipeline?.edges[2].when).toEqual({ "out.verdict": { eq: "fail" } });
     expect(step.done!(fake.obs())).toBe(true);
   });
 
   it("says what it waits for while the clause is another one", () => {
     const fake = new FakeApp();
     const step = upTo(fake, "loop-condition");
-    fake.writeCondition(1, "verdict", "pass");
+    fake.writeCondition(2, "verdict", "pass");
     expect(step.done!(fake.obs())).toBe(false);
     expect(stepBody(step, fake.obs())).toContain("Not there yet");
     expect(stepBody(step, fake.obs())).toContain("verdict = fail");
@@ -1133,8 +1198,8 @@ describe("replaying a step with Previous", () => {
       expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe(expected);
     }
     const step = currentStep(FIRST_PIPELINE_TOUR, run)!;
-    expect(fake.app.selection).toEqual({ kind: "edge", id: null, edgeIndex: 2 });
-    expect(step.target(fake.obs())).toEqual(['.react-flow__edge[data-id="e-1"]']);
+    expect(fake.app.selection).toEqual({ kind: "edge", id: null, edgeIndex: 3 });
+    expect(step.target(fake.obs())).toEqual(['.react-flow__edge[data-id="e-2"]']);
     expect(stepBody(step, fake.obs())).toMatch(/^Already set: the condition reads verdict = fail\./);
     expect(needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(true);
   });
@@ -1143,11 +1208,11 @@ describe("replaying a step with Previous", () => {
     const fake = new FakeApp();
     at(fake, "save");
     // The loop edge's condition removed, the tester → End edge still selected.
-    const edges = fake.app.pipeline!.edges.map((e, i) => (i === 1 ? { ...e, when: undefined } : e));
+    const edges = fake.app.pipeline!.edges.map((e, i) => (i === 2 ? { ...e, when: undefined } : e));
     fake.app = { ...fake.app, pipeline: { ...fake.app.pipeline!, edges } };
     const step = STEPS.find((s) => s.id === "loop-condition")!;
     expect(stepBody(step, fake.obs())).toMatch(/^Click the edge first, then add the condition verdict = fail/);
-    fake.selectEdge(1);
+    fake.selectEdge(2);
     expect(step.target(fake.obs())).toEqual(['[data-testid="when-editor"]']);
     expect(stepBody(step, fake.obs())).toMatch(/^Add the condition verdict = fail\./);
   });

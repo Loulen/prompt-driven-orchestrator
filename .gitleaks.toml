@@ -5,6 +5,7 @@ useDefault = true
 
 [[allowlists]]
 description = "Not secrets: Claude model ids in price tables, and a test fixture's fake secret"
+targetRules = ["generic-api-key"]
 regexTarget = "secret"
 regexes = [
   '''^claude-(opus|sonnet|haiku|fable)-[0-9a-z.-]+$''',

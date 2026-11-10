@@ -21,7 +21,7 @@
 
 <!-- Media slots: `make readme-media` publishes each scene to docs/assets/readme/<scene>.gif with its
      poster docs/assets/readme/<scene>.jpg (scenes: hero, pipelines, routing, outputs, review, triggers,
-     stats, interactive-orchestrator, profiles, skills). Until a scene is published, its slot shows docs/pdo-ui.png.
+     stats, interactive-orchestrator, profiles, skills).
      In each <picture>: the reduced-motion <source> takes the poster, the other <source> the GIF
      (type="image/gif"), the <img> the poster. README.md and docs/readme/README.fr.md share the media. -->
 <p align="center">

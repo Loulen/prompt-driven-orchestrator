@@ -173,7 +173,7 @@ test("Triggers list groups by repo across ≥2 repos, including the daemon's own
   //
   // This also removes the local/CI trap the previous assertion had to work around:
   // the expectation now sorts the same strings the UI sorts, so it no longer
-  // depends on the workspace's absolute path (…/Maestro locally,
+  // depends on the workspace's absolute path (a local checkout,
   // …/prompt-driven-orchestrator in CI) landing on the same side as its basename.
   const expectedLabelOrder = [repoA, repoB, WORKSPACE_ROOT]
     .map((p) => path.basename(p))

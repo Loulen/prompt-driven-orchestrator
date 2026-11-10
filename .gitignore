@@ -58,6 +58,7 @@ frontend/design/*
 
 # Personal agent context — not shared with the team
 CLAUDE.local.md
+docs/agents/overnight-status.md
 
 # Env files at any path
 .env

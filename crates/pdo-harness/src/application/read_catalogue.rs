@@ -37,7 +37,14 @@ struct Inner {
     /// The harnesses whose version re-check runs in the background right now:
     /// a burst of reads past the window starts one, not one per read.
     rechecking: std::sync::Mutex<HashSet<String>>,
+    /// Told when a re-check probes a harness again because its binary answers
+    /// another version than the one cached (one that failed to answer at boot
+    /// included): the open pages read the new catalogue.
+    reprobe_notice: std::sync::OnceLock<ReprobeNotice>,
 }
+
+/// Who hears a harness probed again by a read.
+type ReprobeNotice = Box<dyn Fn(&str) + Send + Sync>;
 
 impl CatalogueReader {
     pub fn new(
@@ -50,8 +57,16 @@ impl CatalogueReader {
                 ttl: Box::new(ttl),
                 cache: tokio::sync::Mutex::new(HashMap::new()),
                 rechecking: std::sync::Mutex::new(HashSet::new()),
+                reprobe_notice: std::sync::OnceLock::new(),
             }),
         }
+    }
+
+    /// The same reader, telling `notice` the harness a re-check probed again.
+    /// Set once: a second notice is ignored.
+    pub fn with_reprobe_notice(self, notice: impl Fn(&str) + Send + Sync + 'static) -> Self {
+        let _ = self.inner.reprobe_notice.set(Box::new(notice));
+        self
     }
 
     /// Whether `binary` resolves on the harness probe `PATH`.
@@ -187,13 +202,25 @@ impl Inner {
         }
         let catalogue = self.catalogue(binary).await;
         let mut guard = self.cache.lock().await;
-        let empty_reprobes = match guard.get(harness) {
-            Some(entry) if entry.cached.version == version && !answered(&catalogue) => {
-                entry.empty_reprobes + 1
-            }
-            _ => 0,
+        let (empty_reprobes, new_version) = match guard.get(harness) {
+            Some(entry) if entry.cached.version == version => (
+                if answered(&catalogue) {
+                    0
+                } else {
+                    entry.empty_reprobes + 1
+                },
+                false,
+            ),
+            Some(_) => (0, true),
+            None => (0, false),
         };
         Self::store(&mut guard, harness, version, catalogue, empty_reprobes);
+        drop(guard);
+        if new_version {
+            if let Some(notice) = self.reprobe_notice.get() {
+                notice(harness);
+            }
+        }
     }
 
     /// Run the catalogue ladder of `binary` and cache it at `version`.
@@ -335,6 +362,34 @@ pub(crate) mod tests {
         reader.read("claude", "claude").await;
         reader.read("claude", "claude").await;
         assert_eq!(fake.runs().len(), 2, "the second read ran nothing");
+    }
+
+    #[tokio::test]
+    async fn a_read_that_finds_a_new_version_says_so_and_a_first_read_does_not() {
+        // A boot probe that failed (a slow `--version`) leaves no version; the next
+        // read past the window finds one and probes again: the open pages, which
+        // still show « probe failed », must hear of it.
+        let fake = binaries();
+        let heard = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let notes = heard.clone();
+        let reader = CatalogueReader::new(fake.clone(), || Duration::ZERO)
+            .with_reprobe_notice(move |harness| notes.lock().unwrap().push(harness.to_string()));
+        reader.read("claude", "claude").await;
+        reader.read("claude", "claude").await;
+        // The read past the window re-checks in the background: its version run.
+        fake.await_runs(3).await;
+        assert!(heard.lock().unwrap().is_empty(), "nothing changed yet");
+        fake.set_version("claude", "2.2.0");
+        reader.read("claude", "claude").await;
+        // Its re-check: the version, then the ladder at the new one.
+        fake.await_runs(5).await;
+        for _ in 0..200 {
+            if !heard.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(*heard.lock().unwrap(), vec!["claude".to_string()]);
     }
 
     #[tokio::test]

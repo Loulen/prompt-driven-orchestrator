@@ -6,7 +6,7 @@ use pdo_kernel::Actor;
 use tracing::{error, info, warn};
 
 use crate::application::events::{emit_run_event, reload_run_state};
-use crate::application::node::prompt::{build_manager_prompt, RunNameHint};
+use crate::application::node::prompt::{build_manager_prompt, with_first_message, RunNameHint};
 use crate::application::paths::effective_repo_root;
 use crate::application::sandbox::{sandbox_home_roots, stage_harness_set, SandboxExec};
 use crate::domain::event::EventKind;
@@ -17,7 +17,8 @@ use crate::Runs;
 /// then reads as started by the Run's creator (CORE-61). The extensions' launch
 /// hooks are asked for it, with that Actor: their variables go into its
 /// environment, their text at the top of its prompt. Once up, it is announced
-/// started.
+/// started. `first_message`, when a gesture starts it to hand it one (the
+/// Review's send, CORE-239), ends its launch prompt.
 ///
 /// **Its only reservation is `RunStarted`** (ADR-0038): the orphan sweep resolves a
 /// `pdo-mgr-<run>` session against the *run*, not a node, so a manager spawned for a
@@ -30,6 +31,7 @@ pub async fn spawn_manager_session(
     name_hint: RunNameHint,
     sandboxed: bool,
     started_by: Option<Actor>,
+    first_message: Option<&str>,
 ) {
     // The URL must be reachable from the side this manager runs on. A sandboxed
     // manager execs into the Run's container, where `localhost` is the container, so a
@@ -47,6 +49,10 @@ pub async fn spawn_manager_session(
     .unwrap_or_default();
 
     let full_prompt = build_manager_prompt(run_id, &daemon_url, &static_prompt, name_hint);
+    let full_prompt = match first_message {
+        Some(message) => with_first_message(&full_prompt, message),
+        None => full_prompt,
+    };
 
     let session_name = pdo_session::domain::names::manager_session_name(run_id);
     // The manager follows the harness OF THE RUN — `Run → instance → floor`, no node

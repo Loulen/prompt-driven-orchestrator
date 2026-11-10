@@ -4,12 +4,13 @@ import type { NodeType } from "../../shared/generated/NodeType";
 import type { RunState } from "../../shared/generated/RunState";
 import type { RunStatus } from "../../shared/generated/RunStatus";
 import { isNodeIsolated } from "../../lib/nodeIsolation";
-import { fallbackNodeSpot } from "../../lib/nodePlacement";
+import { fallbackNodeSpot, fallbackNoteSpot } from "../../lib/nodePlacement";
 import type { EditorPipelineDef } from "../model/pipeline";
 import { deriveLoopRegions } from "./loopRegionDerivation";
 import { regionCostText } from "./loopRegionCost";
 import type { LoopBadge } from "./EditNode";
 import { nodeAgentLabel } from "../model/nodeAgent";
+import { profileLabel } from "../../settings/model/profileNames";
 import type { AgentProfile } from "../../shared/generated/AgentProfile";
 
 /**
@@ -127,7 +128,7 @@ export function deriveEditNodes(
         inRun: runState != null,
         // The card's meta grid: what runs the node, and in a Run its
         // iteration, its time and its cost.
-        agent: nodeAgentLabel(n, agentProfiles, nodeRun?.harness),
+        agent: nodeAgentLabel(n, agentProfiles, nodeRun?.harness, profileLabel),
         run: nodeRun
           ? {
               iter: nodeRun.iter,
@@ -153,10 +154,7 @@ export function buildNoteNodes(pipeline: EditorPipelineDef): Node[] {
   return (pipeline.notes ?? []).map((note, i) => ({
     id: note.id,
     type: "note",
-    position: {
-      x: note.view?.x ?? 240,
-      y: note.view?.y ?? 80 + i * 120,
-    },
+    position: note.view ? { x: note.view.x, y: note.view.y } : fallbackNoteSpot(i),
     data: { noteId: note.id, content: note.content },
     draggable: true,
     selectable: true,

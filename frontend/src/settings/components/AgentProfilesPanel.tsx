@@ -179,7 +179,9 @@ export default function AgentProfilesPanel({
           consequence={
             references.length === 0
               ? "No live reference"
-              : `${references.length} reference${references.length === 1 ? "" : "s"} move to the next tier`
+              : references.length === 1
+                ? "1 reference moves to the next tier"
+                : `${references.length} references move to the next tier`
           }
           target={references.length > 0 ? references.join(", ") : undefined}
           actionLabel="Delete"

@@ -21,7 +21,7 @@ use render::{answer, list_lines, saved_line, validation, version_lines, warn, ya
 #[derive(Subcommand, Debug)]
 pub enum PipelineAction {
     /// List the registry's pipelines, one tab-separated line each: id, name,
-    /// last version, node count, the Projets it is validated for, and why its
+    /// last version, node count, the Projects it is validated for, and why its
     /// file does not parse when it does not.
     List {
         #[arg(long)]
@@ -65,17 +65,17 @@ pub enum PipelineAction {
         #[arg(long)]
         json: bool,
     },
-    /// Set the Projets the launch forms offer a pipeline to. No flag: every
-    /// Projet.
+    /// Set the Projects the launch forms offer a pipeline to. No flag: every
+    /// Project.
     Validate {
         id: String,
         /// Offer it only behind « Show test pipelines ».
         #[arg(long, conflicts_with_all = ["projects", "first"])]
         none: bool,
-        /// Offer it to this Projet only (repeatable, in order).
+        /// Offer it to this Project only (repeatable, in order).
         #[arg(long = "project", value_name = "PROJECT_ID", conflicts_with = "first")]
         projects: Vec<String>,
-        /// Offer it to every Projet, listed first for this one (repeatable).
+        /// Offer it to every Project, listed first for this one (repeatable).
         #[arg(long, value_name = "PROJECT_ID")]
         first: Vec<String>,
         #[arg(long)]

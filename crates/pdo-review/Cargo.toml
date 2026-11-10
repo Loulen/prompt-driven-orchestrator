@@ -53,4 +53,6 @@ pdo-skill.workspace = true
 pretty_assertions.workspace = true
 sqlx.workspace = true
 tempfile.workspace = true
+# Paused time: the delivery's watch over the manager (CORE-239), minutes in a blink.
+tokio = { workspace = true, features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }

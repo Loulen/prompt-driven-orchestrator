@@ -90,8 +90,18 @@ pub fn create_repo(
     let target = parent_path.join(trimmed);
     let shown = target.display().to_string();
 
-    let existed = target.exists();
+    // `symlink_metadata`: a link someone else left there is theirs, wherever it points.
+    let existed = std::fs::symlink_metadata(&target).is_ok();
     if existed {
+        // Whatever stands under a shared parent (`/tmp`) and is not ours — a
+        // repository carrying git hooks or agent settings, an empty folder to
+        // scaffold into, a link to one of our repositories — is never taken
+        // over: the user's Runs would work in it (CORE-232).
+        if !owned_by_us(&target) {
+            return Err(format!(
+                "{shown} belongs to another user: remove it, or create the repository elsewhere"
+            ));
+        }
         if !target.is_dir() {
             return Err(format!("{shown} exists and is not a directory"));
         }
@@ -130,6 +140,21 @@ pub fn create_repo(
             Err(e)
         }
     }
+}
+
+/// Whether the daemon's user owns `dir`. Off Unix there is no owner to compare:
+/// the folder is taken as ours, as before.
+#[cfg(unix)]
+fn owned_by_us(dir: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: `geteuid` takes no argument, dereferences nothing and always succeeds.
+    let me = unsafe { libc::geteuid() };
+    std::fs::symlink_metadata(dir).is_ok_and(|m| m.uid() == me)
+}
+
+#[cfg(not(unix))]
+fn owned_by_us(_dir: &Path) -> bool {
+    true
 }
 
 fn is_empty_dir(dir: &Path) -> bool {
@@ -190,4 +215,44 @@ fn scaffold_into(target: &Path, files: &[ScaffoldFile]) -> Result<(), String> {
         ],
     )?;
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod owner_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_folder_of_ours_is_reused() {
+        let ours = tempfile::tempdir().unwrap();
+        assert!(owned_by_us(ours.path()));
+        // `/` is root's: anyone else does not own it (CORE-232).
+        // SAFETY: as in `owned_by_us`.
+        if unsafe { libc::geteuid() } != 0 {
+            assert!(!owned_by_us(Path::new("/")));
+        }
+    }
+
+    #[test]
+    fn a_folder_of_another_user_is_refused_by_name_never_taken_over() {
+        // SAFETY: as in `owned_by_us`.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        // `/usr` is root's: as a training repository left under `/tmp` by
+        // someone else would be.
+        let err = create_repo("/", "usr", &[]).unwrap_err();
+        assert_eq!(
+            err,
+            "/usr belongs to another user: remove it, or create the repository elsewhere"
+        );
+    }
+
+    #[test]
+    fn a_link_we_did_not_make_is_judged_by_its_own_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let ours = dir.path().join("link");
+        std::os::unix::fs::symlink("/usr", &ours).unwrap();
+        // Our own link to a folder of root's: ours, by the link's owner.
+        assert!(owned_by_us(&ours));
+    }
 }

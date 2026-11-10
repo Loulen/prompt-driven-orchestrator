@@ -975,6 +975,38 @@ async fn edit_remove_secondary_mid_run() {
     );
 }
 
+/// `pdo run repos --remove <path>` sends the repository's path, not its alias:
+/// it removes it as well (it used to answer « updated » and keep it).
+#[tokio::test]
+async fn edit_remove_secondary_by_its_path() {
+    let daemon = TestDaemon::spawn(seed_daemon_repo).await.unwrap();
+    let run_id = create_mono_run(&daemon).await;
+
+    let secondary = tempfile::tempdir().unwrap();
+    make_secondary_repo(secondary.path());
+    let path = secondary.path().to_str().unwrap().to_string();
+
+    let add = patch_repos(
+        &daemon,
+        &run_id,
+        serde_json::json!({ "add": [{ "repo": path }] }),
+    )
+    .await;
+    assert_eq!(add.status(), 200);
+
+    let remove = patch_repos(&daemon, &run_id, serde_json::json!({ "remove": [path] })).await;
+    assert_eq!(remove.status(), 200);
+    let state: serde_json::Value = remove.json().await.unwrap();
+    assert!(
+        state["target_repos"]
+            .as_array()
+            .map(|a| a.is_empty())
+            .unwrap_or(true),
+        "the secondary named by its path must be gone from the projection: {}",
+        state["target_repos"]
+    );
+}
+
 /// #221 (handler half): a terminal (archived) Run's list is frozen — the edit is
 /// refused 409 `run_not_editable`, never applied.
 #[tokio::test]

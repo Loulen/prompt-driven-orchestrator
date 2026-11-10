@@ -287,6 +287,65 @@ mod tests {
     }
 
     #[test]
+    fn the_import_speaks_the_language_of_the_interface() {
+        // The warnings land in the import modal and on `pdo pipeline library
+        // import`, the placeholders in a node's prompt: English, as the rest
+        // of the interface (CORE-228).
+        let src = r#"
+            const build = () => 'x';
+            const lvl = 'low';
+            for (let i = 0; i < n; i++) {
+              for (let j = 0; j < 2; j++) { await agent(`inner`, { label: 'inner' }) }
+              const v = await agent(build(), { label: 'mystery', effort: lvl });
+              if (v.a.b()) return v;
+            }
+            try { await agent(`t`, { label: 't' }) } finally { cleanup() }
+            await pipeline(items, (x) => agent(`Handle ${x}`, { label: 'each' }));
+            await pipeline(items, (x) => x);
+            await agent();
+        "#;
+        let (result, _) = import_and_parse(src, "t");
+        // The warnings, then every prompt the import wrote.
+        let texts: Vec<String> = result
+            .warnings
+            .iter()
+            .map(|w| w.message.clone())
+            .chain(result.prompts.values().cloned())
+            .collect();
+        for english in [
+            "nested loop",
+            "loop bound not resolved",
+            "computed `effort`",
+            "prompt built at run time",
+            "guard whose predicate",
+            "`try/finally`",
+            "collection region (fan-out per item)",
+            "no collection region created",
+            "⟨TODO: prompt built at run time by build()⟩",
+            "write this node's role",
+        ] {
+            assert!(
+                texts.iter().any(|t| t.contains(english)),
+                "{english:?} in none of {texts:?}"
+            );
+        }
+        for french in [
+            "nœud",
+            "boucle",
+            "garde",
+            "construit",
+            "rédige",
+            "aplati",
+            "région",
+        ] {
+            assert!(
+                texts.iter().all(|t| !t.contains(french)),
+                "{french:?} in {texts:?}"
+            );
+        }
+    }
+
+    #[test]
     fn agent_opts_effort_and_model_land_on_the_node() {
         let src = r#"agent(`work`, { label: 'w', model: 'opus', effort: 'low' }); agent(`plain`, { label: 'p' })"#;
         let (result, parsed) = import_and_parse(src, "t");

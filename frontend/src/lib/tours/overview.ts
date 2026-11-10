@@ -58,6 +58,7 @@ import {
   runSelect,
   triggerRow,
 } from "./overviewReading";
+import { brandName } from "../../shared/ui/brand/brand";
 
 /** The second half: the left panel's tabs, the Run's status and archive, then the top bar. */
 const APP_STEPS: TourStep[] = [
@@ -210,7 +211,7 @@ export const OVERVIEW_TOUR: TourDef = {
   minutes: 4,
   steps: [...CANVAS_STEPS, ...APP_STEPS],
   intro: {
-    title: "Tour of Acogni Driver",
+    title: `Tour of ${brandName()}`,
     body: "A walk around the screen on a real Run: the canvas, the panels, a node and its output, an edge, the Runs, Triggers and Pipelines tabs. The tour prepares everything first; nothing needs an agent.",
     footnote:
       "Nothing here touches your own repositories. The example Trigger is removed when the tour ends; the pipeline and the Run stay yours.",
@@ -264,10 +265,10 @@ export const OVERVIEW_TOUR: TourDef = {
       run: removeExampleTrigger,
     },
   ],
-  recapIntro: `You toured Acogni Driver on a real Run of ${TUTORIAL_OVERVIEW_PIPELINE_ID}:`,
+  recapIntro: `You toured ${brandName()} on a real Run of ${TUTORIAL_OVERVIEW_PIPELINE_ID}:`,
   recap: (app) => [
     { label: "Canvas", text: "nodes linked by edges, listed and detailed around it" },
-    { label: "Edges", text: "conditions on outputs, like `verdict eq pass`" },
+    { label: "Edges", text: "conditions on outputs, like `verdict = pass`" },
     { label: "Run", text: isArchived(app) ? "archived, its outputs stay" : "still in your list, with its worktree" },
     { label: "Trigger", text: "the example one is gone" },
   ],

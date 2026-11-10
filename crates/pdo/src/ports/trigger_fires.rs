@@ -32,8 +32,9 @@ async fn fires_by_pipeline(
     .await?)
 }
 
-/// The "triggers that created a run" KPI: fired count, distinct fired triggers,
-/// and the current enabled-trigger count.
+/// The "triggers that created a run" KPI: fired count, the enabled triggers that
+/// fired, and the current enabled-trigger count — so « X of Y enabled triggers
+/// fired » is a ratio: a trigger disabled since its fire is not in X (CORE-232).
 async fn triggers_created_runs(
     db: &sqlx::SqlitePool,
     from: &str,
@@ -42,7 +43,8 @@ async fn triggers_created_runs(
     let (fired, distinct_triggers, enabled_triggers) = sqlx::query_as::<_, (i64, i64, i64)>(
         "SELECT \
            (SELECT COUNT(*) FROM trigger_fires WHERE outcome = 'fired' AND ts >= ?1 AND ts < ?2) AS fired, \
-           (SELECT COUNT(DISTINCT trigger_id) FROM trigger_fires WHERE outcome = 'fired' AND ts >= ?1 AND ts < ?2) AS distinct_triggers, \
+           (SELECT COUNT(DISTINCT f.trigger_id) FROM trigger_fires f JOIN triggers t ON t.id = f.trigger_id \
+            WHERE t.enabled = 1 AND f.outcome = 'fired' AND f.ts >= ?1 AND f.ts < ?2) AS distinct_triggers, \
            (SELECT COUNT(*) FROM triggers WHERE enabled = 1) AS enabled_triggers",
     )
     .bind(from)
@@ -121,23 +123,41 @@ mod tests {
         .execute(&db)
         .await
         .unwrap();
+        // A trigger disabled since it fired, and an enabled one that never fired.
+        sqlx::query(
+            "INSERT INTO triggers (id, name, pipeline_id, cron, enabled, created_at) VALUES \
+             ('t2', 'paused', 'alpha', '0 3 * * *', 0, '2026-07-14T00:00:00.000Z'), \
+             ('t3', 'idle', 'alpha', '0 4 * * *', 1, '2026-07-14T00:00:00.000Z')",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO trigger_fires (trigger_id, ts, outcome, run_id) \
+             VALUES ('t2', '2026-07-16T03:00:00.000Z', 'fired', 'rY')",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
 
         let fires = TriggerTableFires { db: db.clone() };
         let by_pipeline = fires.by_pipeline(FROM, TO).await.unwrap();
-        // alpha = 3 (2 fired + 1 skipped), orphan = 1 under "(deleted trigger)".
+        // alpha = 4 (t1: 2 fired + 1 skipped, t2: 1 fired), orphan = 1 under
+        // "(deleted trigger)".
         assert_eq!(
             by_pipeline,
             vec![
-                ("alpha".to_string(), 3),
+                ("alpha".to_string(), 4),
                 ("(deleted trigger)".to_string(), 1)
             ]
         );
 
         let created = fires.created_runs(FROM, TO).await.unwrap();
-        // 3 fires with outcome='fired' (r1, r5, rX), from 1 distinct existing +
-        // 1 orphan = 2 distinct trigger_ids; 1 enabled trigger.
-        assert_eq!(created.fired, 3);
-        assert_eq!(created.distinct_triggers, 2);
-        assert_eq!(created.enabled_triggers, 1);
+        // 4 fires with outcome='fired' (r1, r5, rX, rY). Of the 2 enabled triggers
+        // (t1, t3), only t1 fired: the orphan and t2, disabled since, are not in the
+        // ratio (CORE-232: « 2 of 2 » once read a disabled trigger as enabled).
+        assert_eq!(created.fired, 4);
+        assert_eq!(created.distinct_triggers, 1);
+        assert_eq!(created.enabled_triggers, 2);
     }
 }

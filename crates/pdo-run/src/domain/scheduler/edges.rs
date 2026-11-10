@@ -46,6 +46,7 @@ pub fn evaluate_outgoing_edges_full(
         resolved_vars,
         frontmatter_fields,
         frontmatter_by_node,
+        None,
     );
     // ADR-0086: a Run that waits for its started nodes does not end at `End`
     // while one of them is alive — the last completion ends it.
@@ -55,7 +56,9 @@ pub fn evaluate_outgoing_edges_full(
 /// What `completed_node_id`'s outgoing edges ask for, before the « Attente
 /// des nœuds lancés » defers the end. The end evaluation replays it
 /// ([`end_reached_action`]) so `End` is reached exactly as routing reaches it
-/// (forced routes, Switch ports, regions included).
+/// (forced routes, Switch ports, regions included). `only_target` replays the
+/// edges into that one node alone, and never parks the Run `unrouted`
+/// ([`released_by_pruning`]).
 pub(super) fn route_outgoing_edges(
     pipeline: &PipelineDef,
     run_state: &RunState,
@@ -63,6 +66,7 @@ pub(super) fn route_outgoing_edges(
     resolved_vars: &HashMap<String, serde_yaml::Value>,
     frontmatter_fields: &HashMap<String, serde_yaml::Value>,
     frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
+    only_target: Option<&str>,
 ) -> Vec<SchedulerAction> {
     let mut actions = Vec::new();
 
@@ -72,16 +76,17 @@ pub(super) fn route_outgoing_edges(
         .map(|n| n.iter)
         .unwrap_or(1);
 
+    let end_node_id = pipeline
+        .nodes
+        .iter()
+        .find(|n| n.node_type == NodeType::End)
+        .map(|n| n.id.as_str());
+
     // ADR-0011: a `force_route` short-circuits this node's `when:` edges AND the
     // `unrouted` detection below — the point is to unstick a run wedged because no
     // live branch matched. Endpoints are validated by the handler before append,
     // so the target always exists.
     if let Some(target) = run_state.forced_routes.get(completed_node_id) {
-        let end_node_id = pipeline
-            .nodes
-            .iter()
-            .find(|n| n.node_type == NodeType::End)
-            .map(|n| n.id.as_str());
         if end_node_id == Some(target.as_str()) {
             actions.push(SchedulerAction::Complete);
         } else {
@@ -90,6 +95,12 @@ pub(super) fn route_outgoing_edges(
                 iter: 1,
             });
         }
+        return actions;
+    }
+
+    // ADR-0082: a pruned node never ran, so it routes nothing: its edges are
+    // dead, what it fed is released by its live siblings (`released_by_pruning`).
+    if run_state.is_pruned(completed_node_id) {
         return actions;
     }
 
@@ -109,12 +120,6 @@ pub(super) fn route_outgoing_edges(
     } else {
         None
     };
-
-    let end_node_id = pipeline
-        .nodes
-        .iter()
-        .find(|n| n.node_type == NodeType::End)
-        .map(|n| n.id.as_str());
 
     // Conditional routing on edges (ADR-0011), multi-match: every edge whose
     // `when:` is satisfied fires; an `else` edge fires iff no sibling on the same
@@ -152,7 +157,9 @@ pub(super) fn route_outgoing_edges(
             }
         }
 
-        if !is_switch && !fired_indices.contains(&edge_index) {
+        if (!is_switch && !fired_indices.contains(&edge_index))
+            || only_target.is_some_and(|t| t != edge.target.node)
+        {
             continue;
         }
 
@@ -216,8 +223,10 @@ pub(super) fn route_outgoing_edges(
                 run_state,
                 region,
                 target_id,
+                completed_node_id,
                 source_iter,
                 frontmatter_fields,
+                frontmatter_by_node,
                 resolved_vars,
             ));
         } else if let Some(region) = crate::domain::loop_region::collection_region_entered_by_edge(
@@ -233,6 +242,8 @@ pub(super) fn route_outgoing_edges(
                 run_state,
                 region,
                 frontmatter_fields,
+                frontmatter_by_node,
+                resolved_vars,
             ));
         } else {
             let target_node = pipeline.nodes.iter().find(|n| n.id == *target_id);
@@ -340,58 +351,17 @@ pub(super) fn route_outgoing_edges(
         }
     }
 
-    // Explicit halt on unrouted convergence (ADR-0011, "jamais de stall
-    // silencieux"). A convergence whose branches are ALL dead is never spawned and
-    // becomes dead itself; the cascade can render `End` unreachable, and the run
-    // would sit `Running` forever. Park instead, so the state is diagnosable.
-    //
-    // Only when this completion produced no forward progress: if `End` is still
-    // reachable through a live path, a convergence waiting on a running sibling is
-    // normal, not a stall.
-    if !is_switch
-        && !actions.iter().any(|a| {
-            matches!(
-                a,
-                SchedulerAction::Spawn { .. }
-                    | SchedulerAction::Complete
-                    | SchedulerAction::Halt { .. }
-            )
-        })
-    {
-        if let Some(end_id) = end_node_id {
-            let mut visiting = HashSet::new();
-            let end_dead = is_node_dead(
-                pipeline,
-                run_state,
-                end_id,
-                frontmatter_by_node,
-                resolved_vars,
-                &mut visiting,
-            );
-            if end_dead {
-                // Don't just say "unrouted": the operator needs each guard, whether
-                // it fired, and the value actually read, to know where to
-                // `force_route`.
-                let candidates = describe_candidate_edges(
-                    pipeline,
-                    completed_node_id,
-                    source_iter,
-                    &fired_indices,
-                    frontmatter_fields,
-                );
-                actions.push(SchedulerAction::Interrupt {
-                    reason_code: "unrouted".to_string(),
-                    region_id: None,
-                    message: format!(
-                        "unrouted: node '{completed_node_id}' (iter {source_iter}) completed \
-                         but conditional routing suppressed every path to End (no live branch \
-                         reaches End). Candidate edges:\n{candidates}\n\
-                         Route it explicitly with force_route (source '{completed_node_id}' \
-                         -> a target), or adjust the verdict the edges read."
-                    ),
-                });
-            }
-        }
+    if !is_switch && only_target.is_none() {
+        actions.extend(unrouted_interrupt(
+            pipeline,
+            run_state,
+            completed_node_id,
+            &actions,
+            &fired_indices,
+            frontmatter_fields,
+            frontmatter_by_node,
+            resolved_vars,
+        ));
     }
 
     actions

@@ -270,6 +270,8 @@ pub fn detection_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::event::Event;
+    use crate::domain::projection::project;
     use std::time::{Duration, SystemTime};
 
     // Claude transcript tails, cut from a real node (the harness owns them and
@@ -615,6 +617,55 @@ SwapFree:         204800 kB
         assert_eq!(running[0].0, "worker");
         assert_eq!(running[0].1, 1);
     }
+    #[test]
+    fn a_node_waiting_for_its_user_in_its_session_is_probed_for_death_only() {
+        // `pdo wait-user` and a refused unreleased completion keep the agent in
+        // its session: its death must not go unseen. An orchestrator parked on
+        // its children has no session to probe.
+        let mut events = vec![Event {
+            id: None,
+            run_id: "r".into(),
+            ts: pdo_kernel::clock::now_iso(),
+            kind: EventKind::RunStarted,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "pipeline_name": "test" })),
+        }];
+        let node_event = |kind: EventKind, node: &str, payload: Option<serde_json::Value>| Event {
+            id: None,
+            run_id: "r".into(),
+            ts: pdo_kernel::clock::now_iso(),
+            kind,
+            node_id: Some(node.into()),
+            iter: Some(1),
+            payload,
+        };
+        for node in ["worker", "asker", "parent"] {
+            events.push(node_event(EventKind::NodeStarted, node, None));
+        }
+        events.push(node_event(
+            EventKind::NodeAwaitingUser,
+            "asker",
+            Some(serde_json::json!({ "cause": "declared", "message": "Colour?" })),
+        ));
+        events.push(node_event(
+            EventKind::NodeAwaitingUser,
+            "parent",
+            Some(serde_json::json!({ "reason": "children_pending" })),
+        ));
+        let state = project(&events).unwrap();
+
+        let mut probed = session_holding_nodes(&state);
+        probed.sort();
+        assert_eq!(
+            probed,
+            vec![
+                ("asker".to_string(), 1, true),
+                ("worker".to_string(), 1, false),
+            ]
+        );
+    }
+
     // --- validate_outputs (integration with outputs_validator) ---
 
     #[test]

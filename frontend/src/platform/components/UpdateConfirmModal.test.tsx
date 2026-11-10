@@ -16,6 +16,7 @@ function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
     checked_at: null,
     source: "GitHub Releases",
     source_url: "",
+    source_page_url: null,
     check_enabled: true,
     install_method: "homebrew",
     manual_command: "brew update && brew upgrade Loulen/tap/pdo",
@@ -33,7 +34,7 @@ function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
 describe("UpdateConfirmModal (#699)", () => {
   it("names the target version, the exact command and the service restart", () => {
     render(<UpdateConfirmModal update={status()} onConfirm={() => {}} onCancel={() => {}} />);
-    expect(screen.getByText("Update Acogni Driver to v1.61.0?")).toBeInTheDocument();
+    expect(screen.getByText("Update PDO to v1.61.0?")).toBeInTheDocument();
     expect(screen.getByTestId("update-confirm-command")).toHaveTextContent(
       "brew update && brew upgrade Loulen/tap/pdo",
     );

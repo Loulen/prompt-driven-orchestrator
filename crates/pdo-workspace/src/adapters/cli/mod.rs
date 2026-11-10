@@ -18,23 +18,23 @@ use render::{done, list_lines, members_line, show, skill_lines};
 
 #[derive(Subcommand, Debug)]
 pub enum ProjectAction {
-    /// List the Projets you may read, one tab-separated line each: id, name,
+    /// List the Projects you may read, one tab-separated line each: id, name,
     /// member count, primary repository.
     List {
-        /// The deleted Projets instead, which the Runs launched in them keep.
+        /// The deleted Projects instead, which the Runs launched in them keep.
         #[arg(long)]
         deleted: bool,
         #[arg(long)]
         json: bool,
     },
-    /// Show one Projet: its name, members, primary repository, harness or
+    /// Show one Project: its name, members, primary repository, harness or
     /// agentic profile, auto-fail preference and skills.
     Show {
         id: String,
         #[arg(long)]
         json: bool,
     },
-    /// Create a Projet from a name, with its first member repositories.
+    /// Create a Project from a name, with its first member repositories.
     Create {
         name: String,
         /// A member repository path (repeatable). A relative path is made
@@ -44,7 +44,7 @@ pub enum ProjectAction {
         #[arg(long)]
         json: bool,
     },
-    /// Rename a Projet or change the settings it carries. Only the flags given
+    /// Rename a Project or change the settings it carries. Only the flags given
     /// change; the others are left as they are.
     Update {
         id: String,
@@ -74,7 +74,7 @@ pub enum ProjectAction {
         /// or `inherit` the instance's preference.
         #[arg(long, value_enum)]
         auto_fail: Option<Preference>,
-        /// The member a launch in this Projet preselects as its primary
+        /// The member a launch in this Project preselects as its primary
         /// repository.
         #[arg(long, conflicts_with = "first_primary")]
         primary_repo: Option<String>,
@@ -89,12 +89,12 @@ pub enum ProjectAction {
         #[command(subcommand)]
         action: MemberAction,
     },
-    /// The skills the Projet selects for every Run launched in it.
+    /// The skills the Project selects for every Run launched in it.
     Skill {
         #[command(subcommand)]
         action: SkillAction,
     },
-    /// Show the Projet's provisioning rules, or replace them with `--file`.
+    /// Show the Project's provisioning rules, or replace them with `--file`.
     Provisioning {
         id: String,
         /// The new rules, as JSON (`-` for the standard input), shaped as the
@@ -104,7 +104,7 @@ pub enum ProjectAction {
         #[arg(long)]
         json: bool,
     },
-    /// Delete a Projet. Its Runs keep it, under its last name.
+    /// Delete a Project. Its Runs keep it, under its last name.
     Delete {
         id: String,
         #[arg(long)]
@@ -114,14 +114,14 @@ pub enum ProjectAction {
 
 #[derive(Subcommand, Debug)]
 pub enum MemberAction {
-    /// Attach a repository to the Projet (a no-op when it already is one).
+    /// Attach a repository to the Project (a no-op when it already is one).
     Add {
         id: String,
         path: String,
         #[arg(long)]
         json: bool,
     },
-    /// Detach a repository from the Projet.
+    /// Detach a repository from the Project.
     Remove {
         id: String,
         path: String,
@@ -132,7 +132,7 @@ pub enum MemberAction {
 
 #[derive(Subcommand, Debug)]
 pub enum SkillAction {
-    /// The skills the Projet selects, one `id<TAB>name` line each.
+    /// The skills the Project selects, one `id<TAB>name` line each.
     List {
         id: String,
         #[arg(long)]
@@ -346,7 +346,7 @@ fn skill(daemon: &Daemon, action: SkillAction) -> Result<()> {
         SkillAction::Remove { id, skill, json } => {
             let current = selected(&read(&id)?);
             if !current.iter().any(|s| s["id"] == skill.as_str()) {
-                anyhow::bail!("{skill} is not a skill of this Projet");
+                anyhow::bail!("{skill} is not a skill of this Project");
             }
             (id, without_skill(current, &skill), json)
         }

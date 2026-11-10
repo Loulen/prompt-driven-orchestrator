@@ -60,8 +60,11 @@ pub struct DaemonConfig {
     pub update_source_url: Option<String>,
     /// The release channel a distribution declares (#24, set by
     /// `Config::with_release_channel`); `None` → the vanilla channel (`PDO`, the
-    /// core's version, no source, the detected install method).
+    /// core's version, the public repository's releases, the detected install method).
     pub release_channel: Option<pdo_platform::domain::release_channel::UpdateChannel>,
+    /// The Marque a distribution declares (set by `Config::with_brand`); the
+    /// vanilla `PDO` by default. The SPA is served under it.
+    pub brand: crate::Brand,
     /// Run the boot check + 6 h periodic version-check loop. `true` in production;
     /// `false` in the layer-3 literals, which drive
     /// [`DaemonHandle::run_update_check_tick`] deterministically instead of racing

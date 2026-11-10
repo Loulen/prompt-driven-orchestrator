@@ -11,9 +11,13 @@ import { telemetryFlagSourceNote } from "../../model/sourceNotes";
 import { SettingRow, SwitchRow } from "./fields";
 import type { FormSectionProps } from "./GeneralSections";
 
-/** ADR-0090 §4: what measuring each person's activity obliges an employer to. */
+/**
+ * ADR-0090 §4: what measuring each person's activity obliges an employer to. The core is
+ * published for every country (CORE-232): the law where you work first, France as the
+ * worked example.
+ */
 const LEGAL =
-  "In France, before you switch it on: the people concerned must be informed beforehand (Code du travail, art. L1222-4), the CSE consulted (art. L2312-38), and the processing must have a GDPR basis and be in your record of processing. This instance cannot meet these obligations for you.";
+  "Before you switch it on, check the law where you work: measuring each person's activity is employee monitoring in many countries. It usually requires informing the people concerned beforehand, consulting their representatives, and a data-protection basis (the GDPR in the EU) entered in your record of processing. In France: Code du travail, art. L1222-4 (information) and art. L2312-38 (CSE). This instance cannot meet these obligations for you.";
 
 /**
  * The address people open the instance at: the Public URL when the daemon names one, else
@@ -71,7 +75,7 @@ export function ActorRow({ values, settings, dirty, setField }: Omit<FormSection
         <div className="set-warn" role="alert" title={LEGAL} data-testid="telemetry-actor-warning">
           <ShieldAlert size={13} strokeWidth={1.5} aria-hidden />
           <span>Records each person's activity</span>
-          <span className="set-faint set-ellipsis">inform · CSE · GDPR</span>
+          <span className="set-faint set-ellipsis">local law · inform · consult</span>
         </div>
       )}
     </>

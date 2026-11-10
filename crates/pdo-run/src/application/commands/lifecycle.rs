@@ -131,9 +131,26 @@ pub(super) async fn resume_run(state: Arc<Runs>, run_id: String) -> Response {
     }
 
     let summary = re_evaluate_after_command(&state, &run_id).await;
+    drive_after_reopen(&state, &run_id, &summary).await;
 
     info!("resume_run: run {run_id}");
     (StatusCode::OK, Json(summary.into_response_body())).into_response()
+}
+
+/// The readiness tick after a resume or a reopen re-evaluated the edges of
+/// the completed nodes: it spawns what no edge reaches — a dropped
+/// `interrupted`/`stopped` node fed by `Start` only — and runs what a
+/// completion during a pause skipped (the auto-skip sweep, pending loop seeds,
+/// the completion gate). A no-op once the re-evaluation ended the Run.
+async fn drive_after_reopen(state: &Runs, run_id: &str, summary: &ReEvalSummary) {
+    if summary.terminal.is_none() {
+        // Boxed: the advance tick is a large future, and inlined into every
+        // command handler it overflows the stack of a debug build.
+        Box::pin(
+            crate::application::scheduler::node_completion::spawn_ready_after_event(state, run_id),
+        )
+        .await;
+    }
 }
 
 pub(super) async fn reopen_run(state: Arc<Runs>, run_id: String) -> Response {
@@ -214,6 +231,7 @@ pub(super) async fn reopen_run(state: Arc<Runs>, run_id: String) -> Response {
     }
 
     let summary = re_evaluate_after_command(&state, &run_id).await;
+    drive_after_reopen(&state, &run_id, &summary).await;
 
     info!("reopen_run: run {run_id}");
     (StatusCode::OK, Json(summary.into_response_body())).into_response()

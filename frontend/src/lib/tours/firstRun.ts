@@ -61,6 +61,7 @@ import {
   skillRow,
 } from "./firstRunReading";
 import { READING_STEPS } from "./firstRunReadingSteps";
+import { brandName, CORE_NAME } from "../../shared/ui/brand/brand";
 
 /**
  * This browser's Launch got an id back since the tour started. Not « the button
@@ -80,12 +81,12 @@ const STEPS: TourStep[] = [
     title: "Open New Run",
     // The button only exists on the Runs tab, so a reader who is somewhere else is
     // sent to the tab first — one step, two targets, whichever is reachable. The
-    // body names the one that is lit (FP of CORE-227: « Click New Run » over a
-    // lit Runs tab).
+    // body names the one that is lit (CORE-227, CORE-232: « Click New Run » over
+    // a lit Runs tab).
     body: (o) =>
       o.present(NEW_RUN_BUTTON)
-        ? "Click New Run, the + at the top of the Runs list. A Run is one execution of a pipeline on a repository; the form that opens describes it."
-        : "Click the Runs tab first: New Run is the + at the top of its list. A Run is one execution of a pipeline on a repository.",
+        ? "Click New Run. A Run is one execution of a pipeline on a repository; the form that opens describes it."
+        : "Open the Runs tab, then click New Run. A Run is one execution of a pipeline on a repository; the form that opens describes it.",
     target: (o) => (o.present(NEW_RUN_BUTTON) ? [NEW_RUN_BUTTON] : [RUNS_TAB]),
     waitingFor: "the New Run button",
     failureHint: "It lives at the top of the Runs tab, on the left.",
@@ -158,7 +159,7 @@ const STEPS: TourStep[] = [
   {
     id: "add-skills",
     title: "Add the two built-in skills",
-    body: "In the PDO folder, tick both skills. A skill is text added to the agent's prompt: one teaches it to drive Acogni Driver, the other to talk with you inside a node.",
+    body: `In the ${CORE_NAME} folder, tick both skills. A skill is text added to the agent's prompt: one teaches it to drive ${brandName()}, the other to talk with you inside a node.`,
     // The folder and its two children are lit as one rectangle; ticking the
     // folder's own box satisfies the step too, since it selects both.
     //
@@ -176,7 +177,7 @@ const STEPS: TourStep[] = [
       return [SKILLS_PDO_FOLDER, ...rows];
     },
     soft: true,
-    waitingFor: "the PDO folder in the Skills picker",
+    waitingFor: `the ${CORE_NAME} folder in the Skills picker`,
     failureHint: "Type pdo in the picker's filter if the folder is out of view.",
     // The honest answer to "I ticked one and nothing happened": something did.
     checklist: (o) => [

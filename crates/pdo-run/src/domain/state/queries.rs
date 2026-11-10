@@ -4,6 +4,15 @@ use std::collections::HashMap;
 
 use super::*;
 
+/// The `awaiting_reason_code`s of a Run its routing parked
+/// ([`RunState::is_parked_by_routing`]).
+const ROUTING_PARK_CODES: [&str; 4] = [
+    PARK_UNROUTED,
+    PARK_REGION_EXHAUSTED,
+    PARK_REGION_ENDED_UNROUTED,
+    PARK_REGION_BUDGET_EXHAUSTED,
+];
+
 impl RunState {
     /// #588 / ADR-0069: is this Run parked on a **declared wait** — a node's agent
     /// asked its user something (or a refused unreleased completion declared it
@@ -91,6 +100,26 @@ impl RunState {
         self.nodes.get(node_id).map(|n| &n.status)
     }
 
+    /// Is `node_id` **pruned** — settled by the reachability sweep because its
+    /// branch was not taken ([`NodeState::pruned`])? Its edges never fire and
+    /// what it feeds does not consume it (ADR-0082).
+    pub fn is_pruned(&self, node_id: &str) -> bool {
+        self.nodes.get(node_id).is_some_and(|n| n.pruned)
+    }
+
+    /// Is this Run **parked by its routing** — awaiting its user because no
+    /// branch reaches `End` (`unrouted`) or a bounded region ran out with no
+    /// exit (`region_exhausted`, `region_ended_unrouted`,
+    /// `region_budget_exhausted`)? Such a Run never ends by itself: only a
+    /// `force_route`, a raised cap or a resume drives it on.
+    pub fn is_parked_by_routing(&self) -> bool {
+        self.status == RunStatus::AwaitingUser
+            && self
+                .awaiting_reason_code
+                .as_deref()
+                .is_some_and(|code| ROUTING_PARK_CODES.contains(&code))
+    }
+
     /// The latest **settled-complete** iteration of `node_id`, if any (#210).
     ///
     /// History-max over `Completed`/`Skipped` iterations (failed/stopped iters are
@@ -99,9 +128,11 @@ impl RunState {
     /// but no per-iteration history exists (legacy states). This is the single
     /// home for the rule formerly duplicated as a free fn in `input_resolution`.
     ///
-    /// `Skipped` counts (#620): the auto-skip writes an empty output precisely so a
-    /// downstream resolver finds a concrete artifact, so a pruned producer's lap is
-    /// resolvable exactly as it was when a skip projected `Completed`.
+    /// `Skipped` counts (#620): a skip writes an output (empty, or the operator's
+    /// override), so the skipped lap resolves like a completed one. A **pruned**
+    /// producer resolves too, but its consumers name it absent
+    /// ([`crate::domain::input_resolution::absent_sources`]): its branch was not
+    /// taken.
     pub fn latest_completed_iter(&self, node_id: &str) -> Option<i64> {
         let node = self.nodes.get(node_id)?;
         let from_history = node

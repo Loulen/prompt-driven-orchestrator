@@ -52,7 +52,8 @@ impl Verdict {
 pub enum RejectReason {
     /// Lifecycle event with no `node_id`.
     MissingNodeId { kind: EventKind },
-    /// The Run does not accept lifecycle events (not `Running`/`AwaitingUser`).
+    /// The Run does not accept lifecycle events (not `Running`/`AwaitingUser`;
+    /// a completion is also accepted on a `Paused` Run).
     /// Covers both completion and start; `node_id`/`iter` feed the completion
     /// template only, and `kind` picks the template.
     RunNotLive {
@@ -159,6 +160,15 @@ pub fn duplicate_completion(state: &RunState, node_id: &str, iter: i64) -> Optio
     .then(|| {
         format!("node {node_id} iter {iter} is already completed: duplicate completion ignored")
     })
+}
+
+/// A completion is accepted on a `Paused` Run too: a pause launches nothing
+/// new, but a node already running finishes. A `script` calls `pdo complete`
+/// once, as its bash exits, so a refusal would lose its work with its session.
+/// What the completion would launch waits for the resume (`complete_node`
+/// does not advance a paused Run; `resume_run` re-evaluates its edges).
+fn run_accepts_completion(status: &RunStatus) -> bool {
+    run_accepts_lifecycle(status) || *status == RunStatus::Paused
 }
 
 fn iteration_status(state: &RunState, node_id: &str, iter: i64) -> Option<NodeStatus> {
@@ -430,6 +440,27 @@ mod tests {
         let verdict = validate_transition(
             Some(&state),
             &ev(EventKind::NodeCompleted, Some("worker"), Some(1)),
+        );
+        assert_reject(verdict, "resume the run");
+    }
+
+    #[test]
+    fn completion_on_a_paused_run_is_allowed_but_a_start_is_not() {
+        // A pause launches nothing new; a node already running when it came
+        // still finishes. A `script` calls `pdo complete` once, as its bash
+        // exits: refusing it would lose the work (the session is gone).
+        let state = state_from(&[
+            ev(EventKind::RunStarted, None, None),
+            ev(EventKind::NodeStarted, Some("worker"), Some(1)),
+            ev(EventKind::RunPaused, None, None),
+        ]);
+        for kind in [EventKind::NodeCompleted, EventKind::NodeAutoCompleted] {
+            let verdict = validate_transition(Some(&state), &ev(kind, Some("worker"), Some(1)));
+            assert_eq!(verdict, Verdict::Allow);
+        }
+        let verdict = validate_transition(
+            Some(&state),
+            &ev(EventKind::NodeStarted, Some("other"), Some(1)),
         );
         assert_reject(verdict, "resume the run");
     }

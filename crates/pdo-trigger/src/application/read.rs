@@ -36,6 +36,9 @@ pub struct Health {
     pub paused: bool,
 }
 
+/// How many times `health` asks the store again for the pause after an error.
+const PAUSED_READ_RETRIES: usize = 2;
+
 impl Triggers {
     /// Every Trigger `actor` may read carrying the attributes `filter` asks
     /// for, each with its attributes.
@@ -116,7 +119,18 @@ impl Triggers {
             .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
         // Fail-open on a read error, matching the tick gate: a paused daemon must
         // never look "dead", and a genuinely-broken store surfaces on the next tick.
-        let paused = self.settings.paused().await.unwrap_or(false);
+        // A busy store (a write of the same daemon holding the database) is asked
+        // again first: one transient refusal must not report a paused instance
+        // as running (CORE-232, seen under load).
+        let mut paused = self.settings.paused().await;
+        for _ in 0..PAUSED_READ_RETRIES {
+            if paused.is_ok() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            paused = self.settings.paused().await;
+        }
+        let paused = paused.unwrap_or(false);
         Health {
             last_tick_at,
             tick_interval_secs: TICK_INTERVAL_SECS,

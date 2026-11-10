@@ -156,7 +156,7 @@ impl Hosted {
             Ok(FolderLookup::Path(path)) => path,
             Ok(FolderLookup::ProjectRepo(project)) => {
                 self.places.project_repo(&project).await.ok_or_else(|| {
-                    bad(format!("the Projet `{project}` has no primary repository"))
+                    bad(format!("the Project `{project}` has no primary repository"))
                 })?
             }
             Ok(FolderLookup::Home) => self
@@ -168,7 +168,7 @@ impl Hosted {
             }
             Err(FolderError::NoProject) => {
                 return Err(bad(
-                    "the primary repository of a Projet needs the session's Projet".into(),
+                    "the primary repository of a Project needs the session's Project".into(),
                 ))
             }
         };

@@ -6,6 +6,7 @@
 
 import { Library } from "lucide-react";
 import AgentControl from "../AgentControl";
+import { inheritedFloor } from "../../model/agentProfiles";
 import HarnessSelect from "../../../harness/components/HarnessSelect";
 import ModelPicker from "../../../harness/components/ModelPicker";
 import { findHarnessOption, type HarnessCatalog } from "../../../harness/model/catalog";
@@ -70,7 +71,7 @@ export default function AgentsSections({
               onChange={(choice) => setField("agentChoice", choice)}
               profiles={agentProfiles}
               catalog={catalog}
-              inherited={{ harness: "claude", model: null, effort: null }}
+              inherited={inheritedFloor(agentProfiles)}
               allowInherit={false}
               label="Agent — Instance settings"
               showLabel={false}
@@ -99,8 +100,8 @@ export default function AgentsSections({
         </SettingRow>
         {/* Default model (#347): folds under `claude` at resolve (#616). */}
         <SettingRow
-          label="Default model"
-          help="The model a work node launches with unless it sets its own; Default leaves it to the account"
+          label="Default model · claude"
+          help="The model a claude node launches with unless it sets its own; Default leaves it to your Claude account. Other harnesses: their Model rows"
           source={modelSourceNote(settings.default_model)}
           keywords="PDO_DEFAULT_MODEL"
           dirty={dirty.has("default-model")}

@@ -12,6 +12,18 @@ pub(super) fn skill_id(daemon: &Daemon, key: &str) -> Result<String> {
     Ok(skill_id_in(&bank, key).unwrap_or_else(|| key.to_string()))
 }
 
+/// The ids of the skills `keys` name, the bank read once.
+pub(super) fn skill_ids(daemon: &Daemon, keys: &[String]) -> Result<Vec<String>> {
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    let bank = daemon.get("/settings/skills")?.ok()?.json()?;
+    Ok(keys
+        .iter()
+        .map(|key| skill_id_in(&bank, key).unwrap_or_else(|| key.clone()))
+        .collect())
+}
+
 fn skill_id_in(bank: &Value, key: &str) -> Option<String> {
     let skills = bank["skills"].as_array()?;
     let id_of = |skill: &Value| skill["id"].as_str().map(str::to_string);

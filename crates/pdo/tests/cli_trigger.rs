@@ -1,5 +1,5 @@
 //! Layer 3a — `pdo trigger` through the real binary, against a real daemon:
-//! created, changed, paused and resumed (one and all), fired into a Run, its
+//! created, changed, disabled and enabled (one), paused and resumed (all), fired into a Run, its
 //! fires and a guard's dry run read, then deleted and found in `pdo audit`; `4` for a Trigger the
 //! daemon does not know, `1` for a refusal.
 
@@ -152,9 +152,20 @@ async fn a_trigger_is_created_fired_paused_and_deleted_by_the_cli() {
         "a refusal writes nothing"
     );
 
-    // Paused: the UI's toggle, and a paused Trigger does not fire.
+    // Disabled: the UI's toggle, and a disabled Trigger does not fire. `disable`
+    // and `enable` are the aliases of `pause` and `resume` (CORE-232).
     let paused = pdo(&daemon, &["trigger", "pause", &id]).await;
-    assert_eq!(paused.ok(), format!("{id}\tnightly paused\n"));
+    assert_eq!(paused.ok(), format!("{id}\tnightly disabled\n"));
+    assert!(
+        pdo(&daemon, &["trigger", "list"])
+            .await
+            .ok()
+            .contains(&format!("{id}\tdisabled\t")),
+        "the list says disabled"
+    );
+    pdo(&daemon, &["trigger", "enable", &id]).await.ok();
+    let disabled = pdo(&daemon, &["trigger", "disable", &id]).await;
+    assert_eq!(disabled.ok(), format!("{id}\tnightly disabled\n"));
     assert_eq!(
         daemon.get_json(&format!("/triggers/{id}")).await["enabled"],
         false
@@ -220,6 +231,16 @@ async fn a_trigger_is_created_fired_paused_and_deleted_by_the_cli() {
     );
     let health = pdo(&daemon, &["trigger", "health", "--json"]).await.json();
     assert_eq!(health["paused"], true);
+    // The list keeps one line per Trigger on stdout and says the global switch
+    // on stderr.
+    let listed = pdo(&daemon, &["trigger", "list"]).await;
+    assert!(
+        listed
+            .stderr
+            .contains("every Trigger is paused: pdo trigger resume --all"),
+        "{}",
+        listed.stderr
+    );
     let health = pdo(&daemon, &["trigger", "health"]).await;
     assert!(
         health.ok().ends_with("· every Trigger paused\n"),

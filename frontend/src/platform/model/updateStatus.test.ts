@@ -1,5 +1,13 @@
-import { describe, it, expect } from "vitest";
-import { newerAvailable, relativeTime, upToDate } from "./updateStatus";
+import { afterEach, describe, it, expect } from "vitest";
+import {
+  channelLabel,
+  coreLabel,
+  installedProductLabel,
+  installedVersionLabel,
+  newerAvailable,
+  relativeTime,
+  upToDate,
+} from "./updateStatus";
 import type { UpdateStatus } from "./update";
 
 function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
@@ -12,6 +20,7 @@ function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
     checked_at: "2026-09-05T08:00:00Z",
     source: "GitHub Releases",
     source_url: "https://example.invalid/latest",
+    source_page_url: null,
     check_enabled: true,
     install_method: "script",
     manual_command: "curl … | sh",
@@ -35,8 +44,10 @@ describe("updateStatus helpers (#697)", () => {
     expect(newerAvailable(null)).toBe(false);
   });
 
-  it("upToDate is only claimed when latest is known and equal — never when off or unknown", () => {
+  it("upToDate is only claimed when latest is known and not newer — never when off or unknown", () => {
     expect(upToDate(status({ latest_version: "1.58.1", newer_available: false }))).toBe(true);
+    // A build ahead of the latest release has nothing to update to (CORE-232).
+    expect(upToDate(status({ installed_version: "2.75.0", latest_version: "1.126.0", newer_available: false }))).toBe(true);
     expect(upToDate(status())).toBe(false);
     expect(upToDate(status({ latest_version: null, newer_available: false }))).toBe(false);
     expect(
@@ -50,5 +61,27 @@ describe("updateStatus helpers (#697)", () => {
     expect(relativeTime("2026-09-05T11:53:00Z", now)).toBe("7 min ago");
     expect(relativeTime("2026-09-05T09:53:00Z", now)).toBe("2 h ago");
     expect(relativeTime("2026-09-01T12:00:00Z", now)).toBe("4 d ago");
+  });
+});
+
+describe("the product a version names (CORE-225)", () => {
+  afterEach(() => {
+    delete document.documentElement.dataset.brand;
+  });
+
+  it("is the Marque on the vanilla channel: PDO, or Acogni Driver when the binary declares it", () => {
+    expect(channelLabel(status())).toBe("PDO");
+    expect(installedProductLabel(status())).toBe("PDO 1.58.1");
+    expect(coreLabel(status())).toBeNull();
+    expect(installedVersionLabel(status())).toBe("v1.58.1");
+    document.documentElement.dataset.brand = "acogni-driver";
+    expect(channelLabel(status())).toBe("Acogni Driver");
+  });
+
+  it("is the distribution's channel, then the core it is built on", () => {
+    const d = status({ channel_name: "Acogni Driver", installed_version: "1.4.0", core_version: "2.76.0" });
+    expect(installedProductLabel(d)).toBe("Acogni Driver 1.4.0");
+    expect(coreLabel(d)).toBe("core PDO 2.76.0");
+    expect(installedVersionLabel(d)).toBe("Acogni Driver 1.4.0 (core PDO 2.76.0)");
   });
 });

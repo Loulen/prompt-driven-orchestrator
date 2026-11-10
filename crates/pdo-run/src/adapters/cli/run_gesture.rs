@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 
 use super::run_pipeline_cli::{run_run_pipeline, RunPipelineAction};
 use super::run_render::node_lines;
+use super::run_repos::edit_repos;
 
 /// The gestures on one Run, and what it shows. Exits **4** when the daemon
 /// knows no such Run.
@@ -224,21 +225,7 @@ pub fn run_run_gesture(gesture: RunGesture) -> Result<()> {
             remove,
             json,
         } => {
-            if add.is_empty() && remove.is_empty() {
-                anyhow::bail!("nothing to change: give --add or --remove");
-            }
-            let add = add
-                .iter()
-                .map(|repo| Ok(json!({ "repo": repo_arg(repo)?, "read_only": read_only })))
-                .collect::<Result<Vec<_>>>()?;
-            let remove = remove
-                .iter()
-                .map(|repo| repo_arg(repo))
-                .collect::<Result<Vec<_>>>()?;
-            let answer = value(daemon.patch(
-                &format!("/runs/{}/repos", segment(&run_id)),
-                &json!({ "add": add, "remove": remove }),
-            )?)?;
+            let answer = edit_repos(&daemon, &run_id, &add, read_only, &remove)?;
             said(&answer, json, &format!("{run_id} repositories updated"));
         }
         RunGesture::Inject {
@@ -377,12 +364,4 @@ pub(super) fn shown(value: &Value, json: bool, text: fn(&Value) -> String) {
     } else {
         print!("{}", text(value));
     }
-}
-
-/// A repository argument as the UI sends it: a URL as is, a path absolute.
-fn repo_arg(raw: &str) -> Result<String> {
-    if raw.contains("://") || raw.starts_with("git@") {
-        return Ok(raw.to_string());
-    }
-    pdo_platform::adapters::cli::daemon::absolute_path(raw)
 }

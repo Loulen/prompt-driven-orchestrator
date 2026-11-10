@@ -11,7 +11,7 @@ import { appliedCostCaps, applyCostCaps, keepFollowed, type CostCapsApplied } fr
 import type { RunCostCapBaseline } from "../model/runCostCaps";
 import { fetchPipeline, savePipeline, deletePipeline as apiDeletePipeline, renamePipeline as apiRenamePipeline } from "../api/pipelines";
 import { serializePipeline } from "../../lib/serializePipeline";
-import type { EditState } from "./editState";
+import type { EditState, OpenPipeline } from "./editState";
 import { isRunTabLocked } from "./editState";
 import { clearedHistory, droppedHistory, rekeyTab } from "./tabHistory";
 import { draftSessionOf } from "./draftSessions";
@@ -20,14 +20,21 @@ import type { SaveAs } from "../api/versions";
 type Set = StoreApi<EditState>["setState"];
 type Get = StoreApi<EditState>["getState"];
 
+/** `tab` without the notices of its draft whose ids are in `ids`. */
+function withoutNotices(tab: OpenPipeline, ids: ReadonlySet<number>): OpenPipeline {
+  if (!tab.draft || ids.size === 0) return tab;
+  return { ...tab, draft: { ...tab.draft, notices: tab.draft.notices.filter((n) => !ids.has(n.id)) } };
+}
+
 export function saveSlice(set: Set, get: Get): Partial<EditState> {
   // The lint above the canvas is the daemon's parse of the file as it was
-  // opened: once a save has written the fix (a broken edge deleted, CORE-88),
-  // re-read it, or the banner keeps naming what is gone until a reload. Only
-  // when there is lint to clear; a failed read keeps it, the save stands.
+  // opened: once a save has written a change, re-read it. Otherwise the banner
+  // keeps naming what the save fixed (a broken edge deleted, CORE-88), and
+  // says nothing of what it broke (Start left wired to no node, CORE-241)
+  // until a reload. A failed read keeps it, the save stands.
   const refreshStaleLint = async (id: string) => {
     const tab = get().openTabs.find((t) => t.id === id);
-    if (!tab || tab.diagnostics.length === 0) return;
+    if (!tab) return;
     try {
       const detail = tab.runId ? await fetchRunPipeline(tab.runId) : await fetchPipeline(id, tab.scope);
       set((s) => ({
@@ -196,6 +203,9 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
         // ADR-0088: a tab with a shared draft saves the draft as it holds it,
         // as the version `version` says; the daemon then counts no change left.
         const draft = draftSessionOf(id)?.content();
+        // What the notices said changed is in the draft this save freezes:
+        // they give way once it is a version. One heard meanwhile stays.
+        const absorbed = new Set(draft ? (tab.draft?.notices ?? []).map((n) => n.id) : []);
         const result = await savePipeline(id, yaml, tab.prompts, tab.scope, draft, draft ? version : undefined);
         // #774 — the save may have RENAMED the pipeline (a `name:` edit moved
         // the file): rekey the tab to the daemon's final id in the same
@@ -207,7 +217,7 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
             return {
               ...patch,
               openTabs: (patch.openTabs ?? s.openTabs).map((t) =>
-                t.id === newId ? { ...t, dirty: false, saveError: undefined } : t,
+                t.id === newId ? withoutNotices({ ...t, dirty: false, saveError: undefined }, absorbed) : t,
               ),
               lastSavedAt: { ...patch.lastSavedAt, [newId]: Date.now() },
             };
@@ -215,7 +225,7 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
         } else {
           set((s) => ({
             openTabs: s.openTabs.map((t) =>
-              t.id === id ? { ...t, dirty: false, saveError: undefined } : t,
+              t.id === id ? withoutNotices({ ...t, dirty: false, saveError: undefined }, absorbed) : t,
             ),
             lastSavedAt: { ...s.lastSavedAt, [id]: Date.now() },
           }));

@@ -54,6 +54,11 @@ export interface SkillDetail extends Skill {
   path: string;
 }
 
+/** How many tiers select a skill: the instance, each Project, Trigger, pipeline node and Run. */
+export function referentCount(r: SkillReferents): number {
+  return (r.instance ? 1 : 0) + r.projects.length + (r.triggers?.length ?? 0) + r.pipelines.length + r.runs.length;
+}
+
 /** Who selects a skill, by tier (#669). */
 export interface SkillReferents {
   skill_id: string;

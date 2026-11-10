@@ -57,7 +57,8 @@ sibling edge matched. There is no LLM router: an LLM never decides which node ru
 Drag an edge back from `reviewer` to `implementer`, set `verdict = fail`, and PDO turns the cycle
 into a named, **bounded loop** (`↻ 1/8` on the canvas) with a `max_iter`, so a cycle can never run
 forever. A **collection loop** fans a node out over a list field of its input, with laps running in
-parallel.
+parallel. Each lap gets its own item: an agent reads it in its preamble, a `script` in `$PDO_ITEM`
+(and the number of laps in `$PDO_ITEM_TOTAL`).
 
 Each loop shows what it spent since it was entered, after its counter (`↻ 3/5 · ~$1.20`), with each
 member's share in the tooltip. A bounded loop also takes a cost cap, `max_cost_usd` (a dollar amount
@@ -72,9 +73,17 @@ command.
 Branches converge on any node: wire several edges into an `agent` and it waits until each incoming
 edge has fired or died, receives only the outputs of the branches that fired (same-named edges group
 into one input), and finds each isolated branch's code already merged back on the run's branch. A
+guarded edge out of a bounded loop has not died while the loop still turns: the node waits for the
+loop to exit (on its guard, or exhausted), never starts on the FAIL of a lap in between. An edge out
+of a collection hands over the output of every lap, in the order of the items. A
 node whose every branch died is skipped; if that makes `End` unreachable, the run halts explicitly
 (« unrouted ») instead of stalling. There is no dedicated Merge node: the converging node carries its
 own prompt, so it can do real synthesis work.
+
+A node skipped because its branch was not taken fires nothing: what it fed does not receive it (its
+preamble says « not taken », a `script` gets an empty `PDO_INPUT_<PORT>`), and an `End` reachable only
+through it stays unreached, so the run waits « unrouted » for you to force a route. A node you skip
+yourself (`pdo node skip`, with or without `--output`) feeds what comes after it as if it had run.
 
 A skipped node keeps a ▶: it runs the branch as if it had been taken (a Retry: next iteration, the
 skipped nodes downstream evaluated again, a finished run re-opened).
@@ -127,8 +136,8 @@ Decisions: [ADR-0010](adr/0010-port-output-as-directory.md),
 
 ## Diff review
 
-The run's **Diff** tab shows everything the run changed since it forked. **Expand and comment**
-opens the review page: a diff between any two refs of the run (fork point, run tip, each node's
+The run's **Diff** tab shows everything the run changed since it forked. Its **Review page** button
+(the arrow icon at the top right) opens the review page: a diff between any two refs of the run (fork point, run tip, each node's
 before/after, the live working tree), side by side, with inline comments on any line. Tick
 **Viewed** on a file (or press `v`) to fold it once read: the mark stays in your browser, for that
 pair of refs.
@@ -136,7 +145,11 @@ pair of refs.
 **Send to manager** hands your comments to the run's manager agent in one message. It answers each
 one with `pdo review reply`, the answer lands in the thread in real time, and the manager can route
 the fix back into the pipeline (restart a node, inject an artifact). By default you resolve a
-comment; the agent only proposes the resolution.
+comment; the agent only proposes the resolution. A manager the send starts reads your comments in its
+launch prompt. If its agent first asks whether to trust the folder, the thread says the comments
+are held and how to go on (answer it in the run's Manager tab); if the manager exits before
+answering, the thread says so and **Send again** hands the unanswered comments to a new manager,
+as written.
 
 Each comment, reply, resolution and reopening keeps who made it: with an extension that names
 people, the thread shows their names, and an extension can complete what you type in the comment
@@ -167,11 +180,11 @@ Decisions: [ADR-0012](adr/0012-triggers-and-trust-earned-autonomy.md),
 
 ## Run stats by model
 
-The **Stats** page aggregates your own runs over a period: Overview (runs, errors, sessions), fires
-per pipeline, Sessions, **Cost** and **Performance**. Cost breaks down by harness, by node, and **by
+The **Stats** page aggregates your own runs over a period (30 days when it opens): **Runs** (runs,
+failures, failure rate), **Sessions**, **Triggers** (fires per pipeline), **Cost** and **Performance**. Cost breaks down by harness, by node, and **by
 model then effort**, with the model the execution actually ran on, read from the harness's own
-transcript. Performance shows duration, failure rate and steering messages per node or per model as
-box plots. Every summary is a median, never a mean.
+transcript. Performance shows peak context, duration (total, active or waiting on you) and steering
+messages per node or per model as box plots. Every summary is a median, never a mean.
 
 Cost is an estimate read from local transcripts: derived for `claude` (tokens × a price table fed
 from models.dev, overridable by hand), reported for harnesses that count it themselves. A harness
@@ -186,8 +199,8 @@ Which harness reports what: [harnesses.md](reference/harnesses.md).
 
 ## Interactive and orchestrator nodes
 
-Two flags of an agent node, independent of its type (`agent`, `script`): together they
-make its **node kind**, and a node can be both.
+Two flags of a node, apart from its type (`agent`, `script`): **Interactive** (any node) and
+**Orchestrator** (an `agent` node). Together they make its **node kind**, and a node can be both.
 
 Turn **Interactive** on and a human talks to the node. When its agent needs you (a question, a
 choice, a review), it declares the wait with `pdo wait-user --message "<question>"`: the node and its
@@ -262,6 +275,8 @@ Decisions: [ADR-0005](adr/0005-inline-xterm-over-os-spawn.md),
 
 Run nodes inside a container profile. PDO stages the harness home (credentials, settings) into the
 sandbox at spawn and harvests transcripts back, so cost and stats still work. The image is yours.
+The nodes call the daemon through the host gateway: keep it listening beyond `127.0.0.1` (its
+default, all interfaces, does).
 
 Decisions: [ADR-0030](adr/0030-sandbox-execution-model.md),
 [ADR-0031](adr/0031-sandbox-staging-profiles.md),
@@ -292,8 +307,11 @@ Decisions: [ADR-0066](adr/0066-les-page-mounts-servent-du-html-navigable-sur-ges
 ### Service & in-app update
 
 `pdo service install` installs a systemd user unit or a launchd agent, so PDO starts at boot and
-keeps running after logout. When a new release is out, one click on the version in the status bar
-updates PDO with your install method and reloads the page. See [cli.md](reference/cli.md).
+keeps running after logout. When a new release is out, the version in the status bar says so
+(`→ <version>`): click it to read what changed, then **Update** › **Update now**, and PDO updates
+with your install method and reloads the page. Settings › General › Version & update shows the
+installed and latest versions (read from the public repository's releases), your install method and
+the command it runs. See [cli.md](reference/cli.md).
 
 Decisions: [ADR-0019](adr/0019-persistent-daemon-service-unit.md).
 

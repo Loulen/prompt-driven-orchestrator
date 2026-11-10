@@ -3,9 +3,10 @@
  *
  * Order and content come from the ticket: create a pipeline, build an
  * **implementer** and a **tester**, give the tester a `verdict` enum and an
- * annotated screenshot, then wire the loop (`verdict eq fail` back to the
- * implementer, `verdict eq pass` to End), save, validate it for the projects
- * that should see it, and decide whether to keep it.
+ * annotated screenshot, then wire Start to the implementer (CORE-241) and the
+ * loop (`verdict = fail` back to the implementer, `verdict = pass` to End),
+ * save, validate it for the projects that should see it, and decide whether to
+ * keep it.
  *
  * Copy rules the implementer of a new step must keep (design round 1):
  * - Title is an imperative, body is two sentences at most.
@@ -209,8 +210,12 @@ export const FIRST_PIPELINE_TOUR: TourDef = {
       text: `agent in its own worktree (${workspaceButton(true)}), also interactive, returns a verdict (pass | fail) and an annotated screenshot.`,
     },
     {
+      label: "Start",
+      text: "hands your prompt to implementer, the node every Run of it starts with.",
+    },
+    {
       label: "Loop",
-      text: "tester → implementer when verdict eq fail; tester → End when verdict eq pass.",
+      text: "tester → implementer when verdict = fail; tester → End when verdict = pass.",
     },
     {
       label: "Validate",

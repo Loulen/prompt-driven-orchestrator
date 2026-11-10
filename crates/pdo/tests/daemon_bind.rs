@@ -24,6 +24,8 @@ fn daemon_bind_uses_the_environment_and_the_flag_takes_precedence() {
             .args(*extra_args)
             .env("PDO_BIND", env_bind)
             .env("PDO_PRICE_SYNC", "off")
+            // No boot version check against the public repository's releases.
+            .env("PDO_UPDATE_CHECK", "0")
             .env("PDO_DAEMON_NO_CLEANUP", "1")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped());

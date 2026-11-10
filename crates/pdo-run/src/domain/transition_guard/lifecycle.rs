@@ -11,7 +11,7 @@ pub(super) fn validate_completion(state: &RunState, event: &Event) -> Verdict {
     };
     let iter = event.iter.unwrap_or(1);
 
-    if !run_accepts_lifecycle(&state.status) {
+    if !run_accepts_completion(&state.status) {
         return Verdict::reject(RejectReason::RunNotLive {
             run_id: state.run_id.clone(),
             status: state.status.clone(),

@@ -71,18 +71,21 @@ pub fn main_with(extensions: impl FnOnce() -> Vec<Box<dyn Extension>>) -> ExitCo
 
 /// [`main_with`], with `configure` applied to the [`Config`](crate::Config)
 /// of `pdo daemon` before it serves: the way a distribution declares what
-/// `serve` would take, such as its [`ReleaseChannel`](crate::ReleaseChannel).
+/// `serve` would take, such as its [`ReleaseChannel`](crate::ReleaseChannel)
+/// or its [`Brand`](crate::Brand).
 /// Called at most once, by `pdo daemon` only.
 ///
 /// ```no_run
 /// fn main() -> std::process::ExitCode {
 ///     pdo::main_with_config(Vec::new, |config| {
-///         config.with_release_channel(pdo::ReleaseChannel {
-///             name: "acme-pdo".into(),
-///             installed_version: env!("CARGO_PKG_VERSION").into(),
-///             source_url: None,
-///             upgrade_command: None,
-///         })
+///         config
+///             .with_release_channel(pdo::ReleaseChannel {
+///                 name: "acme-pdo".into(),
+///                 installed_version: env!("CARGO_PKG_VERSION").into(),
+///                 source_url: None,
+///                 upgrade_command: None,
+///             })
+///             .with_brand(pdo::Brand::AcogniDriver)
 ///     })
 /// }
 /// ```

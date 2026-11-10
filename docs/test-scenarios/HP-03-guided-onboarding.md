@@ -1,6 +1,6 @@
 ---
 id: HP-03
-covers: [tour, tour-step, step-replay, projecteur, training-repository, welcome-modal, run, interactive-node, completion-guard, artifact, script-node, trigger, tidy-up, pipeline-validation, tour-identity, status-icon]
+covers: [tour, tour-step, step-replay, projecteur, training-repository, welcome-modal, run, interactive-node, completion-guard, artifact, script-node, trigger, tidy-up, pipeline-validation, tour-identity, status-icon, theme, dark-mode, settings-search, version-update, command-field]
 ---
 
 # HP-03 — A newcomer takes the full tour
@@ -81,7 +81,7 @@ Features validated while crossing the tour:
    card advances on the close), then unfold its folded **Terminal** (frozen on the script's lines;
    its expand button lifts it over the app as the **enlarged terminal**, still lit, and the same
    button puts it back),
-   click the **reviewer → End** edge (a bubble points at `verdict eq pass`), click **Start** — the
+   click the **reviewer → End** edge (a bubble points at `verdict = pass`), click **Start** — the
    card says first that it shows the prompt the Run was started with, and a bubble points at that
    input once it is open — read the Runs tab (the card sends you back to it if you left it) and the
    **status icon** (the card explains the shapes and draws four Status icons: a check, a turning
@@ -146,6 +146,8 @@ Features validated while crossing the tour:
     wrapped if it is long.
 14. **Continue** → the artifact modal closes and the *First pipeline* tour starts on a clear screen.
     Carry it to its end card and `Finish`; the name to paste is `tutorial-implement-test-<id>`.
+    Before the edges between the two agents, a card has you drag from the border of the **Start**
+    marker onto **implementer** (CORE-241).
     **Save…** opens the Save window, lit as a soft zone, and the card asks to click Save in it.
     The tester's `verdict` step lights the « + field » button alone, then the whole schema editor
     once the field exists. Adding the field selects its placeholder name `field`, so typing
@@ -157,16 +159,25 @@ Features validated while crossing the tour:
     when it asks you to click it. Every edge is drawn from the **border** of the source card (there is
     no output dot), and the two edges out of the tester carry **`out`**, its first output — if one
     carries another port, the card sends you to the edge's **Outputs** section to tick `out`, and
-    only then advances. Before Save, the tour has you **connect Start to implementer**: without
-    that edge no node of the pipeline could start (the implementer's only other way in is the
-    tester's conditional edge). **Midway (e.g. on *Name it tester*), press `‹ Previous`, then `Next`** → the
+    only then advances. The Start → implementer edge matters: without it no node of the pipeline
+    could start (the implementer's only other way in is the tester's conditional edge). **Midway (e.g. on *Name it tester*), press `‹ Previous`, then `Next`** → the
     step before comes back and waits for `Next` (its condition already holds), and the tour carries
     on to its end card as usual, with no « this step could not be completed » card. **On *Select
     the node***, `‹ Previous` is greyed out: *Choose Node* needs the Add menu, which closed on the
     pick. The last step, *Keep it, or delete it*, takes Delete or **Skip** (Skip keeps the pipeline)
-    before the end card.
-15. Open **Settings › General › Tutorials** → all three tours are ticked, *Overview* first;
-    hovering a checkmark reads « Completed <date> ».
+    before the end card. **The pipeline you built runs**: launch a Run on
+    `tutorial-implement-test-<id>` (New Run, or `pdo run create` with a target repository and a
+    prompt) → **implementer** starts (the Run's events hold a `node_started` for it), and the canvas
+    shows the edge from Start. Stop the Run once implementer has started.
+15. Open **Settings › General › Tutorials** → all three tours are ticked, *Overview* first, and the
+    **Full tour** row is ticked too; hovering a checkmark reads « Completed <date> ».
+16. **Make the instance yours** (drive-by, CORE-232): still in Settings, open **Appearance**, pick
+    the **Classic** Theme and turn **Dark mode** off → the interface turns emerald and light at
+    once; reload → it stays so (`GET /actors/me/appearance` holds the two choices). Type
+    `iteration` in the Settings search → the matching switch of the Run canvas block shows, not a
+    bare section title. Open **General › Version & update** → `[PDO mark] PDO <version>`, signed
+    « by Acogni », What's new opens this build's changelog. Close Settings, press **Ctrl+K**, type
+    `sett`, Enter → Settings opens again. Put Acogni and Dark mode back.
 
 ## Checks
 
@@ -209,6 +220,9 @@ Features validated while crossing the tour:
   into the background and eat every click the next tour asks for.
 - Each node the reader creates in *First pipeline* lands **clear of the others** and of the End
   marker, so the edges the tour then asks them to select can actually be clicked.
+- **The pipeline *First pipeline* builds starts**: Start is wired to implementer, and a Run launched
+  on it starts implementer instead of sitting `running` with no node started (CORE-241). The
+  banner above its canvas carries no "Start is connected to no node" once the tour has saved it.
 - **Every lit target is reachable with the mouse, at an ordinary window size** — no step asks for a
   click outside the visible canvas, and no step needs a wider window, a zoom-out or a pan to be
   satisfied. The tour overlay owns the wheel and the drag, so a target off screen is a dead end.
@@ -263,6 +277,7 @@ Features validated while crossing the tour:
   v1 limit, not a finding).
 - Agents are not deterministic. The check is that the node **finished** and wrote its output, never
   the wording of the summary.
-- **Do not assert the product's name or logo.** The welcome modal, the tour cards and the training
+- **The brand is checked once, in step 16.** The welcome modal, the tour cards and the training
   prompt name the product from the binary's **Marque** (CONTEXT.md): the core shows « PDO », a
-  Distribution its own. The journey checks the cards' gestures and targets, never the brand.
+  Distribution its own. Elsewhere the journey checks the cards' gestures and targets, not the
+  wording that carries the brand.

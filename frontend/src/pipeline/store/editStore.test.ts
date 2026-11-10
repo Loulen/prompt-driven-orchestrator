@@ -935,7 +935,7 @@ describe("editStore.save", () => {
   });
 });
 
-describe("editStore.save refreshes a stale lint (CORE-88)", () => {
+describe("editStore.save re-reads the lint (CORE-88, CORE-241)", () => {
   const mockFetchPipeline = vi.mocked(fetchPipeline);
   const mockFetchRunPipeline = vi.mocked(fetchRunPipeline);
   const detail = (diagnostics: string[]) => ({
@@ -972,12 +972,18 @@ describe("editStore.save refreshes a stale lint (CORE-88)", () => {
     expect(useEditStore.getState().openTabs[0].diagnostics).toEqual([]);
   });
 
-  it("costs no read when there was no lint to clear", async () => {
+  it("shows the lint a save brings, on a tab that had none (CORE-241)", async () => {
+    // The Start edge deleted, then Save: the banner must say the Run would
+    // start nothing, without a reload.
     seedTab("p1", true);
+    const startLeadsNowhere =
+      "Start is connected to no node, and no node starts on its own, so a Run of this pipeline would start nothing: draw an edge from Start to the node that should run first";
+    mockFetchPipeline.mockResolvedValueOnce(detail([startLeadsNowhere]) as never);
 
     await useEditStore.getState().save("p1");
 
-    expect(mockFetchPipeline).not.toHaveBeenCalled();
+    expect(mockFetchPipeline).toHaveBeenCalledWith("p1", "repo");
+    expect(useEditStore.getState().openTabs[0].diagnostics).toEqual([startLeadsNowhere]);
   });
 
   it("keeps the lint when the re-read fails", async () => {
@@ -2170,6 +2176,60 @@ describe("openPipeline (#320 / #216 canvas-open)", () => {
     expect(state.selection).toEqual({ kind: "none", id: null });
     // The already-open branch short-circuits before re-fetching.
     expect(mockFetchPipeline).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens one tab when a double-click opens the pipeline twice before the fetch answers", async () => {
+    await Promise.all([
+      useEditStore.getState().openPipeline("pipe-a"),
+      useEditStore.getState().openPipeline("pipe-a"),
+    ]);
+
+    const state = useEditStore.getState();
+    expect(state.openTabs.filter((t) => t.id === "pipe-a")).toHaveLength(1);
+    expect(state.activeTabId).toBe("pipe-a");
+  });
+
+  it("keeps the tab and its edits when the second open of a double-click answers after an edit", async () => {
+    const detail = await fetchPipeline("pipe-b");
+    let answerLate: (value: typeof detail) => void = () => {};
+    vi.mocked(fetchPipeline)
+      .mockResolvedValueOnce(detail)
+      .mockReturnValueOnce(new Promise((resolve) => (answerLate = resolve)));
+
+    const first = useEditStore.getState().openPipeline("pipe-b");
+    const second = useEditStore.getState().openPipeline("pipe-b");
+    await first;
+    useEditStore.setState((s) => ({
+      openTabs: s.openTabs.map((t) => (t.id === "pipe-b" ? { ...t, dirty: true } : t)),
+    }));
+    answerLate(detail);
+    await second;
+
+    const tabs = useEditStore.getState().openTabs.filter((t) => t.id === "pipe-b");
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0].dirty).toBe(true);
+  });
+
+  it("keeps the edited tab in single-tab mode when the second open of a double-click answers late", async () => {
+    useEditStore.setState({ singleTabMode: true });
+    const detail = await fetchPipeline("pipe-c");
+    let answerLate: (value: typeof detail) => void = () => {};
+    vi.mocked(fetchPipeline)
+      .mockResolvedValueOnce(detail)
+      .mockReturnValueOnce(new Promise((resolve) => (answerLate = resolve)));
+
+    const first = useEditStore.getState().openPipeline("pipe-c");
+    const second = useEditStore.getState().openPipeline("pipe-c");
+    await first;
+    useEditStore.setState((s) => ({
+      openTabs: s.openTabs.map((t) => (t.id === "pipe-c" ? { ...t, dirty: true } : t)),
+    }));
+    answerLate(detail);
+    await second;
+
+    const state = useEditStore.getState();
+    expect(state.openTabs.map((t) => [t.id, t.dirty])).toEqual([["pipe-c", true]]);
+    expect(state.pendingSingleTab).toBeNull();
   });
 
   it("forwards the scope arg to fetchPipeline for a library-scoped open", async () => {

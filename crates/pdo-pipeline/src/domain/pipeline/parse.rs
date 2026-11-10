@@ -10,6 +10,7 @@ use super::references::{
     dangling_edge_references, live_artifact_names, live_artifacts_on_edges,
     validate_region_cost_caps, validate_switch_when_clauses,
 };
+use super::start::start_leads_nowhere;
 
 /// Top-level YAML keys accepted by the unknown-field lint.
 /// MUST list every serializable field of PipelineDef — see `known_keys_cover_serialized_pipeline`.
@@ -191,6 +192,15 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         return Err(ParseError::MissingField(
             "start node must have exactly one output port named 'user_prompt'".into(),
         ));
+    }
+
+    // A warning while it is edited (the canvas is drawn one edge at a time),
+    // and the reason a Run launched on it fails at once (CORE-241).
+    if let Some(message) = start_leads_nowhere(&pipeline) {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            message: message.to_string(),
+        });
     }
 
     let end = end_nodes[0];

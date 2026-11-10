@@ -14,7 +14,7 @@ pub struct TemplateFields {
     /// The repository the fired Runs work in (made absolute).
     #[arg(long)]
     pub repo: Option<String>,
-    /// The Projet the fired Runs are launched in, holding `--repo`.
+    /// The Project the fired Runs are launched in, holding `--repo`.
     #[arg(long)]
     pub project: Option<String>,
     /// The branch the fired Runs start from.

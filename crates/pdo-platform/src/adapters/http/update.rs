@@ -28,6 +28,7 @@ fn status_json(s: UpdateStatus) -> serde_json::Value {
         "checked_at": s.checked_at,
         "source": s.source,
         "source_url": s.source_url,
+        "source_page_url": s.source_page_url,
         "check_enabled": s.check_enabled,
         "install_method": s.install_method,
         "manual_command": s.manual_command,
@@ -141,13 +142,17 @@ pub(super) async fn attempt_log(
             text,
         )
             .into_response(),
-        Err(LogError::InvalidId) => (StatusCode::BAD_REQUEST, "invalid attempt id").into_response(),
+        Err(LogError::InvalidId) => {
+            (StatusCode::BAD_REQUEST, format!("invalid attempt id: {id}")).into_response()
+        }
         Err(LogError::NoHome) => {
             (StatusCode::INTERNAL_SERVER_ERROR, "HOME is not set").into_response()
         }
-        Err(LogError::NotFound) => {
-            (StatusCode::NOT_FOUND, "no log for this attempt").into_response()
-        }
+        Err(LogError::NotFound) => (
+            StatusCode::NOT_FOUND,
+            format!("no log for the update attempt {id}"),
+        )
+            .into_response(),
         Err(LogError::Unreadable(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     }
 }

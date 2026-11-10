@@ -61,6 +61,7 @@ struct NoCatalogueEvents;
 
 impl CatalogueEvents for NoCatalogueEvents {
     fn catalogue_refreshed(&self, _harness: &str) {}
+    fn settings_changed(&self) {}
 }
 
 pub(super) struct TestState {

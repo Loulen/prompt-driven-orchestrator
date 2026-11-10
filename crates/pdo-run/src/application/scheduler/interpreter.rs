@@ -167,6 +167,16 @@ pub async fn interpret(
             message,
             region_id,
         } => {
+            // Already parked for this very reason (the sweep's pruning and the
+            // producer's routing can both find `End` dead): park once.
+            if run_state.is_parked_by_routing()
+                && run_state.awaiting_reason_code.as_deref() == Some(reason_code.as_str())
+                && run_state.awaiting_region_id == *region_id
+            {
+                return ActionOutcome::Interrupted {
+                    message: message.clone(),
+                };
+            }
             // ADR-0049: `unrouted` parks the run `AwaitingUser`, never terminal.
             // The payload carries both a machine `reason_code` and a human
             // `reason` (#601), the shape `run_event_reason{,_code}` reads into
@@ -190,6 +200,13 @@ pub async fn interpret(
             }
         }
         SchedulerAction::Complete => {
+            // A Run its routing parked (`unrouted`, an exhausted region) has no
+            // branch reaching `End`: nothing ends it but the gesture that lifts
+            // the park (`force_route`, a raised cap, a resume), which re-opens
+            // it first.
+            if run_state.is_parked_by_routing() {
+                return ActionOutcome::Progressed;
+            }
             // ADR-0086: a Run that waits for its started nodes stays `Running`
             // while one is alive; the last completion ends it.
             if ctx.pipeline.wait_for_started_nodes
@@ -212,7 +229,7 @@ pub async fn interpret(
                 &frontmatter,
                 ctx.resolved_vars,
             );
-            crate::application::scheduler::advance::append_auto_skips(
+            crate::application::scheduler::prune::append_auto_skips(
                 state,
                 run_id,
                 ctx.pipeline,
@@ -565,7 +582,13 @@ loops:
 
         let state = project(&events).expect("projected");
         let region = &pipeline.loops[0];
-        let actions = scheduler::evaluate_collection_barrier(&pipeline, &state, region);
+        let actions = scheduler::evaluate_collection_barrier(
+            &pipeline,
+            &state,
+            region,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
         assert!(
             actions.contains(&SchedulerAction::CollectionDone {
                 region_id: "topics_fanout".into(),

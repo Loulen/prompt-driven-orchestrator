@@ -6,6 +6,9 @@ import type { TriggerListEntry } from "../../shared/generated/TriggerListEntry";
 const updateTrigger = vi.fn();
 const deleteTrigger = vi.fn();
 
+const toastMock = vi.fn();
+vi.mock("../../shared/ui/toast", () => ({ toast: (...args: unknown[]) => toastMock(...args) }));
+
 vi.mock("../api/triggers", () => ({
   deleteTrigger: (id: string) => deleteTrigger(id),
   updateTrigger: (id: string, req: unknown) => updateTrigger(id, req),
@@ -152,8 +155,62 @@ describe("TriggersListPanel", () => {
     fireEvent.click(within(row).getByTestId("trigger-edit"));
     expect(onEditTrigger).toHaveBeenCalledWith(t);
 
+    // Delete asks first: the schedule and the fire history go (CORE-232).
     fireEvent.click(within(row).getByTestId("trigger-delete"));
+    expect(deleteTrigger).not.toHaveBeenCalled();
+    const confirm = screen.getByTestId("confirm-delete-modal");
+    expect(confirm).toHaveTextContent("Delete this trigger?");
+    expect(confirm).toHaveTextContent("Nightly audit");
+    fireEvent.click(within(confirm).getByRole("button", { name: "Delete" }));
     expect(deleteTrigger).toHaveBeenCalledWith("trg-1");
+  });
+
+  it("Cancel keeps the trigger", () => {
+    renderPanel([trigger()]);
+    fireEvent.click(screen.getByTestId("trigger-delete"));
+    fireEvent.click(within(screen.getByTestId("confirm-delete-modal")).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByTestId("confirm-delete-modal")).toBeNull();
+    expect(deleteTrigger).not.toHaveBeenCalled();
+  });
+
+  it("says a refused toggle instead of swallowing it (CORE-232)", async () => {
+    updateTrigger.mockRejectedValueOnce(new Error("trigger is suspended"));
+    renderPanel([trigger()]);
+    fireEvent.click(screen.getByTestId("trigger-toggle"));
+    await waitFor(() =>
+      expect(toastMock).toHaveBeenCalledWith("Disable Nightly audit: trigger is suspended", "error"),
+    );
+  });
+
+  it("says a delete the daemon refuses instead of swallowing it (CORE-232)", async () => {
+    deleteTrigger.mockRejectedValueOnce(new Error("trigger is suspended"));
+    renderPanel([trigger()]);
+    fireEvent.click(screen.getByTestId("trigger-delete"));
+    fireEvent.click(within(screen.getByTestId("confirm-delete-modal")).getByRole("button", { name: "Delete" }));
+    await waitFor(() =>
+      expect(toastMock).toHaveBeenCalledWith("Delete Nightly audit: trigger is suspended", "error"),
+    );
+  });
+
+  it("names a due fire « now », and says what wakes a Trigger with no next fire (CORE-232)", () => {
+    const { unmount } = renderPanel([trigger({ next_fire_at: new Date(Date.now() - 1_000).toISOString() })]);
+    expect(screen.getByTestId("trigger-schedule").getAttribute("title")).toMatch(/^Next fire now\n/);
+    unmount();
+    renderPanel([trigger({ enabled: true, next_fire_at: undefined })]);
+    expect(screen.getByTestId("trigger-schedule").getAttribute("title")).toMatch(
+      /^Not scheduled: Run now or disable and enable it to resume\n/,
+    );
+  });
+
+  it("greys Run now on a disabled trigger, which the daemon would refuse (CORE-232)", async () => {
+    const onRunNow = vi.fn();
+    renderPanel([trigger({ enabled: false })], { onRunNow });
+    const button = screen.getByTestId("trigger-run-now");
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(button);
+    expect(onRunNow).not.toHaveBeenCalled();
+    act(() => button.focus());
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Disabled: enable it first");
   });
 
   it("shows a status tooltip with the last run date and result on the mark", () => {

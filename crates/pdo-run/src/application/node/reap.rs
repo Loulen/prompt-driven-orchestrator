@@ -9,6 +9,20 @@ use crate::application::scheduler::node_completion::retry_waiting_nodes;
 use crate::application::supervision::detach_terminal_tail;
 use crate::Runs;
 
+/// Freeze a NodeRun's pane now, while the session that asked for its terminal
+/// transition still waits for the answer. A `script` node's shell exits as soon as
+/// `pdo complete` / `pdo fail` returns, so the detached reap would find it gone and
+/// keep no pane (CORE-232); that reap re-captures if the session is still there.
+pub fn freeze_node_pane(
+    state: &Runs,
+    repo_root: &std::path::Path,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+) {
+    pdo_session::application::reap::snapshot_pane(state.tmux(), repo_root, run_id, node_id, iter);
+}
+
 /// Reap a NodeRun's tmux session on its terminal transition: the session
 /// context snapshots its pane then kills it.
 pub fn reap_node_session(
@@ -63,6 +77,8 @@ pub fn reap_dead_node_after_run_failure(
     iter: i64,
     sandboxed: bool,
 ) {
+    // The refusal ends a script's shell before the detached reap runs: freeze first.
+    freeze_node_pane(state, repo_root, run_id, node_id, iter);
     let tail_state = state.clone();
     let tail_repo = repo_root.to_path_buf();
     let tail_run = run_id.to_string();

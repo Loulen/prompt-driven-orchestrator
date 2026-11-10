@@ -22,7 +22,7 @@ import type { EdgeWaypoint } from "../../shared/generated/EdgeWaypoint";
 import type { PortSide } from "../../shared/generated/PortSide";
 import { anchorPoint, landsByDrop } from "../../lib/anchorSide";
 import { boxesOverlap, compactLayout, type Box, type CompactPoint, type CompactRect } from "../../lib/compactLayout";
-import { fallbackNodeSpot } from "../../lib/nodePlacement";
+import { fallbackNodeSpot, fallbackNoteSpot } from "../../lib/nodePlacement";
 import type { EditorPipelineDef } from "./pipeline";
 
 /**
@@ -109,8 +109,7 @@ export function compactCanvas(pipeline: EditorPipelineDef, input: CompactCanvasI
 
   const notes = (pipeline.notes ?? []).map((note, i) => ({
     id: note.id,
-    x: note.view?.x ?? 240,
-    y: note.view?.y ?? 80 + i * 120,
+    ...(note.view ? { x: note.view.x, y: note.view.y } : fallbackNoteSpot(i)),
     h: estimateNoteHeight(note.content),
   }));
 

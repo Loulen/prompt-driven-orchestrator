@@ -61,6 +61,7 @@ export const INITIAL_DRAFT_STATE: DraftTabState = {
   canUndo: false,
   canRedo: false,
   undoLabel: null,
+  redoLabel: null,
   notices: [],
 };
 
@@ -267,11 +268,13 @@ export class DraftSession {
   }
 
   private publishHistory(): void {
-    const top = this.undo.undoStack[this.undo.undoStack.length - 1];
+    const label = (stack: { meta: Map<unknown, unknown> }[]) =>
+      (stack[stack.length - 1]?.meta.get("label") as string | undefined) ?? null;
     this.host.setDraftState(this.tabId, {
       canUndo: this.undo.undoStack.length > 0,
       canRedo: this.undo.redoStack.length > 0,
-      undoLabel: (top?.meta.get("label") as string | undefined) ?? null,
+      undoLabel: label(this.undo.undoStack),
+      redoLabel: label(this.undo.redoStack),
     });
   }
 

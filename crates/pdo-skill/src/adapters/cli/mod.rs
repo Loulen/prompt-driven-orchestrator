@@ -19,7 +19,7 @@ use pdo_platform::adapters::cli::daemon::{
 use serde_json::{json, Value};
 
 use bank::read;
-use bank::skill_id;
+use bank::{skill_id, skill_ids};
 pub use files::FileAction;
 pub use import::{Collision, FolderAction};
 use render::{list_lines, show_text};
@@ -76,7 +76,7 @@ pub enum SkillAction {
         #[arg(long)]
         json: bool,
     },
-    /// Who selects the skill: the instance, Projets, Triggers, pipeline
+    /// Who selects the skill: the instance, Projects, Triggers, pipeline
     /// nodes, Runs not started yet.
     Referents {
         id: String,
@@ -142,8 +142,10 @@ pub enum SkillAction {
     },
     /// Export skills and folders (their sub-folders included) as a zip.
     Export {
-        #[arg(long = "skill", value_name = "ID")]
+        /// A skill, by its id or its name (repeatable).
+        #[arg(long = "skill", value_name = "SKILL")]
         skills: Vec<String>,
+        /// A folder, by its id (repeatable).
         #[arg(long = "folder", value_name = "ID")]
         folders: Vec<String>,
         /// Where to write the zip.
@@ -330,6 +332,7 @@ pub fn run_skill(action: SkillAction) -> Result<()> {
                 !skills.is_empty() || !folders.is_empty(),
                 "nothing to export: give --skill or --folder"
             );
+            let skills = skill_ids(&daemon, &skills)?;
             let zip = daemon
                 .post(
                     "/settings/skills/export",

@@ -446,6 +446,35 @@ mod tests {
     }
 
     #[test]
+    fn the_terminals_own_replies_are_neither() {
+        // What xterm.js answers on its own when the program in the pane queries
+        // it: a background colour (OSC 11, ended by ST or BEL), its version
+        // (XTVERSION, a DCS string), a status report (DECRQSS), a device
+        // attributes report (CSI). None of it was typed by a person.
+        for seq in [
+            &b"\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\"[..],
+            b"\x1b]10;rgb:ffff/ffff/ffff\x07",
+            b"\x1bP>|xterm.js(6.0.0)\x1b\\",
+            b"\x1bP1$r0;1m\x1b\\",
+            b"\x1b_Gi=1;OK\x1b\\",
+            b"\x1b[?1;2c",
+        ] {
+            assert_eq!(classify_input(seq), InputSignal::default(), "{seq:?}");
+        }
+    }
+
+    #[test]
+    fn a_keystroke_after_a_terminal_reply_still_counts() {
+        assert_eq!(
+            classify_input(b"\x1b]11;rgb:0/0/0\x07y\r"),
+            InputSignal {
+                typed: true,
+                enter: true
+            }
+        );
+    }
+
+    #[test]
     fn backspace_tab_and_control_bytes_are_not_typed() {
         assert_eq!(classify_input(b"\x7f\t\x03"), InputSignal::default());
     }

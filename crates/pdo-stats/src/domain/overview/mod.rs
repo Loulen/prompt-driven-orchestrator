@@ -37,7 +37,9 @@ pub struct PipelineFireCount {
 pub struct TriggersCreatedRuns {
     /// Fires whose `outcome = 'fired'` (⟺ a run was created) in the window.
     pub fired: i64,
-    /// Distinct triggers that fired at least once in the window.
+    /// Triggers enabled now that fired at least once in the window: the
+    /// numerator of « X of `enabled_triggers` » (a trigger disabled since, or
+    /// deleted, is left out — CORE-232).
     pub distinct_triggers: i64,
     /// Triggers currently `enabled` (a point-in-time count, not windowed).
     pub enabled_triggers: i64,

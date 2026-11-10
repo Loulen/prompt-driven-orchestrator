@@ -1,7 +1,9 @@
 import { useEffect } from "react";
 import { Compass, Play, Rocket, Workflow, type LucideIcon } from "lucide-react";
 import { Button, Kbd } from "../../shared/ui/kit";
-import { AcogniLockup } from "../../shared/ui/brand/AcogniLockup";
+import { BrandLockup } from "../../shared/ui/brand/BrandLockup";
+import { BySignature } from "../../shared/ui/brand/BySignature";
+import { currentBrand } from "../../shared/ui/brand/brand";
 import { TOUR_CATALOG, fullTourMinutes } from "../../lib/tours";
 
 /**
@@ -13,6 +15,9 @@ import { TOUR_CATALOG, fullTourMinutes } from "../../lib/tours";
  * that has to be refused twice is a tour that harasses (story 3). Escape is Later.
  *
  * No choice ever starts a tour on its own (ADR-0071 §2): the user picks, or leaves.
+ *
+ * On top, the lockup of the Marque (CORE-225); under PDO's, « by Acogni » (under
+ * Acogni Driver's the wordmark already says it).
  */
 
 interface Props {
@@ -27,6 +32,7 @@ const ICON: Record<string, LucideIcon> = { overview: Compass, "first-run": Rocke
 export default function WelcomeModal({ onStartFullTour, onStartTour, onLater }: Props) {
   const full = fullTourMinutes();
   const available = TOUR_CATALOG.filter((entry) => entry.def != null).length;
+  const brand = currentBrand();
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -40,9 +46,10 @@ export default function WelcomeModal({ onStartFullTour, onStartTour, onLater }: 
 
   return (
     <div className="tr-scrim z-[110]" data-testid="tour-welcome-backdrop">
-      <div className="tr-frame tr-welcome" role="dialog" aria-label="Welcome to Acogni Driver" data-testid="tour-welcome">
-        <div className="tr-welcome__brand">
-          <AcogniLockup />
+      <div className="tr-frame tr-welcome" role="dialog" aria-label={`Welcome to ${brand.name}`} data-testid="tour-welcome">
+        <div className="tr-welcome__brand" data-brand={brand.id}>
+          <BrandLockup />
+          {brand.id === "pdo" && <BySignature />}
         </div>
         <div className="tr-welcome__body">
           <button

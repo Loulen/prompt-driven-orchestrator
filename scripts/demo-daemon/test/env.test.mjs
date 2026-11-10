@@ -21,6 +21,9 @@ const caller = {
   TMUX: "/tmp/tmux-1000/pdo-5272,1,0",
   TMUX_PANE: "%140",
   TMUX_TMPDIR: "/run/user/1000",
+  INVOCATION_ID: "0123456789abcdef",
+  JOURNAL_STREAM: "8:12345",
+  NOTIFY_SOCKET: "/run/systemd/notify",
   CLAUDE_CONFIG_DIR: "/home/me/.claude",
   XDG_CONFIG_HOME: "/home/me/.config",
   XDG_DATA_HOME: "/home/me/.local/share",
@@ -63,6 +66,12 @@ describe("demo daemon environment", () => {
     assert.equal(env.TMUX_TMPDIR, caller.TMUX_TMPDIR);
   });
 
+  test("no mark of the caller's service manager: the demo daemon is not a supervised service", () => {
+    assert.equal(env.INVOCATION_ID, undefined);
+    assert.equal(env.JOURNAL_STREAM, undefined);
+    assert.equal(env.NOTIFY_SOCKET, undefined);
+  });
+
   test("a fresh HOME, and no variable pointing a harness at the real config", () => {
     assert.equal(env.HOME, paths.home);
     assert.equal(env.CLAUDE_CONFIG_DIR, undefined);
@@ -94,15 +103,16 @@ describe("demo daemon environment", () => {
     assert.equal(env.SHELL, "/bin/bash");
   });
 
-  test("a sandboxed Run needs the daemon reachable from its container: bind all interfaces on request", () => {
-    assert.equal(demoEnv({ env: caller, paths, port: 6391, bind: "0.0.0.0" }).PDO_BIND, "0.0.0.0");
-    assert.throws(() => demoEnv({ env: caller, paths, port: 6391, extra: { PDO_BIND: "0.0.0.0" } }), /PDO_BIND/);
-  });
-
   test("extra variables are set explicitly, after the purge", () => {
     const extra = demoEnv({ env: caller, paths, port: 6391, extra: { PDO_TEST_INTEROP: "1" } });
     assert.equal(extra.PDO_TEST_INTEROP, "1");
     assert.equal(extra.PDO_TOKEN, undefined);
+  });
+
+  test("a sandboxed journey binds the daemon beyond loopback, so its containers reach it", () => {
+    assert.equal(demoEnv({ env: caller, paths, port: 6391, bind: "0.0.0.0" }).PDO_BIND, "0.0.0.0");
+    assert.throws(() => demoEnv({ env: caller, paths, port: 6391, bind: "everywhere" }), /BIND/);
+    assert.throws(() => demoEnv({ env: caller, paths, port: 6391, extra: { PDO_BIND: "0.0.0.0" } }), /PDO_BIND/);
   });
 
   test("extra variables may not undo the isolation", () => {

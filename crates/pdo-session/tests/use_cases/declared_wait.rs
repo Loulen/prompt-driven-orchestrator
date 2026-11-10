@@ -400,6 +400,46 @@ async fn the_same_pilot_attaching_again_takes_nothing() {
 }
 
 #[tokio::test]
+async fn attaching_to_an_iteration_that_ended_takes_nothing() {
+    // A `script` node done in a second: the browser attaches as its Run ends.
+    let mut ended = running(None);
+    ended.run_live = false;
+    ended.is_script = true;
+    if let Some(node) = ended.node.as_mut() {
+        node.iterations[0].holds_session = false;
+    }
+    let world = World::new(ended, Host::allowing());
+    let session = node_session_name(RUN, "griller", 1);
+
+    world.lift().taken_over(&person("alice"), &session).await;
+
+    assert!(gestures(&world).is_empty());
+}
+
+#[tokio::test]
+async fn the_terminals_own_reply_after_a_take_over_is_no_turn_of_speech() {
+    let world = World::new(running(None), Host::allowing());
+    let lift = world.lift();
+    let session = node_session_name(RUN, "griller", 1);
+
+    lift.taken_over(&person("alice"), &session).await;
+    // What xterm.js answers when the agent queries its colours and version.
+    lift.note_input(
+        &person("alice"),
+        &session,
+        b"\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\",
+    )
+    .await;
+    lift.note_input(&person("alice"), &session, b"\x1bP>|xterm.js(6.0.0)\x1b\\")
+        .await;
+
+    assert_eq!(
+        gestures(&world),
+        [(TerminalGesture::TakenOver, "alice".to_string())]
+    );
+}
+
+#[tokio::test]
 async fn a_take_over_gives_the_floor_back() {
     let world = World::new(running(None), Host::allowing());
     let lift = world.lift();

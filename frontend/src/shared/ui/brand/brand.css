@@ -12,3 +12,17 @@
 [data-theme="classic"] [data-mode="dark"] .acogni-brand {
   --primary: oklch(64% 0.16 8);
 }
+
+/* « by Acogni » (`BySignature`): the gear and the publisher's name, in the
+   quiet text of the page. */
+.by-acogni {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--g-2);
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+.by-acogni > svg {
+  flex: none;
+}

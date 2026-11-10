@@ -24,7 +24,9 @@ pub const TERMINAL_SOURCE: &str = "pty";
 
 /// `actor` took the hand on the terminal of `session`, from its bridge or by
 /// an answer written on its behalf: a node's session whose pilot changes
-/// writes `NodeTakenOver`, once per change of pilot.
+/// writes `NodeTakenOver`, once per change of pilot. An iteration that already
+/// ended (a `script` node done before the browser attached, a Run over) takes
+/// nothing: there is no hand left to take.
 pub(crate) async fn record_take_over(
     waits: &dyn NodeWaits,
     typed: &TypedInput,
@@ -39,6 +41,9 @@ pub(crate) async fn record_take_over(
     else {
         return;
     };
+    if !holds_session(waits, &run_id, &node_id, iter).await {
+        return;
+    }
     if !typed.pilot(session, actor) {
         return;
     }
@@ -53,6 +58,23 @@ pub(crate) async fn record_take_over(
         .await
     {
         warn!("Run {run_id}: the take-over of {node_id} iter-{iter} was not recorded: {e}");
+    }
+}
+
+/// Whether `(node, iter)` of a live Run still holds its session, as the Run's
+/// log says. An unreadable log answers yes: a take-over is never lost to it.
+async fn holds_session(waits: &dyn NodeWaits, run_id: &str, node_id: &str, iter: i64) -> bool {
+    match waits.wait_facts(run_id, node_id).await {
+        Ok(Some(facts)) => {
+            facts.run_live
+                && facts.node.is_some_and(|node| {
+                    node.iterations
+                        .iter()
+                        .any(|attempt| attempt.iter == iter && attempt.holds_session)
+                })
+        }
+        Ok(None) => false,
+        Err(_) => true,
     }
 }
 

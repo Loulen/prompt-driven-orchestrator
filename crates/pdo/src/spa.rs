@@ -12,10 +12,16 @@
 //! (`index.html`, which names those files, and the unhashed shared modules of
 //! the extensions) is revalidated on every load (`no-cache`), so an update
 //! reaches the browser without emptying its cache.
+//!
+//! The Marque of the binary ([`Brand`]) is written into `index.html` (its title
+//! and its `data-brand`) and its logos are served under `/shared/brand/`, ahead
+//! of the embedded files.
 
 use axum::http::{header, Method, StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Response};
 use rust_embed::Embed;
+
+use crate::brand::Brand;
 
 #[derive(Embed)]
 #[folder = "$PDO_FRONTEND_EMBED_DIR"]
@@ -30,14 +36,31 @@ const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 /// Any other file: revalidated on every load.
 const REVALIDATE: &str = "no-cache";
 
-pub(crate) async fn static_handler(method: Method, uri: Uri) -> Response {
-    serve(method, &uri, |path| {
-        FrontendAssets::get(path).map(|content| content.data.into_owned())
-    })
+/// Where the Marque's logos are served.
+const BRAND_DIR: &str = "shared/brand/";
+
+/// The favicon's address before the Marque: the pages an extension serves
+/// outside the interface still link it, and get the Marque's.
+const LEGACY_FAVICON: &str = "shared/favicon.svg";
+
+/// The router's fallback: the embedded SPA under `brand`.
+pub(crate) fn static_handler(
+    brand: Brand,
+) -> impl Fn(Method, Uri) -> std::future::Ready<Response> + Clone + Send + Sync + 'static {
+    move |method, uri| {
+        std::future::ready(serve(brand, method, &uri, |path| {
+            FrontendAssets::get(path).map(|content| content.data.into_owned())
+        }))
+    }
 }
 
 /// The answer to `uri`, the files read through `file`.
-fn serve(method: Method, uri: &Uri, file: impl Fn(&str) -> Option<Vec<u8>>) -> Response {
+fn serve(
+    brand: Brand,
+    method: Method,
+    uri: &Uri,
+    file: impl Fn(&str) -> Option<Vec<u8>>,
+) -> Response {
     if method != Method::GET && method != Method::HEAD {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -45,7 +68,27 @@ fn serve(method: Method, uri: &Uri, file: impl Fn(&str) -> Option<Vec<u8>>) -> R
     let path = uri.path().trim_start_matches('/');
 
     if path.is_empty() || path == "index.html" {
-        return serve_index(&file);
+        return serve_index(brand, &file);
+    }
+
+    let path = if path == LEGACY_FAVICON {
+        "shared/brand/favicon.svg"
+    } else {
+        path
+    };
+    if let Some(name) = path.strip_prefix(BRAND_DIR) {
+        return match brand.asset(name) {
+            Some(svg) => (
+                StatusCode::OK,
+                [
+                    (header::CONTENT_TYPE, "image/svg+xml"),
+                    (header::CACHE_CONTROL, REVALIDATE),
+                ],
+                svg,
+            )
+                .into_response(),
+            None => StatusCode::NOT_FOUND.into_response(),
+        };
     }
 
     match file(path) {
@@ -61,7 +104,7 @@ fn serve(method: Method, uri: &Uri, file: impl Fn(&str) -> Option<Vec<u8>>) -> R
             )
                 .into_response()
         }
-        None => serve_index(&file),
+        None => serve_index(brand, &file),
     }
 }
 
@@ -74,12 +117,12 @@ fn cache_control(path: &str) -> &'static str {
     }
 }
 
-fn serve_index(file: &impl Fn(&str) -> Option<Vec<u8>>) -> Response {
+fn serve_index(brand: Brand, file: &impl Fn(&str) -> Option<Vec<u8>>) -> Response {
     let page = match file("index.html") {
-        Some(content) => Html(content).into_response(),
+        Some(content) => Html(brand.stamp(&String::from_utf8_lossy(&content))).into_response(),
         None => {
             if cfg!(debug_assertions) {
-                Html(DEV_PLACEHOLDER).into_response()
+                Html(brand.stamp(DEV_PLACEHOLDER)).into_response()
             } else {
                 return (StatusCode::NOT_FOUND, "frontend assets not found").into_response();
             }
@@ -89,11 +132,11 @@ fn serve_index(file: &impl Fn(&str) -> Option<Vec<u8>>) -> Response {
 }
 
 const DEV_PLACEHOLDER: &str = r#"<!DOCTYPE html>
-<html>
-<head><title>PDO (dev)</title></head>
+<html data-brand="pdo">
+<head><title>PDO</title><link rel="icon" type="image/svg+xml" href="/shared/brand/favicon.svg" /></head>
 <body style="background:#0f1115;color:#e6e8eb;font-family:sans-serif;display:grid;place-items:center;height:100vh;margin:0">
 <div style="text-align:center">
-<h1>PDO daemon running</h1>
+<h1>The daemon is running (dev)</h1>
 <p>In dev mode, run the Vite frontend separately:<br><code>cd frontend && pnpm run dev</code></p>
 </div>
 </body>
@@ -116,7 +159,7 @@ mod tests {
                     ws.on_upgrade(|_| async {})
                 }),
             )
-            .fallback(static_handler)
+            .fallback(static_handler(Brand::Pdo))
     }
 
     #[tokio::test]
@@ -136,9 +179,10 @@ mod tests {
     /// The SPA over two files: its page and one hashed asset.
     fn files(path: &str) -> Option<Vec<u8>> {
         match path {
-            "index.html" => {
-                Some(b"<!doctype html><script src=\"/assets/index-abc123.js\">".to_vec())
-            }
+            "index.html" => Some(
+                b"<!doctype html><html data-brand=\"pdo\"><title>PDO</title><script src=\"/assets/index-abc123.js\">"
+                    .to_vec(),
+            ),
             "assets/index-abc123.js" => Some(b"export {};".to_vec()),
             "shared/react.js" => Some(b"export default {};".to_vec()),
             _ => None,
@@ -146,7 +190,12 @@ mod tests {
     }
 
     fn cache_control_of(path: &str) -> String {
-        let response = serve(Method::GET, &path.parse::<Uri>().unwrap(), files);
+        let response = serve(
+            Brand::Pdo,
+            Method::GET,
+            &path.parse::<Uri>().unwrap(),
+            files,
+        );
         assert_eq!(response.status(), StatusCode::OK, "{path}");
         response.headers()[header::CACHE_CONTROL]
             .to_str()
@@ -189,5 +238,56 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    fn get(brand: Brand, path: &str) -> Response {
+        serve(brand, Method::GET, &path.parse::<Uri>().unwrap(), files)
+    }
+
+    async fn text_of(response: Response) -> String {
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8_lossy(&body).into_owned()
+    }
+
+    #[tokio::test]
+    async fn the_page_carries_the_brand_on_every_route_of_the_front() {
+        for path in ["/", "/index.html", "/runs/r1/review"] {
+            let page = text_of(get(Brand::AcogniDriver, path)).await;
+            assert!(
+                page.contains("<title>Acogni Driver</title>"),
+                "{path}: {page}"
+            );
+            assert!(
+                page.contains("data-brand=\"acogni-driver\""),
+                "{path}: {page}"
+            );
+            let page = text_of(get(Brand::Pdo, path)).await;
+            assert!(page.contains("<title>PDO</title>"), "{path}: {page}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_brand_logos_are_served_as_svg_and_revalidated() {
+        let response = get(Brand::Pdo, "/shared/brand/mark.svg");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "image/svg+xml");
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-cache");
+        assert!(text_of(response).await.contains("aria-label=\"PDO\""));
+        let lockup = text_of(get(Brand::AcogniDriver, "/shared/brand/lockup.svg")).await;
+        assert!(lockup.contains("aria-label=\"Acogni Driver\""));
+        // The favicon's former address answers the Marque's.
+        let legacy = get(Brand::AcogniDriver, "/shared/favicon.svg");
+        assert_eq!(legacy.headers()[header::CONTENT_TYPE], "image/svg+xml");
+        assert_eq!(
+            text_of(legacy).await,
+            Brand::AcogniDriver.asset("favicon.svg").unwrap()
+        );
+        // An unknown logo is a 404, never the page.
+        assert_eq!(
+            get(Brand::Pdo, "/shared/brand/logo.png").status(),
+            StatusCode::NOT_FOUND
+        );
     }
 }

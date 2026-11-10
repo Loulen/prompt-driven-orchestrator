@@ -5,7 +5,7 @@
 //! completion callers share it.
 
 use crate::domain::{event, projection, state};
-use tracing::error;
+use tracing::{error, info};
 
 use crate::application::events::load_events;
 use crate::application::scheduler::node_completion::handle_node_completion;
@@ -35,8 +35,9 @@ pub enum CompletionOutcome {
     /// `RunCompleted` was emitted on this call.
     RunCompleted,
     /// The run advanced but not all expected nodes are done yet — or it completed
-    /// earlier in the same tail via an HNC `Complete`/`Halt` action. Either way
-    /// the completion gate emitted nothing.
+    /// earlier in the same tail via an HNC `Complete`/`Halt` action — or it is
+    /// paused and its advance waits for the resume. Either way the completion
+    /// gate emitted nothing.
     StillRunning,
     Halted,
 }
@@ -115,6 +116,15 @@ pub fn evaluate_skip_completion_head(
     }
 }
 
+/// Is the Run `Paused` right now (a fresh read of its log)?
+async fn run_is_paused(state: &Runs, run_id: &str) -> bool {
+    load_events(state, run_id)
+        .await
+        .ok()
+        .and_then(|events| projection::project(&events))
+        .is_some_and(|run| run.status == state::RunStatus::Paused)
+}
+
 /// Reload + re-project, then fire the just-completed producer's outgoing edges.
 ///
 /// Don't pass the caller's projection through: `handle_node_completion` does not
@@ -150,6 +160,18 @@ pub async fn complete_node(
     order: CompletionOrder,
     complete_when_awaiting_user: bool,
 ) -> CompletionOutcome {
+    // A node may finish while its Run is paused (the transition guard admits
+    // the completion): what it would launch waits. `resume_run` re-evaluates
+    // the edges of every completed node, so the Run picks up from here.
+    // Boxed, like the re-drive below it: this tail is inlined into large
+    // command futures, and a debug build's stack is small.
+    if Box::pin(run_is_paused(state, run_id)).await {
+        info!("complete_node: run {run_id} is paused — {completed_node_id}'s edges fire on resume");
+        // The node's session is gone: its slot goes to a throttled node of
+        // another Run, as after any completion (nothing else re-drives them).
+        Box::pin(retry_waiting_nodes(state)).await;
+        return CompletionOutcome::StillRunning;
+    }
     match order {
         CompletionOrder::CompletionFirst => {
             fire_edges(state, run_id, completed_node_id).await;

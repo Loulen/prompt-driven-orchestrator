@@ -1,4 +1,5 @@
 import type { UpdateStatus } from "./update";
+import { brandName, CORE_NAME } from "../../shared/ui/brand/brand";
 
 /**
  * Version-check helpers (#697). The daemon does the check and caches it; the frontend
@@ -18,15 +19,17 @@ export function newerAvailable(s: UpdateStatus | null | undefined): boolean {
   return !!s && s.check_enabled && s.latest_version != null && s.newer_available;
 }
 
-/** The daemon runs the latest published version. Never claimed when unverified. */
+/**
+ * Nothing newer than the installed version is published — the latest itself, or a build
+ * ahead of it (CORE-232: a 2.x build checked against releases topped at 1.x). As the CLI
+ * and What's new say it. Never claimed when unverified.
+ */
 export function upToDate(s: UpdateStatus | null | undefined): boolean {
-  return (
-    !!s && s.check_enabled && s.latest_version != null && s.latest_version === s.installed_version
-  );
+  return !!s && s.check_enabled && s.latest_version != null && !s.newer_available;
 }
 
-/** The name of the vanilla binary's release channel. */
-export const VANILLA_CHANNEL_NAME = "PDO";
+/** The name of the vanilla binary's release channel: the core's. */
+export const VANILLA_CHANNEL_NAME = CORE_NAME;
 
 /**
  * The binary is a distribution (#24): a build of PDO with its own extensions, its own
@@ -36,19 +39,29 @@ export function isDistribution(s: UpdateStatus): boolean {
   return s.channel_name !== VANILLA_CHANNEL_NAME;
 }
 
-/** The product name a sentence uses: the distribution's own, or the app's for the vanilla channel. */
+/** The product name a sentence uses: the distribution's own, or the Marque's for the vanilla channel. */
 export function channelLabel(s: UpdateStatus): string {
-  return isDistribution(s) ? s.channel_name : "Acogni Driver";
+  return isDistribution(s) ? s.channel_name : brandName();
+}
+
+/** The product and its installed version: `PDO 2.76.0`, `Acogni Driver 1.4.0`. */
+export function installedProductLabel(s: UpdateStatus): string {
+  return `${channelLabel(s)} ${s.installed_version}`;
+}
+
+/** The core a distribution is built on, `core PDO 2.76.0`; `null` for the vanilla binary. */
+export function coreLabel(s: UpdateStatus): string | null {
+  return isDistribution(s) ? `core ${CORE_NAME} ${s.core_version}` : null;
 }
 
 /**
- * How the installed version reads: `v2.0.0` for the vanilla binary, `acme-pdo 0.3.0
- * (core 2.0.0)` for a distribution, whose version alone says nothing about the core.
+ * How the installed version reads in a short slot: `v2.0.0` for the vanilla binary,
+ * `acme-pdo 0.3.0 (core PDO 2.0.0)` for a distribution, whose version alone says
+ * nothing about the core.
  */
 export function installedVersionLabel(s: UpdateStatus): string {
-  return isDistribution(s)
-    ? `${s.channel_name} ${s.installed_version} (core ${s.core_version})`
-    : `v${s.installed_version}`;
+  const core = coreLabel(s);
+  return core ? `${installedProductLabel(s)} (${core})` : `v${s.installed_version}`;
 }
 
 /**

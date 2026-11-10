@@ -181,6 +181,8 @@ export default function ReviewPage({ runId }: Props) {
     sendDisabledReason,
     refusals,
     jumpTo,
+    reviewComments: run?.review_comments,
+    managerRunning: run?.has_manager,
   });
 
   const { jumpComment } = g;

@@ -39,6 +39,7 @@ export function agent(app: TourAppState, i: number): EditorNodeDef | null {
   return agents(app)[i] ?? null;
 }
 
+/** The Start marker the daemon's scaffold puts on every new pipeline. */
 export function startNode(app: TourAppState): EditorNodeDef | null {
   return (app.pipeline?.nodes ?? []).find((n) => n.type === "start") ?? null;
 }
@@ -175,11 +176,11 @@ export const NEW_PIPELINE_ERROR = '[data-testid="new-pipeline-error"]';
 export const outputSlot = (i: number) => `[data-output-index="${i}"]`;
 /** The delete confirmation's box — the dialog itself, not its full-screen backdrop. */
 export const DELETE_CONFIRM = '[data-testid="confirm-delete-modal"]';
+/** The dialog Save… opens: a new version, kept apart, or replacing the last (ADR-0088). */
+export const SAVE_DIALOG = '[data-testid="save-version-modal"]';
 /** Validate, next to Save, and the modal it opens (CONTEXT.md « Pipeline validé »). */
 export const VALIDATE_BUTTON = '[data-testid="validate-button"]';
 export const VALIDATE_MODAL = '[data-testid="validate-pipeline-modal"]';
-/** The window Save… opens: a new version, kept apart, or replacing the last (ADR-0088). */
-export const SAVE_MODAL = '[data-testid="save-version-modal"]';
 /** The tab bar's indicator once the pipeline is offered to somebody. */
 export const VALIDATED_FOR_ALL =
   '[data-testid="toolbar-validation-indicator"][data-validation="all"]';
@@ -239,7 +240,7 @@ function whenEquals(edge: EdgeDef | undefined, field: string, value: string): bo
 }
 
 /**
- * A step that writes `verdict eq <value>` on the tester → `to` edge. While the
+ * A step that writes `verdict = <value>` on the tester → `to` edge. While the
  * edge holds some other condition, the body says what the step is waiting for,
  * so a reader whose clause is off by one field or value is not left staring at
  * a card that never moves (#846, FP iteration 1).
@@ -269,13 +270,13 @@ export function conditionStep(def: {
     id: def.id,
     title: def.title,
     body: (o) => {
-      if (done(o)) return `Already set: the condition reads verdict eq ${def.value}. ${def.why}`;
+      if (done(o)) return `Already set: the condition reads verdict = ${def.value}. ${def.why}`;
       if (!edgeSelected(o.app, def.to(o.app)))
-        return `Click the edge first, then add the condition verdict eq ${def.value} in its inspector. ${def.why}`;
+        return `Click the edge first, then add the condition verdict = ${def.value} in its inspector. ${def.why}`;
       const when = edge(o.app)?.when;
       return !when || Object.keys(when).length === 0
-        ? `Add the condition verdict eq ${def.value}. ${def.why}`
-        : `Not there yet: the condition must read verdict eq ${def.value}, on the out output. ${def.why}`;
+        ? `Add the condition verdict = ${def.value}. ${def.why}`
+        : `Not there yet: the condition must read verdict = ${def.value}, on the out output. ${def.why}`;
     },
     target: (o) =>
       edgeSelected(o.app, def.to(o.app))

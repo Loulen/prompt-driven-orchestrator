@@ -4,7 +4,8 @@ One entry per version, newest first: what changes on screen, the new seams for e
 breaking changes, each marked **Breaking**. The binary embeds this file: "What's new" shows its
 latest entries. The full history lives in the git log and in the
 [GitHub Releases](https://github.com/Loulen/prompt-driven-orchestrator/releases), generated from
-the commits.
+the commits. The history of PDO 1.x, up to 1.132.0, is archived in
+[docs/CHANGELOG-v1.md](docs/CHANGELOG-v1.md).
 
 Work not released yet sits under `## Unreleased`, the first entry; "What's new" does not show it.
 `make release-bump` turns it into the version's entry when a story merges into `main`.
@@ -14,6 +15,19 @@ announced here, never hidden by keeping dead fields. One constraint is not negot
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
 ## Unreleased
+
+### Upgrading from 1.x
+
+This is the first 2.x release published in this repository: it replaces PDO 1.x in place.
+
+- Your data is kept. 2.x reads the `~/.pdo` folder of 1.x as it is: pipelines, Runs, Projects,
+  settings and the database open without a migration step.
+- The service is kept. The same unit starts the daemon at boot, now on the 2.x binary.
+- To upgrade, run `brew upgrade pdo` (or `brew update && brew upgrade Loulen/tap/pdo`), or re-run
+  the install script of the latest release. The Update button of a 1.x install does the same.
+- Going back to 1.x afterwards is not guaranteed: 2.x adds tables and columns 1.x does not know.
+- From this version on, PDO is licensed under the Apache License 2.0, with a `NOTICE` file. Versions
+  up to 1.132.0 stay under the MIT License; their changelog is in `docs/CHANGELOG-v1.md`.
 
 ### The Happy Paths describe the core alone
 
@@ -165,15 +179,278 @@ Tours:
 
 Agentic tests:
 
-- `make demo-daemon BIND_ALL=1` listens on all interfaces, so a sandboxed Run's container reaches
-  the demo daemon. The demo daemon also stages copilot's logged-in user and trusts `/tmp` for
-  claude and copilot.
+- `make demo-daemon BIND_ALL=1` is short for `BIND=0.0.0.0`: the demo daemon listens on all
+  interfaces, so a sandboxed Run's container reaches it. The demo daemon also stages copilot's
+  logged-in user and trusts `/tmp` for claude and copilot.
 - The Happy Paths and the driving playbook say how to answer claude's trust dialog (its cursor
   starts on "No, exit"), which harness logins a journey needs, that the undo history does not
   survive a reload, and where Pipeline info and the Node sessions stat are.
 - The Happy Paths say that "You pilot" and one `node_taken_over` on the first attach are
   expected, where to seed pipelines (the instance library, not the target repo), what the library
   assistant's 20-second focus heartbeat looks like, and which input a new edge lands on.
+### README: the PDO logo, an Enterprise section and media of today's UI
+
+- The README (English and French) opens on the PDO logo, in light and dark, and ends with a short
+  "Enterprise: Acogni Driver" section. Its GIFs and posters are recorded again on the vanilla
+  binary, default Theme.
+- `docs/features.md` says how the in-app update really goes (the status-bar version, "What's new",
+  **Update** › **Update now**) and which node can be Interactive or Orchestrator.
+- `make readme-media` films today's UI again: a scene's pane widths apply (the recorder stores the
+  window width the layout was saved for), the target pipelines are redrawn for the 208 px cards,
+  the canvas gestures aim where the canvas draws a node under a card with several outputs, the
+  Save dialog, the "You pilot" terminal, the full-window Stats, the run's read-only Config tab and
+  the two-row Review toolbar are followed, and the agents filmed write in English. A mocked-history
+  run opens from the rail (its `pipeline.yaml` is written in the fixture repo).
+
+### A pipeline whose Start leads nowhere says so, and its Run fails at once
+
+- The *First pipeline* tour now has you connect **Start to implementer** before wiring the loop. The
+  pipeline it used to end on had no edge out of Start, and its Runs stayed `running` forever without
+  starting a node.
+- A pipeline that nothing starts (Start connected to no node, no node without an incoming edge, no
+  on-demand node) shows a warning in the banner above the canvas: "Start is connected to no node,
+  and no node starts on its own, so a Run of this pipeline would start nothing". A Run launched on
+  it fails at once with that reason, instead of staying `running` with nothing live.
+- The banner above the canvas is read again after every Save, so a warning that a save brings
+  shows up at once, not only after a reload.
+
+### Sandbox, harnesses, worktrees, multi-repo and live sessions: fixes from the vanilla acceptance tour
+
+- A declared wait is lifted by a person's answer only. What the browser's terminal answers by itself
+  when the agent queries it (its colours, its version) no longer counts as typed text, so a bare
+  Enter no longer lifts the wait, and a node's log no longer gains a `node_typed` nobody typed.
+  Attaching to an iteration that already ended records no `node_taken_over`.
+- A node waiting for its user (`pdo wait-user`, an unreleased completion) whose session dies turns
+  `Interrupted` with "session died", as a running one does, instead of waiting forever.
+- Leaving a finished node for the node of the same id in another Run opens its live terminal,
+  instead of keeping it folded and marked "ended".
+- The terminal of a node not started yet, and the Run pane before any node is live, say "Not
+  started yet".
+- Every "Inherit" picker (New Run, node inspector, Project, Settings › Agents) shows what it
+  would really inherit: the instance's choice, else its default harness, else the Default profile
+  as you edited it, instead of always "claude · — · —". In the node inspector, a node's own
+  legacy entries count: a `harnesses: { claude: … }` entry or a `pin_harness` names the model and
+  effort the node runs.
+- A pending tool call of an iteration that ended reads "no result" in the Transcript tab instead
+  of "running" forever.
+- Settings › Diagnostics and the model pickers follow a harness probed again by a later read (a
+  `copilot` whose `--version` was too slow at boot no longer reads "probe failed" until a reload).
+- A node with `harnesses: { claude: { model: … } }` and no pin runs on that model again on the
+  Default profile's harness, as it did before agent profiles; the profile fills what the entry
+  leaves out.
+- The delivery commit of a node no longer carries `.pdo/prompts/` (the prompt and the turn-end hook
+  PDO writes beside the session) into the Run branch of a repository whose `.gitignore` does not
+  cover `.pdo/`.
+- `POST /runs` refuses a `target_repos` whose first entry is not the `target_repo` (400 naming both):
+  the list is the primary first, then the secondaries; its first secondary used to be dropped
+  without a word. `pdo run create --target-repos` says so in its help.
+- A node that changed a tracked file of a read-only secondary repository is told it is still its
+  turn (`pdo complete` exits 3, `recoverable: true`): it reverts and completes again. It used to
+  read "already ruled" (exit 4) while nothing was recorded, and a `script` node ended "session
+  died"; a `script` node now fails with the refusal's cause in its reason, without the
+  instructions `pdo complete` prints for an agent ("still your turn", "Do NOT run `pdo fail`").
+- `pdo run repos --remove <path>` removes the secondary repository it names; `PATCH /runs/<run>/repos`
+  takes a repository's path in `remove` as well as its alias. `--remove <alias>` works from any
+  directory, and a repository the Run does not have is refused (exit 4) with the Run's secondaries,
+  instead of "repositories updated".
+- `make demo-daemon … BIND=0.0.0.0` lets a sandboxed Run's containers reach the demo daemon; the docs
+  of `pdo daemon --bind` and of the sandbox say a loopback daemon leaves a sandboxed node unable to
+  call `pdo complete`.
+
+### Convergence: a node waits for a loop's exit and reads every lap of a collection
+
+- A node fed by a bounded loop's guarded exit (a `review` edge on `verdict = PASS`) and by other
+  branches waits for the loop to exit, on its guard or exhausted. It no longer starts when a
+  collection or another branch finishes while the loop is still turning, with its preamble saying
+  "not available yet" of the loop's output.
+- A collection's barrier starts the node downstream only once its other branches are resolved too;
+  the branch that resolves last starts it.
+- The node downstream of a collection receives the output of every lap, in the order of the items,
+  in its I/O, its preamble and `PDO_INPUT_<PORT>`. It used to receive the last lap only.
+
+### Routing: a branch not taken stays dead downstream
+
+- A run whose only path to End goes through a branch that was not taken stays "awaiting you"
+  with the reason "unrouted" until you force a route, instead of finishing green with End
+  "reached". The same holds for a bounded loop that runs out of laps while its exit goes through
+  a branch not taken: the run stays "exhausted".
+- A node where branches converge receives only the branches that fired. An input whose branch was
+  not taken is no longer listed in the node's I/O; its preamble says "not taken", and a `script`
+  gets an empty `PDO_INPUT_<PORT>` (an input of the same name that did fire keeps its path).
+- A node you skip yourself (`pdo node skip`, with or without `--output`) still feeds what comes
+  after it, as if it had run. The ▶ of a skipped node is unchanged.
+- The run state marks a node skipped because its branch was not taken with `pruned: true`.
+
+### Review: comments never lost on their way to the manager
+
+- "Send to manager" no longer loses comments on a repository the manager's agent never trusted.
+  A manager the send starts reads the comments at the end of its launch prompt, instead of having
+  them typed into its folder-trust prompt (where the Enter chose "No, exit"). Into a manager
+  already running, the comments are typed only once its screen can take them.
+- While the manager's agent asks whether to trust the folder, the comment's thread says the
+  comments are held and how to go on: answer the prompt in the run's Manager tab. They go out once
+  it is answered. PDO never answers it for you nor writes the trust into your home.
+- A manager that exits before answering is said on the thread ("The manager exited before
+  answering", "Manager exited" in the footer) instead of "Awaiting manager reply" for ever, and
+  **Send again** hands every unanswered comment to a new manager, as written. The same holds when
+  no manager runs any more after a daemon restart.
+- New seams: `POST /runs/<id>/review/comments/resend` (`{"ids": [...]}`, the send's right) and
+  `pdo review resend <id>...`; the Run event `review_comment_delivery` (`ids`, `state`: `awaiting`,
+  `blocked` or `exited`, `reason`), folded onto each comment's `delivery`.
+
+### Authoring: fixes from the vanilla acceptance tour
+
+- Importing a Claude Code workflow lists what it could not map in English, in the import modal and
+  on `pdo pipeline library import`, and the placeholder it writes into a node's prompt is English
+  too ("⟨TODO: prompt built at run time — write this node's role⟩").
+- Deleting an agent profile something still names says "1 reference moves to the next tier", and
+  "2 references move" from two on.
+- The Undo tooltip names a note or a loop added or deleted ("Undo add note", "Undo delete loop"),
+  as it already did for nodes and edges; "edit note" is left for a note whose text changed. The
+  Redo tooltip names the change it replays the same way ("Redo delete note").
+- A "changed outside" or library-assistant line above the canvas goes away once you save the draft
+  it changed as a version: that version holds the change, and "See v2" no longer points at a
+  version older than the one you just saved. A line that arrives while the save is under way stays,
+  and so do the lines in the other participants' tabs.
+- A node whose agent profile was deleted names the profile as you knew it ("Agent profile Reviewer
+  fast no longer exists"), in the warning above the canvas, on the node card's tooltip and in the
+  inspector, wherever this browser listed the profile before; elsewhere it still shows the id.
+- The import window's second tab reads "Claude Code workflow".
+- A double-click on a pipeline in the library opens one tab, not two tabs on the same pipeline that
+  each kept their own Undo history. A second open that answers late leaves the open tab and its
+  edits alone.
+- Add › Note places the new note clear of the notes already on the canvas, as it already did for
+  nodes, instead of on top of the last one. A new node keeps clear of the notes too.
+- `pdo skill export --skill` takes a skill's name as well as its id, as every other `pdo skill`
+  command does.
+- `pdo settings agent-profile delete --help` says what the daemon does: it deletes a profile even
+  while something names it, and each of those falls back to the next tier.
+
+### Platform: fixes from the vanilla acceptance tour
+
+- Triggers: the Input field of a Trigger no longer suggests a `{{guard.stdout}}` template (the
+  guard's output replaces the input, it is never interpolated), and the guard example exits
+  non-zero when there is nothing to do (`gh issue list --label ready | grep .`). The guard's
+  tooltip points at Settings › General for its timeout instead of saying "60 s".
+- Run now is greyed on a disabled Trigger, row and panel, with "Disabled: enable it first":
+  the daemon refused it with a 409 the toast showed with the raw id.
+- Deleting a Trigger from its row asks first, as the bulk delete does: its schedule and fire
+  history go. A refused delete or enable/disable says why in a toast instead of doing nothing.
+- A Trigger a missing pipeline or repository put to sleep resumes its schedule when Run now
+  fires it once they are back; its row and panel say "Not scheduled" and what wakes it.
+- The status icon's tooltip names the last outcome in words, a tick's or a manual fire's, and
+  the last fire apart ("Last outcome: Skipped, overlap · Last fired Nov 9, 10:25 UTC"), instead
+  of pairing a skip with the time of an older fire. "Next fire in now" reads "Next fire now".
+- Stats › Triggers counts in "X of Y enabled triggers fired" only the Triggers still enabled: a
+  Trigger disabled since it fired no longer makes "2 of 2" while an enabled one never fired.
+- The "Last fired" switch of Settings › Appearance shows the element at every panel width.
+- A raw cron reads in mono in the Trigger panel (`* * * * *`, not `*****`), and Run info names
+  the Trigger that fired the Run instead of its id.
+- Test guard shows the stderr of a guard that passes too. A prompt-required pipeline whose
+  guard printed nothing is refused with "the guard printed nothing and there is no input
+  template", not "add a guard".
+- The pipeline menu of New Run names its hidden section "Test pipelines · not validated", as
+  its toggle says.
+- `pdo trigger list` says `disabled` for a disabled Trigger ("paused" is the global switch,
+  which standard error now mentions); `pdo trigger disable|enable` are aliases of
+  `pause|resume`; `pdo trigger fire` exits 1 on an error outcome. `pdo audit` prints what a
+  short change changed to (`{"paused":true}`).
+- Settings: a search finds the switches of Settings › Appearance ("iteration", "cost"…), not
+  only their section title, and names their block ("Runs list · Cost", "Run canvas · Cost"). It
+  finds a tour of Settings › Tutorials by its name ("Full tour", "Overview"), shows its row and
+  counts the tours it shows. A section named like its category (Appearance, Projects) is named
+  once under a search, not "Appearance › Appearance". A page left open follows a change made
+  elsewhere (`pdo settings set`, another browser, the harness warm-up) on the fields it is not
+  editing, and the status bar's session gauge follows a session cap set from the CLI.
+- Settings › Notifications drops its sentences of explanation; the rows' tooltips carry them.
+- The default model row reads "Default model · claude": its models are claude's.
+- The skill bank says "built in" for a seeded skill and counts the tiers that select a skill
+  (it always said 0). Provisioning patterns are not spell-checked; a Project's provisioning
+  preview reads its default primary repository. The Edit project dialog has no invisible tab
+  stop, and its effort radios are not announced "Effort Effort".
+- `pdo settings appearance` says `default` for a choice left at its default.
+- `pdo update check` no longer says "can update now" on an install that is up to date, and
+  says why there is no latest version when there is none. `pdo update log <id>` names the attempt
+  it has no log for.
+- Settings › Version & update says "up to date" for a build ahead of the latest release, keeps
+  What's new (the changelog of this build) while the check is off or has not answered, and names
+  the source before the first check.
+- Tours: the conditions read `verdict = pass`, as the canvas draws them; *First pipeline* says
+  "Pick Shared, under Worktree" (the button's name) and calls the unsaved work a draft, not
+  something "only in this browser tab"; its Save step lights the Save dialog once it opens.
+  *First run* says "Open the Runs tab, then click New Run" when it lights the tab, "Untick
+  Auto" as the box reads, and tells you to say to an agent waiting for the release that it can
+  finish. Settings › Tutorials ticks the full tour once its three tours are done.
+- An edge into End reads "fired" once its End port fired, instead of "not fired" always.
+- A `script` node keeps its terminal once it ends: its shell exits as soon as `pdo complete` or
+  `pdo fail` answers, and the pane was often gone before it was frozen, so the Overview tour's
+  "frozen on the lines the script printed" showed "Session no longer available". The frozen
+  pane opens on those lines, at its top: the empty rows under them no longer push them into the
+  scrollback of a folded terminal, which showed black.
+- The training repository of the tours is reused only when it belongs to you: one another user
+  left under `/tmp` is refused by name.
+- The node inspector no longer says "NodeRun" in its tooltips.
+- Settings › Telemetry › "Include the Actor" warns about the law where you work, with France as
+  the example, instead of French law alone.
+- The CLI help speaks English throughout (Project, hosted session, skill bank, Appearance),
+  describes PDO for every harness, not Claude Code alone, and cites no ADR or issue number.
+
+### Updates come from the public repository
+
+- Settings › Version & update checks the latest release of `Loulen/prompt-driven-orchestrator`,
+  and the tooltip of "GitHub Releases" next to the check date shows that repository's releases page. The
+  Homebrew command is `brew update && brew upgrade Loulen/tap/pdo` (the `pdo` formula, no longer
+  `pdo-v2`), and the script command re-runs that repository's installer.
+
+### Review and observation: fixes from the vanilla acceptance tour
+
+- Review: a node that runs in the Run's worktree (not isolated) and commits its own work now has a
+  before → after pair that holds those commits. Before, its delivery started where the node stopped,
+  so the pair read "No changes". `NodeStarted` of such a node carries `run_head_sha`, the Run
+  worktree's HEAD when it started; a node started before this version keeps the old pair.
+- Stats › Cost and Run info: a Run that started no Pipeline Manager and no merge resolver no longer
+  counts an "Infrastructure" execution of unknown cost. Before, every Run read "without computable
+  cost", the Cost headline median stayed "—", and a script-only Run counted a `claude` execution.
+- `pdo stats` reads 30 days when `--period` is not given, the period Stats opens on (it read 7).
+- `pdo review diff --from/--to` with a revision git does not know answers `unknown ref: <ref>` and
+  lists the Run ref spellings, instead of "run branch not found"; `--help` lists them too.
+- `pdo complete` refused for a frontmatter mismatch says the agent has one retry left (it said the
+  retry was spent). A Run parked by a node's `pdo fail` names the node ("node make failed (awaiting
+  your confirmation)") instead of saying "agent pdo fail", which read wrong for a script node.
+- Stats › Performance: the wait coverage reads "1 execution of 4" and capitalises its second
+  sentence.
+### The interface takes the Marque of its binary: PDO, or Acogni Driver
+
+- The vanilla binary now calls itself **PDO** everywhere it names the product: the browser tab
+  (title and favicon, written into the page by the daemon so no other name flashes on load), the
+  mark at the left of the top bar, the welcome modal ("Welcome to PDO", the PDO lockup), the tours,
+  the import of a pipeline ("PDO pipeline"), the notifications, and Settings › Version & update,
+  whose Installed row reads `PDO 2.76.0` after the mark. A distribution that declares Acogni
+  Driver shows "Acogni Driver" and its logo instead, and `Acogni Driver 1.4.0 (core PDO 2.76.0)`.
+- New PDO logo: three steps of a Run (done, running in ruby, to come) joined by two edges. Acogni
+  Driver's mark is the A of Acogni, its hollow in ruby. Both keep their ruby under the Classic
+  Theme, in dark and light.
+- The gear of Acogni is the Settings icon now, in the top bar and in the Settings header; it no
+  longer stands for the product, so the top bar never shows two gears. It signs "by Acogni" under
+  the PDO lockup of the welcome modal and after the title of Settings › Version & update.
+- The Acogni wordmark of the Acogni Driver lockup is no longer clipped under its "g".
+- New seam for distributions: `Config::with_brand(pdo::Brand::AcogniDriver)`, next to
+  `with_release_channel`; without it a binary is PDO. Neither an environment variable, a setting
+  nor an extension changes it. The daemon serves the logos of its Marque under `/shared/brand/`
+  (`mark.svg`, `lockup.svg`, `favicon.svg`) for the pages an extension serves outside the
+  interface; `/shared/favicon.svg` now answers the Marque's favicon.
+### Runs: a pause keeps the work in flight, a reopen relaunches stopped nodes
+
+- A node that finishes while its Run is paused now completes. Before, its completion was refused
+  ("resume the run first"): a `script` node, which completes once as its bash exits, lost its work,
+  and after Resume it read "session died" and had to run again. What the finished node would launch
+  still waits for Resume.
+- Reopening a Run (the Play button, `pdo run reopen`) runs again the nodes that were stopped, as it
+  already did for interrupted ones. A cancelled Run (`pdo run cancel`) used to park "run_stalled …
+  blocked behind" its stopped nodes as soon as it was reopened. A stopped lap of a collection
+  fan-out stays stopped, with the laps already done, until its node is retried.
+- A `script` lap of a collection fan-out gets its item in `$PDO_ITEM` and the number of laps in
+  `$PDO_ITEM_TOTAL`, as an agent lap reads them in its preamble.
 
 ## 2.75.0
 
@@ -234,6 +511,7 @@ Agentic tests:
   It only narrows what your rights already show.
 - When a node of such a Run starts waiting for you (a question, a completion to approve, a Run
   paused on an incident) and no tab of the app is in view, one tab shows a notification
+  paused on an incident) and no tab of the interface is in view, one tab shows a notification
   (the node's name, then "is waiting for you" or "is done, waiting for your go"; "Run paused on an
   incident") and plays a chime of its reason, at most one chime every 10 s. Clicking the
   notification brings the tab back on the Run with the node selected. A wait already there when
@@ -241,6 +519,8 @@ Agentic tests:
   waiting on its child runs.
 - `GET /runs` gives each child Run its `root_run_id`, the Run at the top of its chain of parents.
 - While an alert switch is on, a hidden tab of the app reopens its event stream after a drop (a daemon restart,
+- While an alert switch is on, a hidden tab of the interface reopens its event stream after a drop (a daemon restart,
+- While an alert switch is on, a hidden interface tab reopens its event stream after a drop (a daemon restart,
   a network change) instead of waiting to be shown; `openProbedSocket` takes a `whileHidden` option.
 ### Tree cost: what an orchestration really cost
 

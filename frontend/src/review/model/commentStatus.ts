@@ -154,13 +154,23 @@ export function firstWords(text: string, max = 44): string {
 /** What the sent card's footer says, right of the id and the pair. */
 export type FooterStatus =
   | { kind: "awaiting" }
+  /** CORE-239: the manager's agent shows a prompt only a person can answer; the batch waits. */
+  | { kind: "blocked"; reason?: string }
+  /** CORE-239: the manager ended before answering: « Send again ». */
+  | { kind: "exited"; reason?: string }
   | { kind: "replied"; author: string; at: string; actor?: Actor }
   | { kind: "proposed"; author: string; at: string; actor?: Actor }
   | { kind: "resolved"; by: string; at: string; actor?: Actor }
   | { kind: "reopened"; by: string; at: string; actor?: Actor }
   | { kind: "declined"; by: string; at: string; actor?: Actor };
 
-export function footerStatus(c: ReviewComment): FooterStatus {
+/**
+ * `managerRunning` (the Run's `has_manager`, an observed fact) turns a comment
+ * still awaiting its answer into `exited` when no manager runs any more, even
+ * without the daemon's word for it (CORE-239): a daemon restarted since the
+ * send no longer follows the batch. `undefined` (not known) changes nothing.
+ */
+export function footerStatus(c: ReviewComment, managerRunning?: boolean): FooterStatus {
   const replies = c.replies ?? [];
   const last = replies[replies.length - 1];
   if (c.status === "resolved") {
@@ -174,7 +184,16 @@ export function footerStatus(c: ReviewComment): FooterStatus {
     return { kind: c.proposal_declined ? "declined" : "reopened", by: c.reopened_by ?? "user", at: c.reopened_at, actor: c.reopened_by_actor };
   }
   if (last) return { kind: "replied", author: last.author, at: last.at, actor: last.actor };
+  if (c.delivery?.state === "exited") return { kind: "exited", reason: c.delivery.reason };
+  // No manager runs: whatever held the comment, nobody will answer it now.
+  if (managerRunning === false) return { kind: "exited" };
+  if (c.delivery?.state === "blocked") return { kind: "blocked", reason: c.delivery.reason };
   return { kind: "awaiting" };
+}
+
+/** CORE-239: the ids « Send again » hands a new manager — every comment the manager left unanswered by exiting. */
+export function lostCommentIds(comments: ReviewComment[] | undefined, managerRunning?: boolean): string[] {
+  return (comments ?? []).filter((c) => footerStatus(c, managerRunning).kind === "exited").map((c) => c.id);
 }
 
 import { plural } from "../../shared/lib/plural";

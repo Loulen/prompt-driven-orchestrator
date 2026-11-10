@@ -13,11 +13,16 @@
 //!   holds `waiting`.
 
 mod collections;
+#[cfg(test)]
+mod convergence_tests;
 mod diagnostics;
 pub mod dispatcher;
 mod edges;
 mod end_wait;
+mod forward;
 mod liveness;
+#[cfg(test)]
+mod loop_exit_tests;
 mod loops;
 mod regions;
 
@@ -25,6 +30,7 @@ pub use collections::*;
 use diagnostics::*;
 pub use edges::*;
 pub use end_wait::*;
+use forward::*;
 pub use liveness::*;
 pub use loops::*;
 pub use regions::*;
@@ -376,6 +382,7 @@ mod tests {
             completed_at: Some("t1".into()),
             failure_reason: None,
             skip_reason: None,
+            pruned: false,
             iterations: Vec::new(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
@@ -400,6 +407,7 @@ mod tests {
             completed_at: Some("t1".into()),
             failure_reason: None,
             skip_reason: None,
+            pruned: false,
             iterations: Vec::new(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
@@ -424,6 +432,7 @@ mod tests {
             completed_at: None,
             failure_reason: None,
             skip_reason: None,
+            pruned: false,
             iterations: Vec::new(),
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
@@ -3467,7 +3476,13 @@ mod tests {
             .insert("worker".into(), worker_with_completed_laps(&[1, 2, 3]));
 
         let region = &pipeline.loops[0];
-        let actions = evaluate_collection_barrier(&pipeline, &state, region);
+        let actions = evaluate_collection_barrier(
+            &pipeline,
+            &state,
+            region,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
 
         assert!(actions.contains(&SchedulerAction::CollectionDone {
             region_id: "fan".into(),
@@ -3497,7 +3512,13 @@ mod tests {
             .insert("worker".into(), worker_with_completed_laps(&[1, 3]));
 
         let region = &pipeline.loops[0];
-        let actions = evaluate_collection_barrier(&pipeline, &state, region);
+        let actions = evaluate_collection_barrier(
+            &pipeline,
+            &state,
+            region,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert!(actions.is_empty(), "lap 2 missing — barrier must wait");
     }
 
@@ -3520,7 +3541,13 @@ mod tests {
             .insert("worker".into(), worker_with_completed_laps(&[1, 2, 3]));
 
         let region = &pipeline.loops[0];
-        let actions = evaluate_collection_barrier(&pipeline, &state, region);
+        let actions = evaluate_collection_barrier(
+            &pipeline,
+            &state,
+            region,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert!(actions.is_empty(), "a fired barrier never re-fires");
     }
 
@@ -3547,7 +3574,13 @@ mod tests {
             .insert("worker".into(), worker_with_completed_laps(&[1, 2]));
 
         let region = &pipeline.loops[0];
-        let actions = evaluate_collection_barrier(&pipeline, &state, region);
+        let actions = evaluate_collection_barrier(
+            &pipeline,
+            &state,
+            region,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert!(actions.contains(&SchedulerAction::CollectionDone {
             region_id: "fan".into(),
         }));
@@ -5382,6 +5415,560 @@ loops:
         assert_eq!(
             regions::effective_region_max_cost(&rs, &pipeline.loops[0], &HashMap::new()),
             None
+        );
+    }
+
+    // --- Pruned nodes (ADR-0082): a node settled because its branch was not
+    // taken is dead for routing — it fires nothing, its consumers do not read it,
+    // and an `End` reachable only through it stays unreached. ---
+
+    /// A node the reachability sweep settled: `Skipped`, never ran, pruned.
+    fn pruned_node(id: &str) -> NodeState {
+        NodeState {
+            status: NodeStatus::Skipped,
+            started_at: None,
+            skip_reason: Some("structurally unreachable".into()),
+            pruned: true,
+            ..completed_node(id)
+        }
+    }
+
+    /// A node the operator skipped (`pdo node skip`) without it ever running:
+    /// `Skipped` too, but not pruned — it feeds downstream as if it had run.
+    fn operator_skipped_node(id: &str) -> NodeState {
+        NodeState {
+            pruned: false,
+            skip_reason: Some("skipped locally by operator".into()),
+            ..pruned_node(id)
+        }
+    }
+
+    fn verdict(value: &str) -> HashMap<String, serde_yaml::Value> {
+        [(
+            "verdict".to_string(),
+            serde_yaml::Value::String(value.to_string()),
+        )]
+        .into_iter()
+        .collect()
+    }
+
+    /// `gen → okn (when verdict = pass) → End`: the only path to `End` is
+    /// guarded.
+    fn guarded_only_path_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "unrouted-lab".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("gen", &["task"], &["out"]),
+                make_node("okn", &["in"], &["out"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_cond_edge(
+                    "gen",
+                    "out",
+                    "okn",
+                    "in",
+                    Some("verdict: { eq: pass }"),
+                    false,
+                ),
+                make_edge("okn", "out", "end", "result"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        }
+    }
+
+    #[test]
+    fn a_pruned_node_fires_none_of_its_edges_so_an_unrouted_end_stays_unreached() {
+        let pipeline = guarded_only_path_pipeline();
+        let mut state = empty_run_state();
+        state.nodes.insert("gen".into(), completed_node("gen"));
+        state.nodes.insert("okn".into(), pruned_node("okn"));
+        let fm_by_node: HashMap<_, _> = [("gen".to_string(), verdict("other"))]
+            .into_iter()
+            .collect();
+
+        let from_pruned = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "okn",
+            &HashMap::new(),
+            &HashMap::new(),
+            &fm_by_node,
+        );
+        assert_eq!(from_pruned, Vec::new(), "a pruned node routes nothing");
+
+        // The producer's own routing still sees `End` dead through the pruned
+        // node: the Run stays parked `unrouted`, it never completes.
+        let from_gen = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "gen",
+            &HashMap::new(),
+            &verdict("other"),
+            &fm_by_node,
+        );
+        assert!(
+            matches!(
+                from_gen.as_slice(),
+                [SchedulerAction::Interrupt { reason_code, .. }] if reason_code == "unrouted"
+            ),
+            "{from_gen:?}"
+        );
+        // Parked by that routing, the sweep releases nothing and does not park it twice.
+        state.status = crate::domain::state::RunStatus::AwaitingUser;
+        state.awaiting_reason_code = Some("unrouted".into());
+        assert_eq!(
+            released_by_pruning(
+                &pipeline,
+                &state,
+                &["okn".to_string()],
+                &fm_by_node,
+                &HashMap::new()
+            ),
+            Vec::new(),
+            "no live producer reaches End: nothing is released"
+        );
+        assert_eq!(
+            end_reached_action(&pipeline, &state, &fm_by_node, &HashMap::new()),
+            None
+        );
+    }
+
+    #[test]
+    fn a_node_the_operator_skipped_still_feeds_downstream() {
+        let pipeline = guarded_only_path_pipeline();
+        let mut state = empty_run_state();
+        state.nodes.insert("gen".into(), completed_node("gen"));
+        state
+            .nodes
+            .insert("okn".into(), operator_skipped_node("okn"));
+        let fm_by_node: HashMap<_, _> = [("gen".to_string(), verdict("other"))]
+            .into_iter()
+            .collect();
+
+        let actions = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "okn",
+            &HashMap::new(),
+            &HashMap::new(),
+            &fm_by_node,
+        );
+        assert_eq!(actions, vec![SchedulerAction::Complete]);
+    }
+
+    #[test]
+    fn death_cascades_through_a_pruned_node() {
+        // `elsen` is pruned; `e2`, fed only by it, is dead in turn — it is not
+        // launched by the pruned node's edge.
+        let pipeline = PipelineDef {
+            name: "cascade".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("gen", &["task"], &["out"]),
+                make_node("elsen", &["in"], &["out"]),
+                make_node("e2", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_cond_edge("gen", "out", "elsen", "in", None, true),
+                make_edge("elsen", "out", "e2", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+        let mut state = empty_run_state();
+        state.nodes.insert("gen".into(), completed_node("gen"));
+        state.nodes.insert("elsen".into(), pruned_node("elsen"));
+
+        let dead = unreachable_nodes(&pipeline, &state, &HashMap::new(), &HashMap::new());
+        assert_eq!(
+            dead.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            vec!["e2"]
+        );
+        assert!(
+            !ready_nodes(&pipeline, &state).contains(&"e2".to_string()),
+            "readiness never launches a node whose only feeder is pruned"
+        );
+    }
+
+    /// `x → End` and `y → z (when go) → End`: `End` waits on both branches.
+    fn late_prune_pipeline() -> PipelineDef {
+        PipelineDef {
+            name: "late-prune".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("x", &["task"], &["out"]),
+                make_node("y", &["task"], &["out"]),
+                make_node("z", &["in"], &["out"]),
+                make_end_node(),
+            ],
+            edges: vec![
+                make_edge("x", "out", "end", "result"),
+                make_cond_edge("y", "out", "z", "in", Some("verdict: { eq: go }"), false),
+                make_edge("z", "out", "end", "result"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        }
+    }
+
+    #[test]
+    fn pruning_the_last_awaited_branch_releases_end_through_its_live_producer() {
+        // `x` reached `End` first while `z` was undecided; `y` then did not take
+        // `z`, which is pruned. `End` is reached through `x`, not through `z`.
+        let pipeline = late_prune_pipeline();
+        let mut state = empty_run_state();
+        state.nodes.insert("x".into(), completed_node("x"));
+        state.nodes.insert("y".into(), completed_node("y"));
+        state.nodes.insert("z".into(), pruned_node("z"));
+        let fm_by_node: HashMap<_, _> = [("y".to_string(), verdict("stop"))].into_iter().collect();
+
+        let released = released_by_pruning(
+            &pipeline,
+            &state,
+            &["z".to_string()],
+            &fm_by_node,
+            &HashMap::new(),
+        );
+        assert_eq!(released, vec![SchedulerAction::Complete]);
+    }
+
+    #[test]
+    fn pruning_releases_nothing_while_a_sibling_branch_is_still_running() {
+        let pipeline = late_prune_pipeline();
+        let mut state = empty_run_state();
+        state.nodes.insert("x".into(), running_node("x"));
+        state.nodes.insert("y".into(), completed_node("y"));
+        state.nodes.insert("z".into(), pruned_node("z"));
+        let fm_by_node: HashMap<_, _> = [("y".to_string(), verdict("stop"))].into_iter().collect();
+
+        let released = released_by_pruning(
+            &pipeline,
+            &state,
+            &["z".to_string()],
+            &fm_by_node,
+            &HashMap::new(),
+        );
+        assert_eq!(released, Vec::new());
+    }
+
+    #[test]
+    fn pruning_releases_a_convergence_its_fired_conditional_edge_waited_for() {
+        // `a → join (when ok)` fired while `p` was undecided; once `p` is
+        // pruned, `join` is launched by `a`'s routing — readiness alone, which
+        // reads only unconditional edges, would not launch it.
+        let pipeline = PipelineDef {
+            name: "conditional-join".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("a", &["task"], &["out"]),
+                make_node("b", &["task"], &["out"]),
+                make_node("p", &["in"], &["out"]),
+                make_convergence_node("join"),
+            ],
+            edges: vec![
+                make_cond_edge(
+                    "a",
+                    "out",
+                    "join",
+                    "branches",
+                    Some("verdict: { eq: ok }"),
+                    false,
+                ),
+                make_cond_edge("b", "out", "p", "in", Some("verdict: { eq: go }"), false),
+                make_edge("p", "out", "join", "branches"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+        let mut state = empty_run_state();
+        state.nodes.insert("a".into(), completed_node("a"));
+        state.nodes.insert("b".into(), completed_node("b"));
+        state.nodes.insert("p".into(), pruned_node("p"));
+        let fm_by_node: HashMap<_, _> = [
+            ("a".to_string(), verdict("ok")),
+            ("b".to_string(), verdict("stop")),
+        ]
+        .into_iter()
+        .collect();
+
+        assert!(!ready_nodes(&pipeline, &state).contains(&"join".to_string()));
+        let released = released_by_pruning(
+            &pipeline,
+            &state,
+            &["p".to_string()],
+            &fm_by_node,
+            &HashMap::new(),
+        );
+        assert_eq!(
+            released,
+            vec![SchedulerAction::Spawn {
+                node_id: "join".into(),
+                iter: 1,
+            }]
+        );
+    }
+
+    #[test]
+    fn an_exhausted_region_whose_exit_is_pruned_does_not_complete_the_run() {
+        // The review loop exits through `done` (when PASS); at max_iter the
+        // verdict is still FAIL, so the region parks « exhausted — unrouted »
+        // and `done` is pruned. The pruned exit must not reach `End`.
+        let mut pipeline = migrated_review_loop_pipeline(2);
+        pipeline.nodes.push(make_node("done", &["in"], &["out"]));
+        pipeline.edges.retain(|e| e.target.node != "end");
+        pipeline.edges.push(make_cond_edge(
+            "rev",
+            "review",
+            "done",
+            "in",
+            Some("verdict: { in: [PASS, APPROVED] }"),
+            false,
+        ));
+        pipeline
+            .edges
+            .push(make_edge("done", "out", "end", "result"));
+        let mut state = empty_run_state();
+        state
+            .nodes
+            .insert("start".into(), completed_node_iter("start", 1));
+        state
+            .nodes
+            .insert("impl".into(), completed_node_iter("impl", 2));
+        state
+            .nodes
+            .insert("rev".into(), completed_node_iter("rev", 2));
+        state
+            .loop_states
+            .insert("review_loop".into(), region_state(2, 2, false));
+        let by_node = fail_fm();
+
+        let at_exhaustion = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "rev",
+            &HashMap::new(),
+            by_node.get("rev").unwrap(),
+            &by_node,
+        );
+        assert!(
+            at_exhaustion.iter().any(|a| matches!(
+                a,
+                SchedulerAction::Interrupt { reason_code, .. } if reason_code == "region_exhausted"
+            )),
+            "{at_exhaustion:?}"
+        );
+        let dead = unreachable_nodes(&pipeline, &state, &by_node, &HashMap::new());
+        assert_eq!(
+            dead.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            vec!["done"]
+        );
+
+        state.nodes.insert("done".into(), pruned_node("done"));
+        state.status = crate::domain::state::RunStatus::AwaitingUser;
+        state.awaiting_reason_code = Some("region_exhausted".into());
+        let from_done = evaluate_outgoing_edges_full(
+            &pipeline,
+            &state,
+            "done",
+            &HashMap::new(),
+            &HashMap::new(),
+            &by_node,
+        );
+        assert_eq!(from_done, Vec::new());
+        assert_eq!(
+            released_by_pruning(
+                &pipeline,
+                &state,
+                &["done".to_string()],
+                &by_node,
+                &HashMap::new()
+            ),
+            Vec::new()
+        );
+    }
+
+    #[test]
+    fn a_node_fed_by_start_and_a_pruned_node_is_still_launched_by_readiness() {
+        // `Start → fix` fires; only the other feeder of `fix` is pruned.
+        let pipeline = PipelineDef {
+            name: "start-and-pruned".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_start_node("start"),
+                make_node("gen", &["task"], &["out"]),
+                make_node("okn", &["in"], &["out"]),
+                make_node("fix", &["in"], &["out"]),
+            ],
+            edges: vec![
+                make_edge("start", "user_prompt", "gen", "task"),
+                make_edge("start", "user_prompt", "fix", "in"),
+                make_cond_edge(
+                    "gen",
+                    "out",
+                    "okn",
+                    "in",
+                    Some("verdict: { eq: pass }"),
+                    false,
+                ),
+                make_edge("okn", "out", "fix", "in"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+        let mut state = empty_run_state();
+        state.nodes.insert("gen".into(), completed_node("gen"));
+        state.nodes.insert("okn".into(), pruned_node("okn"));
+
+        assert_eq!(ready_nodes(&pipeline, &state), vec!["fix".to_string()]);
+    }
+
+    #[test]
+    fn pruning_releases_a_region_entry_with_its_first_lap() {
+        // The review loop's entry `impl` is fed by `a` (fired) and by `p`,
+        // pruned after `a` settled: releasing `impl` starts the region's lap,
+        // not a bare spawn with no lap recorded.
+        let mut pipeline = migrated_review_loop_pipeline(2);
+        pipeline.edges.retain(|e| e.source.node != "start");
+        pipeline.nodes.push(make_node("a", &["task"], &["out"]));
+        pipeline.nodes.push(make_node("b", &["task"], &["out"]));
+        pipeline.nodes.push(make_node("p", &["in"], &["out"]));
+        pipeline.edges.push(make_edge("a", "out", "impl", "task"));
+        pipeline.edges.push(make_cond_edge(
+            "b",
+            "out",
+            "p",
+            "in",
+            Some("verdict: { eq: go }"),
+            false,
+        ));
+        pipeline.edges.push(make_edge("p", "out", "impl", "task"));
+        let mut state = empty_run_state();
+        state.nodes.insert("a".into(), completed_node("a"));
+        state.nodes.insert("b".into(), completed_node("b"));
+        state.nodes.insert("p".into(), pruned_node("p"));
+        let fm_by_node: HashMap<_, _> = [("b".to_string(), verdict("stop"))].into_iter().collect();
+
+        let released = released_by_pruning(
+            &pipeline,
+            &state,
+            &["p".to_string()],
+            &fm_by_node,
+            &HashMap::new(),
+        );
+        assert_eq!(
+            released,
+            vec![
+                SchedulerAction::LoopIterStarted {
+                    loop_node_id: "review_loop".into(),
+                    iter: 1,
+                    max_iter: 2,
+                },
+                SchedulerAction::Spawn {
+                    node_id: "impl".into(),
+                    iter: 1,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_pruning_that_leaves_end_with_no_live_branch_parks_the_run_unrouted() {
+        // `n` needs its `req` input, whose only feeder did not fire, while `x`
+        // still runs: `n` is pruned (its required input is dead), and it was
+        // the only way to `End`.
+        let mut gate = make_node("n", &["req", "other"], &["out"]);
+        gate.inputs[0].required = true;
+        let pipeline = PipelineDef {
+            name: "required-dead".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes: vec![
+                make_node("gen", &["task"], &["out"]),
+                make_node("x", &["task"], &["out"]),
+                gate,
+                make_end_node(),
+            ],
+            edges: vec![
+                make_cond_edge(
+                    "gen",
+                    "out",
+                    "n",
+                    "req",
+                    Some("verdict: { eq: pass }"),
+                    false,
+                ),
+                make_edge("x", "out", "n", "other"),
+                make_edge("n", "out", "end", "result"),
+            ],
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        };
+        let mut state = empty_run_state();
+        state.nodes.insert("gen".into(), completed_node("gen"));
+        state.nodes.insert("x".into(), running_node("x"));
+        let fm_by_node: HashMap<_, _> = [("gen".to_string(), verdict("other"))]
+            .into_iter()
+            .collect();
+        let dead = unreachable_nodes(&pipeline, &state, &fm_by_node, &HashMap::new());
+        assert_eq!(
+            dead.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            vec!["n"]
+        );
+
+        state.nodes.insert("n".into(), pruned_node("n"));
+        let released = released_by_pruning(
+            &pipeline,
+            &state,
+            &["n".to_string()],
+            &fm_by_node,
+            &HashMap::new(),
+        );
+        assert!(
+            matches!(
+                released.as_slice(),
+                [SchedulerAction::Interrupt { reason_code, .. }] if reason_code == "unrouted"
+            ),
+            "{released:?}"
+        );
+
+        // Already parked: no second park.
+        state.status = crate::domain::state::RunStatus::AwaitingUser;
+        state.awaiting_reason_code = Some("unrouted".into());
+        assert_eq!(
+            released_by_pruning(
+                &pipeline,
+                &state,
+                &["n".to_string()],
+                &fm_by_node,
+                &HashMap::new()
+            ),
+            Vec::new()
         );
     }
 }

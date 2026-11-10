@@ -195,8 +195,8 @@ pub fn refusal_headline(slug: &str, body: &serde_json::Value) -> String {
     match slug {
         "missing_outputs" => "your declared outputs are incomplete".into(),
         "frontmatter_retry_pending" => {
-            "your output frontmatter does not match the declared schema (this was the ONE retry \
-             you get)"
+            "your output frontmatter does not match the declared schema (you have one retry \
+             left: fix it, then run `pdo complete` again)"
                 .into()
         }
         "frontmatter_retry_exhausted" => {
@@ -292,6 +292,18 @@ pub fn refusal_detail_lines(slug: &str, body: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The first frontmatter refusal leaves the agent its one retry: the
+    /// headline says so, instead of claiming the retry was already spent
+    /// (CORE-231).
+    #[test]
+    fn the_first_frontmatter_refusal_announces_the_retry_left() {
+        let pending = refusal_headline("frontmatter_retry_pending", &serde_json::json!({}));
+        assert!(pending.contains("one retry left"), "{pending}");
+        assert!(!pending.contains("was the ONE retry"), "{pending}");
+        let exhausted = refusal_headline("frontmatter_retry_exhausted", &serde_json::json!({}));
+        assert!(exhausted.contains("after the retry"), "{exhausted}");
+    }
 
     /// What `pdo complete` prints on a `children_pending` refusal is enough for
     /// an agent WITHOUT the `pdo-orchestrate` skill: it names

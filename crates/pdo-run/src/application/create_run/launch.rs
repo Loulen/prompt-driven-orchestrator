@@ -30,7 +30,7 @@ pub(super) async fn launch(
         // Host path — inline, no docker.
         spawn_ready_after_event(state, run_id).await;
         if manager_enabled {
-            spawn_manager_session(state, run_id, worktree_dir, name_hint, false, None).await;
+            spawn_manager_session(state, run_id, worktree_dir, name_hint, false, None, None).await;
         }
     } else {
         // Eager fail-fast prep on a detached task: the 201 must not block on a
@@ -101,6 +101,7 @@ pub(super) async fn launch(
                             &task_worktree,
                             name_hint,
                             true,
+                            None,
                             None,
                         )
                         .await;

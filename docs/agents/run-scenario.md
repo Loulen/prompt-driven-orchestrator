@@ -25,7 +25,7 @@ to be running.
 ```bash
 make demo-daemon PORT=6491             # this branch's `pdo daemon`
 make demo-daemon PORT=6491 TEST_EXT=1  # the demo daemon of the test extension instead
-make demo-daemon PORT=6491 BIND_ALL=1  # listening on all interfaces: needed by a sandboxed Run
+make demo-daemon PORT=6491 BIND=0.0.0.0 # a journey with a sandboxed Run
 ```
 
 Without `TEST_EXT`, the demo daemon is the **vanilla core**: this repository's binary with no
@@ -41,9 +41,12 @@ user's ports (5172, 5272, 6160, 6172…) and the caller's own daemon are refused
   and runs the daemon from `~/.pdo/app` there, so its event log, pipelines, profiles and skill bank
   start empty;
 - builds its environment from yours, minus every `PDO_*` (a node's `PDO_PORT`, `PDO_TOKEN`,
-  `PDO_NODE_ID`: the demo daemon is never in nested mode), `TMUX` and `TMUX_PANE`; it sets `PDO_PORT`,
-  `PDO_BIND=127.0.0.1` (`0.0.0.0` with `BIND_ALL=1`), `PDO_UPDATE_CHECK=off`, `PDO_PRICE_SYNC=off`, and keeps `RUSTUP_HOME`,
-  `CARGO_HOME` and `COREPACK_HOME` on the real toolchains;
+  `PDO_NODE_ID`: the demo daemon is never in nested mode), `TMUX` and `TMUX_PANE`, and the service
+  manager's `INVOCATION_ID`, `JOURNAL_STREAM`, `NOTIFY_SOCKET` (it is not a supervised service); it sets `PDO_PORT`,
+  `PDO_BIND=127.0.0.1`, `PDO_UPDATE_CHECK=off`, `PDO_PRICE_SYNC=off`, and keeps `RUSTUP_HOME`,
+  `CARGO_HOME` and `COREPACK_HOME` on the real toolchains. A sandboxed Run's nodes call the daemon
+  from their container through the host gateway, which a loopback daemon does not answer (their
+  `pdo complete` fails): `BIND=0.0.0.0` makes it listen on every interface for the journey;
 - **copies** the harnesses' auth files (`~/.claude/.credentials.json` and the account block of
   `~/.claude.json`, `~/.pi/agent/auth.json`, `~/.local/share/opencode/auth.json`, and the logged-in
   user of `~/.copilot/config.json`) into the demo `HOME`, with `/tmp` marked trusted for `claude`
@@ -79,7 +82,7 @@ browser for a UI journey; the status bar shows the daemon **connected**.
 
 A **sandboxed** Run's container calls the daemon at `host.docker.internal:<port>` (the docker
 bridge), which a loopback-only daemon refuses: its node can't `pdo complete` and stays running.
-Start the demo daemon with `BIND_ALL=1` for any journey that runs a sandbox. It then listens on
+Start the demo daemon with `BIND=0.0.0.0` (or `BIND_ALL=1`) for any journey that runs a sandbox. It then listens on
 your network too: stop it as soon as the journey ends.
 
 If a precondition the journey lists isn't met, that's a **finding**: report it, don't try to "fix"
@@ -115,17 +118,17 @@ The point of this layer is that the UI alone doesn't tell the full story — ver
   Run: in a git worktree it checks trust on the repository's root only, without walking up to `/tmp`
   (checked on Claude Code 2.1.316). So the **first** `claude` launch on each target repo lands on
   the "Quick safety check" trust dialog; once accepted, the repo's later Runs pass. Read the pane
-  first: the cursor sits on
-  « ❯ No, exit » by default, so a bare `Enter` **ends the session**. Accept with
-  `tmux -L pdo-<port> send-keys -t <session> Down Enter` (the cursor on « Yes, I trust this
-  folder »). `copilot`'s equivalent is **not** a step to drive: the staged config trusts `/tmp`, and
-  for a repo elsewhere approve its root once, outside the journey; it cascades to every node
-  sub-worktree (`docs/reference/harnesses.md` § Prerequisites). A `copilot` pane parked on it means
-  the prerequisite was never met.
+  first: the cursor sits on « ❯ No, exit » by default. Pick « Yes, I trust this folder » with
+  `tmux -L pdo-<port> send-keys -t <session> Down`, then `… send-keys -t <session> Enter` (a bare
+  Enter exits `claude`, and the node turns « session died »). `copilot`'s equivalent is **not** a
+  step to drive: the staged config trusts `/tmp`, and for a repo elsewhere approve its root once,
+  outside the journey; it cascades to every node sub-worktree (`docs/reference/harnesses.md`
+  § Prerequisites). A `copilot` pane parked on it means the prerequisite was never met.
 - **Filesystem** (read with `cat` / Read):
   - Pipelines: the instance library `/tmp/pdo-demo-<port>/home/.pdo/pipelines/<name>.yaml`, with
     the sidecar `<name>.prompts/<node>.md`. Pipelines belong to the instance: a YAML in a target
-    repo's `.pdo/pipelines/` is not listed, so seed them in the library.
+    repo's `.pdo/pipelines/` is not listed. Seed one with `pdo pipeline create <name>` then
+    `pdo pipeline save <id> <file> --prompt <node>=<file>`, or author it in the UI
   - Run artifacts: `.pdo/runs/<run_id>/worktree/.pdo/artifacts/...`
 - **Library assistant focus**: while a pipeline tab is open the UI sends one
   `PUT /sessions/libassist/focus` when the edited pipeline changes, then repeats it every 20 s as a

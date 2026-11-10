@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { sleep } from "../lib/demo-instance.mjs";
-import { cursorPath, drawnRoute, driftWarnings, gestureDrift, startState } from "../lib/build-scene.mjs";
+import { cursorPath, drawnRoute, drawnY, driftWarnings, gestureDrift, startState } from "../lib/build-scene.mjs";
 import { DEMO_PIPELINE_ID, dumpYaml, installTarget, parseYaml, readTarget, target, targetPipeline, withName } from "../lib/targets.mjs";
 
 /** Replace `implement-review` in the instance's library with `yaml`, and wait
@@ -52,9 +52,20 @@ async function waitServed(instance, id, { nodes, edges }) {
   throw new Error(`the daemon never served ${id} with ${nodes} nodes / ${edges} edges (last: ${JSON.stringify(seen)})`);
 }
 
+/**
+ * Where the canvas draws a stored ordinate, for the target the scene builds
+ * toward (lib/build-scene.mjs `drawnY`): a card with several outputs is drawn
+ * taller than it was placed and pushes what lies below it down. The gestures
+ * aim at the target's stored positions (`view`, waypoints, label positions),
+ * so they go through `asDrawn()`. Set by `installStartState`; one scene at a time.
+ */
+let canvasLayout = (y) => y;
+const asDrawn = (p) => ({ x: p.x, y: canvasLayout(p.y) });
+
 /** Install the start state of a building scene: target `id` without what the
  *  scene draws (lib/build-scene.mjs), under the demo name. Returns it. */
 export async function installStartState(instance, id, drawn) {
+  canvasLayout = drawnY(targetPipeline(id));
   const start = startState(targetPipeline(id), drawn);
   const yaml = withName(dumpYaml(start), target(id).name);
   await installPipeline(instance, yaml, { nodes: start.nodes.length, edges: start.edges.length });
@@ -101,14 +112,6 @@ export async function zoomCanvas(ctx, at, { dy = -240, duration = 800 } = {}) {
   await ctx.moveTo(at, { duration: 500 });
   await ctx.scroll(dy, { duration });
   await sleep(450);
-}
-
-/** Pick a value in a native <select>: the cursor clicks it, the page picks. */
-export async function choose(ctx, select, value) {
-  await ctx.click(select, { duration: 550 });
-  await sleep(200);
-  await select.selectOption(value);
-  await sleep(250);
 }
 
 /** An empty spot of the canvas (bottom-left corner), to deselect. */
@@ -207,10 +210,13 @@ export async function drawEdge(ctx, edge, { duration = 850, film = true } = {}) 
   const { page } = ctx;
   const from = await nodeRect(page, edge.source.node);
   const to = await nodeRect(page, edge.target.node);
-  const bends = edge.mode === "manual" ? (edge.waypoints ?? []) : [];
+  const bends = edge.mode === "manual" ? (edge.waypoints ?? []).map(asDrawn) : [];
   const [src, tgt] = [anchorPoint(from, edge.source_anchor), anchorPoint(to, edge.target_anchor)];
   const wire = drawnRoute([src, ...bends, tgt], edge.source_anchor.side, edge.target_anchor.side);
-  const points = cursorPath(wire, anchorPoint(from, edge.source_anchor, 3), anchorPoint(to, edge.target_anchor, 5));
+  // The press lands ON the source's border: its rim strip (the edge source) runs
+  // from 3 screen px inside the card to 5 outside, and a press any deeper grabs
+  // the card itself, which then moves instead of drawing.
+  const points = cursorPath(wire, anchorPoint(from, edge.source_anchor, 0), anchorPoint(to, edge.target_anchor, 5));
   const screen = [];
   for (const p of points) screen.push(await toScreen(page, p));
   await filmed(ctx, film, async () => {
@@ -246,9 +252,9 @@ async function dragCard(ctx, nodeId, view, { duration, film }) {
   });
 }
 
-/** Drag a node by its card to its target `view` (flow px). */
+/** Drag a node by its card to its target `view` (flow px, as stored). */
 export async function dragNodeTo(ctx, nodeId, view, { duration = 900, film = true } = {}) {
-  await dragCard(ctx, nodeId, view, { duration, film });
+  await dragCard(ctx, nodeId, asDrawn(view), { duration, film });
 }
 
 /**
@@ -259,8 +265,9 @@ export async function dragNodeTo(ctx, nodeId, view, { duration = 900, film = tru
  * px exactly. An eased nudge crosses it at a sample that varies, and a 1 px
  * correction never landed.
  */
-export async function nudgeNodeTo(ctx, nodeId, view, { tolerance = 0.5 } = {}) {
+export async function nudgeNodeTo(ctx, nodeId, stored, { tolerance = 0.5 } = {}) {
   const { page } = ctx;
+  const view = asDrawn(stored);
   let rect;
   for (let i = 0; i < 4; i++) {
     rect = await nodeRect(page, nodeId);
@@ -287,7 +294,7 @@ export async function nudgeNodeTo(ctx, nodeId, view, { tolerance = 0.5 } = {}) {
  *  lands on `pos` (flow px), where the editor pins a dragged label. */
 export async function dragLabelTo(ctx, label, pos, { duration = 800, film = true } = {}) {
   const from = await ctx.point(label);
-  const to = await toScreen(ctx.page, pos);
+  const to = await toScreen(ctx.page, asDrawn(pos));
   await filmed(ctx, film, async () => {
     await ctx.moveTo(from, { duration: 450 });
     await ctx.page.mouse.down();
@@ -299,10 +306,20 @@ export async function dragLabelTo(ctx, label, pos, { duration = 800, film = true
   });
 }
 
-/** Save the open pipeline (Ctrl+S) and wait until the editor says so. */
+/** Save the open pipeline as a new version (Ctrl+S opens the Save dialog,
+ *  Ctrl+Enter confirms it) and wait until the editor says so. The « Saved »
+ *  toast is dismissed: it would stay in frame, on the poster. */
 export async function saveCanvas(ctx) {
-  await ctx.page.keyboard.press("Control+s");
-  await ctx.page.getByText("Saved just now").waitFor({ timeout: 10_000 });
+  const { page } = ctx;
+  await page.keyboard.press("Control+s");
+  const dialog = page.getByRole("dialog");
+  await dialog.waitFor();
+  await sleep(150);
+  await page.keyboard.press("Control+Enter");
+  await dialog.waitFor({ state: "detached", timeout: 10_000 });
+  await page.getByText("Saved just now").waitFor({ timeout: 10_000 });
+  const toast = page.getByTestId("toast-success");
+  if (await toast.count()) await toast.getByLabel("Dismiss").click().catch(() => {});
   ctx.savedAt = Date.now();
   await sleep(300);
 }
@@ -337,9 +354,17 @@ export async function landOnTarget(ctx, id) {
         const el = document.querySelector(`.react-flow__node[data-id="${id}"]`);
         return el && el.style.transform.replace(/\s/g, "") === `translate(${x}px,${y}px)`;
       }),
-    target.nodes.map((n) => ({ id: n.id, x: n.view.x, y: n.view.y })),
+    target.nodes.map((n) => ({ id: n.id, x: n.view.x, y: drawnY(target)(n.view.y) })),
     { timeout: 15_000 },
   );
+  // The reinstall reads as an edit from outside: its notice above the canvas
+  // (« changed outside · kept as vN ») is dismissed, it would stay on the poster.
+  const notices = page.getByTestId("draft-notice-dismiss");
+  await notices.first().waitFor({ timeout: 5_000 }).catch(() => {});
+  while ((await notices.count()) > 0) {
+    await notices.first().click();
+    await sleep(200);
+  }
   await sleep(2600);
   return drift;
 }
@@ -351,7 +376,7 @@ export async function landOnTarget(ctx, id) {
  */
 export async function clearToolbar(ctx, { margin = 24 } = {}) {
   const { page } = ctx;
-  const toolbar = await page.getByTestId("toolbar-add").locator("xpath=..").boundingBox();
+  const toolbar = await page.getByTestId("edit-toolbar").boundingBox();
   const tops = await page.locator(".react-flow__node").evaluateAll((els) => els.map((el) => el.getBoundingClientRect().top));
   const top = Math.min(...tops);
   const gap = top - (toolbar.y + toolbar.height);

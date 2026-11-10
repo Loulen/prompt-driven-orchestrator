@@ -121,8 +121,8 @@ export default function BehaviorSection({
         <>
           <FormRow
             label="Orchestrator"
-            help="Any node can create child runs (pdo run create). This toggle adds the pdo-orchestrate skill and shows the Orchestration tab from the start. Frozen once the NodeRun spawns."
-            aside={orchestratorFrozen ? <FrozenMark title="Frozen at spawn: an edit applies to the next NodeRun" /> : undefined}
+            help="Any node can create child runs (pdo run create). This toggle adds the pdo-orchestrate skill and shows the Orchestration tab from the start. Frozen once the node starts."
+            aside={orchestratorFrozen ? <FrozenMark title="Frozen at spawn: an edit applies to the node's next execution" /> : undefined}
           >
             <Toggle
               label="Orchestrator"

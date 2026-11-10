@@ -45,6 +45,9 @@ pub enum Transition<'a> {
     CronEdit(&'a CronSchedule),
     /// A pipeline repoint reviving a dormant Trigger (existing cron).
     Repoint(&'a CronSchedule),
+    /// A "Run now" on a dormant Trigger whose references resolve again (the
+    /// pipeline or repository came back): its schedule resumes forward from now.
+    Revive(&'a CronSchedule),
     /// Re-enabling a disabled Trigger. Decision B (#372, ADR-0012): recompute
     /// **forward** from `now`, skipping the missed slot — never a hidden
     /// catch-up fire. Before #372 this path left `next_fire_at` frozen in the
@@ -74,7 +77,7 @@ pub fn recompute_next_fire(
 ) -> Option<Option<String>> {
     use Transition::*;
     match transition {
-        Create(s) | CronEdit(s) | Repoint(s) | Enable(s) | CronTick(s) => {
+        Create(s) | CronEdit(s) | Repoint(s) | Revive(s) | Enable(s) | CronTick(s) => {
             // `Some(None)` when the cron yields no future slot (e.g. Feb 30):
             // clearing `next_fire_at` stops an impossible expression firing.
             Some(s.next_fire_utc(now))

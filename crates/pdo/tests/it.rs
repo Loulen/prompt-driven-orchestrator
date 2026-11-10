@@ -231,6 +231,8 @@ mod run_transcript_search;
 #[path = "run_transcript_search_bench.rs"]
 mod run_transcript_search_bench;
 
+#[path = "brand.rs"]
+mod brand;
 #[path = "release_channel.rs"]
 mod release_channel;
 #[path = "update_apply.rs"]
@@ -376,6 +378,12 @@ mod review_comments;
 #[path = "review_comment_actor.rs"]
 mod review_comment_actor;
 
+#[path = "review_delivery.rs"]
+mod review_delivery;
+
+#[path = "run_pause_reopen.rs"]
+mod run_pause_reopen;
+
 #[path = "run_naming.rs"]
 mod run_naming;
 
@@ -420,6 +428,12 @@ mod skill_seed;
 
 #[path = "sandbox_tracer.rs"]
 mod sandbox_tracer;
+
+#[path = "pruned_routing.rs"]
+mod pruned_routing;
+
+#[path = "convergence_dataflow.rs"]
+mod convergence_dataflow;
 
 #[path = "script_node.rs"]
 mod script_node;

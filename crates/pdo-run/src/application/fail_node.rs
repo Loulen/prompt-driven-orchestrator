@@ -11,7 +11,7 @@ use crate::application::events::append_event;
 use crate::application::events::load_events;
 use crate::application::events::reload_run_state;
 use crate::application::gesture;
-use crate::application::node::reap::reap_node_session;
+use crate::application::node::reap::{freeze_node_pane, reap_node_session};
 use crate::application::operations::on_node;
 use crate::application::paths::effective_repo_root;
 use crate::application::paths::resolve_run_pipeline_path;
@@ -120,11 +120,14 @@ impl Runs {
         // Resolve `auto_fail` BEFORE the terminal append, so the tail knows whether this
         // deliberate `pdo fail` terminalises the run or parks it `AwaitingUser`. The
         // `NodeFailed` itself is unconditional — the agent's iteration genuinely failed.
-        let auto_fail_run = match reload_run_state(state, &run_id).await {
-            Some((_, rs)) => resolve_run_auto_fail(state, &rs, &node_id).await,
+        let (auto_fail_run, repo_root) = match reload_run_state(state, &run_id).await {
+            Some((_, rs)) => (
+                resolve_run_auto_fail(state, &rs, &node_id).await,
+                Some(effective_repo_root(state, &rs)),
+            ),
             // No projected state: default to the safe park behaviour; the terminal
             // append below is a no-op anyway.
-            None => false,
+            None => (false, None),
         };
 
         let event = event::Event {
@@ -139,6 +142,11 @@ impl Runs {
 
         if let Err(e) = append_event(state, &event).await {
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+        }
+
+        // The pane is frozen before the answer: a script's shell exits right after it.
+        if let Some(repo_root) = &repo_root {
+            freeze_node_pane(state, repo_root, &run_id, &node_id, iter);
         }
 
         // Same self-cancellation window as `node_done`: the reap kills `pdo fail`'s own
@@ -190,9 +198,7 @@ impl Runs {
                     iter: None,
                     payload: Some(projection::interrupt_payload(
                         "agent_fail_awaiting",
-                        format!(
-                        "agent_fail_awaiting: agent pdo fail (awaiting confirmation): {tail_reason}"
-                    ),
+                        awaiting_confirmation_reason(&tail_node, &tail_reason),
                     )),
                 }
             };
@@ -206,5 +212,27 @@ impl Runs {
             info!("Node {tail_node} failed in run {tail_run} (auto_fail={auto_fail_run})");
         });
         (StatusCode::OK, "ok").into_response()
+    }
+}
+
+/// The reason a deliberate `pdo fail` parks its Run with, waiting for a human
+/// to confirm. It names the node and never says « agent »: a `script` node's
+/// non-zero exit goes through the same `pdo fail` (CORE-231).
+fn awaiting_confirmation_reason(node_id: &str, reason: &str) -> String {
+    format!("agent_fail_awaiting: node {node_id} failed (awaiting your confirmation): {reason}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::awaiting_confirmation_reason;
+
+    #[test]
+    fn the_park_reason_names_the_node_and_not_an_agent() {
+        let text = awaiting_confirmation_reason("make", "script exited 1");
+        assert_eq!(
+            text,
+            "agent_fail_awaiting: node make failed (awaiting your confirmation): script exited 1"
+        );
+        assert!(!text.contains("agent pdo fail"), "{text}");
     }
 }

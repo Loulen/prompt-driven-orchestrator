@@ -36,7 +36,7 @@ impl Importer {
         // silence (ADR-0001).
         if effort_expr.is_some() && effort.is_none() {
             self.warn(format!(
-                "nœud '{display_name}': `effort` calculé (non littéral) — niveau d'effort non importé, à repositionner dans l'inspecteur (#424)"
+                "node '{display_name}': computed `effort` (not a literal) — the effort level is not imported, set it again in the inspector (#424)"
             ));
         }
 
@@ -49,10 +49,10 @@ impl Importer {
             prompt_body
         } else {
             self.warn(format!(
-                "nœud '{display_name}': prompt construit dynamiquement (helper nu / identifiant) — placeholder annoté à rédiger (N3, hors périmètre v1 : résolution one-hop du helper)"
+                "node '{display_name}': prompt built at run time (bare helper / identifier) — an annotated placeholder to write (N3, outside the v1 subset: one-hop helper resolution)"
             ));
             if prompt_body.is_empty() {
-                "⟨TODO: prompt construit dynamiquement — rédige le rôle de ce nœud⟩".to_string()
+                "⟨TODO: prompt built at run time — write this node's role⟩".to_string()
             } else {
                 prompt_body
             }

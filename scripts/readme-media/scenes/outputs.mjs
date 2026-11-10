@@ -2,7 +2,8 @@
 // pipeline's `reviewer`, on a run REAL agents played to the end (`setup`, off
 // camera, one run for both variants).
 //
-//   Edit — its two declared ports: `review` (Markdown, with its `verdict` enum)
+//   Edit — its two declared ports, in the pipeline's editor (a run is
+//          read-only and shows no ports): `review` (Markdown, with its `verdict` enum)
 //          and `screenshots` (Image List), expected content « Screenshots of
 //          the app, annotated with Pillow. »          → ports-declared
 //   Run  — the node is done: its terminal folds to a one-line bar (#346) and
@@ -10,7 +11,7 @@
 //          An annotated screenshot opens in the lightbox → image-opened
 //          then the `review` markdown, its Mermaid diagram rendered → mermaid-rendered
 //
-//   a — the Edit tab scrolled to the Outputs, one screenshot, the diagram.
+//   a — the editor scrolled to the Outputs, one screenshot, the diagram.
 //   b — the image_list's expected content opened in full, two screenshots
 //       (the lightbox's next arrow), the diagram.
 //
@@ -19,6 +20,7 @@
 // cost reads in dollars.
 
 import { sleep } from "../lib/demo-instance.mjs";
+import { DEMO_PIPELINE_ID } from "../lib/targets.mjs";
 import { completeDemoRun, openRun, scrollUntil, DEMO_TASK } from "./_live.mjs";
 
 const VIEWPORT = { width: 1100, height: 660 };
@@ -35,15 +37,26 @@ const CROP = { x: 0, y: 0, width: 1100, height: 660 };
 
 let runId = null;
 
-/** Off camera: the finished run open, `reviewer` selected on its Run tab. */
+const quick = { duration: 150, pause: 40 };
+/** The canvas zoomed out one step, off camera: the loop's pill, right of its
+ *  cards, fits in the narrow canvas beside the wide inspector. */
+async function zoomOutOnce(ctx) {
+  await ctx.click(ctx.page.getByTestId("toolbar-zoom-out").locator("visible=true"), quick);
+  await sleep(400);
+}
+
+/** Off camera, two tabs: the finished run, `reviewer` selected on its Run tab
+ *  (its outputs loaded), then the demo pipeline's editor, `reviewer` selected
+ *  (its declared ports). The take opens on the editor. */
 async function openReviewer(ctx) {
   const { page } = ctx;
   await openRun(ctx, DEMO_TASK.name);
+  await zoomOutOnce(ctx);
   const thumbnails = page.getByTestId("inspector-pane-run").getByTestId("image-thumbnails");
   // A click while the canvas still settles can miss the node (Pipeline info
   // opens instead): try again, off camera.
   for (let attempt = 1; ; attempt++) {
-    await ctx.click(page.getByTestId("rf__node-reviewer"), { duration: 150, pause: 40 });
+    await ctx.click(page.getByTestId("rf__node-reviewer").locator("visible=true"), quick);
     try {
       await thumbnails.waitFor({ timeout: 8_000 });
       break;
@@ -54,28 +67,44 @@ async function openReviewer(ctx) {
   }
   // The thumbnails are loaded before anything is filmed.
   await page.waitForFunction(() => [...document.querySelectorAll('[data-testid^="thumbnail-"]')].every((img) => img.complete && img.naturalWidth > 0));
+  // The pipeline the run was started from, in its editor: a run is read-only
+  // (ADR-0085) and its Config tab shows no ports; the editor declares them.
+  await ctx.click(page.getByTestId("left-tab-library"), quick);
+  await ctx.click(page.getByTestId(`library-row-${DEMO_PIPELINE_ID}`), quick);
+  // The editor's canvas; its inspector, empty, stays folded until reviewer is selected.
+  await page.getByTestId("validate-button").waitFor();
+  await sleep(600);
+  await zoomOutOnce(ctx);
+  await ctx.click(page.getByTestId("rf__node-reviewer").locator("visible=true"), quick);
+  await page.getByTestId("output-port-card-screenshots").waitFor({ timeout: 10_000 });
   await sleep(500);
 }
 
-/** Filmed: the Edit tab, scrolled down to the reviewer's two output ports:
- *  `review`'s card under the tab bar, or (`focus: "screenshots"`) the Image
+/** Filmed: the editor's inspector, scrolled down to the reviewer's two output
+ *  ports: `review`'s card near the top, or (`focus: "screenshots"`) the Image
  *  List card mid-panel, room left below it for its expected content. */
 async function showDeclaredPorts(ctx, { focus = "review" } = {}) {
   const { page } = ctx;
-  await ctx.click(page.getByTestId("inspector-tab-edit"), { duration: 700 });
   const screenshots = page.getByTestId("output-port-card-screenshots");
-  await screenshots.waitFor({ timeout: 10_000 });
-  await sleep(300);
   const target = page.getByTestId(`output-port-card-${focus}`);
   await scrollUntil(ctx, target, { over: page.getByTestId("inspector-pane-edit"), top: focus === "review" ? 96 : 330 });
   return screenshots;
 }
 
-/** Filmed: back to the Run tab, where the finished node shows its outputs. */
+/** Filmed: back to the run, from the runs rail (the narrow tab bar folds its
+ *  tab into its overflow menu), where the finished node shows its outputs. */
 async function backToRun(ctx) {
   const { page } = ctx;
-  await ctx.click(page.getByTestId("inspector-tab-run"), { duration: 700 });
-  await page.getByTestId("inspector-pane-run").getByTestId("image-thumbnails").waitFor({ timeout: 10_000 });
+  await ctx.click(page.getByTestId("left-tab-runs"), { duration: 600 });
+  const row = page.getByTestId("run-display-label").filter({ hasText: DEMO_TASK.name }).first();
+  await row.waitFor();
+  await ctx.click(row, { duration: 600 });
+  const thumbnails = page.getByTestId("inspector-pane-run").getByTestId("image-thumbnails");
+  // The run tab comes back on its last selection; if it lost it, reviewer is clicked again.
+  if (!(await thumbnails.waitFor({ timeout: 3_000 }).then(() => true, () => false))) {
+    await ctx.click(page.getByTestId("rf__node-reviewer").locator("visible=true"), { duration: 600 });
+  }
+  await thumbnails.waitFor({ timeout: 10_000 });
   await sleep(300);
 }
 
@@ -111,9 +140,10 @@ async function openReviewMarkdown(ctx) {
   });
 }
 
-/** Reading the Edit tab edits nothing: the poster never shows « unsaved ». */
+/** Reading the editor's ports edits nothing: checked on the editor, before the
+ *  take goes back to the run (read-only, no Save button). */
 async function assertNothingUnsaved(page) {
-  if (!(await page.getByTestId("save-button").isDisabled())) throw new Error("the run tab shows unsaved changes on the poster");
+  if (!(await page.getByTestId("save-button").isDisabled())) throw new Error("reading the reviewer's ports left the pipeline unsaved");
 }
 
 export default {
@@ -144,6 +174,7 @@ export default {
         await ctx.hover(screenshots.getByText("Expected content"), { duration: 600, pause: 100 });
         ctx.mark("ports-declared", { before: 700, after: 1000 });
         await sleep(1000);
+        await assertNothingUnsaved(page);
         await ctx.fast(() => backToRun(ctx), { speed: NAV_SPEED });
         await ctx.keep(() => openScreenshot(ctx, 0));
         ctx.mark("image-opened", { before: 200, after: 1200 });
@@ -155,7 +186,6 @@ export default {
         await openReviewMarkdown(ctx);
         ctx.mark("mermaid-rendered", { before: 200, after: 0 });
         await ctx.hold(1900);
-        await assertNothingUnsaved(page);
       },
     },
     {
@@ -177,6 +207,7 @@ export default {
         });
         ctx.mark("ports-declared", { before: 0, after: 1000 });
         await sleep(1000);
+        await assertNothingUnsaved(page);
         await ctx.fast(() => backToRun(ctx), { speed: NAV_SPEED });
         await ctx.keep(() => openScreenshot(ctx, 0));
         ctx.mark("image-opened", { before: 200, after: 700 });
@@ -191,7 +222,6 @@ export default {
         await openReviewMarkdown(ctx);
         ctx.mark("mermaid-rendered", { before: 200, after: 0 });
         await ctx.hold(1900);
-        await assertNothingUnsaved(page);
       },
     },
   ],

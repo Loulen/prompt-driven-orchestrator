@@ -61,8 +61,12 @@ pub enum ReviewAction {
         /// `git apply`; without the work not committed yet.
         #[arg(long, conflicts_with_all = ["from", "to", "json"])]
         git: bool,
+        /// A Run ref: `fork` (default), `tip`, `node:<id>:<iter>:before`,
+        /// `node:<id>:<iter>:after`, `live:<id>`, or a revision of the Run's
+        /// repository.
         #[arg(long)]
         from: Option<String>,
+        /// A Run ref, as `--from`, or `worktree` (the work not committed yet).
         #[arg(long)]
         to: Option<String>,
         /// The Run; defaults to the session's `PDO_RUN_ID`.
@@ -94,6 +98,16 @@ pub enum ReviewAction {
         #[arg(long)]
         to: Option<String>,
         /// The Run; defaults to the session's `PDO_RUN_ID`.
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Send comments the manager never answered again, as written, as the
+    /// Review page's « Send again » (started if it is not running).
+    Resend {
+        #[arg(required = true)]
+        ids: Vec<String>,
         #[arg(long)]
         run: Option<String>,
         #[arg(long)]
@@ -273,6 +287,19 @@ fn run_review_page(action: ReviewAction) -> Result<()> {
             } else {
                 let ids = sent_ids(&sent);
                 println!("{} sent · {path}:{line} · run {run_id}", ids.join(", "));
+            }
+        }
+        ReviewAction::Resend { ids, run, json } => {
+            let run_id = run_of(run)?;
+            let path = format!("/runs/{}/review/comments/resend", segment(&run_id));
+            let resent = daemon
+                .post(&path, Some(&json!({ "ids": ids })))?
+                .ok()?
+                .json()?;
+            if json {
+                print_json(&resent);
+            } else {
+                println!("{} sent again · run {run_id}", ids.join(", "));
             }
         }
         ReviewAction::Resolve { id, run, json } => {

@@ -25,6 +25,8 @@ clap.workspace = true
 axum.workspace = true
 chrono.workspace = true
 ignore.workspace = true
+# The owner check of a reused scaffold (`geteuid`).
+libc = "0.2"
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true

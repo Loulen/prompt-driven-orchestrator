@@ -62,7 +62,7 @@ help:
 	@echo "  make lint    cargo clippy + eslint"
 	@echo "  make fmt     cargo fmt"
 	@echo "  make clean   cargo clean (embedded frontend included) + rm a stray frontend/dist"
-	@echo "  make demo-daemon PORT=<p> [TEST_EXT=1] [BIND_ALL=1]  Start a demo daemon for an agentic test: this branch's pdo, fresh HOME under /tmp/pdo-demo-<p>"
+	@echo "  make demo-daemon PORT=<p> [TEST_EXT=1] [BIND=0.0.0.0]  Start a demo daemon for an agentic test: this branch's pdo, fresh HOME under /tmp/pdo-demo-<p>"
 	@echo "  make demo-daemon-stop PORT=<p>          Stop it: its pid and its tmux socket pdo-<p>, nothing else"
 	@echo "  make demo-daemon-resync PORT=<p>        Copy the host's harness logins into its HOME again (« Login expired »)"
 	@echo "  make support-table  Regenerate the harness support table in docs/reference/harnesses.md from the code"
@@ -208,9 +208,8 @@ support-table:
 # branch's `pdo daemon` (or, TEST_EXT=1, the test extension's demo daemon) on
 # PORT, under a fresh HOME in /tmp/pdo-demo-<PORT>, with no PDO_* nor TMUX*
 # inherited. PORT is required: the 6172 of `make dev` is not a default here.
-# BIND_ALL=1 listens on all interfaces, not loopback: a sandboxed Run's container
-# reaches the daemon through the docker bridge (HP-02's sandbox pair).
-# DEMO_ENV='NAME=value …' sets variables on the daemon explicitly. The stop
+# DEMO_ENV='NAME=value …' sets variables on the daemon explicitly; BIND=0.0.0.0 lets a
+# sandboxed Run's containers reach it (loopback by default), BIND_ALL=1 being short for it. The stop
 # reaches the pid of the pidfile and the tmux socket pdo-<PORT>, never the
 # user's daemon or tmux server; KEEP=1 keeps /tmp/pdo-demo-<PORT> (logs).
 DEMO_DAEMON := node --disable-warning=ExperimentalWarning scripts/demo-daemon/demo-daemon.mjs
@@ -219,7 +218,7 @@ DEMO_PORT_HINT = $(if $(filter demo-daemon-stop demo-daemon-resync,$@),the port 
 DEMO_PORT = $(if $(filter command line environment,$(origin PORT)),$(PORT),$(error PORT=<port> is required, e.g. make $@ PORT=6491 ($(DEMO_PORT_HINT))))
 
 demo-daemon:
-	@$(DEMO_DAEMON) start $(DEMO_PORT) $(if $(filter 1,$(TEST_EXT)),--test-ext) $(if $(filter 1,$(BIND_ALL)),--bind-all) $(if $(DEMO_ENV),--env '$(DEMO_ENV)')
+	@$(DEMO_DAEMON) start $(DEMO_PORT) $(if $(filter 1,$(TEST_EXT)),--test-ext) $(if $(DEMO_ENV),--env '$(DEMO_ENV)') $(if $(BIND),--bind '$(BIND)',$(if $(filter 1,$(BIND_ALL)),--bind 0.0.0.0))
 
 demo-daemon-stop:
 	@$(DEMO_DAEMON) stop $(DEMO_PORT) $(if $(filter 1,$(KEEP)),--keep)

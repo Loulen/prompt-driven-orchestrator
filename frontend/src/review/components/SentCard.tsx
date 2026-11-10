@@ -7,6 +7,8 @@ import { parseExcerpt } from "../model/entries";
 import type { ReviewComment } from "../../shared/generated/ReviewComment";
 import { AuthorGlyph, AuthorIcon, StateIcon } from "./commentBits";
 import { DecisionButton, FooterStatusView } from "./commentFooter";
+import DeliveryNotice from "./DeliveryNotice";
+import type { SentDelivery } from "../model/commentsApi";
 import ReplyRow from "./ReplyRow";
 
 /**
@@ -39,6 +41,7 @@ export default function SentCard({
   onSeen,
   outdated,
   movedFrom,
+  delivery,
 }: {
   comment: ReviewComment;
   label: string;
@@ -55,10 +58,12 @@ export default function SentCard({
   onSeen?: () => void;
   outdated?: { writtenOn: string };
   movedFrom?: number;
+  /** CORE-239: how the comment stands on its way to the manager, and « Send again ». */
+  delivery?: SentDelivery;
 }) {
   const state = commentState(c);
   const replies = c.replies ?? [];
-  const footer = footerStatus(c);
+  const footer = footerStatus(c, delivery?.managerRunning);
   // A boxed thread folds (`overlays.commentThread`): resolved ⇒ collapsed
   // (GitHub-like), open ⇒ unfolded, until the header is clicked. The click is
   // keyed on the resolution it was made for, so a comment resolved later
@@ -250,6 +255,16 @@ export default function SentCard({
               ))}
             </div>
           )}
+          {(footer.kind === "blocked" || footer.kind === "exited") && delivery && (
+            <DeliveryNotice
+              status={footer}
+              runHref={delivery.runHref}
+              onResend={delivery.onResend}
+              resending={delivery.resending}
+              resendCount={delivery.resendCount}
+              resendRefused={delivery.resendRefused}
+            />
+          )}
           {/* One line whatever the width: the pair label truncates, the id and the status never wrap. */}
           <div className="rv-ct__foot">
             <span className="shrink-0 font-mono" data-testid="review-comment-id">
@@ -296,7 +311,7 @@ export default function SentCard({
                 >
                   <Undo2 size={11} /> Reopen
                 </DecisionButton>
-              ) : footer.kind !== "awaiting" ? (
+              ) : footer.kind !== "awaiting" && footer.kind !== "blocked" && footer.kind !== "exited" ? (
                 <DecisionButton
                   ghost
                   onClick={onResolve}

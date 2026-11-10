@@ -86,6 +86,21 @@ describe("deriveEdgeTrigger", () => {
     const t = deriveEdgeTrigger(rs, edge)!;
     expect(t.last_value).toContain("verdict");
   });
+
+  it("an edge into End reads fired once its End port fired, not « not fired » (CORE-232)", () => {
+    const toEnd: EdgeDef = { source: { node: "reviewer", port: "verdict" }, target: { node: "end", port: "result" } };
+    const state = (fired_at: string | null, status = "completed") =>
+      runState({
+        status: status as RunState["status"],
+        nodes: { reviewer: nodeState("reviewer", "completed") },
+        end_node: { id: "end", ports: [{ port_name: "result", status: fired_at ? "fired" : "pending", reason: null, fired_at }] },
+      });
+    expect(deriveEdgeTrigger(state("2026-11-09T10:00:00Z"), toEnd)?.fired).toBe(true);
+    expect(deriveEdgeTrigger(state(null, "running"), toEnd)?.fired).toBe(false);
+    // A port the Run does not list: the Run's completion says it.
+    const unlisted: EdgeDef = { ...toEnd, target: { node: "end", port: "other" } };
+    expect(deriveEdgeTrigger(state("t"), unlisted)?.fired).toBe(true);
+  });
 });
 
 describe("deriveEdgeTrigger — an edge into End", () => {

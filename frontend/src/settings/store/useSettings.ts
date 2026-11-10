@@ -27,6 +27,18 @@ export function announcedSettings(event: Event): InstanceSettings | undefined {
 }
 
 /**
+ * Fired when the daemon says the settings were written, here or elsewhere (`pdo
+ * settings set`, another browser, the harness warm-up; CORE-232). An open Settings page
+ * reads them anew; its own Save already holds the answer and does not wait for it.
+ */
+export const SETTINGS_WRITTEN = "pdo:settings-written";
+
+export function announceSettingsWritten() {
+  window.dispatchEvent(new Event(SETTINGS_WRITTEN));
+  announceSettingsChanged();
+}
+
+/**
  * Instance-wide settings state for the Settings surface (#129, ADR-0015; #690).
  *
  * Mirrors `useLibrary`: a one-shot fetch plus `refresh`/`save`. The fetch is
@@ -75,6 +87,13 @@ export function useSettings(open: boolean) {
       .catch(() => {});
   }, []);
   useHarnessCatalogueChanged(reread, open);
+  // Written elsewhere (the CLI, another browser; CORE-232): the fields this page is not
+  // editing follow, an edit in progress stays (the form keeps its draft over the read).
+  useEffect(() => {
+    if (!open) return;
+    window.addEventListener(SETTINGS_WRITTEN, reread);
+    return () => window.removeEventListener(SETTINGS_WRITTEN, reread);
+  }, [open, reread]);
 
   const save = useCallback(async (patch: UpdateSettingsRequest) => {
     // Let the caller catch a rejection (fail-fast 400) and surface it.

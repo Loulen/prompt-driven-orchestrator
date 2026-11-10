@@ -53,4 +53,17 @@ describe("the words of a change", () => {
     const edge = { source: { node: "a", port: "o" }, target: { node: "b", port: "i" }, waypoints: [{ x: 1, y: 2 }] };
     expect(describeChange(pipeline([], { edges: [edge] }), pipeline([], { edges: [{ ...edge }] }))).toBeNull();
   });
+
+  it("names a note or a loop added or deleted, as an edge", () => {
+    const note = { id: "n1", content: "", view: { x: 0, y: 0 } };
+    const noted = pipeline([], { notes: [note] });
+    expect(describeChange(pipeline([]), noted)).toBe("add note");
+    expect(describeChange(noted, pipeline([], { notes: [] }))).toBe("delete note");
+    expect(describeChange(noted, pipeline([], { notes: [{ ...note, content: "x" }] }))).toBe("edit note");
+    const loop = { id: "loop", kind: "bounded", members: ["a"], max_iter: 3 };
+    const looped = pipeline([], { loops: [loop] } as never);
+    expect(describeChange(pipeline([]), looped)).toBe("add loop");
+    expect(describeChange(looped, pipeline([], { loops: [] } as never))).toBe("delete loop");
+    expect(describeChange(looped, pipeline([], { loops: [{ ...loop, max_iter: 4 }] } as never))).toBe("edit loop");
+  });
 });

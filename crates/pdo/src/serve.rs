@@ -17,6 +17,7 @@ use pdo_platform::domain::release_channel::UpdateChannel;
 use pdo_run::adapters::extension_runs::ExtensionRuns;
 
 use crate::attributes::SqliteAttributes;
+use crate::brand::Brand;
 use crate::contexts::{self, ContextResources};
 use crate::extensions;
 use crate::identify::with_identify;
@@ -28,6 +29,7 @@ pub struct Config {
     daemon: DaemonConfig,
     inner_layer: Option<RouterLayer>,
     release_channel: Option<ReleaseChannel>,
+    brand: Option<Brand>,
 }
 
 /// Where a binary checks for its updates, which version it declares installed,
@@ -95,6 +97,7 @@ impl Config {
             daemon: daemon_cli_config(bind, port),
             inner_layer: None,
             release_channel: None,
+            brand: None,
         })
     }
 
@@ -107,6 +110,7 @@ impl Config {
             daemon: DaemonConfig::from_env(),
             inner_layer: None,
             release_channel: None,
+            brand: None,
         }
     }
 
@@ -115,6 +119,23 @@ impl Config {
     /// source, updated through the install method it detects.
     pub fn with_release_channel(mut self, channel: ReleaseChannel) -> Self {
         self.release_channel = Some(channel);
+        self
+    }
+
+    /// Declare the Marque of this binary: the name and the logo its interface
+    /// shows (window title, favicon, top bar, welcome, tours, Version & update).
+    /// Without this call the daemon is the vanilla `pdo`, [`Brand::Pdo`]. A
+    /// distribution declares it here, at compile time, next to its release
+    /// channel: no environment variable, setting or extension changes it.
+    ///
+    /// ```no_run
+    /// # async fn start() -> anyhow::Result<()> {
+    /// let config = pdo::Config::from_cli(None, 5172)?.with_brand(pdo::Brand::AcogniDriver);
+    /// pdo::serve(config, vec![]).await?.wait().await
+    /// # }
+    /// ```
+    pub fn with_brand(mut self, brand: Brand) -> Self {
+        self.brand = Some(brand);
         self
     }
 
@@ -173,7 +194,11 @@ pub async fn serve(config: Config, extensions: Vec<Box<dyn Extension>>) -> Resul
         mut daemon,
         inner_layer,
         release_channel,
+        brand,
     } = config;
+    if let Some(brand) = brand {
+        daemon.brand = brand;
+    }
     if let Some(channel) = release_channel {
         daemon.release_channel = Some(channel.into_update_channel());
     }

@@ -1,7 +1,8 @@
 /**
  * The second half of the *First pipeline* tour (#823): the tester node, its
- * verdict and screenshot outputs, the loop that wires it back to the implementer
- * and on to End, then save, validate and keep-or-delete. Pure data, spliced after the
+ * verdict and screenshot outputs, the edge from Start (CORE-241), the loop that
+ * wires the tester back to the implementer and on to End, then save, validate
+ * and keep-or-delete. Pure data, spliced after the
  * first half in `firstPipeline.ts`; the copy rules there apply here too.
  */
 
@@ -9,13 +10,13 @@ import type { TourObservation, TourStep } from "../tourDef";
 import {
   ADD_MENU_NODE,
   DELETE_CONFIRM,
+  SAVE_DIALOG,
   NAME_INPUT,
   OUT_PORT,
   PROMPT_INPUT,
   VALIDATED_FOR_ALL,
   VALIDATED_FOR_PROJECTS,
   VALIDATE_BUTTON,
-  SAVE_MODAL,
   VALIDATE_MODAL,
   agent,
   agents,
@@ -175,12 +176,23 @@ export const TESTER_STEPS: TourStep[] = [
     done: (o) => !!agent(o.app, 1)?.outputs[1]?.instructions?.trim(),
   },
   {
+    // CORE-241: the daemon's scaffold puts Start and End on the canvas with no
+    // edge, and a Run starts only the nodes Start is wired to. Without this
+    // step the tour ended on a pipeline whose Runs never started anything.
+    id: "edge-start-implementer",
+    title: "Connect Start to implementer",
+    // #846 — there is no output dot any more (#844, ADR-0071): the whole border
+    // of a card is the drag-source. Both cards are the target, rim included, so
+    // the hole lights the very strip the press has to land on.
+    body: "Press anywhere on the border of the Start marker (it glows amber) and drag onto implementer. A Run hands its prompt to the nodes Start is wired to and starts them: without this edge, it would start nothing.",
+    target: (o) => [...nodeSel(startNode(o.app)), ...nodeSel(agent(o.app, 0))],
+    waitingFor: "the Start marker and the implementer card",
+    done: (o) => edgeIndex(o.app.pipeline, startNode(o.app), agent(o.app, 0)) >= 0,
+  },
+  {
     id: "edge-implementer-tester",
     title: "Connect implementer to tester",
-    // #846 — there is no output dot any more (#844, ADR-0071): the whole border
-    // of a card is the drag-source. The card is the target, rim included, so
-    // the hole lights the very strip the press has to land on.
-    body: "Press anywhere on the border of the implementer's card — it glows amber — and drag onto tester. The edge is the hand-off: when the first finishes, the second starts.",
+    body: "Now press on the border of the implementer's card and drag onto tester. The edge is the hand-off: when the first finishes, the second starts.",
     target: (o) => [...nodeSel(agent(o.app, 0)), ...nodeSel(agent(o.app, 1))],
     waitingFor: "the two agent cards",
     done: (o) => edgeIndex(o.app.pipeline, agent(o.app, 0), agent(o.app, 1)) >= 0,
@@ -219,7 +231,7 @@ export const TESTER_STEPS: TourStep[] = [
     title: "Connect tester to End",
     to: endNode,
     body: "Press on the border of the tester's card again and drag onto the End marker. End is where a Run stops, and it needs a route in.",
-    // Same two outputs, same consequence: the `verdict eq pass` of the next
+    // Same two outputs, same consequence: the `verdict = pass` of the next
     // step can only be written on an edge that carries the verdict (#825).
     note: "Again the edge carries out, the first output: the condition below it reads the verdict in out's frontmatter.",
     waitingFor: "the tester card and the End marker",
@@ -243,18 +255,6 @@ export const TESTER_STEPS: TourStep[] = [
     why: "Both routes out of the tester are now explicit: pass ends the Run, fail sends it round again.",
   }),
   {
-    // FP of CORE-227: without this edge the pipeline validated, and a Run of it
-    // started nothing. The implementer's only way in was the conditional edge
-    // back from the tester, so it was never an entry point, and the tester
-    // waited on it. The last wire, so the loop's edges keep their places.
-    id: "edge-start-implementer",
-    title: "Connect Start to implementer",
-    body: "Press on the border of the Start marker and drag onto implementer. Start hands the Run's prompt to the first node; without this edge, a Run of this pipeline would never start.",
-    target: (o) => [...nodeSel(startNode(o.app)), ...nodeSel(agent(o.app, 0))],
-    waitingFor: "the Start marker and the implementer card",
-    done: (o) => edgeIndex(o.app.pipeline, startNode(o.app), agent(o.app, 0)) >= 0,
-  },
-  {
     id: "save",
     title: "Save the pipeline",
     // The step slides on once saved, so the first body is only seen on a replay
@@ -262,14 +262,14 @@ export const TESTER_STEPS: TourStep[] = [
     // rather than asking for a click that is already made.
     body: (o) =>
       saved(o)
-        ? "Saved: the pipeline is in your Library. Until you save, changes live only in this browser tab."
-        : o.present(SAVE_MODAL)
+        ? "Saved: the pipeline is in your Library as a version. Until you save, your changes are a draft."
+        : o.present(SAVE_DIALOG)
           ? "Click Save in the window. Each save numbers a new version of the pipeline; the earlier ones stay under Versions."
-          : "Click Save. Until you do, all of this lives only in this browser tab.",
-    // Two beats, as Validate: the button, then the window it opens, lit rather
-    // than left unlit over the dimmer (FP of CORE-227).
-    target: (o) => (o.present(SAVE_MODAL) ? [SAVE_MODAL] : ['[data-testid="save-button"]']),
-    soft: (o) => o.present(SAVE_MODAL),
+          : "Click Save. Until you do, all of this is a draft: Save makes it a version in your Library.",
+    // Two beats, as Validate: the button, then the dialog it opens, lit rather
+    // than drawn under the dimming (CORE-227, CORE-232).
+    target: (o) => (o.present(SAVE_DIALOG) ? [SAVE_DIALOG] : ['[data-testid="save-button"]']),
+    soft: (o) => o.present(SAVE_DIALOG),
     waitingFor: "the Save button",
     // Not skippable: everything after this reads the saved file.
     done: saved,

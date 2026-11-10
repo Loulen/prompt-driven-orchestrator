@@ -323,7 +323,9 @@ describe("Settings › Telemetry (ADR-0090)", () => {
     fireEvent.click(box);
     const warning = screen.getByTestId("telemetry-actor-warning");
     expect(warning).toHaveTextContent("Records each person's activity");
-    // The obligations, in full, in its tooltip.
+    // The obligations, in full, in its tooltip: the local law first, France as the example.
+    expect(warning).toHaveTextContent("local law");
+    expect(warning.getAttribute("title")).toMatch(/^Before you switch it on, check the law where you work/);
     expect(warning.getAttribute("title")).toMatch("L1222-4");
     expect(warning.getAttribute("title")).toMatch("L2312-38");
     expect(warning.getAttribute("title")).toMatch("GDPR");

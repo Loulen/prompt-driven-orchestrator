@@ -7,7 +7,7 @@
 //! à jour depuis l'app*: sharp tool, delegate to the installation method):
 //!
 //! 1. the **installation method's** upgrade command (`brew update && brew upgrade
-//!    Loulen/pdo-v2/pdo-v2`, the cargo-dist installer re-run, or the command a
+//!    Loulen/tap/pdo`, the cargo-dist installer re-run, or the command a
 //!    distribution's release channel declares, #24);
 //! 2. if **supervised**: `pdo service install` (idempotent, port preserved — and,
 //!    since #699, writing the STABLE binary path so an existing unit pointing into
@@ -288,7 +288,7 @@ mod tests {
     fn homebrew_supervised_script_upgrades_reinstalls_the_unit_then_restarts() {
         let s = render_update_script(&plan(InstallMethod::Homebrew, Supervision::Systemd));
         assert!(s.starts_with("#!/bin/sh\n"));
-        assert!(s.contains("sh -c 'brew update && brew upgrade Loulen/pdo-v2/pdo-v2'"));
+        assert!(s.contains("sh -c 'brew update && brew upgrade Loulen/tap/pdo'"));
         let up = s.find("brew upgrade").unwrap();
         let install = s
             .find("/home/linuxbrew/.linuxbrew/bin/pdo service install --port 5172")

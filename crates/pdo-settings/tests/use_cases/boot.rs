@@ -34,6 +34,11 @@ async fn the_catalogues_warm_up_asks_no_one() {
     let w = world();
     w.settings.warm_harness_catalogues().await;
     assert_eq!(*w.harnesses.warmed.lock().unwrap(), 1);
+    assert_eq!(
+        *w.harnesses.settings_announced.lock().unwrap(),
+        1,
+        "an open page reads the warmed catalogues"
+    );
     assert!(w.asked().is_empty());
 }
 

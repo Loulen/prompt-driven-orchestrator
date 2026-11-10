@@ -24,7 +24,7 @@ import { cssToken } from "../../lib/cssColor";
 import {
   sendResize,
   TERMINAL_INSET_PX,
-  toTerminalNewlines,
+  frozenPaneText,
   type FrozenPane,
   type PaneMode,
 } from "../model/terminalPane";
@@ -204,7 +204,7 @@ export function useXtermSession(
     let ws: ProbedSocket | null = null;
 
     if (isFrozen) {
-      term.write(toTerminalNewlines(frozen?.content ?? ""));
+      term.write(frozenPaneText(frozen?.content ?? ""));
     }
 
     // #867: size the grid for the current role. Pilot and solo fit their own

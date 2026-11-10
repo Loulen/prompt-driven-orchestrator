@@ -10,13 +10,15 @@
 //! owns the id scheme, the hunk excerpt, the author of a reply and the filter
 //! of the list; [`anchor`] the re-map of an anchor, [`decision`] what a reply
 //! or a decision changes, [`message`] the **single batch message** the
-//! Pipeline Manager receives per send.
+//! Pipeline Manager receives per send, [`delivery`] how that message reaches
+//! it (CORE-239).
 //!
 //! Sent comments are immutable: no event edits or deletes one, and nothing here
 //! offers to.
 
 pub mod anchor;
 pub mod decision;
+pub mod delivery;
 pub mod message;
 
 pub use pdo_run::domain::review_comment::{
@@ -129,6 +131,7 @@ pub(crate) mod fixtures {
             reopened_at: None,
             reopened_by_actor: None,
             proposal_declined: false,
+            delivery: None,
         }
     }
 }

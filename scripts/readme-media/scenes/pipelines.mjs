@@ -9,8 +9,8 @@
 // the maintainer's drawing.
 //
 //   a — (the published one) focused on the canvas.
-//   b — the same build with the Pipeline Inspector in frame (its node and edge
-//       counts follow).
+//   b — the same build with Pipeline info open in the inspector (its node and
+//       edge counts follow).
 
 import { sleep } from "../lib/demo-instance.mjs";
 import { targetPipeline } from "../lib/targets.mjs";
@@ -20,10 +20,17 @@ const TARGET = "implement-review.pipelines";
 /** What the gestures draw: `implementer` (its two edges go with it). */
 const DRAWN = { nodes: ["implementer"] };
 
-// The canvas is wide enough (~630 px) for the new card to land to the right of
-// the Start–End column (the editor's first free slot), in frame.
-const VIEWPORT = { width: 1100, height: 760 };
-const LAYOUT = { "pdo.layout.run": { left: 18, center: 57, right: 25 } };
+// Filmed at the 100 % UI scale (Settings › Interface; the front's default is
+// 120 %), in a 1280 px window: the + menu drops a new card in the first FREE
+// slot of the visible canvas, clear of Start and End by a card and a gap, and
+// only a canvas this wide (with the inspector open) has one on screen.
+const VIEWPORT = { width: 1280, height: 680 };
+const LAYOUT = { "pdo.ui.scale": "100", "pdo.layout.run": { left: 16, center: 59, right: 25 } };
+/** Under the tab bar (the « Draft » line shows from the first change on), down
+ *  to the status bar: a — the canvas between the left panel and the
+ *  inspector; b — the canvas and the inspector. */
+const CROP_A = { x: 206, y: 68, width: 753, height: 590 };
+const CROP_B = { x: 206, y: 68, width: 1074, height: 590 };
 
 const edgeOf = (target, from, to) => target.edges.find((e) => e.source.node === from && e.target.node === to);
 
@@ -48,7 +55,7 @@ async function shareRunWorktree(ctx, id) {
   await shared.waitFor();
   await ctx.click(shared, { duration: 150, pause: 40 });
   await ctx.page.getByTestId("isolation-marker").waitFor({ state: "detached", timeout: 5_000 });
-  // Deselect: the inspector shows the pipeline again (its counts, variant b).
+  // Deselect: the empty inspector folds (variant b opens Pipeline info again).
   await ctx.click(await emptyCanvasSpot(ctx.page), { duration: 150, pause: 40 });
   await sleep(200);
 }
@@ -59,6 +66,14 @@ function withNodeId(edge, id) {
   return { ...edge, source: end(edge.source), target: end(edge.target) };
 }
 
+/** Pipeline info in the inspector, off camera: the toolbar's ⓘ (a toggle). */
+async function openPipelineInfo(ctx) {
+  if (await ctx.page.getByTestId("info-panel-name").isVisible()) return;
+  await ctx.click(ctx.page.getByTestId("toolbar-info"), { duration: 150, pause: 40 });
+  await ctx.page.getByTestId("info-panel-name").waitFor();
+  await sleep(300);
+}
+
 async function play(ctx, { markNode, markEdges }) {
   const { page } = ctx;
   const target = targetPipeline(TARGET);
@@ -66,15 +81,21 @@ async function play(ctx, { markNode, markEdges }) {
   // No zoom: the editor drops a new card in the first free slot of the VISIBLE
   // canvas, and zoomed in there is none — it would land out of frame.
   await openPipeline(ctx);
+  // The inspector open from the start, on Pipeline info: an empty one folds
+  // (#949), and a node added or selected unfolds it, which would resize the
+  // canvas mid-take. Variant a crops it out, variant b films its counts.
+  await openPipelineInfo(ctx);
   await clearToolbar(ctx);
   await ctx.moveTo(await emptyCanvasSpot(page), { duration: 200 });
   const id = await ctx.keep(async () => {
     await sleep(150);
     return addImplementer(ctx);
   });
-  const spot = { ...ctx.mouse };
   await shareRunWorktree(ctx, id);
-  await ctx.moveTo(spot, { duration: 150 });
+  // Selecting the node swapped Pipeline info for its inspector: back to it.
+  await openPipelineInfo(ctx);
+  // The cut back lands on the new card, never on the toolbar (its tooltips).
+  await ctx.moveTo(page.getByTestId(`rf__node-${id}`), { duration: 150 });
   await sleep(300);
   // The new card lands where the maintainer drew it.
   const view = target.nodes.find((n) => n.id === "implementer").view;
@@ -107,16 +128,16 @@ export default {
       localStorage: LAYOUT,
       // The canvas and its toolbar (where the + menu opens), below the tab bar:
       // no « unsaved » dot in frame.
-      crop: { x: 198, y: 76, width: 627, height: 528 },
+      crop: CROP_A,
       markers: ["node-added", "edge-dropped"],
       play: (ctx) => play(ctx, { markNode: { before: 200, after: 300 }, markEdges: { before: 200, after: 300 } }),
     },
     {
       id: "b",
-      label: "The same build, with the Pipeline Inspector (its counts follow)",
+      label: "The same build, with Pipeline info in the inspector (its counts follow)",
       viewport: VIEWPORT,
       localStorage: LAYOUT,
-      crop: { x: 198, y: 76, width: 902, height: 528 },
+      crop: CROP_B,
       markers: ["node-added", "edge-dropped"],
       play: (ctx) => play(ctx, { markNode: { before: 200, after: 500 }, markEdges: { before: 200, after: 300 } }),
     },

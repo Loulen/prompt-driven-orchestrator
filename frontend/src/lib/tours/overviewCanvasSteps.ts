@@ -198,7 +198,7 @@ export const CANVAS_STEPS: TourStep[] = [
     title: "Click the edge reviewer → End",
     body: (o) =>
       o.app.selection.kind === "edge" && o.app.selection.edgeIndex === endEdgeIndex(o.app)
-        ? "An edge carries conditions on its source's outputs and fires when the source finishes. This one reads verdict eq pass; the loop back to implementer reads verdict eq fail."
+        ? "An edge carries conditions on its source's outputs and fires when the source finishes. This one reads verdict = pass; the loop back to implementer reads verdict = fail."
         : "Click the edge from reviewer down to End. An edge carries conditions on its source's outputs, and fires when the source finishes.",
     // The edge and its condition pill: a straight edge has a zero-wide box, and
     // the pill — which selects the edge too — gives the hole something to hold.
@@ -216,7 +216,7 @@ export const CANVAS_STEPS: TourStep[] = [
     done: (o) => endEdgeOpen(o),
     readOnly: (o) => (endEdgeOpen(o) ? [RIGHT_PANEL] : []),
     asides: () => [
-      { target: EDGE_CONDITION, text: "The condition: this edge fires only when reviewer's review says verdict eq pass." },
+      { target: EDGE_CONDITION, text: "The condition: this edge fires only when reviewer's review says verdict = pass." },
     ],
   },
   {

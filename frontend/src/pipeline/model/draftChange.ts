@@ -57,6 +57,14 @@ function edgeChange(before: EditorPipelineDef["edges"], after: EditorPipelineDef
   return "edit edge";
 }
 
+/** A note or a loop added, deleted or edited: a list without one is an empty one. */
+function listChange(kind: "note" | "loop", before: unknown[] | undefined, after: unknown[] | undefined): string {
+  const [was, now] = [before?.length ?? 0, after?.length ?? 0];
+  if (now > was) return `add ${kind}`;
+  if (now < was) return `delete ${kind}`;
+  return `edit ${kind}`;
+}
+
 /** What changed from `before` to `after`, in a few words; `null` when nothing did. */
 export function describeChange(before: EditorPipelineDef, after: EditorPipelineDef): string | null {
   const old = new Map(before.nodes.map((n) => [n.id, n]));
@@ -75,8 +83,8 @@ export function describeChange(before: EditorPipelineDef, after: EditorPipelineD
   if (after.edges.length > before.edges.length) return "add edge";
   if (after.edges.length < before.edges.length) return "delete edge";
   if (!same(after.edges, before.edges)) return edgeChange(before.edges, after.edges);
-  if (!same(after.notes, before.notes)) return "edit note";
-  if (!same(after.loops, before.loops)) return "edit loop";
+  if (!same(after.notes, before.notes)) return listChange("note", before.notes, after.notes);
+  if (!same(after.loops, before.loops)) return listChange("loop", before.loops, after.loops);
   const field = Object.keys({ ...before, ...after }).find(
     (key) => !same(before[key as keyof EditorPipelineDef], after[key as keyof EditorPipelineDef]),
   );

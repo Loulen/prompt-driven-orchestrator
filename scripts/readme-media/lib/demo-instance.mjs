@@ -105,7 +105,10 @@ export class DemoInstance {
     fs.mkdirSync(path.join(this.state.home, ".claude"), { recursive: true, mode: 0o700 });
     fs.writeFileSync(
       path.join(this.state.home, ".claude", "CLAUDE.md"),
-      "Your shell already starts in your working directory. Never `cd` to an absolute path, and never type an absolute path in a command: use paths relative to the current directory.\n",
+      "Your shell already starts in your working directory. Never `cd` to an absolute path, and never type an absolute path in a command: use paths relative to the current directory.\n" +
+        // The README is in English: so is everything an agent writes on camera,
+        // whatever language the copied account prefers.
+        "Write everything in English: your messages, your questions, your files.\n",
     );
     if (this.state.repo) this.installFixtureRepo();
     this.installLibrary();

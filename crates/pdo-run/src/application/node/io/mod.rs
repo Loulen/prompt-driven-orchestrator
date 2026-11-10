@@ -113,6 +113,11 @@ pub fn resolve(
     let mut input_index: HashMap<String, usize> = HashMap::new();
 
     for input in resolved {
+        // ADR-0082: a convergence consumes only the branches that fired. A
+        // pruned source's branch was not taken: it is no input of this node.
+        if run_state.is_pruned(&input.source_node) {
+            continue;
+        }
         // A `files` source hands over its folder: list the files in it.
         let mut files: Vec<FileInfo> = input
             .paths
@@ -323,6 +328,7 @@ mod tests {
             completed_at: None,
             failure_reason: None,
             skip_reason: None,
+            pruned: false,
             iterations: iters
                 .iter()
                 .map(|(iter, status)| IterationInfo {
@@ -1252,6 +1258,69 @@ mod tests {
         assert!(!io.inputs[1].repeated);
         assert_eq!(io.inputs[0].files.len(), 1);
         assert_eq!(io.inputs[1].files.len(), 1);
+    }
+
+    /// `itemizer` (a `kind: collection` region) and `fallback` (its branch not
+    /// taken) both feed `summarizer`'s `notes` — the convergence of HP-02.
+    const COLLECTION_CONVERGENCE: &str = r#"
+name: collection-convergence
+nodes:
+  - { id: start, name: Start, type: start, outputs: [{ name: user_prompt }] }
+  - { id: itemizer, name: itemizer, type: agent, outputs: [{ name: item_note }] }
+  - { id: fallback, name: fallback, type: agent, outputs: [{ name: note }] }
+  - { id: summarizer, name: summarizer, type: agent, outputs: [{ name: summary }] }
+  - { id: end, name: End, type: end, inputs: [{ name: result }] }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: itemizer, port: task }
+  - source: { node: itemizer, port: item_note }
+    target: { node: summarizer, port: notes }
+  - source: { node: fallback, port: note }
+    target: { node: summarizer, port: notes }
+  - source: { node: summarizer, port: summary }
+    target: { node: end, port: result }
+loops:
+  - { id: topics_fanout, kind: collection, over: topics, members: [itemizer] }
+"#;
+
+    #[test]
+    fn a_collection_hands_every_lap_to_its_convergence_in_item_order() {
+        // CORE-240 F2-2: `notes` held lap 2 only (plus the empty output of the
+        // branch not taken); lap 1 was lost.
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        for (lap, item) in [(1, "alpha"), (2, "beta")] {
+            let dir = artifacts.join(format!("itemizer/iter-{lap}/item_note"));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("output.md"), item).unwrap();
+        }
+        let pipeline = pdo_pipeline::domain::pipeline::parse_pipeline(COLLECTION_CONVERGENCE)
+            .unwrap()
+            .pipeline;
+        let mut run_state = run_state_with(
+            "itemizer",
+            &[(2, NodeStatus::Completed), (1, NodeStatus::Completed)],
+        );
+        let mut fallback = run_state_with("fallback", &[(1, NodeStatus::Skipped)])
+            .nodes
+            .remove("fallback")
+            .unwrap();
+        fallback.pruned = true;
+        run_state.nodes.insert("fallback".into(), fallback);
+
+        let io = resolve(&pipeline, &artifacts, "summarizer", 1, &run_state);
+
+        assert_eq!(io.inputs.len(), 1, "{:?}", io.inputs);
+        assert_eq!(io.inputs[0].port, "notes");
+        assert!(io.inputs[0].repeated, "a grouped input is a list");
+        let paths: Vec<&str> = io.inputs[0].files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "itemizer/iter-1/item_note/output.md",
+                "itemizer/iter-2/item_note/output.md",
+            ]
+        );
     }
 
     #[test]

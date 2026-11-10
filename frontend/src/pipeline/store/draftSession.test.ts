@@ -178,6 +178,18 @@ describe("a pipeline tab's shared draft", () => {
     expect(current().pipeline.edges).toHaveLength(0);
   });
 
+  it("names the change Redo replays, as Undo does", () => {
+    join(serverDoc());
+    useEditStore.getState().updateNode("a", { name: "Designer" });
+    expect(current().draft?.redoLabel).toBeNull();
+    useEditStore.getState().undo();
+    expect(current().draft?.redoLabel).toBe("rename A to Designer");
+    expect(current().draft?.undoLabel).toBeNull();
+    useEditStore.getState().redo();
+    expect(current().draft?.redoLabel).toBeNull();
+    expect(current().draft?.undoLabel).toBe("rename A to Designer");
+  });
+
   it("reads when it may not update the pipeline: no edit, nothing sent", () => {
     const socket = join(serverDoc(), false);
     useEditStore.getState().updateNode("a", { name: "Designer" });
@@ -270,5 +282,36 @@ describe("the notices of a shared draft", () => {
 
     dismissDraftNotice("flow", kept[0].id);
     expect(current().draft!.notices).toHaveLength(2);
+  });
+
+  it("give way once the tab saves the draft they changed as a version", async () => {
+    const socket = join(serverDoc());
+    socket.handlers.onMessage({
+      type: "notice",
+      notice: { kind: "external_edit", file: "flow.yaml", version: { number: 2, title: "external edit" }, fields: [] },
+    });
+    expect(current().draft!.notices).toHaveLength(1);
+    // A notice heard while the save is on its way is not in the saved version.
+    vi.mocked(savePipeline).mockImplementationOnce(async () => {
+      socket.handlers.onMessage({
+        type: "notice",
+        notice: { kind: "external_edit", file: "flow.yaml", version: { number: 3, title: "external edit" }, fields: [] },
+      });
+      return { ok: true, version: { number: 4, title: "v4" } };
+    });
+    await useEditStore.getState().save("flow", { new_version: true, keep_old: false });
+    const left = current().draft!.notices;
+    expect(left.map((entry) => (entry.notice.kind === "external_edit" ? entry.notice.version.number : 0))).toEqual([3]);
+  });
+
+  it("stay when the save fails", async () => {
+    const socket = join(serverDoc());
+    socket.handlers.onMessage({
+      type: "notice",
+      notice: { kind: "external_edit", file: "flow.yaml", version: { number: 2, title: "external edit" }, fields: [] },
+    });
+    vi.mocked(savePipeline).mockRejectedValueOnce(new Error("disk full"));
+    await useEditStore.getState().save("flow", { new_version: true, keep_old: false });
+    expect(current().draft!.notices).toHaveLength(1);
   });
 });

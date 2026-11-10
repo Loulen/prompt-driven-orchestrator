@@ -33,10 +33,15 @@ Features validated while crossing the editing screens:
 - **Lint banner** renders **exactly once**, on the canvas, never again in the inspector (#63).
 - **Shared draft** (ADR-0088): an unsaved edit survives a page reload; the Pipelines row says
   `draft: N changes` and the canvas banner « Draft · N changes since vM ».
-- **Pipeline versions** (ADR-0088): the Save window, then Pipeline info › **Versions** — « View vN »
-  opens that version read-only, « Restore vN into the draft » puts it back in the draft.
+- **Pipeline versions** (ADR-0088): the Save window, then Pipeline info › **Versions**, which lists
+  the new version (marked `last`, with its author) above the older one; « View vN » opens that
+  version read-only, « Restore vN into the draft » puts it back in the draft without saving a
+  version (CORE-228).
 - **Validate** (CONTEXT.md « Pipeline validé »): next to Save, its modal turns the test pipeline into
   a validated one, and the tab bar's indicator follows.
+- **Import a workflow** (ADR-0016): a Claude Code `.js` workflow imported from the Pipelines list
+  becomes a draft pipeline on the canvas; the modal lists what it could not map as warnings, in the
+  language of the interface (CORE-228).
 
 ## Preconditions
 
@@ -98,12 +103,17 @@ Features validated while crossing the editing screens:
     field. Confirm with « Save vN+1 » → a toast « Saved … », the tab's unsaved dot clears, « Saved
     just now » shows, the Save button disables and the draft banner is gone.
 11. Open **Pipeline info** (the toolbar's ⓘ button; with nothing selected the right pane is
-    closed) › **Versions** → the new version is
-    listed. « View vN » on the previous one → a read-only tab `<id>-copy.yaml @ vN` opens without the
-    edits; close it.
+    closed) › **Versions** → the new version is listed above the previous one, marked `last`, with
+    its author. « View vN » on the previous one → a read-only tab `<id>-copy.yaml @ vN` opens without
+    the edits; close it.
 12. **Validate**: the tab bar's « Validate » (next to Save) opens its modal; tick « All projects
     (current and future) » and « Save validation » → the tab bar's indicator turns from the flask
     (0) to the globe « All ».
+13. **Import a workflow**: the Pipelines tab's « Import a workflow » opens « Import a pipeline »;
+    pick « Claude Code workflow » and load a `.js` file holding one line,
+    ``agent(`Fix the failing test.`, { label: 'implement' })`` → the import opens a draft pipeline
+    named after the file on the canvas, its agent node labelled `implement` between Start and End.
+    Anything the import could not map is listed as « Imported with N warnings », in English.
 
 ## Checks
 
@@ -120,6 +130,8 @@ Features validated while crossing the editing screens:
   still the duplicate's.
 - After step 10: unsaved dot gone, « Saved just now » visible, Save disabled, no draft banner.
 - After step 12: the copy reads « All » in the tab bar and on its row of the Pipelines tab.
+- After step 13: the imported pipeline has a row in the Pipelines tab, `draft` and never saved;
+  the modal's text and its warnings are in English.
 - The lint banner, when the pipeline has a warning, is drawn once, on the canvas.
 - The browser console shows no uncaught error along the journey.
 
@@ -139,8 +151,8 @@ Features validated while crossing the editing screens:
 
 ## Cleanup (best-effort)
 
-- Delete the copy (the row's ⋯ › Delete, or its `*.yaml` + `*.prompts/` dir) and any pipeline the
-  agent seeded.
+- Delete the copy and the imported pipeline (the row's ⋯ › Delete, or its `*.yaml` + `*.prompts/`
+  dir) and any pipeline the agent seeded.
 
 ## Notes
 

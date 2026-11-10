@@ -14,6 +14,7 @@ mod normalize;
 mod parse;
 mod prompts;
 mod references;
+mod start;
 
 pub use definition::{
     GridSize, LoopKind, LoopRegion, Note, PipelineDef, VariableDef, VariableType,
@@ -36,6 +37,7 @@ pub use normalize::{
 pub use parse::parse_pipeline;
 pub use prompts::{canonical_prompt_path, split_live_prompts};
 pub use references::{dangling_edge_references, resolve_switch_upstream_schema};
+pub use start::{start_leads_nowhere, START_LEADS_NOWHERE};
 
 #[cfg(test)]
 mod tests {
@@ -43,6 +45,17 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
+
+    /// The diagnostics but [`START_LEADS_NOWHERE`] (CORE-241): a fixture of
+    /// Start and End alone starts nothing, and checks that nothing ELSE warns.
+    fn besides_start_leads_nowhere(result: &ParseResult) -> Vec<&str> {
+        result
+            .diagnostics
+            .iter()
+            .map(|d| d.message.as_str())
+            .filter(|m| *m != START_LEADS_NOWHERE)
+            .collect()
+    }
 
     const START_END_NODES: &str = r#"
   - id: start
@@ -1041,6 +1054,8 @@ nodes:
     outputs:
       - name: review
 edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: ab000001, port: review }
   - source: { node: ab000001, port: code }
     target: { node: ab000002, port: code }
   - source: { node: ab000002, port: review }
@@ -2703,6 +2718,8 @@ nodes:
     outputs:
       - name: review
 edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: ab000001, port: task }
   - source: { node: ab000001, port: code }
     target: { node: ab000002, port: code }
   - source: { node: ab000002, port: review }
@@ -4016,11 +4033,7 @@ nodes: []
 "#,
         );
         let result = parse_pipeline(&yaml).unwrap();
-        assert!(
-            result.diagnostics.is_empty(),
-            "unexpected diagnostics: {:?}",
-            result.diagnostics
-        );
+        assert_eq!(besides_start_leads_nowhere(&result), Vec::<&str>::new());
         assert!(!result.pipeline.prompt_required);
     }
 
@@ -4037,7 +4050,7 @@ nodes: []
 "#,
         );
         let result = parse_pipeline(&yaml).unwrap();
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(besides_start_leads_nowhere(&result), Vec::<&str>::new());
         assert_eq!(result.pipeline.grid_size, Some(GridSize::L));
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
         assert!(serialized.contains("grid_size: L"), "{serialized}");
@@ -4127,7 +4140,7 @@ nodes:
     fn wait_for_started_nodes_round_trips_and_false_is_omitted() {
         let yaml = with_start_end("name: waiting\nwait_for_started_nodes: true\nnodes: []\n");
         let result = parse_pipeline(&yaml).unwrap();
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(besides_start_leads_nowhere(&result), Vec::<&str>::new());
         assert!(result.pipeline.wait_for_started_nodes);
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
         assert!(
@@ -4177,10 +4190,9 @@ nodes: []
 "#,
         );
         let result = parse_pipeline(&yaml).unwrap();
-        assert_eq!(result.diagnostics.len(), 1);
         assert_eq!(
-            result.diagnostics[0].message,
-            "unknown field 'bogus_field' (ignored)"
+            besides_start_leads_nowhere(&result),
+            vec!["unknown field 'bogus_field' (ignored)"]
         );
     }
 

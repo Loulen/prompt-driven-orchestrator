@@ -51,6 +51,9 @@ fn var_value_to_env_string(value: &serde_yaml::Value) -> String {
 /// - `PDO_LIVE_DIR` — the folder the script publishes its live artifacts in
 ///   (ADR-0089), set only when the node declares one or may publish freely.
 ///   Nothing checks it at the end.
+/// - `PDO_ITEM` / `PDO_ITEM_TOTAL` — on a lap of a collection fan-out only: the
+///   lap's item (a scalar verbatim, a mapping or a list as YAML) and the number
+///   of laps.
 /// - `PDO_VAR_<NAME>` — each resolved pipeline variable (sorted for determinism).
 ///
 /// The base four (`PDO_RUN_ID`/`NODE_ID`/`NODE_ITER`/`DAEMON_URL`) are exported
@@ -77,6 +80,11 @@ pub fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)> {
             .map(|p| p.to_string_lossy())
             .collect::<Vec<_>>()
             .join("\n");
+        // An input with nothing to read (a branch not taken, an upstream that
+        // has produced nothing yet) never blanks a same-named input that has.
+        if value.is_empty() && env.iter().any(|(k, _)| *k == key) {
+            continue;
+        }
         env.push((key, value));
     }
 
@@ -85,6 +93,14 @@ pub fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)> {
             format!("PDO_OUTPUT_{}", env_name_suffix(&output.port_name)),
             output.path.to_string_lossy().into_owned(),
         ));
+    }
+
+    // A lap of a collection fan-out: the item it works on and how many laps the
+    // fan-out has (its own index is `PDO_NODE_ITER`) — what an agent lap reads
+    // under `## Collection Context`.
+    if let Some(fe) = &ctx.foreach_context {
+        env.push(("PDO_ITEM".to_string(), fe.current_item.clone()));
+        env.push(("PDO_ITEM_TOTAL".to_string(), fe.total.to_string()));
     }
 
     if !ctx.node.live_artifacts.is_empty() || ctx.node.free_live_artifacts {

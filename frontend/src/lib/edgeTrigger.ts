@@ -47,15 +47,20 @@ export function deriveEdgeTrigger(
   };
 }
 
-/** Whether the edge's target took what it carries: a node left `pending`; End,
- *  a marker with no node state, received the port the edge lands on. */
+/**
+ * Whether the edge's target took what it carries: a node left `pending`; End, a
+ * marker with no node state, received a port the edge lands on (its target port
+ * for one output, each port's own name for several: CONTEXT.md, emergent
+ * inputs). A port the Run does not list reads fired once the Run completed
+ * (CORE-232: an edge into End always read « not fired »).
+ */
 function targetReached(runState: RunState, edge: EdgeDef): boolean {
   const end = runState.end_node;
   if (end && end.id === edge.target.node) {
-    // The inputs the edge lands under on End: its target port for one output,
-    // each port's own name for several (CONTEXT.md, emergent inputs).
     const inputs = new Set(emergentInputs(edge).map((i) => i.input));
-    return end.ports.some((p) => inputs.has(p.port_name) && p.status === "received");
+    const ports = end.ports.filter((p) => inputs.has(p.port_name));
+    if (ports.length === 0) return runState.status === "completed";
+    return ports.some((p) => p.status === "received" || p.fired_at != null);
   }
   const target = runState.nodes[edge.target.node];
   return target != null && target.status !== "pending";

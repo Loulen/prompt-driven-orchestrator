@@ -125,7 +125,8 @@ pub fn project(events: &[Event]) -> Option<RunState> {
             EventKind::ReviewCommentSent
             | EventKind::ReviewCommentReplied
             | EventKind::ReviewCommentResolved
-            | EventKind::ReviewCommentReopened => {
+            | EventKind::ReviewCommentReopened
+            | EventKind::ReviewCommentDelivery => {
                 crate::domain::review_comment::fold(&mut state.review_comments, event)
             }
 
@@ -658,6 +659,7 @@ mod tests {
             completed_at: None,
             failure_reason: None,
             skip_reason: None,
+            pruned: false,
             iterations: vec![],
             frontmatter_retries: 0,
             frontmatter_violations: vec![],
@@ -1368,6 +1370,86 @@ mod tests {
             "the interrupted node is dropped so the scheduler re-drives it fresh"
         );
         assert!(state.failure_reason.is_none() && state.awaiting_reason.is_none());
+    }
+
+    #[test]
+    fn reopen_re_drives_the_nodes_a_cancel_stopped() {
+        // A cancel stops every live node and halts the Run; a reopen that kept
+        // them `stopped` re-parked it `run_stalled` behind them at once.
+        let reopen = Event {
+            id: None,
+            run_id: "run-1".into(),
+            ts: "2026-01-01T00:00:00.000Z".into(),
+            kind: EventKind::CommandIssued,
+            node_id: None,
+            iter: None,
+            payload: Some(serde_json::json!({ "command": "reopen_run" })),
+        };
+        let state = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeStarted, Some("done"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("done"), Some(1)),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            make_event(EventKind::RunPaused, None, None),
+            make_event(EventKind::NodeStopped, Some("worker"), Some(1)),
+            make_event_with_payload(
+                EventKind::RunHalted,
+                None,
+                serde_json::json!({ "message": "cancelled", "command": "cancel_run" }),
+            ),
+            reopen,
+        ])
+        .unwrap();
+        assert_eq!(state.status, RunStatus::Running);
+        assert_eq!(state.nodes["done"].status, NodeStatus::Completed);
+        assert!(
+            !state.nodes.contains_key("worker"),
+            "the stopped node is dropped so the scheduler runs it again"
+        );
+    }
+
+    #[test]
+    fn reopen_keeps_a_stopped_collection_member_with_its_laps() {
+        // Dropping a stopped fan-out member would drop its completed laps too,
+        // and the region (its state kept) would never start the stopped ones.
+        let mut state = project(&[
+            make_event(EventKind::RunStarted, None, None),
+            make_event(EventKind::NodeStarted, Some("lap"), Some(1)),
+            make_event(EventKind::NodeCompleted, Some("lap"), Some(1)),
+            make_event(EventKind::NodeStarted, Some("lap"), Some(2)),
+            make_event(EventKind::NodeStopped, Some("lap"), Some(2)),
+            make_event(EventKind::NodeStarted, Some("solo"), Some(1)),
+            make_event(EventKind::NodeStopped, Some("solo"), Some(1)),
+            make_event(EventKind::RunHalted, None, None),
+        ])
+        .unwrap();
+        state.collection_states.insert(
+            "fan".into(),
+            CollectionState {
+                region_id: "fan".into(),
+                total_items: 2,
+                done: false,
+                entry: "lap".into(),
+                members: vec!["lap".into()],
+            },
+        );
+        command::apply_command_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "reopen_run" }),
+            ),
+        );
+        assert_eq!(state.status, RunStatus::Running);
+        assert!(
+            state.nodes.contains_key("lap"),
+            "the fan-out member keeps its laps"
+        );
+        assert!(
+            !state.nodes.contains_key("solo"),
+            "a plain stopped node runs again"
+        );
     }
 
     #[test]
@@ -3826,6 +3908,7 @@ mod tests {
             completed_at: None,
             failure_reason: None,
             skip_reason: None,
+            pruned: false,
             iterations: iters
                 .iter()
                 .map(|(i, s)| IterationInfo {
@@ -5002,6 +5085,68 @@ mod tests {
             state.all_nodes_completed(&["orphan".into()]),
             "a pruned node counts as done for run completion"
         );
+    }
+
+    #[test]
+    fn only_the_reachability_sweep_prunes_a_node_and_its_restart_revives_it() {
+        // ADR-0082: the sweep's skip (`auto_skip_unreachable`) prunes the node —
+        // dead for routing. The operator's skip of a never-started node
+        // (`skip_node`) settles it as if it had run: `Skipped`, not pruned.
+        let mut state = RunState::new("r".into(), String::new());
+        apply_node_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::NodeCompleted,
+                Some("untaken"),
+                serde_json::json!({
+                    "source": "auto_skip_unreachable", "skipped": true, "reason": "unreachable"
+                }),
+            ),
+        );
+        apply_node_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::NodeCompleted,
+                Some("operator"),
+                serde_json::json!({
+                    "source": "skip_node", "skipped": true,
+                    "reason": "skipped locally by operator"
+                }),
+            ),
+        );
+        assert_eq!(state.nodes["untaken"].status, NodeStatus::Skipped);
+        assert!(state.is_pruned("untaken"));
+        assert_eq!(state.nodes["operator"].status, NodeStatus::Skipped);
+        assert!(!state.is_pruned("operator"));
+        assert!(
+            serde_json::to_value(&state.nodes["operator"])
+                .unwrap()
+                .get("pruned")
+                .is_none(),
+            "absent from the wire when false"
+        );
+
+        // Two sweeps that raced past the guard append the same prune twice:
+        // the duplicate leaves the node pruned and `Skipped`.
+        apply_node_event(
+            &mut state,
+            &make_event_with_payload(
+                EventKind::NodeCompleted,
+                Some("untaken"),
+                serde_json::json!({
+                    "source": "auto_skip_unreachable", "skipped": true, "reason": "unreachable"
+                }),
+            ),
+        );
+        assert_eq!(state.nodes["untaken"].status, NodeStatus::Skipped);
+        assert!(state.is_pruned("untaken"));
+
+        // The ▶ of the pruned node runs its branch as if it was taken.
+        apply_node_event(
+            &mut state,
+            &make_event(EventKind::NodeStarted, Some("untaken"), Some(2)),
+        );
+        assert!(!state.is_pruned("untaken"));
     }
 
     #[test]

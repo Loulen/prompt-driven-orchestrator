@@ -12,6 +12,22 @@ const MARKER_AFTER = 1800;
 /** How often the screen guard samples the filmed DOM (lib/screen-guard.mjs). */
 const SCREEN_SAMPLE_MS = 250;
 
+/** The front's UI scale when the scene stores none (frontend/src/lib/uiScale.ts). */
+const DEFAULT_UI_SCALE = 120;
+
+/**
+ * The front restores a stored Workbench layout (`pdo.layout.run`, the panes in
+ * % of the window) only with the CSS width of the window it was saved in
+ * (`pdo.layout.run.width`, frontend/src/app/useShellLayout.ts); without it, it
+ * opens on its default widths. A scene gives the shares for its viewport: its
+ * CSS width is the viewport's at the scene's UI scale.
+ */
+export function withLayoutWidth(storage, viewport) {
+  if (storage["pdo.layout.run"] === undefined || storage["pdo.layout.run.width"] !== undefined) return storage;
+  const scale = Number(storage["pdo.ui.scale"] ?? DEFAULT_UI_SCALE) / 100;
+  return { ...storage, "pdo.layout.run.width": String(Math.round(viewport.width / scale)) };
+}
+
 export class Recorder {
   constructor({ browser, instance, variant, videoDir, gifWidth }) {
     this.browser = browser;
@@ -41,7 +57,7 @@ export class Recorder {
       colorScheme: "dark",
       recordVideo: { dir: this.videoDir, size: viewport },
     });
-    const storage = { "pdo.tour.offered": "1", ...(this.variant.localStorage ?? {}) };
+    const storage = withLayoutWidth({ "pdo.tour.offered": "1", ...(this.variant.localStorage ?? {}) }, viewport);
     await this.context.addInitScript((entries) => {
       for (const [key, value] of Object.entries(entries)) {
         if (localStorage.getItem(key) === null) localStorage.setItem(key, typeof value === "string" ? value : JSON.stringify(value));

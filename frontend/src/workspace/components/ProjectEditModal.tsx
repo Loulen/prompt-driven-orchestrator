@@ -6,6 +6,7 @@ import { addProjectMember, createProject, removeProjectMember, updateProject } f
 import { ApiError } from "../../shared/http/client";
 import { useHarnessCatalog } from "../../harness/store/useHarnessCatalog";
 import { useAgentProfiles } from "../../settings/store/useAgentProfiles";
+import { useInheritedFloor } from "../../settings/store/useInheritedFloor";
 import AgentControl from "../../settings/components/AgentControl";
 import HarnessSelect from "../../harness/components/HarnessSelect";
 import PersistedProvisioningEditor from "./PersistedProvisioningEditor";
@@ -88,6 +89,7 @@ export default function ProjectEditModal({
   // each installed/not). The modal holds no settings of its own, so it fetches.
   const harnessCatalog = useHarnessCatalog();
   const { profiles: agentProfiles } = useAgentProfiles();
+  const inheritedAgent = useInheritedFloor(agentProfiles);
   // ADR-0081 (#31): the extension sections of `project/edit`. They keep a draft
   // and apply it once the core saved (a fresh Projet has its id only then);
   // a failing section keeps the modal open, the Projet itself already saved.
@@ -287,12 +289,14 @@ export default function ProjectEditModal({
               onChange={setAgentChoice}
               profiles={agentProfiles}
               catalog={harnessCatalog}
-              inherited={{ harness: "claude", model: null, effort: null }}
+              inherited={inheritedAgent}
               label="Agent — Project"
               showLabel={false}
               testId="project-agent-control"
             />
-            <div className="d-sr" aria-hidden>
+            {/* Hidden and out of the tab order: the Agent control above is the
+                surface (CORE-232: an invisible tab stop). */}
+            <div className="d-sr" aria-hidden inert data-testid="project-harness-hidden">
               <HarnessSelect
                 value={harness}
                 onChange={setHarness}
@@ -319,7 +323,8 @@ export default function ProjectEditModal({
             <PersistedProvisioningEditor
               scope="project"
               projectId={initialProject.id}
-              initialRepository={initialProject.members[0] ?? ""}
+              // Previewed against the Project's default primary, as a launch would (CORE-232).
+              initialRepository={effectivePrimary ?? initialProject.members[0] ?? ""}
               home={home}
             />
           )}

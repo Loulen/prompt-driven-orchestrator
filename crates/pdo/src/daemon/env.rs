@@ -60,6 +60,8 @@ impl DaemonConfig {
             // Not an env var: the channel belongs to the binary, which declares it
             // at compile time through `Config::with_release_channel`.
             release_channel: None,
+            // Declared at compile time too, through `Config::with_brand`.
+            brand: crate::Brand::default(),
             // Core daemon behaviour; the `update_check` SETTING is the user's
             // off switch, not an env var. Only the layer-3 literals opt out.
             run_update_check_loop: true,

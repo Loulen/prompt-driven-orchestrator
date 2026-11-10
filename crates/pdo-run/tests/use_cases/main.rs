@@ -12,6 +12,7 @@ mod operation_projects;
 mod ports;
 mod project_tiers;
 mod projections;
+mod pruning;
 mod read_access;
 mod read_run;
 mod run_summary;

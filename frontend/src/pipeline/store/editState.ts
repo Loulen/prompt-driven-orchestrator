@@ -78,6 +78,8 @@ export interface DraftTabState {
   canRedo: boolean;
   /** The words of my last change, for the Undo tooltip. */
   undoLabel: string | null;
+  /** The words of the change Redo replays, for the Redo tooltip. */
+  redoLabel: string | null;
   /**
    * What changed the draft from outside the canvas (a file written outside
    * PDO, the library assistant), oldest first, until dismissed.

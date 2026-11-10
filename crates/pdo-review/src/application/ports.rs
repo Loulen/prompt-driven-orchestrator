@@ -34,18 +34,23 @@ pub trait ReviewRuns: Send + Sync {
     fn append<'a>(&'a self, event: &'a Event) -> BoxFuture<'a, Result<(), String>>;
 
     /// Start the Run's Pipeline Manager if it is not running, started by
-    /// `actor` (CORE-61): `true` when this call started it. A refusal is
+    /// `actor` (CORE-61): `true` when this call started it, with
+    /// `first_message` at the end of its launch prompt (CORE-239). A refusal is
     /// `(status, body)`, answered verbatim.
     fn ensure_manager<'a>(
         &'a self,
         run_id: &'a str,
         run: &'a RunState,
         actor: &'a Actor,
+        first_message: &'a str,
     ) -> BoxFuture<'a, Result<bool, (u16, serde_json::Value)>>;
 
-    /// Paste `message` into the manager's session, off the request — after a
-    /// grace when `just_started` (the harness has to be reading its input).
-    fn hand_to_manager(&self, run_id: &str, message: String, just_started: bool);
+    /// What the manager's session shows (its visible pane), `None` once the
+    /// session is gone (CORE-239).
+    fn manager_screen(&self, run_id: &str) -> Option<String>;
+
+    /// Paste `message` into the manager's session and submit it.
+    fn paste_to_manager(&self, run_id: &str, message: &str);
 
     /// The Projets the Run is in (CORE-3): its review comments' Operations
     /// are in them. None for an unknown Run.

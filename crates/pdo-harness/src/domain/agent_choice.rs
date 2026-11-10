@@ -249,7 +249,7 @@ pub fn resolve(
     // `agent_profile::init`, but a defensive literal `claude` avoids a panic if
     // ever called against an incomplete snapshot (e.g. a unit test that omits
     // it on purpose).
-    let combo = profiles
+    let mut combo = profiles
         .get(default_profile_id)
         .cloned()
         .unwrap_or(ResolvedCombo {
@@ -257,6 +257,17 @@ pub fn resolve(
             model: None,
             effort: None,
         });
+    // The node's own per-harness entry for the floor's harness still says how
+    // the node runs on it, as before #563 (the floor was `claude`, its model and
+    // effort read from that entry): field by field, over the profile's.
+    if let Some(entry) = tiers.node_harnesses.and_then(|m| m.get(&combo.harness)) {
+        if let Some(model) = normalise(entry.model.as_deref()) {
+            combo.model = Some(model);
+        }
+        if let Some(effort) = normalise(entry.effort.as_deref()) {
+            combo.effort = Some(effort);
+        }
+    }
     Resolved {
         combo,
         tier: Tier::Default,
@@ -535,6 +546,60 @@ mod tests {
         assert_eq!(r.combo.effort, None);
         assert_eq!(r.via, Via::Legacy);
         assert!(r.warnings.is_empty());
+    }
+
+    #[test]
+    fn at_the_floor_the_nodes_own_entry_for_the_floors_harness_still_sets_its_model() {
+        // A node with no pin and no choice, `harnesses: { claude: { model: haiku } }`:
+        // before #563 the floor was `claude` and its model came from that entry.
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            CLAUDE.to_string(),
+            HarnessEntry {
+                model: Some("haiku".to_string()),
+                effort: Some("low".to_string()),
+            },
+        );
+        entries.insert(
+            OPENCODE.to_string(),
+            HarnessEntry {
+                model: Some("not-the-floor".to_string()),
+                effort: None,
+            },
+        );
+        let tiers = Tiers {
+            node_harnesses: Some(&entries),
+            ..Default::default()
+        };
+        let r = resolve(&tiers, &profiles_with_default(), DEFAULT_ID);
+        assert_eq!(r.tier, Tier::Default);
+        assert_eq!(r.combo.harness, CLAUDE);
+        assert_eq!(r.combo.model.as_deref(), Some("haiku"));
+        assert_eq!(r.combo.effort.as_deref(), Some("low"));
+    }
+
+    #[test]
+    fn at_the_floor_a_node_entry_without_a_model_keeps_the_default_profiles() {
+        let mut profiles = profiles_with_default();
+        profiles.insert(
+            DEFAULT_ID.to_string(),
+            profile(CLAUDE, Some("sonnet"), Some("high")),
+        );
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            CLAUDE.to_string(),
+            HarnessEntry {
+                model: None,
+                effort: Some("low".to_string()),
+            },
+        );
+        let tiers = Tiers {
+            node_harnesses: Some(&entries),
+            ..Default::default()
+        };
+        let r = resolve(&tiers, &profiles, DEFAULT_ID);
+        assert_eq!(r.combo.model.as_deref(), Some("sonnet"));
+        assert_eq!(r.combo.effort.as_deref(), Some("low"));
     }
 
     #[test]

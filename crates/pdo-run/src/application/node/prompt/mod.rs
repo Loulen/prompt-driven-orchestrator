@@ -128,11 +128,12 @@ pub struct AugmentContext<'a> {
     /// empty `Vec`) pools nothing — failed iterations stay quarantined, and no raw
     /// `iter-*` glob is ever handed to an agent or script.
     pub repeated_iters: HashMap<String, Vec<i64>>,
-    /// The upstream nodes with no completed iteration yet
+    /// The upstream nodes with nothing to read, and why
     /// ([`crate::domain::input_resolution::absent_sources`]): their inputs are
     /// named absent in the preamble instead of pointing at a file that does not
-    /// exist (ADR-0086). Precomputed by the daemon, like `source_iters`.
-    pub absent_sources: std::collections::HashSet<String>,
+    /// exist — not available yet (ADR-0086), or a branch not taken (ADR-0082).
+    /// Precomputed by the daemon, like `source_iters`.
+    pub absent_sources: HashMap<String, crate::domain::input_resolution::Absence>,
     /// Secondary repos visible to this node; empty for a mono-repo Run. Nodes
     /// reach these ONLY by absolute path, so `build_preamble` prints the paths and
     /// `build_script_env` exposes them as `PDO_SECONDARY_REPOS` plus
@@ -194,6 +195,7 @@ pub fn toggle_invocations(interactive: bool, orchestrator: bool) -> Option<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::input_resolution::Absence;
     use pdo_pipeline::domain::pipeline::{
         EdgeDef, EdgeEndpoint, EdgeSource, NodeType, Port, PortType,
     };
@@ -682,6 +684,81 @@ mod tests {
     }
 
     #[test]
+    fn script_env_hands_a_collection_lap_its_item() {
+        // A `script` lap of a collection fan-out reads no preamble, so its item
+        // arrives as `PDO_ITEM` (and the lap count as `PDO_ITEM_TOTAL`), as an
+        // agent lap reads it under `## Collection Context`.
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        let env: HashMap<String, String> = build_script_env(&ctx).into_iter().collect();
+        assert!(!env.contains_key("PDO_ITEM"), "no item outside a fan-out");
+        assert!(!env.contains_key("PDO_ITEM_TOTAL"));
+
+        ctx.foreach_context = Some(ForEachContext {
+            current_item: "beta".into(),
+            current_iter: 2,
+            total: 3,
+        });
+        let env: HashMap<String, String> = build_script_env(&ctx).into_iter().collect();
+        assert_eq!(env.get("PDO_ITEM").map(String::as_str), Some("beta"));
+        assert_eq!(env.get("PDO_ITEM_TOTAL").map(String::as_str), Some("3"));
+    }
+
+    /// `planner` and `drafter` both feed `reader`'s `work` (a same-named input),
+    /// `drafter`'s branch not taken.
+    fn convergence_of_a_branch_not_taken() -> PipelineDef {
+        let mut pipeline = sample_pipeline();
+        for id in ["drafter", "reader"] {
+            pipeline.nodes.push(NodeDef {
+                node_type: NodeType::Script,
+                id: id.into(),
+                name: id.into(),
+                ..pipeline.nodes[0].clone()
+            });
+        }
+        for source in ["planner", "drafter"] {
+            pipeline.edges.push(EdgeDef {
+                source: EdgeSource::single(source, "plan"),
+                target: EdgeEndpoint {
+                    node: "reader".into(),
+                    port: "work".into(),
+                },
+                ..Default::default()
+            });
+        }
+        pipeline
+    }
+
+    #[test]
+    fn a_branch_not_taken_is_named_in_the_preamble_and_blanks_no_fired_input() {
+        // ADR-0082: a convergence consumes only the branches that fired.
+        let pipeline = convergence_of_a_branch_not_taken();
+        let node = pipeline.nodes.iter().find(|n| n.id == "reader").unwrap();
+        let vars = HashMap::new();
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.source_iters = HashMap::from([("planner".to_string(), 1), ("drafter".to_string(), 1)]);
+        ctx.absent_sources = HashMap::from([("drafter".to_string(), Absence::NotTaken)]);
+
+        let preamble = build_preamble(&ctx);
+        assert!(
+            preamble.contains(
+                "- `work`: not taken — its upstream `drafter` was skipped because its branch"
+            ),
+            "{preamble}"
+        );
+        assert!(!preamble.contains("drafter/iter-1"), "{preamble}");
+
+        let env: HashMap<String, String> = build_script_env(&ctx).into_iter().collect();
+        assert_eq!(
+            env.get("PDO_INPUT_WORK").map(String::as_str),
+            Some("/repo/.pdo/artifacts/planner/iter-1/plan/output.md"),
+            "the untaken branch blanked the input of the branch that fired"
+        );
+    }
+
+    #[test]
     fn script_env_empties_an_input_whose_upstream_produced_nothing() {
         // ADR-0086: a script launched ahead of its producer (an on-demand node)
         // gets an empty `PDO_INPUT_<PORT>`, never the path of a file nothing
@@ -705,7 +782,7 @@ mod tests {
         let node = pipeline.nodes.iter().find(|n| n.id == "reader").unwrap();
         let vars = HashMap::new();
         let mut ctx = sample_ctx(&pipeline, node, &vars);
-        ctx.absent_sources = ["planner".to_string()].into_iter().collect();
+        ctx.absent_sources = HashMap::from([("planner".to_string(), Absence::NotYet)]);
 
         let env: HashMap<String, String> = build_script_env(&ctx).into_iter().collect();
         assert_eq!(env.get("PDO_INPUT_WORK").map(String::as_str), Some(""));
@@ -1656,7 +1733,7 @@ mod tests {
         let node = pipeline.nodes.iter().find(|n| n.id == "reader").unwrap();
         let vars = HashMap::new();
         let mut ctx = sample_ctx(&pipeline, node, &vars);
-        ctx.absent_sources = ["planner".to_string()].into_iter().collect();
+        ctx.absent_sources = HashMap::from([("planner".to_string(), Absence::NotYet)]);
 
         let preamble = build_preamble(&ctx);
         assert!(
@@ -1901,6 +1978,20 @@ mod tests {
         );
         assert!(prompt.contains("# Pipeline Manager Runtime Preamble"));
         assert!(prompt.contains("You are the Pipeline Manager."));
+    }
+
+    #[test]
+    fn a_manager_started_for_a_message_reads_it_after_its_instructions() {
+        let prompt = with_first_message(
+            "# Pipeline Manager Runtime Preamble\nYou are the Pipeline Manager.",
+            "Review comments — 1 new on Run run-1.\n[rc-001] lib.rs:R4\n",
+        );
+        let role = prompt.find("You are the Pipeline Manager.").unwrap();
+        let message = prompt
+            .find("[pdo-runtime] Review comments — 1 new on Run run-1.")
+            .expect("the message carries the runtime prefix");
+        assert!(role < message, "instructions first, then the message");
+        assert!(prompt.contains("[rc-001] lib.rs:R4"));
     }
 
     #[test]

@@ -251,7 +251,12 @@
       color: var(--text);
     }
   }
-  .set-sec__body[data-filtered="true"] > :not(.set-row),
+  /* A search keeps the matching rows. A filtered Appearance block renders its
+     switches bare, each in its pointing wrapper (`ElementSwitch`): the wrapper
+     stays while its row matches (rows filter themselves), CORE-232. So does a
+     table whose rows the search filters (`set-extra--rows`, the tours). */
+  .set-sec__body[data-filtered="true"] > :not(.set-row, .set-ablock__point, .set-extra--rows),
+  .set-sec__body[data-filtered="true"] > .set-ablock__point:not(:has(.set-row)),
   .set-extra[hidden] {
     display: none;
   }
@@ -411,6 +416,17 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* Version & update › Installed: the mark of the Marque, the product and its
+     version, then the core of a distribution (CORE-225). */
+  .set-product {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+  }
+  .set-product > svg {
+    flex: none;
   }
   .set-line {
     display: flex;

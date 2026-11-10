@@ -9,7 +9,8 @@ pub(super) fn state(trigger: &Value) -> &'static str {
     } else if trigger["enabled"] == true {
         "enabled"
     } else {
-        "paused"
+        // As the Triggers list says it: « paused » is the global switch's word.
+        "disabled"
     }
 }
 
@@ -78,6 +79,11 @@ pub(super) fn show_text(trigger: &Value) -> String {
     out
 }
 
+/// Whether a fire's answer is an error, not an honest skip: the CLI then exits 1.
+pub(super) fn fire_failed(answer: &Value) -> bool {
+    answer["outcome"] == "error" || answer["outcome"] == "guard-error"
+}
+
 pub(super) fn fire_line(id: &str, answer: &Value) -> String {
     if answer["fired"] == true {
         format!(
@@ -144,7 +150,8 @@ mod tests {
     #[test]
     fn a_trigger_reads_as_its_state() {
         assert_eq!(state(&json!({ "enabled": true })), "enabled");
-        assert_eq!(state(&json!({ "enabled": false })), "paused");
+        // « paused » is the global switch's word, as in the Triggers list (CORE-232).
+        assert_eq!(state(&json!({ "enabled": false })), "disabled");
         assert_eq!(
             state(
                 &json!({ "enabled": true, "suspension": { "extension": "test", "reason": "r" } })
@@ -173,6 +180,23 @@ mod tests {
             ),
             "tr-1 not fired (skipped): guard exited 1"
         );
+    }
+
+    #[test]
+    fn an_error_outcome_fails_the_fire_a_skip_does_not() {
+        assert!(fire_failed(
+            &json!({ "fired": false, "outcome": "error", "reason": "r" })
+        ));
+        assert!(fire_failed(
+            &json!({ "fired": false, "outcome": "guard-error" })
+        ));
+        assert!(!fire_failed(
+            &json!({ "fired": false, "outcome": "guard-exit-nonzero" })
+        ));
+        assert!(!fire_failed(
+            &json!({ "fired": false, "outcome": "skipped-overlap" })
+        ));
+        assert!(!fire_failed(&json!({ "fired": true, "run_id": "r1" })));
     }
 
     #[test]

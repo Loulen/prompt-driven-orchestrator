@@ -215,8 +215,14 @@ pub async fn run_stale_detection(state: &Arc<Runs>) {
             &sandbox_root,
         );
 
-        let running = stale_detector::running_nodes(&run_state);
-        for (node_id, iter) in &running {
+        // The nodes holding a session: the running ones, and the ones whose
+        // agent waits in its session for its user, probed for death only.
+        let holding = stale_detector::session_holding_nodes(&run_state);
+        let running: Vec<(String, i64)> = holding
+            .iter()
+            .map(|(node_id, iter, _)| (node_id.clone(), *iter))
+            .collect();
+        for (node_id, iter, awaiting_user) in &holding {
             // #653/ADR-0060: the sweep probes where the NodeRun actually works —
             // its frozen isolation, not a type that no longer implies a directory.
             let working_dir = if node_run_isolation(&events, &run_state, node_id, *iter) {
@@ -270,7 +276,8 @@ pub async fn run_stale_detection(state: &Arc<Runs>) {
                 node_id,
                 *iter,
                 now,
-                autocomplete_turn_end,
+                // A turn that ended on a question to the user never completes it.
+                autocomplete_turn_end && !awaiting_user,
                 &node_harness,
             );
 

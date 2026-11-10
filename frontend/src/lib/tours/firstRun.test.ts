@@ -439,8 +439,11 @@ describe("targets that re-aim as the user works", () => {
     const fake = new FakeApp();
     fake.hide(NEW_RUN);
     expect(stepById("open-new-run").target(fake.obs())).toEqual([RUNS_TAB]);
+    // The card says the tab it lights (CORE-232).
+    expect(stepBody(stepById("open-new-run"), fake.obs())).toMatch(/^Open the Runs tab, then click New Run\./);
     fake.show(NEW_RUN);
     expect(stepById("open-new-run").target(fake.obs())).toEqual([NEW_RUN]);
+    expect(stepBody(stepById("open-new-run"), fake.obs())).toMatch(/^Click New Run\./);
   });
 
   /**
@@ -448,16 +451,6 @@ describe("targets that re-aim as the user works", () => {
    * what was lit — the full tour arrives from the Pipelines tab. The body names
    * the lit thing.
    */
-  it("says to click the Runs tab while the tab is what is lit, then New Run", () => {
-    const fake = new FakeApp();
-    fake.hide(NEW_RUN);
-    const onTab = stepBody(stepById("open-new-run"), fake.obs());
-    expect(onTab).toMatch(/^Click the Runs tab/);
-    expect(onTab).not.toMatch(/^Click New Run/);
-    fake.show(NEW_RUN);
-    expect(stepBody(stepById("open-new-run"), fake.obs())).toMatch(/^Click New Run/);
-  });
-
   it.each([
     ["pick-pipeline", PIPELINE_TRIGGER, () => {}, PIPELINE_OPTION],
     ["pick-profile", AGENT_TRIGGER, () => {}, AGENT_DEFAULT_ROW],
@@ -1061,7 +1054,8 @@ describe("waiting for the node to finish", () => {
     fake.releaseCompletion();
 
     expect(stepBody(waitStep(), fake.obs())).not.toContain("Nothing to do");
-    expect(stepNote(waitStep(), fake.obs())).toContain("answer it");
+    // The release tells the agent nothing: the reader is the one who says it may finish (CORE-232).
+    expect(stepNote(waitStep(), fake.obs())).toContain("tell it in the terminal above that it can finish now");
   });
 
   it("lights the whole inspector as a zone to roam in", () => {

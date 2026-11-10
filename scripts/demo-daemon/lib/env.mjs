@@ -10,11 +10,17 @@
 // a fresh one; the toolchains (rustup, cargo, corepack) stay the real ones, so
 // a build or a `pnpm` inside a demo node does not download them again.
 
+import { isIP } from "node:net";
 import path from "node:path";
 import { RESERVED_PORTS } from "../../readme-media/lib/demo-instance.mjs";
 
 /** The caller's tmux: the demo tmux server must not nest in it. */
 export const TMUX_VARS = ["TMUX", "TMUX_PANE"];
+
+/** The service manager's marks: inherited from a caller that systemd started (the
+ *  user's daemon, its nodes), they would make the demo daemon read itself as a
+ *  supervised service (CORE-232: « Method: Unknown · systemd service »). */
+export const SUPERVISOR_VARS = ["INVOCATION_ID", "JOURNAL_STREAM", "NOTIFY_SOCKET"];
 
 /** What `extra` may not set: the isolation itself (HOME, port, nested mode). */
 const NOT_EXTRA = ["HOME", "PATH", "PDO_PORT", "PDO_BIND", "PDO_NODE_ID", "PDO_DAEMON_NO_CLEANUP", "PDO_TOKEN", ...TMUX_VARS];
@@ -64,19 +70,26 @@ function portOf(url) {
 /**
  * The demo daemon's environment, from the caller's `env` (left untouched).
  * `extra` holds variables the caller asks for explicitly (`DEMO_ENV=`), set
- * after the purge; it may not undo the isolation (NOT_EXTRA). `bind`: the
- * address the daemon listens on, loopback unless a sandboxed Run needs it
- * reachable from its container (`BIND_ALL=1`: all interfaces, since the
- * container calls `host.docker.internal`, the docker bridge).
+ * after the purge; it may not undo the isolation (NOT_EXTRA). `bind` is the
+ * address the daemon listens on (`BIND=`): loopback by default; a sandboxed
+ * journey needs `0.0.0.0`, its containers calling the daemon through the host
+ * gateway, which a loopback-only daemon does not answer.
  */
 export function demoEnv({ env, paths, port, extra = {}, bind = "127.0.0.1" }) {
+  if (isIP(bind) === 0) throw new Error(`BIND=<ip> is an address the daemon listens on, e.g. 0.0.0.0 (got ${JSON.stringify(bind)})`);
   const refused = Object.keys(extra).filter((key) => NOT_EXTRA.includes(key));
   if (refused.length > 0) throw new Error(`DEMO_ENV may not set ${refused.join(", ")}: the demo daemon's isolation sets them`);
   const realHome = env.HOME;
   const cacheHome = env.XDG_CACHE_HOME ?? path.join(realHome, ".cache");
   const out = {};
   for (const [key, value] of Object.entries(env)) {
-    if (key.startsWith("PDO_") || TMUX_VARS.includes(key) || REAL_CONFIG_VARS.includes(key)) continue;
+    if (
+      key.startsWith("PDO_") ||
+      TMUX_VARS.includes(key) ||
+      REAL_CONFIG_VARS.includes(key) ||
+      SUPERVISOR_VARS.includes(key)
+    )
+      continue;
     out[key] = value;
   }
   const searchPath = `${paths.bin}:${env.PATH ?? ""}`;

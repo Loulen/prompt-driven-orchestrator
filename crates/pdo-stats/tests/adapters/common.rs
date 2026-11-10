@@ -68,8 +68,9 @@ impl TriggerFires for DbFires {
                     "SELECT \
                        (SELECT COUNT(*) FROM trigger_fires \
                         WHERE outcome = 'fired' AND ts >= ?1 AND ts < ?2), \
-                       (SELECT COUNT(DISTINCT trigger_id) FROM trigger_fires \
-                        WHERE outcome = 'fired' AND ts >= ?1 AND ts < ?2), \
+                       (SELECT COUNT(DISTINCT f.trigger_id) FROM trigger_fires f \
+                        JOIN triggers t ON t.id = f.trigger_id \
+                        WHERE t.enabled = 1 AND f.outcome = 'fired' AND f.ts >= ?1 AND f.ts < ?2), \
                        (SELECT COUNT(*) FROM triggers WHERE enabled = 1)",
                 )
                 .bind(from)

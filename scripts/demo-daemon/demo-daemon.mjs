@@ -1,9 +1,9 @@
-// `make demo-daemon PORT=<p> [TEST_EXT=1] [BIND_ALL=1] [DEMO_ENV='K=V …']` and `make
+// `make demo-daemon PORT=<p> [TEST_EXT=1] [DEMO_ENV='K=V …'] [BIND=<ip> | BIND_ALL=1]` and `make
 // demo-daemon-stop PORT=<p> [KEEP=1]` (and `make demo-daemon-resync PORT=<p>`, the
 // host's harness logins copied in again): a PDO daemon for an agentic test,
 // sealed off from the user's (lib/daemon.mjs). See docs/agents/run-scenario.md.
 //
-//   node scripts/demo-daemon/demo-daemon.mjs start <port> [--test-ext] [--bind-all] [--env 'K=V …']
+//   node scripts/demo-daemon/demo-daemon.mjs start <port> [--test-ext] [--env 'K=V …'] [--bind <ip>]
 //   node scripts/demo-daemon/demo-daemon.mjs stop <port> [--keep]
 //   node scripts/demo-daemon/demo-daemon.mjs resync <port>
 
@@ -31,12 +31,12 @@ async function main(argv) {
   const value = (name) => (rest.includes(name) ? rest[rest.indexOf(name) + 1] : undefined);
   if (verb === "start") {
     const port = parsePort(portText, process.env);
-    const demo = await startDemo({ port, testExt: flag("--test-ext"), bindAll: flag("--bind-all"), extra: parseExtra(value("--env")), repoRoot });
+    const demo = await startDemo({ port, testExt: flag("--test-ext"), extra: parseExtra(value("--env")), bind: value("--bind"), repoRoot });
     const unset = Object.keys(process.env)
       .filter((key) => key.startsWith("PDO_"))
       .map((key) => `-u ${key} `)
       .join("");
-    const extras = `${flag("--test-ext") ? ", with the test extension" : ""}${flag("--bind-all") ? ", on all interfaces (sandboxed Runs reach it)" : ""}`;
+    const extras = `${flag("--test-ext") ? ", with the test extension" : ""}${value("--bind") ? `, listening on ${value("--bind")}` : ""}`;
     console.log(`demo daemon up on port ${port}${extras} (pid ${demo.pid}, HOME ${demo.paths.home}, log ${demo.paths.log})`);
     console.log(`PDO_DAEMON_URL=${demo.url}`);
     console.log(`PDO=${demo.pdo}`);

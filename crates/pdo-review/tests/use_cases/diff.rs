@@ -95,3 +95,23 @@ async fn a_bad_ref_is_refused_and_a_gone_branch_is_a_404() {
         Err(Failure::Text(404, body)) if body == "run branch not found"
     ));
 }
+
+/// CORE-231: a raw revision git does not know is the caller's typo, not a gone
+/// branch. The 404 names it and the Run ref spellings.
+#[tokio::test]
+async fn an_unknown_raw_revision_is_named_not_reported_as_a_gone_branch() {
+    let w = World::new();
+    w.completed_run("r1").await;
+    w.git.unknown.lock().unwrap().insert("bogusref".into());
+    match w
+        .review
+        .structured_diff("r1", Some("fork"), Some("bogusref"))
+        .await
+    {
+        Err(Failure::Text(404, body)) => {
+            assert!(body.starts_with("unknown ref: bogusref"), "{body}");
+            assert!(body.contains("node:<id>:<iter>:before"), "{body}");
+        }
+        other => panic!("{other:?}"),
+    }
+}

@@ -1,6 +1,6 @@
 ---
 id: HP-02
-covers: [run, project, start-node, tmux-session, dataflow, conditional-routing, loop-region, collection, convergence, artifact, run-stats, approve, sandbox, staging-profile, staging-floor, sandbox-prep, harness, agent-choice, harness-capability, harness-turn-end, harness-reported-cost, harness-resume-by-identity]
+covers: [run, run-pause, review, review-comment, pipeline-manager, project, start-node, tmux-session, dataflow, conditional-routing, loop-region, collection, convergence, artifact, run-stats, approve, sandbox, staging-profile, staging-floor, sandbox-prep, harness, agent-choice, harness-capability, harness-turn-end, harness-reported-cost, harness-resume-by-identity, shared-terminal, terminal-import, declared-wait]
 ---
 
 # HP-02 — Launch a run to completion
@@ -37,6 +37,10 @@ Features validated while crossing the run screens:
   node downstream is an ordinary **agent**: it starts only once every lap is done, receives the
   laps' outputs grouped in one input, and finds each lap's code already merged back on the Run
   branch. The editor toolbar offers no Merge button.
+- **Pause / Resume** (CORE-229): a Run paused from its row of the Runs list launches nothing new,
+  but a node already working **finishes** during the pause and reads completed; Resume starts the
+  next node. A completion lost to a pause (the node « session died » after Resume, its work to
+  redo) is the regression this guards.
 - **Approve ▾** (ADR-0068): on a node with no output yet, Approve is inert, its tooltip
   « Missing outputs: <ports> »; the daemon answers **409 `missing_outputs`** to a forced completion.
 - **Artifact rendering** (#240 / ADR-0013): an output opens in the markdown modal; a ` ```mermaid `
@@ -45,6 +49,10 @@ Features validated while crossing the run screens:
   Node sessions started (manager excluded; **hidden by default**: turn on Settings › Appearance ›
   Run info › Stats › « Node sessions » first), Changes (`+N −M`, a click opens the Diff tab) and the
   **Est. cost** (« — » when it cannot be computed); every label is the cell's tooltip.
+- **Diff review loop** (ADR-0067, CORE-231): the Run's Diff tab opens the Review page; an inline
+  comment sent to the Pipeline Manager gets its reply in the thread without a reload, and resolving
+  folds the thread. It is the one journey where a real agent answers through the Review surface:
+  see step 17.
 - **Runs grouped by Project** (#258, ADR-0087): the Runs list groups by Project, falling back to
   the repository for Runs outside any Project, as soon as there are two groups or one Project group.
 - **Daemon version** in the status bar (#139): `v<version>`, live.
@@ -53,6 +61,12 @@ Features validated while crossing the run screens:
   reach the same outcome by two visibly different routes. The `off` twin is the **control**: a green
   sandboxed Run proves nothing alone (a Run that silently fell back to the host path also looks
   green). See steps 10-13.
+- **Live session, two browsers** (CORE-230): while a node waits for its user, a second browser
+  opens its terminal and **watches** (« Watching », the pilot's screen at a reduced font, its
+  keystrokes refused); **Take control** flips the roles. The pilot drops a file on the terminal:
+  **Import** files it under the Run's `_attachments/`, and **Copy & send to terminal** writes the
+  sentence into the agent's input **without** Enter: the wait stays open until the pilot types and
+  presses Enter; a bare Enter never lifts it. See step 18.
 - **Agentic harness, as a four-way choice** (PRD #549 / #612 / #702, ADR-0045, ADR-0046, ADR-0051,
   ADR-0052, ADR-0063): a **four-node** pipeline runs one node on **`claude`**, one on **`opencode`**,
   one on **`copilot`** and one on **`pi`** in the **same Run**. The set is the control: a
@@ -74,9 +88,10 @@ Features validated while crossing the run screens:
   stages `copilot`'s logged-in user and trusts `/tmp` for it: keep the target repo under `/tmp`.
 - Docker is available for the sandbox pair; the sandbox image may be built on the first sandboxed
   Run (minutes, once per image change). The daemon listens on an address the container reaches:
-  start the demo daemon with **`BIND_ALL=1`** (`docs/agents/run-scenario.md`). A loopback-only
-  daemon refuses the container's `host.docker.internal` calls, and the sandboxed node can never
-  complete.
+  start the demo daemon with **`BIND=0.0.0.0`** (or `BIND_ALL=1`, `docs/agents/run-scenario.md`).
+  On a loopback-only daemon the twin's `pdo complete` fails (« failed to reach daemon …
+  host.docker.internal ») and step 11 cannot pass: a precondition missing, not a finding of the
+  sandbox.
 - A target git repository, and the pipelines the journey seeds (a dataflow pipeline with a
   conditional edge, a bounded review loop and a collection region converging on an agent; a
   one-node pipeline; a four-node pipeline). A pipeline created for the journey is born a **test
@@ -101,7 +116,9 @@ Features validated while crossing the run screens:
    `node_typed` with no keystroke is a finding.
 5. Data routes downstream: conditional edges fire to all matching targets, the loop region iterates
    (`i/N` in its corner) and exits on PASS, the collection region fans out in parallel (`⇉ X/N
-   items`) and converges on the downstream **agent**.
+   items`) and converges on the downstream **agent**. While a node works, press **Pause** on the
+   Run's row of the Runs list → the row reads **Paused** and offers **Resume**; let the node finish
+   → it reads **completed** and no new node starts; press **Resume** → the next node starts.
 6. The Run reaches **Completed**: nodes read completed, End carries its « Reached » check (tooltip
    « Run end · reached »), and its inspector's « Termination reasons » show the `result` port
    **received**.
@@ -153,6 +170,22 @@ Features validated while crossing the run screens:
     conversation** — its prompt and its turn. When the agent ran `pdo complete` itself, the session
     is reaped at once, so the snapshot may freeze mid-turn (« Working · esc interrupt ») rather than
     on its `❯` prompt back and waiting: both are the node's own conversation.
+17. **Review the first Run.** Back on the Run of steps 1-9, open its **Diff** tab: the file list and
+    its `+`/`−` counts match what the Run changed. Its **Review page** button (top right) opens the
+    Review page on the fork → worktree (or tip) pair. Hover a changed line, click its **+**, write a
+    one-line remark, save it as a draft, then **Send all to manager**. Within a minute the manager's
+    reply appears **in the thread, without a reload**, and the comment reads as answered. **Resolve**
+    it: the thread folds and keeps its line number. Last, open one output card of the Run and
+    download it (the arrow): the file is the artifact the markdown modal showed in step 7.
+18. **Two browsers on a waiting node.** Launch a one-node pipeline whose **interactive** node asks a
+    question with `pdo wait-user`. Its terminal shows **You pilot**. Open the same node in a second
+    browser (another profile): it reads **Watching** with **Take control**; its typing does nothing.
+    Press **Take control** there: the first browser turns spectator. Back in the pilot, press a bare
+    **Enter** in the terminal: the question stays on the banner. Click the terminal's import icon,
+    pick a file, **Import**, then **Copy & send to terminal**: the sentence naming
+    `.pdo/artifacts/_attachments/<node>/<file>` sits in the agent's input, not submitted, and the node
+    still waits. Type an answer and press **Enter**: the wait lifts (`node_resumed`), and **Approve ▾ ›
+    Auto-approve when ready** lets the agent complete.
 
 ## Checks
 
@@ -161,11 +194,20 @@ Features validated while crossing the run screens:
 - Start/End render; the running node shows live, wrapping terminal output (no horizontal scrollbar).
 - Routing matches the pipeline shape (multi-match fan-out, the loop corner iterating, the
   collection's `⇉ X/N items`, the convergence drawn as an agent, not a Merge).
+- Paused, the Run launches nothing; the node that was working completes during the pause (never
+  « session died » after Resume) and Resume starts its successor.
 - The Run settles to **Completed**; End's `result` reads **received**.
 - The artifact modal shows the content; a valid mermaid block is an SVG, an invalid one falls back
   to `<pre><code>` (never a blank pane, never a thrown error).
 - Stats: Duration ticks on a live Run and freezes on a terminal one; Est. cost is labelled an
   estimate, « — » when it cannot be computed.
+- Review (step 17): the Diff tab's counts equal the Review page header's; the manager's reply lands
+  in the thread live; a resolved thread folds and keeps its `:<line>`. A comment left « Awaiting
+  manager reply » with no manager session alive is a finding: the manager's first start on a repo
+  `claude` never trusted reads the batch at the end of its launch prompt, or says « Held for you »
+  with the way out (CORE-239).
+- Two browsers (step 18): the spectator's keystrokes reach nothing; a bare Enter never lifts the
+  wait; « Copy & send to terminal » submits nothing by itself.
 - The browser console shows no uncaught error along the journey.
 
 #### Sandbox A/B (steps 10-13)

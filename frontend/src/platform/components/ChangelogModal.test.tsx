@@ -43,6 +43,7 @@ function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
     checked_at: "2026-09-05T08:00:00Z",
     source: "GitHub Releases",
     source_url: "https://api.github.com/repos/Loulen/prompt-driven-orchestrator/releases/latest",
+    source_page_url: null,
     check_enabled: true,
     install_method: "homebrew",
     manual_command: "brew update && brew upgrade Loulen/tap/pdo",

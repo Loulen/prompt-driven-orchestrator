@@ -187,7 +187,8 @@ async fn a_distribution_compares_its_own_version_and_updates_with_its_own_comman
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let log = std::fs::read_to_string(&log_path).unwrap_or_default();
-        if log.contains("cmd=acme-upgrade") {
+        // The executor writes one line at a time: read on once both are in.
+        if log.contains("cmd=acme-upgrade") && log.contains("method=") {
             assert!(log.contains("method=declared"), "{log}");
             break;
         }
@@ -317,14 +318,19 @@ async fn the_operators_source_still_wins_over_the_channels() {
 }
 
 #[tokio::test]
-async fn the_vanilla_binary_is_pdo_at_the_cores_version_with_no_source() {
+async fn the_vanilla_binary_is_pdo_at_the_cores_version_checking_the_public_repository() {
     let _env = crate::common::lock_update_check_unset();
     let root = tempfile::tempdir().unwrap();
+    // No check runs (no loop, no `POST /update/check`): nothing leaves the machine.
     let (_daemon, base) = start(root.path(), quiet(&home(root.path())), None).await;
     let body = update_json(&base).await;
     assert_eq!(body["channel_name"], "PDO");
     assert_eq!(body["installed_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(body["core_version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(body["source_url"], serde_json::Value::Null);
+    assert_eq!(
+        body["source_url"],
+        "https://api.github.com/repos/Loulen/prompt-driven-orchestrator/releases/latest"
+    );
+    assert_eq!(body["source"], "GitHub Releases");
     assert_eq!(body["latest_version"], serde_json::Value::Null);
 }

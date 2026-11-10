@@ -3,7 +3,7 @@ import { Pause, Pencil, Play } from "lucide-react";
 import type { Trigger } from "../../shared/generated/Trigger";
 import { fetchSettings } from "../../settings/api/settings";
 import { humanizeCron } from "../model/cronPresets";
-import { formatFireTs, lastOutcomeTooltip, outcomeTone, overlapLabel } from "../model/outcome";
+import { NOT_SCHEDULED_HINT, fireRefusalOf, formatFireTs, lastOutcomeTooltip, outcomeTone, overlapLabel } from "../model/outcome";
 import { tildify } from "../../lib/homePath";
 import FireHistory from "./triggerDetail/FireHistory";
 import GuardSection from "./triggerDetail/GuardSection";
@@ -89,18 +89,28 @@ export default function TriggerDetailPanel({
     };
   }, []);
 
+  const schedule = humanizeCron(trigger.cron);
+  // No words for it: the raw cron itself.
+  const rawCron = schedule.startsWith(trigger.cron.trim());
   const rows: KeyValueRow[] = [
     {
       k: "Schedule",
-      v: <span data-testid="trigger-detail-schedule">{humanizeCron(trigger.cron)}</span>,
-      tip: humanizeCron(trigger.cron).startsWith(trigger.cron.trim())
-        ? humanizeCron(trigger.cron)
-        : `${humanizeCron(trigger.cron)} · ${trigger.cron}`,
+      v: <span data-testid="trigger-detail-schedule">{schedule}</span>,
+      tip: rawCron ? schedule : `${schedule} · ${trigger.cron}`,
+      // A raw cron reads field by field in mono (« * * * * * », not « ***** »).
+      mono: rawCron,
     },
     {
       k: "Next",
-      v: <span data-testid="trigger-detail-next">{formatFireTs(trigger.next_fire_at) ?? (trigger.enabled ? "–" : "off")}</span>,
-      tip: formatFireTs(trigger.next_fire_at, "local") ?? undefined,
+      v: (
+        <span data-testid="trigger-detail-next">
+          {formatFireTs(trigger.next_fire_at) ?? (trigger.enabled ? "Not scheduled" : "off")}
+        </span>
+      ),
+      // Asleep after a missing pipeline or repository: what wakes it (CORE-232).
+      tip:
+        formatFireTs(trigger.next_fire_at, "local") ??
+        (trigger.enabled ? NOT_SCHEDULED_HINT : undefined),
       mono: true,
     },
     ...(trigger.last_editor
@@ -137,6 +147,7 @@ export default function TriggerDetailPanel({
       : { k: "Sandbox", v: <span className="ln-faint">Instance default</span>, tip: "Instance default" },
   ];
 
+  const fireRefusal = fireRefusalOf(trigger, refused.fire);
   return (
     <aside className="tg-detail" data-testid="trigger-detail-panel">
       <header className="tg-detail__head">
@@ -159,8 +170,8 @@ export default function TriggerDetailPanel({
             size="sm"
             icon={Play}
             onClick={onRunNow}
-            title={refused.fire ? undefined : "Run now"}
-            disabledReason={refused.fire}
+            title={fireRefusal ? undefined : "Run now"}
+            disabledReason={fireRefusal}
             data-testid="trigger-detail-run-now"
           >
             Run

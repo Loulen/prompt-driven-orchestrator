@@ -31,6 +31,26 @@ async fn an_edit_asks_the_instance_settings_update_and_answers_the_new_page() {
 }
 
 #[tokio::test]
+async fn a_stored_edit_is_announced_to_the_open_pages_a_refused_one_is_not() {
+    let w = world();
+    w.settings
+        .update(&Actor::LocalOperator, json!({ "session_cap": 4 }))
+        .await
+        .unwrap();
+    assert_eq!(*w.harnesses.settings_announced.lock().unwrap(), 1);
+
+    w.settings
+        .update(&Actor::LocalOperator, json!({ "session_cap": 0 }))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        *w.harnesses.settings_announced.lock().unwrap(),
+        1,
+        "nothing stored, nothing announced"
+    );
+}
+
+#[tokio::test]
 async fn a_refused_edit_stores_nothing_and_validates_nothing() {
     let w = world();
     w.refuse();

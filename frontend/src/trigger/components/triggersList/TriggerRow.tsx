@@ -14,7 +14,7 @@ import { fmtAge, fmtUntil } from "../../../shared/ui/leftList/format";
 import { useListClock } from "../../../shared/ui/leftList/clock";
 import type { Trigger } from "../../../shared/generated/Trigger";
 import { humanizeCron } from "../../model/cronPresets";
-import { lastOutcomeTooltip, outcomeTone, overlapLabel } from "../../model/outcome";
+import { NOT_SCHEDULED_HINT, fireRefusalOf, lastOutcomeTooltip, outcomeTone, overlapLabel } from "../../model/outcome";
 import SuspendedPill from "./SuspendedPill";
 import { suspensionTooltip } from "../../model/suspension";
 import { copyToClipboard } from "../../../shared/lib/clipboard";
@@ -54,9 +54,10 @@ function nextOf(t: Trigger, paused: boolean, now: number): { text: string; title
   if (t.suspension) return { text: "—", title: `Suspended: ${suspensionTooltip(t.suspension)}`, dim: true };
   if (!t.enabled) return { text: "off", title: `Disabled\n${schedule}`, dim: true };
   if (paused) return { text: "paused", title: `All triggers paused\n${schedule}`, dim: true };
-  if (!t.next_fire_at) return { text: "—", title: `Not scheduled\n${schedule}`, dim: true };
+  if (!t.next_fire_at)
+    return { text: "—", title: `Not scheduled: ${NOT_SCHEDULED_HINT}\n${schedule}`, dim: true };
   const until = fmtUntil(t.next_fire_at, now);
-  return { text: until, title: `Next fire in ${until}\n${schedule}`, dim: false };
+  return { text: until, title: `${until === "now" ? "Next fire now" : `Next fire in ${until}`}\n${schedule}`, dim: false };
 }
 
 /**
@@ -160,8 +161,9 @@ export default function TriggerRow({
       <span className="d-switch__knob" aria-hidden />
     </button>
   );
+  const fireRefusal = fireRefusalOf(t, refused.fire);
   // The menu always holds Enable/Disable and Delete; Run now only when offered.
-  const menuReasons = reasonsOf(onRunNow && refused.fire, refused.update, refused.delete);
+  const menuReasons = reasonsOf(onRunNow && fireRefusal, refused.update, refused.delete);
   return (
     <div
       role="button"
@@ -243,7 +245,7 @@ export default function TriggerRow({
           )}
           <span className="lp-end">
             {t.last_fired_at && lastMarks && (
-              <span className="lp-num lp-muted lp-hide-narrow" title={last} data-testid="trigger-last-fired" {...lastMarks}>
+              <span className="lp-num lp-muted" title={last} data-testid="trigger-last-fired" {...lastMarks}>
                 {fmtAge(t.last_fired_at, now)}
               </span>
             )}
@@ -259,7 +261,7 @@ export default function TriggerRow({
       {!preview && (
       <HoverBar testId="trigger-row-actions">
         {onRunNow && (
-          <RowAction icon={Play} label="Run now" testId="trigger-run-now" onClick={onRunNow} disabledReason={refused.fire} />
+          <RowAction icon={Play} label="Run now" testId="trigger-run-now" onClick={onRunNow} disabledReason={fireRefusal} />
         )}
         {onEdit && (
           <RowAction icon={Pencil} label="Edit trigger" testId="trigger-edit" onClick={onEdit} disabledReason={refused.update} />
@@ -276,7 +278,7 @@ export default function TriggerRow({
             `trigger/item/menu` groups, then Delete. */}
         <RowMenu label={`More actions for ${t.name}`} testId="trigger-row-menu" reasons={menuReasons}>
           {onRunNow && (
-            <RowMenuItem data-testid="trigger-menu-run-now" disabledReason={refused.fire} onClick={onRunNow}>
+            <RowMenuItem data-testid="trigger-menu-run-now" disabledReason={fireRefusal} onClick={onRunNow}>
               <Play /> Run now
             </RowMenuItem>
           )}

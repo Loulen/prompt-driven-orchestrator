@@ -52,10 +52,10 @@ export default function WorkspaceSection({
     <>
       <FormRow
         label="Worktree"
-        help="Where this node's NodeRun works"
+        help="Where this node works: the Run's worktree (Shared) or a worktree of its own (Isolated)"
         aside={
           isolationFrozen ? (
-            <FrozenMark title="Frozen at spawn: an edit applies to the next NodeRun" testid="workspace-frozen" />
+            <FrozenMark title="Frozen at spawn: an edit applies to the node's next execution" testid="workspace-frozen" />
           ) : undefined
         }
       >

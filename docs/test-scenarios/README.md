@@ -31,10 +31,12 @@ plays the same journeys on top of its own extensions, never instead of them. So:
 
 - no journey step, precondition or check needs an extension (no Backlog, no Rights, no extension
   tab or route); a check that only an extension can satisfy says so and is skipped on the core;
-- no journey asserts the **product's name or logo**: they come from the binary's **Marque**
-  (CONTEXT.md), « PDO » on the core, the Distribution's own elsewhere.
+- the **product's name and logo** come from the binary's **Marque** (CONTEXT.md): « PDO » and its
+  mark on the core, the Distribution's own elsewhere. One step checks them, HP-03's step 16
+  (Settings › General › Version & update reads `PDO <version>` after the PDO mark, signed « by
+  Acogni »); a Distribution reads its own there. No other step depends on the brand.
 
-Start the demo daemon with **`BIND_ALL=1`** for HP-02: its sandboxed Run calls the daemon from a
+Start the demo daemon with **`BIND=0.0.0.0`** (or `BIND_ALL=1`) for HP-02: its sandboxed Run calls the daemon from a
 container, which a loopback-only daemon refuses. Every harness HP-02 runs must be logged in on the
 machine (the demo daemon copies the logins it finds, and skips the others): a missing login is a
 precondition finding, not a product bug.
@@ -44,7 +46,7 @@ precondition finding, not a product bug.
 | ID | Title | Covers | Status |
 |---|---|---|---|
 | [HP-01](HP-01-author-and-save.md) | Author & save a pipeline | Pipelines tab, unified canvas, shared draft, Save window and pipeline versions, duplicate, Validate | active |
-| [HP-02](HP-02-run-to-completion.md) | Launch a run to completion | run lifecycle, dataflow, artifacts, stats, Approve, **sandbox A/B (`full` vs `off`)**, **harness four-way choice (`claude` / `opencode` / `copilot` / `pi`)** | active |
+| [HP-02](HP-02-run-to-completion.md) | Launch a run to completion | run lifecycle, dataflow, artifacts, stats, Approve, **diff review loop (comment → manager reply → resolve)**, **sandbox A/B (`full` vs `off`)**, **harness four-way choice (`claude` / `opencode` / `copilot` / `pi`)**, **live session on two browsers (watch, take control, import, a declared wait a bare Enter never lifts)** | active |
 | [HP-03](HP-03-guided-onboarding.md) | A newcomer takes the full tour | welcome modal, tutorial mode, Projecteur, training repository, *Overview* on a script Run + example Trigger tidy-up, New Run form, interactive node + Approve ▾, artifact, *First pipeline* + Validate, step replay | active |
 
 **The 3rd slot went to onboarding (#825, spec #821), not to Triggers.** The full tour is the only
@@ -58,6 +60,11 @@ of **3** stands, and curation is a human decision at the integration→main MR.
 
 HP-03 was promoted from `proposed` to `active` with CORE-227; its replay on the vanilla core, with
 HP-01 and HP-02, is reported in that ticket.
+
+**The diff review loop is grafted onto HP-02 (its §17) rather than given its own slot.** It reuses the
+Run HP-02 already completed, costs one manager turn, and is the only place a real agent answers
+through the Review surface: the acceptance tour of the Review and observation domain found its first use
+broken there, silently, when no step of any HP crossed it.
 
 **Sandbox (PRD #403) is grafted onto HP-02 as an A/B drive-by rather than given its own slot.** The
 pair `full` + `off` is what makes it meaningful: the `off` twin is the control (a Run that silently

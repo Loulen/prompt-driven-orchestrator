@@ -1,8 +1,10 @@
-<h1 align="center">PDO</h1>
+<h1 align="center">
+  <picture><source media="(prefers-color-scheme: dark)" srcset="../../docs/assets/readme/pdo-logo-dark.svg"><img src="../../docs/assets/readme/pdo-logo-light.svg" alt="PDO" height="64" /></picture>
+</h1>
 
 <p align="center">
   <a href="https://github.com/Loulen/prompt-driven-orchestrator/releases/latest"><img src="https://img.shields.io/github/v/release/Loulen/prompt-driven-orchestrator?style=flat&amp;label=release&amp;color=10b981" alt="Latest release" /></a>
-  <a href="../../LICENSE"><img src="https://img.shields.io/badge/license-MIT-10b981?style=flat" alt="License: MIT" /></a>
+  <a href="../../LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-10b981?style=flat" alt="License: Apache 2.0" /></a>
   <img src="https://img.shields.io/badge/macOS%20%7C%20Linux-10b981?style=flat-square" alt="Plateformes : macOS et Linux" />
 </p>
 
@@ -174,7 +176,7 @@ Importez des skills depuis un dépôt ou écrivez-les à la main, puis donnez-le
 - **[Runs multi-dépôts](../../docs/features.md#multi-repo-runs)** — un seul run qui travaille sur plusieurs dépôts.
 - **[Tours guidés](../../docs/features.md#guided-tours)** — l'app vous accompagne dans votre premier pipeline, une étape à la fois.
 - **[Page mounts](../../docs/features.md#page-mounts)** — les agents servent prototypes et rapports sous `/pages/<name>/` pour que vous les relisiez.
-- **[Service et mise à jour intégrée](../../docs/features.md#service--in-app-update)** — `pdo service install` le garde en marche ; un clic dans la barre d'état le met à jour.
+- **[Service et mise à jour intégrée](../../docs/features.md#service--in-app-update)** — `pdo service install` le garde en marche ; la barre d'état signale une nouvelle version, et vous mettez à jour depuis son « What's new ».
 - **Et bien plus** — le [changelog](../../CHANGELOG.md) est la vraie liste des fonctionnalités.
 
 ---
@@ -222,6 +224,11 @@ Mises à jour, options du service et toutes les commandes CLI : [docs/reference/
 
 Envie de contribuer ou de lancer PDO depuis les sources ? Voir [CONTRIBUTING.md](../../CONTRIBUTING.md). La documentation de référence (CLI, reverse proxy, terminal, support des harnais) vit dans [docs/reference/](../../docs/reference/).
 
+## Entreprise : Acogni Driver
+
+**Acogni Driver** est l'édition entreprise de PDO, publiée par Acogni : le même core open source, compilé avec des extensions privées.
+Pour en parler, contactez Acogni via [Loulen sur GitHub](https://github.com/Loulen).
+
 ## Licence
 
-PDO est libre et open source, sous [licence MIT](../../LICENSE) : utilisez-le, modifiez-le, embarquez-le, hébergez-le, pour tout usage.
+PDO est libre et open source, sous [licence Apache 2.0](../../LICENSE) : utilisez-le, modifiez-le, embarquez-le, hébergez-le, pour tout usage. La licence ne donne aucun droit sur les marques Acogni ; voir [NOTICE](../../NOTICE). Les versions jusqu'à 1.132.0 ont été publiées sous licence MIT ; leur historique est dans [docs/CHANGELOG-v1.md](../CHANGELOG-v1.md).

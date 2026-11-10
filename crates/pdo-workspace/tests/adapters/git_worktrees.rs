@@ -775,6 +775,41 @@ fn stage_and_commit_keeps_the_run_artifacts_out_of_the_branch() {
     );
 }
 
+/// The prompt and the turn-end hook PDO writes beside a session
+/// (`.pdo/prompts/<node>-iter-<n>.md`, `….settings.json`) are PDO's, not the
+/// node's deliverable: a target repo whose `.gitignore` does not cover `.pdo/`
+/// used to get them committed into every Run branch.
+#[test]
+fn stage_and_commit_keeps_the_session_prompts_out_of_the_branch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    init_test_repo(repo);
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .unwrap()
+    };
+    let prompts = repo.join(".pdo/prompts");
+    std::fs::create_dir_all(&prompts).unwrap();
+    std::fs::write(prompts.join("worker-iter-1.md"), "# PDO Runtime Preamble\n").unwrap();
+    std::fs::write(prompts.join("worker-iter-1.settings.json"), "{}\n").unwrap();
+    std::fs::write(repo.join("hello.txt"), "hello from PDO\n").unwrap();
+
+    stage_and_commit(repo, "worker", 1, &CommitIdentity::default())
+        .unwrap()
+        .unwrap();
+
+    let files =
+        String::from_utf8_lossy(&git(&["show", "--name-status", "--format="]).stdout).to_string();
+    assert!(files.contains("A\thello.txt"), "{files}");
+    assert!(
+        !files.contains(".pdo/prompts"),
+        "the session's prompts stay out: {files}"
+    );
+}
+
 /// #796: only artifacts are exempt from the completion commit — nothing else
 /// under `.pdo/` (a versioned pipeline edited by the node) is.
 #[test]
@@ -917,6 +952,53 @@ fn deliver_in_place_excludes_resources_materialized_by_provisioning() {
         !committed.lines().any(|path| path == "local-secret.txt"),
         "provisioned resources must not enter delivery commits: {committed}"
     );
+}
+
+/// A non-isolated node that commits its own work: the delivery takes no commit,
+/// but its `before` is the Run worktree's HEAD when the node started, so the
+/// pair still brackets what the node did (CORE-231).
+#[test]
+fn deliver_in_place_brackets_the_commits_the_node_made_itself() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    init_test_repo(repo);
+
+    let run_id = "test-deliver-self-commit";
+    let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+    let pipeline_branch = format!("pdo/run-{run_id}");
+    create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
+    let started_at = rev_parse(&wt_dir, "HEAD").unwrap();
+
+    std::fs::write(wt_dir.join("own.rs"), "pub fn own() {}\n").unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&wt_dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}: {out:?}");
+    };
+    git(&["add", "own.rs"]);
+    git(&["commit", "-m", "the node's own commit"]);
+    let tip = rev_parse(&wt_dir, "HEAD").unwrap();
+
+    let outcome = deliver_node_work(
+        &wt_dir,
+        &wt_dir,
+        false,
+        "unused",
+        "shared-1",
+        1,
+        Some(&started_at),
+        &CommitIdentity::default(),
+    )
+    .unwrap();
+    let DeliveryOutcome::Delivered(d) = outcome else {
+        panic!("a non-isolated delivery never conflicts");
+    };
+    assert!(d.changed(), "the node's own commit is its delivery");
+    assert_eq!(d.before, started_at);
+    assert_eq!(d.after, tip, "nothing left behind ⇒ no delivery commit");
 }
 
 /// The no-op reports itself as one: same tip on both sides, no commit taken.

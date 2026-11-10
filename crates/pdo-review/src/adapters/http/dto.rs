@@ -79,3 +79,10 @@ impl From<SendReviewCommentInput> for DraftComment {
 pub struct SendReviewCommentsRequest {
     pub comments: Vec<SendReviewCommentInput>,
 }
+
+/// « Send again » (CORE-239): the sent comments to hand the manager once more,
+/// as written.
+#[derive(Deserialize)]
+pub struct ResendReviewCommentsRequest {
+    pub ids: Vec<String>,
+}

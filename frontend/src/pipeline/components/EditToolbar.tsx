@@ -55,7 +55,7 @@ interface Props {
   // #752 (CONTEXT.md « Accès rapide Review »): the Review quick access, in the
   // slot the "Run repositories" toggle used to hold (Repositories is a tab of the
   // Run panel now). A real link to the Run's Review page — same tab, like the
-  // Diff tab's "Expand and comment" — with a pill = `pendingCount()` (sent, not
+  // Diff tab's "Review page" button — with a pill = `pendingCount()` (sent, not
   // resolved). The colour carries the nuance, never the number: outlined blue
   // pending, solid blue ≥ 1 unread reply, amber ≥ 1 resolution proposed (wins).
   // Passed for every non-archived Run; absent on templates and archived Runs.
@@ -174,7 +174,14 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
             onClick={() => undo()}
             disabled={!canUndo}
           />
-          <IconButton icon={Redo2} label="Redo" kbd="Ctrl+Y" data-testid="toolbar-redo" onClick={() => redo()} disabled={!canRedo} />
+          <IconButton
+            icon={Redo2}
+            label={draft?.redoLabel ? `Redo ${draft.redoLabel}` : "Redo"}
+            kbd="Ctrl+Y"
+            data-testid="toolbar-redo"
+            onClick={() => redo()}
+            disabled={!canRedo}
+          />
         </>
       )}
 

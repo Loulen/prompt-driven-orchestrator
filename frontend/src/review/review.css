@@ -827,3 +827,22 @@ span.rv-pill {
 .pdo-review-flash {
   animation: pdo-review-flash 2.4s ease-out;
 }
+
+/* CORE-239: a sent comment held on its way to the manager — why, and the way out. */
+.rv-ct__notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--g-2);
+  padding: var(--g-2) var(--g-2) var(--g-2) var(--g-3);
+  border-top: 1px solid var(--line-soft);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+.rv-ct__notice > svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.rv-ct__notice-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

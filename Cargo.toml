@@ -26,7 +26,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-version = "2.76.0"
+version = "2.76.1"
 license = "Apache-2.0"
 description = "Prompt-Driven Orchestrator — a local daemon that runs and supervises agentic coding pipelines"
 repository = "https://github.com/Loulen/prompt-driven-orchestrator"
@@ -86,7 +86,7 @@ opentelemetry-http = { version = "0.33.1", default-features = false }
 opentelemetry-prometheus = { version = "0.33.1", default-features = false }
 prometheus = { version = "0.14", default-features = false }
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "system-proxy", "rustls-tls", "json", "blocking", "multipart"] }
-pdo-extension-api = { path = "crates/pdo-extension-api", version = "0.25.0" }
+pdo-extension-api = { path = "crates/pdo-extension-api", version = "0.25.1" }
 pdo-kernel = { path = "crates/pdo-kernel" }
 pdo-workspace = { path = "crates/pdo-workspace" }
 pdo-skill = { path = "crates/pdo-skill" }
@@ -137,6 +137,10 @@ github-build-setup = "../build-setup.yml"
 install-path = "~/.local/bin"
 # Les PR ne construisent que le plan ; rien ne publie hors tag `v*`.
 pr-run-mode = "plan"
+# dist 0.32 builds aarch64-apple-darwin on `macos-14` by default; GitHub retired
+# that image ("The configuration 'macos-14-arm64-us-default' is not supported").
+[workspace.metadata.dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
 
 # Profil de build utilisé par `dist build` (`cargo build --profile dist`). Requis :
 # sans lui, la release échoue avec « error: profile `dist` is not defined ». Normalement

@@ -14,6 +14,10 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## 2.76.1
+
+- The release builds the Apple Silicon macOS archive on `macos-15`: GitHub retired the `macos-14` runner dist used by default, so 2.76.0 published no release.
+
 ## 2.76.0
 
 ### Upgrading from 1.x

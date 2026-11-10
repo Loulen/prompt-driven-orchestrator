@@ -24,19 +24,24 @@ import { PROD_CHECK } from "../lib/history-plan.mjs";
 import { DEMO_TRIGGER } from "../lib/seed.mjs";
 import { assertNoAgent, forbidAgentLaunch, waitForRuns } from "./_no-agent.mjs";
 
-const VIEWPORT = { width: 1100, height: 700 };
-// Canvas (the pipeline the trigger fires) + the trigger panel, wide enough for
-// the guard's report to read in full; the top bar, the left panel (and its
-// pause banner) and the status bar are cut.
-const LAYOUT = { "pdo.layout.run": { left: 18, center: 36, right: 46 } };
-const CROP = { x: 198, y: 44, width: 902, height: 634 };
-// Variant b: the runs rail, the canvas and the top of the trigger panel.
-const VIEWPORT_B = { width: 1040, height: 680 };
-const LAYOUT_B = { "pdo.layout.run": { left: 21, center: 37, right: 42 } };
-const CROP_B = { x: 0, y: 44, width: 1040, height: 614 };
-/** How far the canvas is panned right, off camera: the drawn `Incident_found =
- *  false` label sits left of the nodes, past the edge of the fitted view. */
-const PAN_X = 70;
+const VIEWPORT = { width: 1200, height: 700 };
+// The panes in % of the viewport, at the default UI scale (120 %): the left
+// panel at its floor (240 px, cut), the canvas 470 px (the pipeline and its
+// `Incident_found = false` label, left of the agents' column), the trigger
+// panel 490 px, wide enough for the guard's report and the fire history to
+// read in full. The top bar, the left panel (and its pause banner) and the
+// status bar are cut.
+const LAYOUT = { "pdo.layout.run": { left: 20, center: 39.17, right: 40.83 } };
+const CROP = { x: 242, y: 44, width: 958, height: 628 };
+// Variant b: the runs rail (270 px), the canvas (470 px) and the trigger panel
+// (440 px: under it, the fire history's columns run into each other).
+const VIEWPORT_B = { width: 1180, height: 680 };
+const LAYOUT_B = { "pdo.layout.run": { left: 22.88, center: 39.83, right: 37.29 } };
+const CROP_B = { x: 0, y: 44, width: 1180, height: 610 };
+/** Room, in px, left of the drawn `Incident_found = false` label once the
+ *  canvas is panned: the fitted view centres the agents' column and leaves
+ *  the label past the canvas's left edge. */
+const LABEL_MARGIN = 14;
 
 /** From the runs list to the trigger's detail panel and its canvas, off camera. */
 async function openTrigger(ctx) {
@@ -55,30 +60,41 @@ async function openTrigger(ctx) {
   for (const node of PROD_CHECK.nodeDefs.filter((n) => n.node_type === "agent")) {
     await page.locator(".react-flow__node").filter({ hasText: node.name }).first().waitFor();
   }
-  await panCanvas(page, PAN_X);
+  await panCanvas(page);
   await sleep(500);
   return panel;
 }
 
-/** Pan the edit canvas by `dx`, dragging its empty bottom-left corner. Off
- *  camera; the view is not part of the pipeline, so nothing turns unsaved. */
-async function panCanvas(page, dx) {
+/** Pan the edit canvas right until the `Incident_found = false` label clears
+ *  its left edge, dragging the empty pane right of End. Off camera; the view
+ *  is not part of the pipeline, so nothing turns unsaved. */
+async function panCanvas(page) {
+  await sleep(500); // the canvas fits its view once the nodes are drawn
   const box = await page.getByTestId("rf__wrapper").boundingBox();
-  const y = box.y + box.height - 30;
-  await page.mouse.move(box.x + 24, y);
-  await page.mouse.down();
-  await page.mouse.move(box.x + 24 + dx / 2, y, { steps: 6 });
-  await page.mouse.move(box.x + 24 + dx, y, { steps: 6 });
-  await page.mouse.up();
-  await sleep(300);
   const falseLabel = page.getByText("Incident_found = false", { exact: true }).first();
+  const before = await falseLabel.boundingBox();
+  if (!before) throw new Error("the « Incident_found = false » label is not drawn");
+  const dx = Math.round(box.x + LABEL_MARGIN - before.x);
+  if (dx > 0) {
+    const y = box.y + box.height - 30;
+    const x = box.x + box.width - 30 - dx;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + dx / 2, y, { steps: 6 });
+    await page.mouse.move(x + dx, y, { steps: 6 });
+    await page.mouse.up();
+    await sleep(300);
+  }
   const label = await falseLabel.boundingBox();
   if (!label || label.x < box.x + 4) throw new Error(`the « Incident_found = false » label is cut by the canvas edge (${JSON.stringify(label)})`);
+  const right = Math.max(...(await page.locator(".react-flow__node").evaluateAll((els) => els.map((e) => e.getBoundingClientRect().right))));
+  if (right > box.x + box.width - 4) throw new Error(`the pipeline is wider than the canvas (nodes end at ${right}, the canvas at ${box.x + box.width})`);
 }
 
 /** The poster never shows an unsaved pipeline. */
 async function assertSaved(page) {
-  const save = page.getByRole("button", { name: "Save", exact: true });
+  // « Save… » on a pipeline opened from its trigger (a shared draft, ADR-0088).
+  const save = page.getByTestId("save-button");
   if (!(await save.isDisabled())) throw new Error("the prod-check canvas reads unsaved");
 }
 
@@ -149,9 +165,11 @@ export default {
           await ctx.hover(shown.getByTestId("fire-run-link"), { duration: 600, pause: 300 });
         });
         ctx.mark("history-shown", { before: 200, after: 600 });
-        // Off the link (its hover state) before the end state, the poster.
-        const box = await shown.boundingBox();
-        await ctx.keep(() => ctx.moveTo({ x: box.x + box.width * 0.62, y: box.y + box.height + 26 }, { duration: 500 }));
+        // Off the link and the history's rows (their hover state) before the
+        // end state, the poster: up to the input template, the report's
+        // destination.
+        const input = await panel.getByTestId("trigger-detail-input").boundingBox();
+        await ctx.keep(() => ctx.moveTo({ x: input.x + input.width * 0.62, y: input.y + input.height / 2 }, { duration: 500 }));
         await assertSaved(page);
         await ctx.hold(1600);
         assertNoAgent(ctx.instance);
@@ -176,11 +194,21 @@ export default {
         await ctx.keep(async () => {
           await ctx.hover(panel.getByTestId("trigger-detail-schedule"), { duration: 700, pause: 350 });
           await ctx.hover(panel.getByTestId("trigger-detail-guard"), { duration: 450, pause: 350 });
-          await ctx.click(page.getByTestId("run-filter-trigger"), { duration: 700 });
-          const option = page.locator('[data-testid^="run-filter-option-"]').filter({ hasText: DEMO_TRIGGER.name }).first();
+          // The rail's funnel, its Trigger row, the trigger; the funnel again
+          // closes the menu.
+          const funnel = page.getByTestId("run-filter-funnel");
+          await ctx.click(funnel, { duration: 700 });
+          const select = page.getByTestId("run-filter-trigger").getByRole("button", { name: "Trigger" });
+          await select.waitFor();
+          await sleep(200);
+          await ctx.click(select, { duration: 450 });
+          const option = page.getByRole("option", { name: DEMO_TRIGGER.name, exact: true });
           await option.waitFor();
           await sleep(200);
           await ctx.click(option, { duration: 450 });
+          await sleep(300);
+          if (await page.getByTestId("run-filter-menu").isVisible()) await ctx.click(funnel, { duration: 500 });
+          await page.getByTestId("run-filter-menu").waitFor({ state: "hidden" });
         });
         const labels = page.getByTestId("run-display-label");
         await labels.filter({ hasText: "Alert: checkout p95 spike" }).first().waitFor();

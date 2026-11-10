@@ -1,4 +1,6 @@
-<h1 align="center">PDO</h1>
+<h1 align="center">
+  <picture><source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/pdo-logo-dark.svg"><img src="docs/assets/readme/pdo-logo-light.svg" alt="PDO" height="64" /></picture>
+</h1>
 
 <p align="center">
   <a href="https://github.com/Loulen/prompt-driven-orchestrator/releases/latest"><img src="https://img.shields.io/github/v/release/Loulen/prompt-driven-orchestrator?style=flat&amp;label=release&amp;color=10b981" alt="Latest release" /></a>
@@ -174,7 +176,7 @@ Import skills from a repo or write them by hand, then give them to any node from
 - **[Multi-repo runs](docs/features.md#multi-repo-runs)** — one run that works across several repositories.
 - **[Guided tours](docs/features.md#guided-tours)** — the app walks you through your first pipeline, one step at a time.
 - **[Page mounts](docs/features.md#page-mounts)** — agents serve prototypes and reports under `/pages/<name>/` for you to review.
-- **[Service &amp; in-app update](docs/features.md#service--in-app-update)** — `pdo service install` keeps it running; one click in the status bar updates it.
+- **[Service &amp; in-app update](docs/features.md#service--in-app-update)** — `pdo service install` keeps it running; the status bar flags a new release, and you update from its "What's new".
 - **And more** — the [changelog](CHANGELOG.md) is the real feature list.
 
 ---
@@ -240,6 +242,11 @@ PDO_FRONTEND_DIST = { value = "pdo-core/frontend/dist", relative = true }
 ```
 
 `cargo build` then needs neither Node nor pnpm, and writes nothing into `~/.cargo/git/checkouts/`: the UI is copied under `target/`. Without `PDO_FRONTEND_DIST`, the build looks for `frontend/node_modules` inside the checkout and stops with a message naming both options when it is missing. Nothing checks yet that the `dist/` matches the tag.
+
+## Enterprise: Acogni Driver
+
+**Acogni Driver** is the enterprise edition of PDO, published by Acogni: the same open source core, built with private extensions.
+To talk about it, contact Acogni through [Loulen on GitHub](https://github.com/Loulen).
 
 ## License
 

@@ -200,9 +200,9 @@ export async function stopDemoRun(instance, runId, { archive = false, children =
 
 /** Open the runs rail (history loaded, never « No runs yet ») and select the run
  *  named `name`, off camera. Resolves once its canvas shows `implementer`. */
-export async function openRun(ctx, name = DEMO_TASK.name) {
+export async function openRun(ctx, name = DEMO_TASK.name, { goto = true } = {}) {
   const { page } = ctx;
-  await ctx.goto("/");
+  if (goto) await ctx.goto("/");
   const row = page.getByTestId("run-display-label").filter({ hasText: name }).first();
   await row.waitFor({ timeout: 30_000 });
   // Through ctx, even off camera: the cursor overlay follows the real mouse,
@@ -210,6 +210,17 @@ export async function openRun(ctx, name = DEMO_TASK.name) {
   await ctx.click(row, { duration: 150, pause: 40 });
   await page.getByTestId("rf__node-implementer").waitFor({ timeout: 30_000 });
   await sleep(600);
+}
+
+/** The runs rail loaded, off camera, BEFORE a live run starts: its row is
+ *  clicked as soon as it shows (`openRun(ctx, name, { goto: false })`). The
+ *  demo `implementer` can finish in half a minute, and a page loaded after the
+ *  start on a busy machine would miss it at work. */
+export async function openRunsRail(ctx) {
+  const { page } = ctx;
+  await ctx.goto("/");
+  await page.getByTestId("run-display-label").first().waitFor({ timeout: 30_000 });
+  await sleep(300);
 }
 
 /** Wheel-scroll the panel under `over` (a locator or a point) until `target`'s

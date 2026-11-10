@@ -72,13 +72,13 @@ nodes:
     type: start
     outputs:
       - { name: user_prompt }
-    view: { x: 199, y: 47 }
+    view: { x: 270, y: 60 }
   - id: end
     name: End
     type: end
     inputs:
       - { name: result }
-    view: { x: 204, y: 316 }
+    view: { x: 272, y: 424 }
   - id: implementer
     name: implementer
     type: script
@@ -88,7 +88,7 @@ nodes:
     outputs:
       - name: code
         instructions: "What was changed, in a few lines."
-    view: { x: 196, y: 135 }
+    view: { x: 196, y: 130 }
   - id: reviewer
     name: reviewer
     type: script
@@ -102,51 +102,51 @@ nodes:
             allowed: [pass, fail]
             type: enum
         instructions: "Your verdict, then a small Mermaid diagram of the flow you checked."
-    view: { x: 197, y: 208 }
+    view: { x: 196, y: 236 }
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: implementer, port: task }
     mode: manual
     waypoints:
-      - { x: 280, y: 95 }
+      - { x: 300, y: 107 }
     target_side: top
-    source_anchor: { side: bottom, offset: 81 }
-    target_anchor: { side: top, offset: 84 }
+    source_anchor: { side: bottom, offset: 30 }
+    target_anchor: { side: top, offset: 104 }
   - source: { node: implementer, port: code }
     target: { node: reviewer, port: code }
     mode: manual
     waypoints:
-      - { x: 280, y: 168 }
+      - { x: 300, y: 218 }
     target_side: top
-    source_anchor: { side: bottom, offset: 84 }
-    target_anchor: { side: top, offset: 83 }
+    source_anchor: { side: bottom, offset: 104 }
+    target_anchor: { side: top, offset: 104 }
   - source: { node: reviewer, port: review }
     target: { node: implementer, port: task }
     when:
       verdict: { eq: fail }
     mode: manual
     waypoints:
-      - { x: 397, y: 154 }
-      - { x: 396, y: 154 }
+      - { x: 452, y: 162 }
+      - { x: 451, y: 162 }
     target_side: right
-    source_anchor: { side: right, offset: 26 }
-    target_anchor: { side: right, offset: 19 }
+    source_anchor: { side: right, offset: 40 }
+    target_anchor: { side: right, offset: 32 }
     output_label_pos:
-      review: { x: 381, y: 225 }
-    condition_label_pos: { x: 395, y: 192 }
+      review: { x: 420, y: 291 }
+    condition_label_pos: { x: 452, y: 216 }
   - source: { node: reviewer, port: review }
     target: { node: end, port: result }
     when:
       verdict: { eq: pass }
     mode: manual
     waypoints:
-      - { x: 280, y: 276 }
+      - { x: 300, y: 380 }
     target_side: top
-    source_anchor: { side: bottom, offset: 83 }
-    target_anchor: { side: top, offset: 76 }
+    source_anchor: { side: bottom, offset: 104 }
+    target_anchor: { side: top, offset: 28 }
     output_label_pos:
-      review: { x: 253, y: 256 }
-    condition_label_pos: { x: 284, y: 284 }
+      review: { x: 268, y: 352 }
+    condition_label_pos: { x: 304, y: 392 }
 loops:
   - id: loop-tutorial-overview
     kind: bounded

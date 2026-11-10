@@ -54,8 +54,9 @@ export default {
       id: "a",
       label: "Cost › By model → effort",
       viewport: VIEWPORT_A,
-      // Focused on the Cost panel: the top bar and the Stats sections are cut.
-      crop: { x: 140, y: 150, width: 940, height: 610 },
+      // Focused on the Cost panel: the top bar, the Stats header and its tabs
+      // are cut. Stats fills the window (no rail since the shell's redesign).
+      crop: { x: 6, y: 166, width: 1068, height: 588 },
       markers: ["cost-by-model", "effort"],
       async play(ctx) {
         const { page } = ctx;
@@ -88,7 +89,8 @@ export default {
       id: "b",
       label: "Performance › By model, box-plots",
       viewport: VIEWPORT,
-      crop: { x: 150, y: 150, width: 1050, height: 610 },
+      // Under the Stats tabs and their filter bar, the full window width.
+      crop: { x: 6, y: 162, width: 1188, height: 594 },
       markers: ["performance", "by-model"],
       async play(ctx) {
         const { page } = ctx;

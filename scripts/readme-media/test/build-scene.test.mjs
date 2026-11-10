@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { DRIFT_TOLERANCE, cursorPath, drawnRoute, driftWarnings, edgeKey, gestureDrift, startState } from "../lib/build-scene.mjs";
+import { DRIFT_TOLERANCE, cursorPath, drawnRoute, drawnY, driftWarnings, edgeKey, gestureDrift, startState } from "../lib/build-scene.mjs";
 import { variantEntry } from "../lib/manifest.mjs";
 import { TARGET_MS } from "../lib/montage.mjs";
 import { loadScenes, validateScene } from "../lib/scenes.mjs";
@@ -91,7 +91,7 @@ test("a gesture that lands on the target has no drift, whatever the editor's ids
   assert.deepEqual(gestureDrift(saved, built), []);
   const loop = structuredClone(complete);
   loop.loops[0].id = "loop-0123456789abcdef";
-  loop.edges[2].waypoints = [{ x: 396, y: 154 }]; // the same bend, drawn once
+  loop.edges[2].waypoints = [{ x: 452, y: 162 }]; // the same bend, drawn once
   assert.deepEqual(gestureDrift(loop, complete), []);
 });
 
@@ -101,8 +101,8 @@ test("the drift reads the wire the canvas draws, not the waypoints it was saved 
   // leg out of reviewer's right and squares the bend: the same wire.
   const saved = structuredClone(complete);
   const loop = saved.edges.find((e) => edgeKey(e) === "reviewer→implementer");
-  loop.waypoints = [{ x: 396, y: 233 }];
-  loop.source_anchor = { side: "right", offset: 25 };
+  loop.waypoints = [{ x: 452, y: 275 }];
+  loop.source_anchor = { side: "right", offset: 39 };
   assert.deepEqual(gestureDrift(saved, complete), []);
   assert.deepEqual(drawnRoute([{ x: 357, y: 234 }, { x: 397, y: 154 }, { x: 396, y: 154 }, { x: 356, y: 154 }], "right", "right"), [
     { x: 357, y: 234 },
@@ -112,7 +112,7 @@ test("the drift reads the wire the canvas draws, not the waypoints it was saved 
     { x: 356, y: 154 },
   ]);
   // A wire that really goes elsewhere still drifts: the loop squared on the left.
-  loop.waypoints = [{ x: 150, y: 234 }, { x: 150, y: 154 }];
+  loop.waypoints = [{ x: 150, y: 276 }, { x: 150, y: 162 }];
   assert.equal(gestureDrift(saved, complete).filter((l) => l.startsWith("edge reviewer→implementer: route")).length, 1);
 });
 
@@ -140,13 +140,13 @@ test("a gesture that drifts from the target is recorded, one line per visible di
   delete saved.nodes.find((n) => n.id === "reviewer").isolated_worktree;
   const drift = gestureDrift(saved, complete);
   assert.deepEqual(drift, [
-    "node end: at (204, 360) vs target (204, 316)",
+    "node end: at (204, 360) vs target (272, 424)",
     "node reviewer: isolated vs target shares the run worktree",
     "edge reviewer→implementer: carries review vs target review, screenshots",
-    "edge reviewer→implementer: condition label at (435, 192) vs target (395, 192)",
+    "edge reviewer→implementer: condition label at (492, 216) vs target (452, 216)",
     'edge reviewer→end: condition {"verdict":{"neq":"fail"}} vs target {"verdict":{"eq":"pass"}}',
     "edge reviewer→end: target_anchor on left vs target top",
-    "edge reviewer→end: route (280, 243) (280, 283) (280, 276) (164, 276) (164, 380) (204, 380) vs target (280, 243) (280, 283) (280, 276) (280, 316)",
+    "edge reviewer→end: route (300, 301) (300, 341) (300, 380) (164, 380) (204, 380) vs target (300, 301) (300, 341) (300, 384) (300, 424)",
     "loop region implementer,reviewer: bounded ↻ 3 vs target bounded ↻ 5",
   ]);
   // Under the tolerance, a position reads the same.
@@ -178,9 +178,9 @@ test("the manifest records a simulated drift as a warning, without failing the v
   });
   // The card moved, and the ends of its two edges with it.
   assert.deepEqual(entry.warnings, [
-    "drift from the target: node implementer: at (260, 135) vs target (196, 135)",
-    "drift from the target: edge start→implementer: route (280, 82) (280, 122) (280, 95) (344, 95) (344, 135) vs target (280, 82) (280, 122) (280, 95) (280, 135)",
-    "drift from the target: edge implementer→end: route (344, 170) (344, 210) (280, 210) (280, 178) (280, 218) vs target (280, 170) (280, 210) (280, 178) (280, 218)",
+    "drift from the target: node implementer: at (260, 135) vs target (196, 130)",
+    "drift from the target: edge start→implementer: route (300, 84) (300, 124) (300, 95) (364, 95) (364, 135) vs target (300, 84) (300, 124) (300, 90) (300, 130)",
+    "drift from the target: edge implementer→end: route (364, 200) (364, 240) (300, 240) (300, 210) (300, 250) vs target (300, 195) (300, 235) (300, 210) (300, 250)",
   ]);
   assert.equal(entry.gif, "pipelines/a.gif");
 });
@@ -199,4 +199,18 @@ test("the building scenes declare what they draw, and both variants of each", ()
     const start = startState(target, scenes.get(name).drawn);
     assert.deepEqual(parseYaml(dumpYaml(start)), start);
   }
+});
+
+test("the canvas draws what lies under a card with several outputs lower, by the card's growth", () => {
+  // reviewer lists two outputs: drawn 81 px tall for the 65 it was placed for,
+  // so everything from its placed bottom (236 + 65) down is drawn 16 px lower.
+  const down = drawnY(complete);
+  const reviewer = complete.nodes.find((n) => n.id === "reviewer").view;
+  assert.equal(down(complete.nodes.find((n) => n.id === "start").view.y), 60);
+  assert.equal(down(reviewer.y), reviewer.y);
+  assert.equal(down(reviewer.y + 64), reviewer.y + 64);
+  assert.equal(down(reviewer.y + 65), reviewer.y + 65 + 16);
+  assert.equal(down(complete.nodes.find((n) => n.id === "end").view.y), complete.nodes.find((n) => n.id === "end").view.y + 16);
+  // Cards of one output each: drawn as stored.
+  assert.equal(drawnY(built)(400), 400);
 });

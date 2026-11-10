@@ -16,6 +16,20 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 
 ## Unreleased
 
+### README: the PDO logo, an Enterprise section and media of today's UI
+
+- The README (English and French) opens on the PDO logo, in light and dark, and ends with a short
+  "Enterprise: Acogni Driver" section. Its GIFs and posters are recorded again on the vanilla
+  binary, default Theme.
+- `docs/features.md` says how the in-app update really goes (the status-bar version, "What's new",
+  **Update** › **Update now**) and which node can be Interactive or Orchestrator.
+- `make readme-media` films today's UI again: a scene's pane widths apply (the recorder stores the
+  window width the layout was saved for), the target pipelines are redrawn for the 208 px cards,
+  the canvas gestures aim where the canvas draws a node under a card with several outputs, the
+  Save dialog, the "You pilot" terminal, the full-window Stats, the run's read-only Config tab and
+  the two-row Review toolbar are followed, and the agents filmed write in English. A mocked-history
+  run opens from the rail (its `pipeline.yaml` is written in the fixture repo).
+
 ### A pipeline whose Start leads nowhere says so, and its Run fails at once
 
 - The *First pipeline* tour now has you connect **Start to implementer** before wiring the loop. The

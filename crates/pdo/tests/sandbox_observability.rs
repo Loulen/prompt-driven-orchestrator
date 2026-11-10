@@ -110,7 +110,10 @@ fn seed(repo: &Path) -> anyhow::Result<()> {
 /// `container inspect` → running (`true`), so `ensure_ready` never builds/creates.
 /// The daemon-reachability probe (`/dev/tcp/host.docker.internal/<port>`) is
 /// answered as reached: on the host that name does not resolve, and running it
-/// would fail the sandbox prep of every live Run here.
+/// would fail the sandbox prep of every live Run here. The harness-binary probe
+/// (`command -v -- <binary>`) is answered as present for the same reason: run on
+/// the host, it would find `claude` only where it happens to be installed (a dev
+/// machine, not CI), and interrupt the node with `harness_binary_missing`.
 /// Logs every argv (one line per arg) to `argv.log`.
 fn write_live_docker() -> (TempDir, String, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
@@ -130,7 +133,7 @@ fn write_live_docker() -> (TempDir, String, PathBuf) {
          image) exit 0 ;;\n\
          container) printf 'true'; exit 0 ;;\n\
          exec)\n\
-         case \"$*\" in *'/dev/tcp/host.docker.internal/'*) exit 0 ;; esac\n\
+         case \"$*\" in *'/dev/tcp/host.docker.internal/'*|*'command -v -- '*) exit 0 ;; esac\n\
          shift\n\
          while [ \"$#\" -gt 0 ]; do\n\
          case \"$1\" in\n\

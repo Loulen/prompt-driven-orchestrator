@@ -70,6 +70,10 @@ impl Tmux for TmuxCli {
         lifecycle::session_exists(&self.socket, name)
     }
 
+    fn session_closed_at(&self, name: &str) -> Option<std::time::SystemTime> {
+        lifecycle::session_closed_at(&self.socket, name)
+    }
+
     fn server_alive(&self) -> Option<bool> {
         lifecycle::server_alive(&self.socket)
     }

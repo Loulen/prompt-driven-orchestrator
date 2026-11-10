@@ -1034,6 +1034,84 @@ async fn mark_node_done_on_completed_iter_is_noop_without_downstream_spawn() {
     );
 }
 
+/// A duplicate completion on a **Completed** Run is a no-op that leaves the Run
+/// as it was: the embedded re-open (ADR-0049) is for a completion that changes
+/// something, so it must not fire before the duplicate is recognised. It used
+/// to: the Run was re-opened, then the completion was ignored, and the Run sat
+/// `running` with every node done.
+#[tokio::test]
+async fn a_duplicate_completion_on_a_completed_run_does_not_reopen_it() {
+    for kind in ["mark_node_done", "skip_node"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_name = "dup-on-completed";
+        write_pipeline_with_consumer(tmp.path(), pipe_name);
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "dup-on-completed-1";
+        for (kind, node) in [
+            (event_log::EventKind::RunStarted, None),
+            (event_log::EventKind::NodeStarted, Some("worker")),
+            (event_log::EventKind::NodeCompleted, Some("worker")),
+            (event_log::EventKind::NodeStarted, Some("consumer")),
+            (event_log::EventKind::NodeCompleted, Some("consumer")),
+            (event_log::EventKind::RunCompleted, None),
+        ] {
+            append_event(
+                &state,
+                &event_log::Event {
+                    id: None,
+                    run_id: run_id.into(),
+                    ts: pdo_kernel::clock::now_iso(),
+                    kind: kind.clone(),
+                    node_id: node.map(Into::into),
+                    iter: node.map(|_| 1),
+                    payload: (kind == event_log::EventKind::RunStarted)
+                        .then(|| serde_json::json!({ "pipeline_name": pipe_name })),
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/runs/{run_id}/commands"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(
+                        r#"{{"kind": "{kind}", "node_id": "worker", "iter": 1}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{kind}");
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(body["noop"], true, "{kind}: a duplicate is a no-op");
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::CommandIssued
+                    && e.payload.as_ref().and_then(|p| p.get("command"))
+                        == Some(&serde_json::json!("reopen_run"))),
+            "{kind}: a duplicate must not re-open the Run"
+        );
+        assert_eq!(
+            event_log::project(&events).unwrap().status,
+            event_log::RunStatus::Completed,
+            "{kind}: the Run stays Completed"
+        );
+    }
+}
+
 #[tokio::test]
 async fn mark_node_done_on_never_started_iter_is_rejected() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1650,6 +1728,97 @@ async fn a_shared_worktree_node_that_dirties_a_tracked_file_is_delivered_not_ref
     assert!(!events
         .iter()
         .any(|e| e.kind == event_log::EventKind::NodeInterrupted));
+}
+
+/// A completion refused on its outputs leaves no trace: the node's edits are
+/// neither committed nor recorded as delivered, on `POST …/done` and on the
+/// `mark_node_done` command arm alike. Output validation reads the artifact
+/// store, which never travels through git, so it runs before the delivery.
+#[tokio::test]
+async fn a_completion_refused_on_missing_outputs_delivers_nothing() {
+    for (surface, mark_done) in [("done", false), ("mark_node_done", true)] {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        init_git_repo_for_refusal_tests(repo);
+        let pipe = "refused-no-delivery";
+        write_pipeline_with_outputs(repo, pipe);
+
+        let state = test_state_with_dir(repo).await;
+        let run_id = "refused-no-delivery-run";
+        let wt_dir = worktree_dir_for_run(repo, run_id);
+        let pipeline_branch = format!("pdo/run-{run_id}");
+        create_worktree(repo, &wt_dir, &pipeline_branch, "HEAD").unwrap();
+        let tip = |repo: &Path| {
+            let out = std::process::Command::new("git")
+                .args(["rev-parse", &pipeline_branch])
+                .current_dir(repo)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let tip_before = tip(repo);
+        std::fs::write(wt_dir.join("tracked.txt"), "edited, outputs not written\n").unwrap();
+
+        for event in [
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: pdo_kernel::clock::now_iso(),
+                kind: event_log::EventKind::RunStarted,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({
+                    "pipeline_name": pipe,
+                    "node_defs": [
+                        { "id": "worker", "node_type": "agent", "isolated_worktree": false, "inputs": [], "outputs": [] }
+                    ],
+                    "edges": [],
+                })),
+            },
+            event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: pdo_kernel::clock::now_iso(),
+                kind: event_log::EventKind::NodeStarted,
+                node_id: Some("worker".into()),
+                iter: Some(1),
+                payload: None,
+            },
+        ] {
+            append_event(&state, &event).await.unwrap();
+        }
+
+        let (status, _, body) = if mark_done {
+            command_triplet(
+                &state,
+                run_id,
+                r#"{"kind": "mark_node_done", "node_id": "worker", "iter": 1}"#,
+            )
+            .await
+        } else {
+            done_triplet(&state, run_id, "worker", "{}").await
+        };
+        assert_eq!(status, StatusCode::CONFLICT, "{surface}: {body}");
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["error"], "missing_outputs", "{surface}");
+
+        assert_eq!(
+            tip(repo),
+            tip_before,
+            "{surface}: a refused completion must not commit the node's work"
+        );
+        assert!(
+            worktree_has_tracked_changes(&wt_dir).unwrap(),
+            "{surface}: the node's edit stays in the worktree, uncommitted"
+        );
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == event_log::EventKind::NodeDelivered),
+            "{surface}: a refused completion must not record a delivery"
+        );
+    }
 }
 
 /// #654: a NodeRun that left nothing takes NO commit — the Run's branch does

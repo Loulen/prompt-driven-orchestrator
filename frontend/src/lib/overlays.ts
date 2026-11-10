@@ -23,15 +23,22 @@
  */
 
 type Dismiss = () => void;
+/** Where the overlay is on screen, read when asked: `null` once it is gone. */
+type Root = () => Element | null;
 
-const registered = new Set<Dismiss>();
+const registered = new Map<Dismiss, Root | null>();
 
 /**
  * Declare this overlay dismissable while it is mounted. Returns the unregister,
  * so a component's effect can simply `return registerTransientOverlay(onClose)`.
+ *
+ * `root` says where it is. A picker gives it (the folder explorer, the skills
+ * picker): it is then also folded by {@link dismissOverlaysAside} when whoever
+ * needs the app next points somewhere outside it. A viewer that gives none (the
+ * artifact viewer) is only closed by a clear stage.
  */
-export function registerTransientOverlay(dismiss: Dismiss): () => void {
-  registered.add(dismiss);
+export function registerTransientOverlay(dismiss: Dismiss, root: Root | null = null): () => void {
+  registered.set(dismiss, root);
   return () => {
     registered.delete(dismiss);
   };
@@ -44,5 +51,20 @@ export function registerTransientOverlay(dismiss: Dismiss): () => void {
  * mutates the very set we are walking.
  */
 export function dismissTransientOverlays(): void {
-  for (const dismiss of [...registered]) dismiss();
+  for (const dismiss of [...registered.keys()]) dismiss();
+}
+
+/**
+ * Fold the pickers that hold none of `keep` — what the next gesture is about.
+ * A guided tour moving to a step that points at the Pipeline field must not
+ * leave the folder explorer over it, its Cancel under the dim (FP of CORE-227):
+ * the picker was for the step before. One that holds the new target stays.
+ */
+export function dismissOverlaysAside(keep: Element[]): void {
+  for (const [dismiss, root] of [...registered]) {
+    const el = root?.();
+    if (!el) continue;
+    if (keep.some((k) => el.contains(k))) continue;
+    dismiss();
+  }
 }

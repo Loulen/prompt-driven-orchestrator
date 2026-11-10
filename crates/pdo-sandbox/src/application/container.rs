@@ -9,6 +9,9 @@ use tracing::warn;
 
 use super::image::docker;
 use super::ports::DockerCli;
+use crate::domain::container::reach::{
+    daemon_unreachable_reason, reach_daemon_script, REACH_TIMEOUT_SECS,
+};
 use crate::domain::container::{
     container_name, create_args, identity_exec_args, is_absent_stderr, is_name_conflict_stderr,
     kill_one_liner, sh_single_quote, ContainerSpec,
@@ -272,6 +275,55 @@ pub fn binary_present_in_container(
     // the name does not resolve; any other shell verdict is read the same way — the
     // only thing that says "present" is a zero exit.
     Ok(false)
+}
+
+/// Whether the Run's container reaches the daemon at its container-side URL
+/// (`http://host.docker.internal:<port>`), asked from inside the container
+/// ([`reach_daemon_script`]). `Ok` ⇒ the nodes can report back. `Err` names the
+/// cause: the daemon's address unreachable — a daemon bound to `127.0.0.1` on a
+/// Linux engine, a firewall on the bridge — with the remedy
+/// ([`daemon_unreachable_reason`]), or a container that could not run the
+/// probe at all, which is not the same fault.
+pub fn daemon_reachable_from_container(
+    cli: &dyn DockerCli,
+    run_id: &str,
+    uid: u32,
+    gid: u32,
+    port: u16,
+) -> Result<()> {
+    let name = container_name(run_id);
+    let user = format!("{uid}:{gid}");
+    let script = reach_daemon_script(port);
+    let output = match docker(
+        cli,
+        &["exec", "--user", &user, &name, "bash", "-lc", &script],
+    ) {
+        Ok(output) => output,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(anyhow::Error::new(e)).context(DOCKER_NOT_FOUND_MSG);
+        }
+        Err(e) => {
+            return Err(e).context("failed to run `docker exec` to probe the daemon's address");
+        }
+    };
+    if output.success {
+        return Ok(());
+    }
+    let stderr = output.stderr.trim();
+    if is_absent_stderr(stderr) || stderr.contains("is not running") {
+        anyhow::bail!(
+            "sandbox container `{name}` cannot answer the daemon reachability probe: `docker exec` exited with {}: {stderr}",
+            output.status
+        );
+    }
+    let detail = if output.status.ends_with(": 124") {
+        format!("no answer within {REACH_TIMEOUT_SECS} s")
+    } else if let Some(last) = stderr.lines().last().filter(|l| !l.trim().is_empty()) {
+        last.trim().to_string()
+    } else {
+        output.status.clone()
+    };
+    anyhow::bail!(daemon_unreachable_reason(port, &detail))
 }
 
 /// `docker rm -f <name>` au `cleanup_run`. Idempotent : conteneur déjà absent (sentinelle) →
@@ -799,6 +851,24 @@ mod tests {
         );
     }
 
+    /// A session already gone — the usual case on a completion, whose reap ran
+    /// first — leaves nothing for the one-liner to signal. Its exit code used to
+    /// be the last `grep`'s (no match → 1), so every sandboxed completion logged
+    /// « targeted kill … failed » (FP of CORE-227). The one-liner ends in success:
+    /// only `docker exec` itself can fail it.
+    #[test]
+    fn the_kill_one_liner_succeeds_when_nothing_matches() {
+        let script = kill_one_liner("pdo-nobody-here-iter-1");
+        let status = std::process::Command::new("sh")
+            .args(["-c", &script])
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "nothing to kill is not a failure: {status}"
+        );
+    }
+
     #[test]
     fn remove_present_ok() {
         let tmp = tempfile::tempdir().unwrap();
@@ -912,6 +982,69 @@ mod tests {
         let fx = Fixtures::sample();
         assert!(super::ensure_running(&docker, "r1", &fx.spec()).is_err());
         assert_eq!(docker.verbs(), vec!["container"]);
+    }
+
+    #[test]
+    fn a_container_that_reaches_the_daemon_passes_the_probe_in_memory() {
+        let docker = ScriptedDocker::happy();
+        super::daemon_reachable_from_container(&docker, "r1", 1000, 1000, 6172).unwrap();
+        assert_eq!(
+            docker.calls(),
+            vec![strings(&[
+                "exec",
+                "--user",
+                "1000:1000",
+                "pdo-sbx-r1",
+                "bash",
+                "-lc",
+                &crate::domain::container::reach::reach_daemon_script(6172),
+            ])]
+        );
+    }
+
+    /// A daemon bound to 127.0.0.1 refuses the container's calls: the probe says
+    /// so, naming the URL the nodes would use and the remedy.
+    #[test]
+    fn a_refused_connection_fails_naming_the_daemon_address_in_memory() {
+        let docker = ScriptedDocker::answering(|_| {
+            ScriptedDocker::fail(
+                1,
+                "bash: connect: Connection refused\nbash: line 1: /dev/tcp/host.docker.internal/6172: Connection refused",
+            )
+        });
+        let err =
+            super::daemon_reachable_from_container(&docker, "r1", 1000, 1000, 6172).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("cannot reach the PDO daemon at http://host.docker.internal:6172"),
+            "{msg}"
+        );
+        assert!(msg.contains("Connection refused"), "{msg}");
+        assert!(msg.contains("PDO_BIND"), "{msg}");
+    }
+
+    #[test]
+    fn a_silent_timeout_is_said_as_such_in_memory() {
+        let docker = ScriptedDocker::answering(|_| ScriptedDocker::fail(124, ""));
+        let err =
+            super::daemon_reachable_from_container(&docker, "r1", 1000, 1000, 6172).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("no answer within 5 s"),
+            "{err:#}"
+        );
+    }
+
+    /// A container that cannot run the probe is not an unreachable daemon.
+    #[test]
+    fn a_container_that_cannot_answer_the_probe_is_said_as_such_in_memory() {
+        let docker = ScriptedDocker::answering(|_| {
+            ScriptedDocker::fail(1, "Error: No such container: pdo-sbx-r1")
+        });
+        let err =
+            super::daemon_reachable_from_container(&docker, "r1", 1000, 1000, 6172).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("cannot answer"), "{msg}");
+        assert!(!msg.contains("PDO_BIND"), "{msg}");
     }
 
     #[test]

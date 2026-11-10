@@ -39,7 +39,7 @@ import { useWiringGridStep } from "../../hooks/useWiringGrid";
 import { useWiringStore } from "../../stores/wiringStore";
 import { useAgentProfiles } from "../../settings/store/useAgentProfiles";
 import { useSkillBank } from "../../skill/store/useSkillBank";
-// #723 — orchestrator pastilles on the run-view node card.
+import { boxSelectTextGuard } from "../store/boxSelectTextGuard";
 import { useCanvasContextMenu } from "../store/useCanvasContextMenu";
 import { useCanvasLint } from "../store/useCanvasLint";
 import { useCanvasPlacement } from "../store/useCanvasPlacement";
@@ -128,7 +128,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   } = useCanvasWiring({ pipeline, reactFlow, addEdgeToStore, updateEdge, setWiring, gridStep });
   const dragHighlightNodeId = isDraggingEdge ? hoveredNodeId : null;
   useCanvasReveal(reactFlowRef, reactFlow);
-  usePaneToggleReframe(reactFlowRef, reactFlow, tab != null && pipeline != null, rightPaneCollapsed);
+  usePaneToggleReframe(reactFlowRef, reactFlow, tab != null && pipeline != null, rightPaneCollapsed, tab?.id);
   const { computeDropPosition, handleAddNode, handleAddNote } = useCanvasPlacement({
     pipeline,
     shiftRef,
@@ -199,10 +199,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     const noteNodes: Node[] = buildNoteNodes(shown);
     return [...regionNodes, ...placed, ...noteNodes];
   }, [shown, compactCards, placed, activeRunState, editingRun]);
-  const derivedEdges = useMemo(
-    () => (shown ? deriveEditEdges(shown) : []),
-    [shown],
-  );
+  const derivedEdges = useMemo(() => (shown ? deriveEditEdges(shown) : []), [shown]);
 
   useEffect(() => {
     setNodes(derivedNodes);
@@ -314,6 +311,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           onNodeContextMenu={readOnly ? undefined : handleNodeContextMenu}
           onEdgeContextMenu={readOnly ? undefined : handleEdgeContextMenu}
           connectionLineComponent={DragConnectionLine}
+          {...boxSelectTextGuard}
           deleteKeyCode={null}
           fitView
           // CORE-88: down to 25 %, where the rim and the snap still hold; the

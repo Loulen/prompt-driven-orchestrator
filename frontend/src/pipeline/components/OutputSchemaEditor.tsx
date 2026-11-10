@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { IconButton, TextInput } from "../../shared/ui/kit";
 import type { FrontmatterFieldDecl } from "../../shared/generated/FrontmatterFieldDecl";
@@ -8,9 +8,13 @@ type FieldType = (typeof FIELD_TYPES)[number];
 
 interface FieldEntry {
   name: string;
-  type: FieldType;
+  /** One of {@link FIELD_TYPES}, or a type nobody knows as the YAML spells it:
+   *  kept as written, so an edit elsewhere never rewrites it (the lint names it). */
+  type: string;
   allowed?: string[];
 }
+
+const known = (type: string): type is FieldType => (FIELD_TYPES as readonly string[]).includes(type);
 
 function schemaToEntries(
   schema: Record<string, FrontmatterFieldDecl> | null | undefined,
@@ -18,7 +22,7 @@ function schemaToEntries(
   if (!schema) return [];
   return Object.entries(schema).map(([name, decl]) => ({
     name,
-    type: (FIELD_TYPES.includes(decl.type as FieldType) ? decl.type : "string") as FieldType,
+    type: decl.type,
     allowed: decl.allowed ?? undefined,
   }));
 }
@@ -31,7 +35,9 @@ function entriesToSchema(
   for (const e of entries) {
     schema[e.name] = {
       type: e.type,
-      ...(e.type === "enum" && e.allowed ? { allowed: e.allowed } : {}),
+      // An unknown type keeps its list too: a `type: Enum` typo must not lose
+      // its values on an edit elsewhere. Picking a known type drops it (updateField).
+      ...((e.type === "enum" || !known(e.type)) && e.allowed ? { allowed: e.allowed } : {}),
     };
   }
   return schema;
@@ -44,6 +50,9 @@ interface Props {
 
 export default function OutputSchemaEditor({ schema, onChange }: Props) {
   const entries = schemaToEntries(schema);
+  // The placeholder name of the field just added, selected once its row shows,
+  // so typing the real name replaces it (`fieldverdict`, FP of CORE-227).
+  const [justAdded, setJustAdded] = useState<string | null>(null);
 
   function update(newEntries: FieldEntry[]) {
     onChange(entriesToSchema(newEntries));
@@ -56,6 +65,7 @@ export default function OutputSchemaEditor({ schema, onChange }: Props) {
       name = `field_${++counter}`;
     }
     update([...entries, { name, type: "string" }]);
+    setJustAdded(name);
   }
 
   function removeField(index: number) {
@@ -83,6 +93,8 @@ export default function OutputSchemaEditor({ schema, onChange }: Props) {
           entry={entry}
           onUpdate={(patch) => updateField(i, patch)}
           onRemove={() => removeField(i)}
+          selectName={entry.name === justAdded}
+          onNameSelected={() => setJustAdded(null)}
         />
       ))}
       <button type="button" onClick={addField} className="ei-addline" title="Add a frontmatter field" data-testid="add-schema-field">
@@ -97,14 +109,27 @@ function SchemaFieldRow({
   entry,
   onUpdate,
   onRemove,
+  selectName,
+  onNameSelected,
 }: {
   entry: FieldEntry;
   onUpdate: (patch: Partial<FieldEntry>) => void;
   onRemove: () => void;
+  /** Focus the name and select it, once. */
+  selectName: boolean;
+  onNameSelected: () => void;
 }) {
+  const nameRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!selectName || !nameRef.current) return;
+    nameRef.current.focus();
+    nameRef.current.select();
+    onNameSelected();
+  }, [selectName, onNameSelected]);
   return (
     <div className="ei-field" data-testid="schema-field">
       <TextInput
+        ref={nameRef}
         mono
         small
         value={entry.name}
@@ -116,11 +141,14 @@ function SchemaFieldRow({
       />
       <select
         value={entry.type}
-        onChange={(e) => onUpdate({ type: e.target.value as FieldType })}
+        onChange={(e) => onUpdate({ type: e.target.value })}
         className="ei-select ei-select--sm ei-select--mono"
         aria-label="Field type"
+        aria-invalid={known(entry.type) ? undefined : true}
+        title={known(entry.type) ? undefined : `Unknown type: ${entry.type}`}
         data-testid="schema-field-type"
       >
+        {!known(entry.type) && <option value={entry.type}>{entry.type} (unknown)</option>}
         {FIELD_TYPES.map((t) => (
           <option key={t} value={t}>
             {t}

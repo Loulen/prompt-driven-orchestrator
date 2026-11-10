@@ -20,7 +20,9 @@ const testId = (id: string) => `[data-testid="${id}"]`;
 export const RUNS_TAB = testId("left-tab-runs");
 export const NEW_RUN_BUTTON = testId("new-run-button");
 export const NAME_INPUT = testId("run-name-input");
-export const AUTO_NAME = testId("auto-name-checkbox");
+/** The whole Auto control, box AND word. The bare box put the word outside the
+ *  hole, under the card placed beside it (FP of CORE-227). */
+export const AUTO_NAME = testId("auto-name");
 export const REPO_INPUT = testId("target-repo-input");
 export const BROWSE_TRIGGER = testId("repo-browse-trigger");
 export const EXPLORER = testId("repo-browser-modal");
@@ -59,6 +61,13 @@ export const TUTORIAL_ENTRY = `${testId("repo-browse-entry")}[data-entry-name="$
 /** The Run inspector — the pane the node's terminal, guard and outputs live in. */
 export const INSPECTOR_RUN = testId("inspector-pane-run");
 export const TERMINAL = testId("tmux-terminal");
+/** The node's terminal lifted over the whole app (#44). */
+export const ENLARGED_TERMINAL = testId("terminal-fullsize");
+/** The enlarged terminal's own « Collapse terminal » button, top right of its bar. */
+export const COLLAPSE_TERMINAL = `${ENLARGED_TERMINAL} ${testId("term-expand")}`;
+/** The banner of a node whose session died (ADR-0049), and its Reopen. */
+export const INTERRUPTED_BANNER = testId("interrupted-banner");
+export const REOPEN_BUTTON = testId("interrupted-reopen-btn");
 /** The chevron of Approve ▾: its menu holds « Auto-approve when ready ». */
 export const RELEASE_BUTTON = testId("approve-btn-menu");
 /** The menu of Approve ▾ once open (a portal), and its « Auto-approve when ready » entry. */

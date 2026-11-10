@@ -5,6 +5,7 @@ import * as React from "react";
 import { X } from "lucide-react";
 import { Button, IconButton } from "./controls";
 import { cx } from "./util";
+import { markFocusGivenBack } from "./focusGivenBack";
 
 export interface ModalProps {
   title: React.ReactNode;
@@ -84,6 +85,7 @@ export function Modal({
         if (typeof d.close === "function") d.close();
         else d.removeAttribute("open");
       }
+      markFocusGivenBack(opener);
       opener?.focus?.({ preventScroll: true });
     };
   }, []);

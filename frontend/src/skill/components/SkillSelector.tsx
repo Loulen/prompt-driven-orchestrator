@@ -1,7 +1,8 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Folder, FolderOpen, Sparkles, TriangleAlert } from "lucide-react";
 import type { SkillBank } from "../model/skill";
 import { AnchoredPanel } from "../../shared/ui/kit/layer";
+import { registerTransientOverlay } from "../../lib/overlays";
 import type { SkillRef } from "../../shared/generated/SkillRef";
 import type { SkillTier } from "../../shared/generated/SkillTier";
 import { buildRows } from "../model/skillTree";
@@ -66,6 +67,10 @@ export default function SkillSelector({
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  // Open, it is a picker someone else may need folded: a guided tour moving on
+  // to the Prompt must not leave it over the lit field (FP of CORE-227).
+  useEffect(() => (open ? registerTransientOverlay(() => setOpen(false), () => popoverRef.current) : undefined), [open]);
 
   // Folders start expanded (every skill visible at a glance); `null` = untouched.
   const [collapsedOverride, setCollapsedOverride] = useState<Set<string> | null>(null);
@@ -177,6 +182,7 @@ export default function SkillSelector({
           gestures are frozen. */}
       <AnchoredPanel anchor={triggerRef} open={open} onClose={() => setOpen(false)} className="d-pop--panel ln-skills__pop">
         <div
+          ref={popoverRef}
           role="dialog"
           aria-label={label}
           data-testid={`${testId}-popover`}

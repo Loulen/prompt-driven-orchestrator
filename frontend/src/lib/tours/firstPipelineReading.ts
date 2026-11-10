@@ -176,7 +176,7 @@ export const NEW_PIPELINE_ERROR = '[data-testid="new-pipeline-error"]';
 export const outputSlot = (i: number) => `[data-output-index="${i}"]`;
 /** The delete confirmation's box — the dialog itself, not its full-screen backdrop. */
 export const DELETE_CONFIRM = '[data-testid="confirm-delete-modal"]';
-/** The dialog Save opens: its title, then Save vN. */
+/** The dialog Save… opens: a new version, kept apart, or replacing the last (ADR-0088). */
 export const SAVE_DIALOG = '[data-testid="save-version-modal"]';
 /** Validate, next to Save, and the modal it opens (CONTEXT.md « Pipeline validé »). */
 export const VALIDATE_BUTTON = '[data-testid="validate-button"]';

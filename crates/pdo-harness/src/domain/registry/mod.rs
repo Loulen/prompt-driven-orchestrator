@@ -246,6 +246,12 @@ mod tests {
     }
 
     #[test]
+    fn copilot_has_an_effort_axis() {
+        let d = copilot();
+        assert!(d.has_effort_hole(), "copilot has an effort axis (--effort)");
+    }
+
+    #[test]
     fn opencode_has_no_effort_axis_and_no_identity_pin() {
         let d = opencode();
         assert!(

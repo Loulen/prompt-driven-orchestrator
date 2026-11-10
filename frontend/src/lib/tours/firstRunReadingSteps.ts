@@ -14,11 +14,15 @@ import {
 import {
   APPROVE_MENU,
   AUTO_APPROVE_ENTRY,
+  COLLAPSE_TERMINAL,
+  ENLARGED_TERMINAL,
   INSPECTOR_RUN,
+  INTERRUPTED_BANNER,
   OUT_MODAL,
   OUT_ROW,
   READING_TIMEOUT_MS,
   RELEASE_BUTTON,
+  REOPEN_BUTTON,
   TERMINAL,
   endedBadly,
   followedNode,
@@ -27,6 +31,16 @@ import {
   runIsOpen,
   runRowSel,
 } from "./firstRunReading";
+
+/**
+ * A node whose session died while the tour talks about it (FP of CORE-227):
+ * its banner is lit beside the step's target and Reopen — the one gesture that
+ * brings it back — stays live, instead of sitting under the dim.
+ */
+const REOPEN_REACHABLE: Pick<TourStep, "readOnly" | "explore"> = {
+  readOnly: (o) => (o.present(INTERRUPTED_BANNER) ? [INTERRUPTED_BANNER] : []),
+  explore: [REOPEN_BUTTON],
+};
 
 export const READING_STEPS: TourStep[] = [
   // ---- reading the Run (#825) ---------------------------------------------
@@ -106,6 +120,7 @@ export const READING_STEPS: TourStep[] = [
     title: "Talk to the agent",
     body: "Click in the terminal and paste the line, then press Enter. This is the agent's own session; if it first asks whether you trust the folder, answer yes.",
     target: () => [TERMINAL],
+    ...REOPEN_REACHABLE,
     waitingFor: "the agent's terminal in the Run inspector",
     failureHint: "The terminal is in the Run tab of the inspector, above the buttons.",
     targetTimeoutMs: READING_TIMEOUT_MS,
@@ -124,6 +139,7 @@ export const READING_STEPS: TourStep[] = [
     // then a soft zone, so the entry stays clickable.
     target: (o) => (o.present(APPROVE_MENU) ? [AUTO_APPROVE_ENTRY] : [RELEASE_BUTTON]),
     soft: (o) => o.present(APPROVE_MENU),
+    ...REOPEN_REACHABLE,
     waitingFor: "the Approve ▾ button",
     failureHint: "It sits at the right of the I/O and Transcript tabs while the node is live.",
     targetTimeoutMs: READING_TIMEOUT_MS,
@@ -160,8 +176,10 @@ export const READING_STEPS: TourStep[] = [
           "If the agent says it is waiting for you, tell it in the terminal above that it can finish now. The step waits for as long as it takes.",
     // The whole inspector, as a zone rather than a target: during a wait of
     // unknown length the reader must keep the terminal — read it, scroll it,
-    // answer a late question. The rest of the app stays blocked.
-    target: () => [INSPECTOR_RUN],
+    // answer a late question. The rest of the app stays blocked. An enlarged
+    // terminal is the zone then: the inspector's box would draw a dashed
+    // outline and a dim across it (FP of CORE-227).
+    target: (o) => (o.present(ENLARGED_TERMINAL) ? [ENLARGED_TERMINAL] : [INSPECTOR_RUN]),
     soft: true,
     // The one step with no limit (ticket: « sans limite de temps »). An agent
     // takes as long as it takes, and a countdown here would be the tour deciding
@@ -206,15 +224,27 @@ export const READING_STEPS: TourStep[] = [
     id: "open-output",
     title: "Open the output",
     // Two beats, one card: click the row, then read what opened.
-    body: (o) =>
-      o.present(OUT_MODAL)
-        ? "This is what the agent wrote — the summary your prompt asked for, and the only thing the next node would have received. Read it, then press Next."
-        : `Click ${TUTORIAL_OUT_PORT}. It is the file the agent wrote — the summary your prompt asked for — and the only thing the next node would have received.`,
+    body: (o) => {
+      if (o.present(OUT_MODAL))
+        return "This is what the agent wrote — the summary your prompt asked for, and the only thing the next node would have received. Read it, then press Next.";
+      if (o.present(ENLARGED_TERMINAL))
+        return `The terminal is still enlarged over the app, and the ${TUTORIAL_OUT_PORT} row is under it. Click Collapse terminal, at the top right of its bar, to put it back in the inspector.`;
+      return `Click ${TUTORIAL_OUT_PORT}. It is the file the agent wrote — the summary your prompt asked for — and the only thing the next node would have received.`;
+    },
     // Re-aims onto the artifact the click opened, the way `pick-repo` re-aims
     // onto the explorer. Without it the tour ends the instant the file appears,
     // and the recap card lands on top of the summary it just told the reader to
     // open — the one thing this step exists to show them (FP finding, #825).
-    target: (o) => (o.present(OUT_MODAL) ? [OUT_MODAL] : [OUT_ROW]),
+    //
+    // A terminal the reader enlarged at the wait step covers the whole app, the
+    // row included: the hole would light the terminal's screen and its collapse
+    // button would sit under the dim (FP of CORE-227). The step aims at that
+    // button first; once the terminal is back in the inspector, at the row.
+    target: (o) => {
+      if (o.present(OUT_MODAL)) return [OUT_MODAL];
+      if (o.present(ENLARGED_TERMINAL)) return [COLLAPSE_TERMINAL];
+      return [OUT_ROW];
+    },
     // A page to read, not a control to hit: once the artifact is up it is lit as
     // a zone — dashed, lighter dim, scrollable — and the popover moves beside it.
     soft: (o) => o.present(OUT_MODAL),

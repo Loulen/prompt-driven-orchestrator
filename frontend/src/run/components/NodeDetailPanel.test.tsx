@@ -1356,6 +1356,21 @@ describe("NodeDetailPanel", () => {
       expect(screen.getByTestId("interrupted-banner-title")).toHaveTextContent("Session died");
     });
 
+    // FP of CORE-227: the early-death hint (« it ended within N s of its start,
+    // check that its harness is logged in… ») was cut before its useful half,
+    // in a one-line banner. The reason is given whole, under the banner's line.
+    it("gives the reason of a dead session whole, under the banner's line", () => {
+      const reason =
+        "session_died: it ended within 23 s of its start; check that its harness is logged in and knows the node's model";
+      render(
+        <>
+          <NodeDetailPanel node={makeNode({ status: "interrupted", failure_reason: reason })} runId="run-1" />
+        </>,
+      );
+      expect(screen.getByTestId("interrupted-banner-message")).toHaveTextContent("work presumed intact");
+      expect(screen.getByTestId("interrupted-banner-reason")).toHaveTextContent(reason);
+    });
+
     it("names a merge-back conflict instead of a dead session (ADR-0082)", () => {
       render(
         <>

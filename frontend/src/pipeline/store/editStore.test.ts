@@ -1331,6 +1331,17 @@ describe("reloadPipeline", () => {
     expect(mockFetchPipeline).not.toHaveBeenCalled();
     expect(useEditStore.getState().openTabs[0].pipeline.name).toBe("test");
   });
+
+  // FP of CORE-227 (HP-01): deleting the open pipeline closes its tab, then the
+  // daemon's `pipeline_changed` reloaded it anyway, a `404` in the console for
+  // a file nobody shows. No tab, nothing to reload.
+  it("reads nothing for a pipeline no tab shows", async () => {
+    seedTab("my-pipe", false);
+
+    await useEditStore.getState().reloadPipeline("deleted-pipe");
+
+    expect(mockFetchPipeline).not.toHaveBeenCalled();
+  });
 });
 describe("createCollectionRegion (#151 / #269)", () => {
   it("creates a collection region with a minted id, over and members, and marks dirty", () => {

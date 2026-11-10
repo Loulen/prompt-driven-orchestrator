@@ -178,6 +178,28 @@ describe("Outputs section (#843)", () => {
     expect(screen.getByTestId("edge-route-ports")).toHaveTextContent(".out+spec");
   });
 
+  it("names, on the target side, the emergent input each carried output lands under", () => {
+    // CONTEXT.md, Edges: from two ports on, each input takes its own port's
+    // name — `target.port` is no input of the target then.
+    seedEdge({
+      ...singlePort,
+      source: { node: "design", ports: ["out", "spec"] },
+      target: { node: "orch", port: "in" },
+    });
+    render(<EdgeDetailPanel />);
+    expect(screen.getByTestId("edge-route-line")).toHaveTextContent(
+      "design.out+spec → orchestrator.out+spec",
+    );
+  });
+
+  it("names the target input of a one-output edge after target.port", () => {
+    seedEdge({ ...singlePort, target: { node: "orch", port: "brief_in" } });
+    render(<EdgeDetailPanel />);
+    expect(screen.getByTestId("edge-route-line")).toHaveTextContent(
+      /^design\.out → orchestrator\.brief_in$/,
+    );
+  });
+
   it("keeps a port the node no longer declares visible and ticked", () => {
     // The panel reports what the YAML says; silently dropping a since-renamed
     // output would look like the edge changed on its own.

@@ -72,7 +72,7 @@ export default function WorkspaceSection({
               onClick={() => handleField("isolated_worktree", choice.isolated)}
               data-testid={`workspace-${choice.isolated ? "isolated" : "shared"}`}
             >
-              {choice.isolated ? "Isolated" : "Shared"}
+              {choice.button}
             </button>
           ))}
         </div>

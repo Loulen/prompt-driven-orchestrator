@@ -288,9 +288,10 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
       const tab = get().openTabs.find((t) => t.id === id);
       // ADR-0088: the daemon lands a written file in the shared draft, field
       // by field; the tab gets it from there, with no conflict to resolve.
-      // Without a shared draft, unsaved work stays as it is.
-      if (tab?.draft || tab?.dirty) return;
-      const detail = await fetchPipeline(id, tab?.scope);
+      // Without a shared draft, unsaved work stays as it is. No tab shows it
+      // (closed, or just deleted): nothing to read.
+      if (!tab || tab.draft || tab.dirty) return;
+      const detail = await fetchPipeline(id, tab.scope);
       set((s) => ({
         openTabs: s.openTabs.map((t) =>
           t.id === id

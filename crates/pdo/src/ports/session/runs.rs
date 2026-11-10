@@ -89,24 +89,24 @@ impl NodePanes for RunSide {
             let Some(node) = run_state.nodes.get(node_id) else {
                 return Ok(None);
             };
-            let terminal = node
-                .iterations
-                .iter()
-                .find(|i| i.iter == iter)
-                .is_some_and(|i| {
-                    matches!(
-                        i.status,
-                        NodeStatus::Completed
-                            | NodeStatus::Skipped
-                            | NodeStatus::Failed
-                            | NodeStatus::Stopped
-                            | NodeStatus::Stale
-                    )
-                });
+            let iteration = node.iterations.iter().find(|i| i.iter == iter);
+            let interrupted = iteration.is_some_and(|i| i.status.is_interrupted())
+                || (node.iter == iter && node.status.is_interrupted());
+            let terminal = iteration.is_some_and(|i| {
+                matches!(
+                    i.status,
+                    NodeStatus::Completed
+                        | NodeStatus::Skipped
+                        | NodeStatus::Failed
+                        | NodeStatus::Stopped
+                        | NodeStatus::Stale
+                )
+            });
             Ok(Some(PaneTarget {
                 latest_iter: node.iter == iter,
                 terminal,
                 pending: node.status == NodeStatus::Pending,
+                interrupted,
                 repo_root: effective_repo_root(&runs, &run_state),
             }))
         })

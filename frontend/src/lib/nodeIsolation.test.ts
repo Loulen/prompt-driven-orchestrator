@@ -5,6 +5,7 @@ import {
   isNodeIsolated,
   nodeIsolation,
   resolveIsolation,
+  workspaceButton,
   workspaceLabel,
   worktreePathFor,
 } from "./nodeIsolation";
@@ -76,6 +77,9 @@ describe("resolveIsolation — the library's door (#655)", () => {
   it("names each workspace once, for every surface that shows one", () => {
     expect(workspaceLabel(true)).toBe("Isolated worktree");
     expect(workspaceLabel(false)).toBe("Run worktree");
+    // The segmented control's buttons, which the tours name.
+    expect(workspaceButton(true)).toBe("Isolated");
+    expect(workspaceButton(false)).toBe("Shared");
     expect(WORKSPACE_CHOICES.map((c) => c.isolated)).toEqual([true, false]);
   });
 });

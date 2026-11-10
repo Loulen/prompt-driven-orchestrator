@@ -41,3 +41,18 @@ export function isHeartbeatFrame(text: string): boolean {
 export function isVeiled(mode: PaneMode, dropped: boolean, settled: boolean): boolean {
   return mode === "live" && dropped && !settled;
 }
+
+/** The statuses of a node whose session is up. */
+const LIVE_STATUSES = new Set(["running", "awaiting_user"]);
+
+/**
+ * Whether the node's session came back: its status turned live from one that
+ * is not (a restart or a recovery of an `interrupted` node, a retry of a
+ * `failed` one, under the same session name). The terminal whose socket fell
+ * with the old session reconnects then, by itself — it stayed on « Terminal
+ * connection closed » until Reconnect (FP of CORE-227). `running` ⇄
+ * `awaiting_user` is the same session.
+ */
+export function sessionCameBack(previous: string | undefined, next: string | undefined): boolean {
+  return next !== undefined && LIVE_STATUSES.has(next) && previous !== undefined && !LIVE_STATUSES.has(previous);
+}

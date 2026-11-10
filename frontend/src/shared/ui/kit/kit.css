@@ -892,7 +892,8 @@
     transition: opacity 0.1s;
   }
   .d-sec:hover .d-sec__aside,
-  .d-sec__aside:focus-within {
+  .d-sec__aside:focus-within,
+  .d-sec__aside:has([data-tour-lit]) {
     opacity: 1;
   }
   .d-sec__body {
@@ -1121,6 +1122,18 @@
     color: var(--text-2);
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .d-banner[data-detail] {
+    flex-wrap: wrap;
+    row-gap: 0;
+  }
+  /* the whole reason, on its own lines under the banner's, aligned on the title */
+  .d-banner__detail {
+    flex-basis: 100%;
+    padding: 0 0 var(--g-1) calc(14px + var(--g-3));
+    color: var(--text-2);
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
   }
   .d-banner__actions {
     display: inline-flex;

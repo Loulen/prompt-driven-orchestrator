@@ -103,6 +103,51 @@ describe("deriveEdgeTrigger", () => {
   });
 });
 
+describe("deriveEdgeTrigger — an edge into End", () => {
+  const toEnd: EdgeDef = { source: { node: "reviewer", port: "out" }, target: { node: "end", port: "result" } };
+  const endNode = (status: string) => ({
+    id: "end",
+    ports: [{ port_name: "result", status, reason: null, fired_at: status === "received" ? "t" : null }],
+  });
+
+  it("reports fired once End received the port the edge lands on", () => {
+    const rs = runState({
+      status: "completed",
+      nodes: { reviewer: nodeState("reviewer", "completed", 1) },
+      end_node: endNode("received"),
+    });
+    expect(deriveEdgeTrigger(rs, toEnd)!.fired).toBe(true);
+  });
+
+  it("reports not fired while End has not received it", () => {
+    const rs = runState({
+      nodes: { reviewer: nodeState("reviewer", "completed", 1) },
+      end_node: endNode("pending"),
+    });
+    expect(deriveEdgeTrigger(rs, toEnd)!.fired).toBe(false);
+  });
+
+  it("reads the port the edge lands under, not End's first port", () => {
+    const rs = runState({
+      nodes: { reviewer: nodeState("reviewer", "completed", 1) },
+      end_node: {
+        id: "end",
+        ports: [{ port_name: "other", status: "received", reason: null, fired_at: "t" }],
+      },
+    });
+    expect(deriveEdgeTrigger(rs, toEnd)!.fired).toBe(false);
+  });
+
+  it("a multi-output edge lands under each port's own name", () => {
+    const multi: EdgeDef = { source: { node: "reviewer", port: "out", ports: ["out", "notes"] }, target: { node: "end", port: "result" } };
+    const rs = runState({
+      nodes: { reviewer: nodeState("reviewer", "completed", 1) },
+      end_node: { id: "end", ports: [{ port_name: "notes", status: "received", reason: null, fired_at: "t" }] },
+    });
+    expect(deriveEdgeTrigger(rs, multi)!.fired).toBe(true);
+  });
+});
+
 function nodeState(id: string, status: string, iter = 0) {
   return {
     node_id: id,

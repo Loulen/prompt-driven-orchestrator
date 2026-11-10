@@ -35,7 +35,7 @@ use parse::*;
 use reeval::*;
 use reeval_pass::*;
 
-use crate::application::complete_node::completion_head_gate;
+use crate::application::complete_node::{completion_head_gate, duplicate_completion_stop};
 use crate::application::events::append_event;
 use crate::application::events::load_events;
 use crate::application::events::load_projected;

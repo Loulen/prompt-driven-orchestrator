@@ -2,7 +2,7 @@
 
 use oxc_ast::ast::{Expression, ObjectExpression, ObjectPropertyKind};
 
-use crate::domain::pipeline::FrontmatterFieldDecl;
+use crate::domain::pipeline::{canonical_field_type, FrontmatterFieldDecl};
 
 use super::*;
 
@@ -46,15 +46,14 @@ pub(super) fn object_to_frontmatter(
     fm
 }
 
+/// A JSON-schema type of an imported workflow, as a field type: the aliases a
+/// pipeline YAML also accepts ([`canonical_field_type`]), plus `number`, which an
+/// imported schema means as a count (a hand-written YAML gets it linted instead).
 pub(super) fn map_json_type(ty: &str) -> String {
     match ty {
-        "integer" | "number" => "int",
-        "boolean" => "bool",
-        "array" => "list",
-        "string" => "string",
-        other => other,
+        "number" => "int".to_string(),
+        other => canonical_field_type(other),
     }
-    .to_string()
 }
 
 /// Look up a property by static name on an object literal expression.

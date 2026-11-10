@@ -12,7 +12,7 @@ import path from "node:path";
 import { after, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { isAlive } from "../../readme-media/lib/demo-instance.mjs";
-import { stageHarnessCredentials, startDemo, stopDemo } from "../lib/daemon.mjs";
+import { resyncDemo, stageHarnessCredentials, startDemo, stopDemo } from "../lib/daemon.mjs";
 import { demoPaths } from "../lib/env.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -69,6 +69,12 @@ function fakeHostHome() {
     ".claude/settings.json": '{"model":"mine"}',
     ".pi/agent/auth.json": '{"key":"TEST-ONLY"}',
     ".local/share/opencode/auth.json": '{"key":"TEST-ONLY"}',
+    ".copilot/config.json": `// managed automatically\n${JSON.stringify({
+      trustedFolders: ["/home/me/secret"],
+      lastLoggedInUser: { host: "https://github.com", login: "me" },
+      loggedInUsers: [{ host: "https://github.com", login: "me" }],
+      recentModelIds: ["gpt-x"],
+    })}`,
   };
   for (const [rel, content] of Object.entries(files)) {
     fs.mkdirSync(path.dirname(path.join(home, rel)), { recursive: true });
@@ -109,12 +115,65 @@ describe("credentials staging", () => {
     assert.deepEqual(snapshot(hostHome), before, "the real config is untouched");
   });
 
+  test("copilot gets its logged-in user and trusts /tmp, where the journeys' repos live; not the user's own folders", () => {
+    const hostHome = fakeHostHome();
+    const demoHome = path.join(tmpRoot, "staged-copilot");
+    const staged = stageHarnessCredentials({ hostHome, demoHome });
+    const file = path.join(demoHome, ".copilot", "config.json");
+    assert.ok(staged.includes(file), "recorded for the wipe");
+    const config = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.deepEqual(config.trustedFolders, ["/tmp"]);
+    assert.deepEqual(config.loggedInUsers, [{ host: "https://github.com", login: "me" }]);
+    assert.deepEqual(config.lastLoggedInUser, { host: "https://github.com", login: "me" });
+    assert.equal(config.recentModelIds, undefined);
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  });
+
   test("a harness without auth on this machine is skipped", () => {
     const hostHome = fs.mkdtempSync(path.join(tmpRoot, "bare-host-"));
     const demoHome = path.join(tmpRoot, "bare-staged");
     stageHarnessCredentials({ hostHome, demoHome });
     assert.ok(!fs.existsSync(path.join(demoHome, ".pi")));
+    assert.ok(!fs.existsSync(path.join(demoHome, ".copilot")));
     assert.ok(!fs.existsSync(path.join(demoHome, ".claude", ".credentials.json")));
+  });
+});
+
+// FP of CORE-227: the host refreshed its claude login during a long journey,
+// which retires the token the demo HOME held, and the nodes read « Login
+// expired ». The resync copies the host's auth again, into the running demo.
+describe("resync", () => {
+  test("copies the host's current auth into the demo HOME, and lists it for the wipe", () => {
+    const hostHome = fakeHostHome();
+    const port = 6999;
+    const paths = demoPaths(port, tmpRoot);
+    fs.mkdirSync(paths.home, { recursive: true });
+    fs.writeFileSync(paths.pidfile, "1\n");
+    fs.writeFileSync(path.join(paths.root, "credentials.txt"), "/elsewhere/staged-before\n");
+    stageHarnessCredentials({ hostHome, demoHome: paths.home });
+    const rel = ".claude/.credentials.json";
+    fs.writeFileSync(path.join(hostHome, rel), '{"claudeAiOauth":{"accessToken":"REFRESHED"}}');
+
+    // A trust the journey granted, written by claude into the demo's config.
+    const config = path.join(paths.home, ".claude.json");
+    const granted = { ...JSON.parse(fs.readFileSync(config, "utf8")), projects: { "/tmp/repo": { hasTrustDialogAccepted: true } } };
+    fs.writeFileSync(config, JSON.stringify(granted));
+
+    const staged = resyncDemo({ port, tmpRoot, hostHome });
+
+    assert.deepEqual(JSON.parse(fs.readFileSync(config, "utf8")), granted, "the demo's own config is kept");
+    assert.equal(fs.readFileSync(path.join(paths.home, rel), "utf8"), '{"claudeAiOauth":{"accessToken":"REFRESHED"}}');
+    assert.ok(staged.includes(path.join(paths.home, rel)));
+    const listed = fs.readFileSync(path.join(paths.root, "credentials.txt"), "utf8").split("\n").filter(Boolean);
+    assert.ok(listed.includes("/elsewhere/staged-before"), "what the start staged stays listed");
+    assert.ok(listed.includes(path.join(paths.home, rel)));
+    assert.equal(new Set(listed).size, listed.length, "each file listed once");
+  });
+
+  test("refuses a port with no demo daemon, and writes nothing", () => {
+    const port = 6998;
+    assert.throws(() => resyncDemo({ port, tmpRoot, hostHome: fakeHostHome() }), /no demo daemon on port 6998/);
+    assert.ok(!fs.existsSync(demoPaths(port, tmpRoot).home));
   });
 });
 

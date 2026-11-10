@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { pickSection } from "./scrollSpyPick";
 
 /**
  * Scroll-spy for the Settings sub-column (#690): which section of the scrolling page is
@@ -6,8 +7,10 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
  *
  * - The section whose heading is nearest the top of the container wins (an
  *   `IntersectionObserver` with `rootMargin: -20% 0 -60% 0`). When the container is
- *   scrolled to the bottom, the LAST section wins even if its heading never reaches the
- *   top — the classic "last section never highlights" bug.
+ *   scrolled to the bottom, the section that fills most of the view wins, even if its
+ *   heading never reaches the top: a long last section is lit there (the classic "last
+ *   section never highlights" bug), a short one under a long one is not
+ *   (`scrollSpyPick.ts`).
  * - A clicked entry is **pinned** until the smooth scroll settles (`scrollend`, or 150 ms
  *   after the last `scroll` event), so the highlight never flickers through the sections
  *   the scroll passes over — and it stays on the clicked entry once settled, even when the
@@ -46,24 +49,18 @@ export function useScrollSpy<Id extends string>(
       const atBottom =
         container.scrollTop + container.clientHeight >= container.scrollHeight - 2 ||
         (last != null && last.getBoundingClientRect().bottom <= box.bottom + 2);
-      if (atBottom && container.scrollHeight > container.clientHeight) {
-        setSpied(list[list.length - 1]);
-        return;
-      }
-      const top = box.top;
-      let best: Id | null = null;
-      let bestDelta = Number.POSITIVE_INFINITY;
-      for (const id of list) {
+      const sections = list.flatMap((id) => {
         const el = container.querySelector<HTMLElement>(`[data-section-id="${id}"]`);
-        if (!el) continue;
-        const delta = el.getBoundingClientRect().top - top;
-        // Nearest heading at or above ~20% of the viewport; else the first one below.
-        const score = delta <= container.clientHeight * 0.2 ? Math.abs(delta) : delta + 1e6;
-        if (score < bestDelta) {
-          bestDelta = score;
-          best = id;
-        }
-      }
+        if (!el) return [];
+        const r = el.getBoundingClientRect();
+        return [{ id, top: r.top, bottom: r.bottom }];
+      });
+      const best = pickSection(
+        sections,
+        // The boxes' own height: the sections are measured in it, under the UI scale's `zoom` too.
+        { top: box.top, height: box.height },
+        atBottom && container.scrollHeight > container.clientHeight,
+      );
       if (best) setSpied(best);
     };
 

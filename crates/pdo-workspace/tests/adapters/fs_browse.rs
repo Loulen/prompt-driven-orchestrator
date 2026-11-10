@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use pdo_workspace::adapters::fs::browse::{child_type, list_level, resolve_browse_root};
-use pdo_workspace::domain::browse::{classify_entry, BrowseRootError, EntryKind};
+use pdo_workspace::domain::browse::{classify_entry, BrowseRootError, EntryKind, BROWSE_CAP};
 
 fn classify_browse_entry(meta: Option<&std::fs::Metadata>, include_files: bool) -> EntryKind {
     classify_entry(meta.map(child_type), include_files)
@@ -30,6 +30,29 @@ fn a_level_lists_dirs_first_hides_dot_entries_and_flags_repositories() {
         .map(|e| e.name.as_str())
         .collect();
     assert_eq!(names, vec![".hidden", "repo"]);
+}
+
+/// `/tmp` with more folders than the cap (the First run tour sends a newcomer
+/// there to pick `pdo-tutorial`): the cap is applied to the sorted level, never
+/// to the first `read_dir` sample, and a repository is not what it drops.
+#[test]
+fn a_level_over_the_cap_keeps_its_repositories_and_its_first_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    for i in 0..(BROWSE_CAP + 120) {
+        std::fs::create_dir(tmp.path().join(format!("scratch-{i:05}"))).unwrap();
+    }
+    std::fs::create_dir_all(tmp.path().join("pdo-tutorial/.git")).unwrap();
+    std::fs::create_dir(tmp.path().join("aaa-first")).unwrap();
+
+    let listing = list_level(tmp.path(), false, false);
+    assert!(listing.truncated);
+    assert_eq!(listing.entries.len(), BROWSE_CAP);
+    let names: Vec<_> = listing.entries.iter().map(|e| e.name.as_str()).collect();
+    assert!(names.contains(&"pdo-tutorial"), "the repository is listed");
+    assert_eq!(
+        names[0], "aaa-first",
+        "the cap keeps the first names of the sorted level"
+    );
 }
 
 #[test]

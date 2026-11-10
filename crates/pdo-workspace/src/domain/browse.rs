@@ -12,7 +12,8 @@
 use serde::Serialize;
 use ts_rs::TS;
 
-/// Listing cap, applied **per genre** with directories claiming the budget first.
+/// Listing cap, applied **after sorting the whole level**, with directories claiming
+/// the budget first and git repositories first among them.
 /// Don't make it one shared budget: files would starve directories, and 50 000 files
 /// beside two subdirectories in `~/Downloads` would yield zero navigable rows.
 pub const BROWSE_CAP: usize = 1000;
@@ -72,20 +73,38 @@ pub fn classify_entry(child: Option<ChildType>, include_files: bool) -> EntryKin
 /// Merge the two genre buckets: each sorted case-insensitively, directories first,
 /// **directories claim the budget first**, total `<= cap`.
 ///
-/// `truncated` is `total > cap`, which is why the caller collects at most `cap + 1` per
-/// genre — a `(cap + 1)`th survivor is all `truncated` needs.
+/// The cap is applied to the **whole** level, after sorting: the caller hands every
+/// child, never an early-stopped sample. Within the directories, a git repository
+/// is the last thing dropped: past the cap, plain folders make room for the
+/// repositories (what the explorer is opened to pick), and what is kept still reads
+/// in name order. `/tmp` with a thousand scratch folders must still show the
+/// repository someone was sent there to pick.
+///
+/// `truncated` is `total > cap`.
 pub fn merge_browse_entries(
-    mut dirs: Vec<BrowseEntry>,
+    dirs: Vec<BrowseEntry>,
     mut files: Vec<BrowseEntry>,
     cap: usize,
 ) -> (Vec<BrowseEntry>, bool) {
-    dirs.sort_by_key(|a| a.name.to_lowercase());
     files.sort_by_key(|a| a.name.to_lowercase());
     let truncated = dirs.len() + files.len() > cap;
-    dirs.truncate(cap);
+    let mut dirs = keep_repositories_first(dirs, cap);
     files.truncate(cap - dirs.len());
     dirs.extend(files);
     (dirs, truncated)
+}
+
+/// At most `cap` directories in name order, every repository kept before any
+/// plain folder (up to the cap itself).
+fn keep_repositories_first(dirs: Vec<BrowseEntry>, cap: usize) -> Vec<BrowseEntry> {
+    let (mut repos, mut plain): (Vec<_>, Vec<_>) = dirs.into_iter().partition(|d| d.is_git_repo);
+    repos.sort_by_key(|a| a.name.to_lowercase());
+    plain.sort_by_key(|a| a.name.to_lowercase());
+    repos.truncate(cap);
+    plain.truncate(cap - repos.len());
+    repos.extend(plain);
+    repos.sort_by_key(|a| a.name.to_lowercase());
+    repos
 }
 
 /// Why the requested browse root could not be resolved into a listable directory.
@@ -172,6 +191,37 @@ mod tests {
             "dirs claim the budget first"
         );
         assert!(truncated);
+    }
+
+    fn repo_entry(name: &str) -> BrowseEntry {
+        BrowseEntry {
+            is_git_repo: true,
+            ..browse_entry(name, true)
+        }
+    }
+
+    #[test]
+    fn over_the_cap_a_git_repository_is_never_the_folder_dropped() {
+        // `/tmp` with more folders than the cap, the repository sorting late:
+        // the cap drops plain folders, never a repository, and what is kept
+        // still reads in name order.
+        let mut dirs: Vec<BrowseEntry> = (0..1100)
+            .map(|i| browse_entry(&format!("a{i:04}"), true))
+            .collect();
+        dirs.push(repo_entry("pdo-tutorial"));
+        dirs.push(repo_entry("zz-repo"));
+        let (entries, truncated) = merge_browse_entries(dirs, Vec::new(), 1000);
+        assert!(truncated);
+        assert_eq!(entries.len(), 1000);
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"pdo-tutorial"), "the repository is kept");
+        assert!(names.contains(&"zz-repo"), "every repository is kept");
+        let mut sorted = names.clone();
+        sorted.sort_by_key(|n| n.to_lowercase());
+        assert_eq!(names, sorted, "the kept folders read in name order");
+        // The plain folders kept are the alphabetically-first ones.
+        assert_eq!(names[0], "a0000");
+        assert!(!names.contains(&"a0998"), "plain folders make room");
     }
 
     #[test]

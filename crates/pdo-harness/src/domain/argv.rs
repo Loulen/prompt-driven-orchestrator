@@ -227,7 +227,8 @@ mod tests {
 
     #[test]
     fn copilot_launch_fills_every_hole() {
-        // Copilot has no launch-time effort axis: an effort value must leak no token.
+        // `--effort` is copilot's launch-time effort axis (`--effort, --reasoning-effort
+        // <level>`, measured on 1.0.83): the effort the picker offers reaches the argv.
         let d = registry::resolve("copilot").unwrap();
         let holes = Holes {
             prompt: prompt_hole("/tmp/p.md"),
@@ -238,8 +239,8 @@ mod tests {
         };
         assert_eq!(
             render(&d.launch, &holes),
-            "exec copilot --allow-all --no-ask-user --model 'gpt-5.2' --session-id 'abc-123' \
-             -i \"$(cat '/tmp/p.md')\""
+            "exec copilot --allow-all --no-ask-user --model 'gpt-5.2' --effort 'high' \
+             --session-id 'abc-123' -i \"$(cat '/tmp/p.md')\""
         );
     }
 
@@ -267,6 +268,21 @@ mod tests {
         assert_eq!(
             render(&d.resume, &holes),
             "exec copilot --allow-all --no-ask-user --resume 'abc-123'"
+        );
+    }
+
+    #[test]
+    fn copilot_resume_re_poses_the_effort() {
+        let d = registry::resolve("copilot").unwrap();
+        let holes = Holes {
+            resume: "--resume 'abc-123'".to_string(),
+            model: "'gpt-5.2'".to_string(),
+            effort: "'low'".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            render(&d.resume, &holes),
+            "exec copilot --allow-all --no-ask-user --resume 'abc-123' --model 'gpt-5.2' --effort 'low'"
         );
     }
 

@@ -136,7 +136,8 @@ fn complete_refusal_text(
             "The node and its run are now awaiting the user (the daemon declared the \
              wait for you). Ask the user to choose **Auto-approve when ready** in the \
              **Approve** menu (or to click **Approve** to take the artifacts as they are). \
-             After release, run `pdo complete` again. For any later question, declare it with \
+             When the user releases the node, PDO types a `[pdo-runtime]` line in this \
+             terminal: then run `pdo complete` again. For any later question, declare it with \
              `pdo wait-user --message \"<question>\"`.\n\
              Do NOT run `pdo fail`."
         }

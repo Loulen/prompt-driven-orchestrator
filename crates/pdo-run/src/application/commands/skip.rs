@@ -22,6 +22,11 @@ pub(super) async fn skip_node(
     // it first, so the completion gate does not refuse with "resume first".
     let run_state = match run_state {
         Some(rs) => {
+            // A duplicate never re-opens the Run: answer its no-op first.
+            if let Some(stop) = duplicate_completion_stop(&rs, "skip_node", &run_id, &node_id, iter)
+            {
+                return stop.into_response();
+            }
             match crate::application::reopen::embed_reopen_for_targeted_command(&state, &run_id, rs)
                 .await
             {

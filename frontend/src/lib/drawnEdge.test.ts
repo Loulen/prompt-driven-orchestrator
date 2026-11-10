@@ -289,6 +289,47 @@ describe("drawnEdgeLayout (#844)", () => {
     });
   });
 
+  // FP of CORE-227 (C1): a wire drawn from a right anchor with its first bend
+  // closer than one leg ran out to the leg's end and came back 19 px before it
+  // turned (`M308,240 L338,240 L319,240 …`). The bend slides out to the leg's
+  // end instead: no spur, and the route stays a fixed point.
+  it("never doubles back along the source leg when the first bend sits inside it", () => {
+    const leg = landingLeg(GRID_STEP);
+    const src = { x: 308, y: 240 };
+    const tgt = { x: 600, y: 400 };
+    const traced = [src, { x: 319, y: 240 }, { x: 319, y: 400 }, tgt];
+    const path = enforcePerpendicularEnds(traced, "right", "left", leg);
+    const reverses = path.some((p, i) => {
+      if (i < 2) return false;
+      const [a, b] = [path[i - 2], path[i - 1]];
+      return (
+        (a.y === b.y && b.y === p.y && (b.x - a.x) * (p.x - b.x) < 0) ||
+        (a.x === b.x && b.x === p.x && (b.y - a.y) * (p.y - b.y) < 0)
+      );
+    });
+    expect(reverses, JSON.stringify(path)).toBe(false);
+    expect(path[1]).toEqual({ x: src.x + leg, y: 240 });
+    expect(enforcePerpendicularEnds(path, "right", "left", leg)).toEqual(path);
+  });
+
+  // Review of the fix above: a diagonal after the spur makes `squareUp` insert
+  // a bend on the run that slides. The whole run slides, so the route stays
+  // square and a fixed point.
+  it("folds the spur without leaving a diagonal when the run after it was squared", () => {
+    const leg = landingLeg(GRID_STEP);
+    const traced = [
+      { x: 308, y: 240 },
+      { x: 319, y: 240 },
+      { x: 319, y: 400 },
+      { x: 500, y: 450 },
+      { x: 600, y: 480 },
+    ];
+    const path = enforcePerpendicularEnds(traced, "right", "left", leg);
+    const square = path.every((p, i) => i === 0 || p.x === path[i - 1].x || p.y === path[i - 1].y);
+    expect(square, JSON.stringify(path)).toBe(true);
+    expect(enforcePerpendicularEnds(path, "right", "left", leg)).toEqual(path);
+  });
+
   it("writes nothing at all for a drop that carried no gesture and no anchor", () => {
     expect(
       drawnEdgeLayout({

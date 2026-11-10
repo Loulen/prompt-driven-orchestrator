@@ -132,3 +132,31 @@ async fn retry_all_refuses_a_live_run_and_cleanup_archives_a_finished_one() {
     let (status, body) = command(&w, serde_json::json!({ "kind": "cleanup_run" })).await;
     assert_eq!(status, 409, "archiving twice: {body}");
 }
+
+/// Approve / « mark done » is a terminal transition like any completion: the
+/// node's session is snapshot then killed, so a completed node never shows a
+/// live pane. Before, only the agent's own completion reaped it — a node whose
+/// `pdo complete` could not reach the daemon (a sandboxed one, say) and that a
+/// human marked done kept its session alive until the one-hour backstop.
+#[tokio::test]
+async fn mark_node_done_reaps_the_nodes_session() {
+    let w = world();
+    seed_relay(&w, "r1").await;
+    pdo_run::application::scheduler::advance::advance_run(&w.runs, "r1").await;
+    let session = pdo_session::domain::names::node_session_name("r1", "worker", 1);
+    assert!(w.tmux.live.lock().unwrap().contains(&session));
+    write_out(&w, "r1", "worker");
+
+    let (status, body) = command(
+        &w,
+        serde_json::json!({ "kind": "mark_node_done", "node_id": "worker", "iter": 1 }),
+    )
+    .await;
+
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        w.tmux.killed.lock().unwrap().contains(&session),
+        "the marked-done node's session is reaped"
+    );
+    assert!(!w.tmux.live.lock().unwrap().contains(&session));
+}

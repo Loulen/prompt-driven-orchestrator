@@ -170,20 +170,29 @@ async fn copilots_catalogue_is_deduced_from_its_binary_and_re_read_when_it_updat
     assert_eq!(copilot["version"], "GitHub Copilot CLI 1.0.80.");
 
     // AC #5: the binary auto-updates under the running daemon and its list changes.
-    // No restart, no manual re-probe — the next read past the version window follows.
+    // No restart, no manual re-probe — a read past the version window re-checks
+    // the version in the background (a slow `--version` never holds the page), and
+    // a following read serves the re-probed catalogue.
     write_fake_copilot(
         &bindir,
         "GitHub Copilot CLI 1.1.0.",
         "auto claude-opus-6 gpt-6",
     );
-    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-
-    let settings: serde_json::Value = reqwest::get(format!("{}/settings", daemon.url()))
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let settings = loop {
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        let settings: serde_json::Value = reqwest::get(format!("{}/settings", daemon.url()))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if served_harness(&settings, "copilot")["version"] == "GitHub Copilot CLI 1.1.0."
+            || tokio::time::Instant::now() >= deadline
+        {
+            break settings;
+        }
+    };
     assert_eq!(
         served_models(&settings, "copilot"),
         vec!["auto", "claude-opus-6", "gpt-6"],

@@ -28,6 +28,10 @@ make demo-daemon PORT=6491 TEST_EXT=1  # the demo daemon of the test extension i
 make demo-daemon PORT=6491 BIND=0.0.0.0 # a journey with a sandboxed Run
 ```
 
+Without `TEST_EXT`, the demo daemon is the **vanilla core**: this repository's binary with no
+extension loaded, the product published as PDO. The Happy Paths are played on it
+(`docs/test-scenarios/README.md` § « The core alone »).
+
 Pick a free port between 6400 and 6999 (another agent may be testing at the same time); the
 user's ports (5172, 5272, 6160, 6172…) and the caller's own daemon are refused. The command:
 
@@ -44,8 +48,15 @@ user's ports (5172, 5272, 6160, 6172…) and the caller's own daemon are refused
   from their container through the host gateway, which a loopback daemon does not answer (their
   `pdo complete` fails): `BIND=0.0.0.0` makes it listen on every interface for the journey;
 - **copies** the harnesses' auth files (`~/.claude/.credentials.json` and the account block of
-  `~/.claude.json`, `~/.pi/agent/auth.json`, `~/.local/share/opencode/auth.json`) into the demo
-  `HOME`; your own config folders are never linked nor written;
+  `~/.claude.json`, `~/.pi/agent/auth.json`, `~/.local/share/opencode/auth.json`, and the logged-in
+  user of `~/.copilot/config.json`) into the demo `HOME`, with `/tmp` marked trusted for `claude`
+  and `copilot` (put the journey's target repos there); your own config folders are never linked
+  nor written. A harness with no auth on this machine (no file to copy, e.g. opencode never logged
+  in) is not staged: a journey that runs it fails on a **precondition**, not a product bug.
+  The copies are taken once: when your own `claude` refreshes its login during a long journey, the
+  demo's token is retired and its nodes read « Login expired » (in a sandbox, the node stays
+  `running` and silent). Run `make demo-daemon-resync PORT=<port>` to copy your current logins in
+  again, then relaunch the node; that is an environment step, not a product finding;
 - writes the pidfile `/tmp/pdo-demo-<port>/daemon.pid`, waits for the daemon to answer, then prints
   `PDO_DAEMON_URL=…`, `PDO=…` (the branch's `pdo`, not the one on your `PATH`) and a ready command.
 
@@ -69,6 +80,11 @@ The Runs it launches open their tmux sessions on the socket `pdo-<port>`
 (`tmux -L pdo-6491 ls`), never on your default tmux server. Open `http://127.0.0.1:<port>` in the
 browser for a UI journey; the status bar shows the daemon **connected**.
 
+A **sandboxed** Run's container calls the daemon at `host.docker.internal:<port>` (the docker
+bridge), which a loopback-only daemon refuses: its node can't `pdo complete` and stays running.
+Start the demo daemon with `BIND=0.0.0.0` (or `BIND_ALL=1`) for any journey that runs a sandbox. It then listens on
+your network too: stop it as soon as the journey ends.
+
 If a precondition the journey lists isn't met, that's a **finding**: report it, don't try to "fix"
 the setup.
 
@@ -76,7 +92,8 @@ the setup.
 
 UI-first. Use the **Chrome DevTools MCP** server when available
 (`mcp__plugin_chrome-devtools-mcp_chrome-devtools__*`); fall back to **Playwright MCP**
-(`mcp__plugin_playwright_playwright__browser_*`) — both expose roughly the same primitives:
+(`mcp__plugin_playwright_playwright__browser_*`), or the `playwright-cli` skill from a shell — all
+expose roughly the same primitives:
 
 - `navigate_page` — open `http://127.0.0.1:<port>` (the demo daemon's)
 - `take_snapshot` (semantic DOM) and `take_screenshot` (visual evidence)
@@ -97,18 +114,26 @@ The point of this layer is that the UI alone doesn't tell the full story — ver
 
 - **tmux sessions**: `tmux -L pdo-<port> capture-pane -p -t pdo-<run_id>-<node_id>-iter-<n>`. The session-name
   pattern is fixed; confirm it shows the expected program (e.g. `claude` running, not a bare shell
-  that exited). A first `claude` launch in a fresh worktree lands on the "Quick safety check" trust
-  dialog, its cursor on « No, exit »: pick « Yes, I trust this folder » with
+  that exited). The staged config trusts `/tmp`, but `claude` does **not** carry that trust into a
+  Run: in a git worktree it checks trust on the repository's root only, without walking up to `/tmp`
+  (checked on Claude Code 2.1.316). So the **first** `claude` launch on each target repo lands on
+  the "Quick safety check" trust dialog; once accepted, the repo's later Runs pass. Read the pane
+  first: the cursor sits on « ❯ No, exit » by default. Pick « Yes, I trust this folder » with
   `tmux -L pdo-<port> send-keys -t <session> Down`, then `… send-keys -t <session> Enter` (a bare
   Enter exits `claude`, and the node turns « session died »). `copilot`'s equivalent is **not** a
-  step to drive: approve the target repository's root once, outside the journey, and it cascades to
-  every node sub-worktree (`docs/reference/harnesses.md` § Prerequisites). A `copilot` pane parked on it means the
-  prerequisite was never met.
+  step to drive: the staged config trusts `/tmp`, and for a repo elsewhere approve its root once,
+  outside the journey; it cascades to every node sub-worktree (`docs/reference/harnesses.md`
+  § Prerequisites). A `copilot` pane parked on it means the prerequisite was never met.
 - **Filesystem** (read with `cat` / Read):
-  - Pipelines: the daemon's library, never the target repo's `.pdo/pipelines/` (it is not read):
-    seed one with `pdo pipeline create <name>` then `pdo pipeline save <id> <file> --prompt <node>=<file>`,
-    or author it in the UI
+  - Pipelines: the instance library `/tmp/pdo-demo-<port>/home/.pdo/pipelines/<name>.yaml`, with
+    the sidecar `<name>.prompts/<node>.md`. Pipelines belong to the instance: a YAML in a target
+    repo's `.pdo/pipelines/` is not listed. Seed one with `pdo pipeline create <name>` then
+    `pdo pipeline save <id> <file> --prompt <node>=<file>`, or author it in the UI
   - Run artifacts: `.pdo/runs/<run_id>/worktree/.pdo/artifacts/...`
+- **Library assistant focus**: while a pipeline tab is open the UI sends one
+  `PUT /sessions/libassist/focus` when the edited pipeline changes, then repeats it every 20 s as a
+  heartbeat (ADR-0051: the daemon reaps an idle assistant after 120 s). A steady 20 s rhythm with
+  the same body is expected; several identical PUTs within a second are the finding.
 - **Daemon state**: `curl http://127.0.0.1:<port>/runs/<run_id>` for the projected run state (incl.
   `sessions_spawned`, `started_at`/`completed_at`, `loc`), and `/runs/<run_id>/events` for the full
   event log.

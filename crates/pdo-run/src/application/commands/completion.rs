@@ -28,6 +28,12 @@ pub(super) async fn mark_node_done(
     // the guard's "resume the run first" 409.
     let run_state = match run_state {
         Some(rs) => {
+            // A duplicate never re-opens the Run: answer its no-op first.
+            if let Some(stop) =
+                duplicate_completion_stop(&rs, "mark_node_done", &run_id, &node_id, iter)
+            {
+                return stop.into_response();
+            }
             match crate::application::reopen::embed_reopen_for_targeted_command(&state, &run_id, rs)
                 .await
             {
@@ -71,28 +77,6 @@ pub(super) async fn mark_node_done(
     let worktree_dir = worktree_dir_for_run(&repo_root, &run_id);
     let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
 
-    // #654 / ADR-0060: the manual completion delivers like every other
-    // one. Pre-#654 this arm ran neither the merge-back nor any
-    // worktree check, so an interactive node marked complete from the UI
-    // left its sub-worktree stranded and its shared-worktree edits
-    // uncommitted — the asymmetry ADR-0035 recorded as an accepted limit
-    // and this ticket removes. Same single operation, same events, before
-    // the terminal append and therefore before the downstream spawn.
-    if let Some(refusal) = crate::application::complete_node::deliver_node_run(
-        &state,
-        &events,
-        rs_ref,
-        &repo_root,
-        &worktree_dir,
-        &run_id,
-        &node_id,
-        iter,
-    )
-    .await
-    {
-        return crate::adapters::http::verdicts::refusal_response(&refusal);
-    }
-
     // The shared chokepoint (#490). Both surfaces project the refusal
     // through the same single function, which is what makes "a refusal is
     // never a 2xx" cover `POST /commands` too.
@@ -104,6 +88,30 @@ pub(super) async fn mark_node_done(
         &artifacts_dir,
         &run_id,
         rs_ref,
+    )
+    .await
+    {
+        return crate::adapters::http::verdicts::refusal_response(&refusal);
+    }
+
+    // #654 / ADR-0060: the manual completion delivers like every other
+    // one. Pre-#654 this arm ran neither the merge-back nor any
+    // worktree check, so an interactive node marked complete from the UI
+    // left its sub-worktree stranded and its shared-worktree edits
+    // uncommitted — the asymmetry ADR-0035 recorded as an accepted limit
+    // and this ticket removes. Same single operation, same events, before
+    // the terminal append and therefore before the downstream spawn — and
+    // after the output validation, so a mark-done refused on its outputs
+    // leaves no commit and no `NodeDelivered` behind.
+    if let Some(refusal) = crate::application::complete_node::deliver_node_run(
+        &state,
+        &events,
+        rs_ref,
+        &repo_root,
+        &worktree_dir,
+        &run_id,
+        &node_id,
+        iter,
     )
     .await
     {
@@ -144,6 +152,21 @@ pub(super) async fn mark_node_done(
     if let Err(e) = append_event(&state, &cmd_event).await {
         error!("failed to append mark_node_done command event: {e}");
     }
+
+    // A terminal transition reaps the node's session (snapshot, then kill),
+    // like every other completion: a node marked done never keeps a live pane.
+    // Before, only the agent's own completion reaped, so a node whose
+    // `pdo complete` could not reach the daemon — a sandboxed one — and that a
+    // human approved kept its session until the reaper's one-hour backstop.
+    // Inline, not detached: this command never runs inside the session it kills.
+    reap_node_session(
+        &state,
+        &repo_root,
+        &run_id,
+        &node_id,
+        iter,
+        !rs_ref.sandbox.is_off(),
+    );
 
     // Shared post-`NodeCompleted` tail, `SweepFirst`: advance the run +
     // re-drive throttled waiters, THEN fire this node's edges, then the

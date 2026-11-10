@@ -15,6 +15,12 @@ use crate::application::operations::on_node;
 use crate::domain::{event, projection};
 use crate::Runs;
 
+/// The line handed to an agent refused before the release: it went idle on the
+/// refusal and nothing else would wake it. The `[pdo-runtime]` prefix is posed
+/// by `send_message`.
+pub const COMPLETION_RELEASED_MESSAGE: &str =
+    "The user released this node: run `pdo complete` again now.";
+
 pub fn release_refusal(slug: &str, message: impl Into<String>) -> Response {
     (
         StatusCode::CONFLICT,
@@ -99,6 +105,13 @@ pub async fn release_node_completion(
             .into_response();
     }
 
+    // The agent already ran `pdo complete`, was refused, and went idle on the
+    // wait the daemon declared for it: nothing else would wake it.
+    let agent_refused_before = node.iter == iter
+        && node.awaiting.as_ref().is_some_and(|awaiting| {
+            awaiting.cause == crate::domain::state::AWAITING_CAUSE_COMPLETION_NOT_RELEASED
+        });
+
     let event = event::Event {
         id: None,
         run_id: run_id.to_string(),
@@ -114,6 +127,14 @@ pub async fn release_node_completion(
             Json(serde_json::json!({ "error": format!("error: {e}") })),
         )
             .into_response();
+    }
+    if agent_refused_before {
+        let session = pdo_session::domain::names::node_session_name(run_id, node_id, iter);
+        pdo_session::application::messages::send_message(
+            state.tmux(),
+            &session,
+            COMPLETION_RELEASED_MESSAGE,
+        );
     }
 
     (

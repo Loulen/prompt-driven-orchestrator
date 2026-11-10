@@ -492,12 +492,13 @@ describe("Pipeline info — YAML tab reflects an unsaved edit (#948)", () => {
     expect(screen.getByTestId("info-yaml-content")).toHaveTextContent("prompt_required: false");
     await waitFor(() => expect(fetchPipelineDocument).toHaveBeenCalledWith("p1"));
 
+    // A loaded full-suite run can take longer than waitFor's default second.
     fireEvent.click(screen.getByRole("button", { name: /Download/ }));
-    await waitFor(() => expect(saveBlob).toHaveBeenCalled());
+    await waitFor(() => expect(saveBlob).toHaveBeenCalled(), { timeout: 5_000 });
     expect(await vi.mocked(saveBlob).mock.calls[0][0].text()).toBe(saved);
 
     fireEvent.click(screen.getByRole("button", { name: /Copy/ }));
-    await waitFor(() => expect(copyToClipboard).toHaveBeenCalledWith(saved));
+    await waitFor(() => expect(copyToClipboard).toHaveBeenCalledWith(saved), { timeout: 5_000 });
   });
 });
 

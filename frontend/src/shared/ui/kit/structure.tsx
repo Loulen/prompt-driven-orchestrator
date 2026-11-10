@@ -179,16 +179,21 @@ export interface BannerProps {
   actions?: React.ReactNode;
   /** Drawn instead of the tone's status icon, in the tone's colour (a lock on a read-only state). */
   icon?: Icon;
+  /** Given whole under the line, wrapped: a reason too long for one line. */
+  detail?: string;
+  /** `data-testid` of the `detail`. */
+  detailTestId?: string;
 }
 
 /** A tinted line at the top of a pane: the status icon (or `icon`), a short fact, the detail, actions. */
-export function Banner({ tone, title, text, actions, icon: BannerIcon }: BannerProps) {
+export function Banner({ tone, title, text, actions, icon: BannerIcon, detail, detailTestId }: BannerProps) {
   return (
     <div
       className="d-banner"
       style={{ ["--st" as string]: toneColor(tone) }}
       role={tone === "failed" ? "alert" : "status"}
-      title={text}
+      title={text ?? detail}
+      data-detail={detail ? "true" : undefined}
     >
       {BannerIcon ? (
         <BannerIcon size={14} strokeWidth={1.5} className="d-banner__icon" aria-hidden />
@@ -198,6 +203,11 @@ export function Banner({ tone, title, text, actions, icon: BannerIcon }: BannerP
       <strong className="d-banner__title">{title}</strong>
       {text && <span className="d-banner__text">{text}</span>}
       {actions && <span className="d-banner__actions">{actions}</span>}
+      {detail && (
+        <span className="d-banner__detail" data-testid={detailTestId}>
+          {detail}
+        </span>
+      )}
     </div>
   );
 }

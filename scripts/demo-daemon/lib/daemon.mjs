@@ -21,15 +21,20 @@ import { demoEnv, demoPaths, TMUX_VARS } from "./env.mjs";
 const STAGED_LIST = "credentials.txt";
 const READY_TIMEOUT_MS = 60_000;
 
+/** Where the journeys put their target repos (`docs/agents/run-scenario.md`):
+ *  trusted by the harnesses that ask, so no trust dialog stops a node. */
+const TRUSTED_DIRS = ["/tmp"];
+
 /** Copy the auth files of every harness this machine has into `demoHome`;
  *  never a link, never a write to `hostHome`. Returns the files staged. */
-export function stageHarnessCredentials({ hostHome, demoHome }) {
-  return stageCredentials({ harnesses: Object.keys(HARNESS_AUTH), hostHome, demoHome, trustedDirs: [] });
+export function stageHarnessCredentials({ hostHome, demoHome, derive = true }) {
+  return stageCredentials({ harnesses: Object.keys(HARNESS_AUTH), hostHome, demoHome, trustedDirs: TRUSTED_DIRS, derive });
 }
 
 /**
  * Start a demo daemon on `port`. `testExt`: the test extension's demo daemon
  * instead of the bare one. `extra`: variables set explicitly on the daemon.
+ * `bind`: the address it listens on (`demoEnv`), loopback unless given.
  * `build`: run cargo's incremental build of `pdo` first, so a branch that moved
  * since the last build is not tested on a stale binary (false: build only if
  * the binary is missing). Resolves to `{ url, pdo, pid, paths, env }`.
@@ -73,6 +78,26 @@ export async function startDemo({ port, testExt = false, extra = {}, bind, build
     throw new Error(`${error.message}\n--- ${paths.log} (kept) ---\n${tail}`);
   }
   return { url, pdo, pid: child.pid, paths, env: daemonEnv };
+}
+
+/**
+ * Copy the host's harness auth into the running demo daemon of `port` again.
+ * A login the host refreshes retires the token the demo HOME was given at the
+ * start (claude rotates it), and its nodes then read « Login expired ». Only
+ * the token files are copied: the configs the demo wrote to (a folder trusted
+ * during the journey) are kept. The files staged are added to the stop's wipe
+ * list. Refuses a port without a pidfile. Returns the files staged.
+ */
+export function resyncDemo({ port, tmpRoot = "/tmp", hostHome = process.env.HOME }) {
+  const paths = demoPaths(port, tmpRoot);
+  if (readPid(paths.pidfile) === null) {
+    throw new Error(`no demo daemon on port ${port}: ${paths.pidfile} does not exist (nothing copied)`);
+  }
+  const staged = stageHarnessCredentials({ hostHome, demoHome: paths.home, derive: false });
+  const list = path.join(paths.root, STAGED_LIST);
+  const listed = new Set([...readLines(list), ...staged]);
+  fs.writeFileSync(list, [...listed].map((file) => `${file}\n`).join(""));
+  return staged;
 }
 
 /**

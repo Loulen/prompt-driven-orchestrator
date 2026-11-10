@@ -79,14 +79,14 @@ const STEPS: TourStep[] = [
   {
     id: "open-new-run",
     title: "Open New Run",
-    // Says the tab first when it lights the tab (CORE-232: entered from Overview, the
-    // card said « Click New Run » over a lit Runs tab icon).
+    // The button only exists on the Runs tab, so a reader who is somewhere else is
+    // sent to the tab first — one step, two targets, whichever is reachable. The
+    // body names the one that is lit (CORE-227, CORE-232: « Click New Run » over
+    // a lit Runs tab).
     body: (o) =>
       o.present(NEW_RUN_BUTTON)
         ? "Click New Run. A Run is one execution of a pipeline on a repository; the form that opens describes it."
         : "Open the Runs tab, then click New Run. A Run is one execution of a pipeline on a repository; the form that opens describes it.",
-    // The button only exists on the Runs tab, so a reader who is somewhere else is
-    // sent to the tab first — one step, two targets, whichever is reachable.
     target: (o) => (o.present(NEW_RUN_BUTTON) ? [NEW_RUN_BUTTON] : [RUNS_TAB]),
     waitingFor: "the New Run button",
     failureHint: "It lives at the top of the Runs tab, on the left.",
@@ -95,7 +95,7 @@ const STEPS: TourStep[] = [
   {
     id: "name-run",
     title: "Name the Run",
-    body: "Untick Auto, next to the name, then paste the name. A name you chose is easier to find in the list; the four characters at the end are this browser's, so yours stays apart from other people's on a shared instance.",
+    body: "Untick Auto, next to the Name field, then paste the name. A name you chose is easier to find in the list; the four characters at the end are this browser's, so yours stays apart from other people's on a shared instance.",
     // Both: the field is disabled until the box is unticked, so a hole on the
     // field alone would ring a control nobody can type in.
     target: () => [NAME_INPUT, AUTO_NAME],

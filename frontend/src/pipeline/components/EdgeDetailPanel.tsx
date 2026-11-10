@@ -17,6 +17,7 @@ import {
   carriedPorts,
   declaredOutputs,
   defaultConditionPort,
+  emergentInputs,
   inDeclarationOrder,
   withCarriedPorts,
 } from "../../lib/edgePorts";
@@ -202,7 +203,10 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
 
   const fromName = sourceNode?.name ?? edge.source.node;
   const toName = targetNode?.name ?? edge.target.node;
-  const route = `${fromName}.${ports.join("+")} → ${toName}.${edge.target.port}`;
+  // The target side names the inputs the edge drops (CONTEXT.md, Edges): a
+  // one-output edge lands under `target.port`, a wider one under each port's name.
+  const inputs = emergentInputs(edge).map((i) => i.input);
+  const route = `${fromName}.${ports.join("+")} → ${toName}.${inputs.join("+")}`;
 
   return (
     <aside className="ei" data-testid="edge-detail-panel">
@@ -222,7 +226,7 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
           </span>
         </span>
       </div>
-      <div className="ei-idline" title={route}>
+      <div className="ei-idline" title={route} data-testid="edge-route-line">
         {route}
       </div>
 

@@ -82,7 +82,7 @@ export function markTourDone(tourId: string, at: Date = new Date()): Record<stri
   return loadToursDone();
 }
 
-/** Settings › Tutorials › « Reset tutorial memory »: forget the checkmarks AND the
+/** Settings › General › Tutorials › « Reset »: forget the checkmarks AND the
  *  welcome prompt, so the next load proposes the modal again on a Run-less instance.
  *  The {@link tourIdentity} stays: forgetting it would orphan every object the
  *  tours already gave this browser (ADR-0071 §5). */

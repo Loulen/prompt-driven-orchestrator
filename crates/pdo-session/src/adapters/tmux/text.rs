@@ -10,7 +10,8 @@ use super::tmux;
 /// **Keystrokes, not a message**: a shell command in a `pdo-shell` session, a
 /// bare `Enter`. Text meant for a **harness agent** goes through
 /// `application::messages`, the one place the `[pdo-runtime]` prefix is posed
-/// (#792) — never through here.
+/// (#792) — never through here: a TUI harness takes the text and its Enter,
+/// sent in one burst, for a paste, and leaves the line unsubmitted.
 pub(super) fn send_keys(socket: &str, session_name: &str, text: &str) {
     let _ = tmux(socket)
         .args(["send-keys", "-t", session_name, text, "Enter"])

@@ -19,7 +19,7 @@ export type { GridSize };
  * The step a canvas draws with is resolved by `resolveGridSize`: the pipeline's
  * own `grid_size` (stored in the file, next to the `waypoints` drawn on it, so a
  * shared pipeline renders the same everywhere) wins over the reader's global
- * default (Settings › General › Interface), which falls back to `M`.
+ * default (Settings › Appearance › Interface), which falls back to `M`.
  *
  * 40px — the #840 prototype's pick and the only step before #877 — turned out too
  * coarse in use: a node card (35px tall) was shorter than one cell, and the

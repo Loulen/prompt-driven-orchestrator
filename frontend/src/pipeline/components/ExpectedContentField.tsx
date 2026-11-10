@@ -30,13 +30,29 @@ export default function ExpectedContentField({
 
   useEffect(() => {
     if (!expanded) return;
-    const collapseOnOutsideClick = (event: MouseEvent) => {
-      if (!containerRef.current?.contains(event.target as Node)) {
-        setExpanded(false);
-      }
+    // The field folds once a press outside it is RELEASED, not on the press:
+    // folding under the press moved what sits below it (« + field ») up before
+    // the release, and the click missed it (FP of CORE-227).
+    let foldOnRelease = false;
+    const notePress = (event: MouseEvent) => {
+      // A press that keeps the focus where it is — a tour card's buttons
+      // prevent its default — keeps the field open: folding under it moved the
+      // card, and the click missed Next.
+      foldOnRelease =
+        !event.defaultPrevented && !containerRef.current?.contains(event.target as Node);
     };
-    document.addEventListener("mousedown", collapseOnOutsideClick);
-    return () => document.removeEventListener("mousedown", collapseOnOutsideClick);
+    const foldAfterClick = () => {
+      if (foldOnRelease) setExpanded(false);
+      foldOnRelease = false;
+    };
+    document.addEventListener("mousedown", notePress);
+    // In the capture phase: a click whose propagation a dialog stops must
+    // still fold the field, as the press did.
+    document.addEventListener("click", foldAfterClick, true);
+    return () => {
+      document.removeEventListener("mousedown", notePress);
+      document.removeEventListener("click", foldAfterClick, true);
+    };
   }, [expanded]);
 
   return (

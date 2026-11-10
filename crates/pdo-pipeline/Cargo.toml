@@ -39,7 +39,11 @@ oxc_ast.workspace = true
 oxc_parser.workspace = true
 oxc_span.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+# A float read from JSON is the float that was written (ADR-0088): the shared
+# draft finds an edge by its whole value, sub-pixel anchor offsets included, and
+# the draft a save carries arrives as JSON while the replicated document holds
+# the browser's exact numbers. The default parser may land one ULP off.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 serde_yaml.workspace = true
 sha2.workspace = true
 sqlx.workspace = true

@@ -27,6 +27,7 @@ import {
   startTour,
   stepBody,
   stepNote,
+  stepReadOnly,
   stepSoft,
   type TourRun,
 } from "../tour";
@@ -66,7 +67,8 @@ const t = (id: string) => `[data-testid="${id}"]`;
 const RUNS_TAB = t("left-tab-runs");
 const NEW_RUN = t("new-run-button");
 const NAME_INPUT = t("run-name-input");
-const AUTO_NAME = t("auto-name-checkbox");
+/** The whole Auto control, box and word (FP of CORE-227). */
+const AUTO_NAME = t("auto-name");
 const REPO_INPUT = t("target-repo-input");
 const BROWSE = t("repo-browse-trigger");
 const EXPLORER = t("repo-browser-modal");
@@ -91,6 +93,10 @@ const NODE_ID = "assistant";
 const NODE_CARD = `.react-flow__node[data-id="${NODE_ID}"]`;
 const INSPECTOR_RUN = t("inspector-pane-run");
 const TERMINAL = t("tmux-terminal");
+const ENLARGED_TERMINAL = t("terminal-fullsize");
+const COLLAPSE_TERMINAL = `${ENLARGED_TERMINAL} ${t("term-expand")}`;
+const INTERRUPTED_BANNER = t("interrupted-banner");
+const REOPEN = t("interrupted-reopen-btn");
 const RELEASE = t("approve-btn-menu");
 const APPROVE_MENU = '[role="menu"][aria-label="Approve options"]';
 const AUTO_APPROVE_ENTRY = `${APPROVE_MENU} [role="menuitemcheckbox"]`;
@@ -440,6 +446,11 @@ describe("targets that re-aim as the user works", () => {
     expect(stepBody(stepById("open-new-run"), fake.obs())).toMatch(/^Click New Run\./);
   });
 
+  /**
+   * FP of CORE-227: card 1/15 said « Click New Run » while the Runs tab was
+   * what was lit — the full tour arrives from the Pipelines tab. The body names
+   * the lit thing.
+   */
   it.each([
     ["pick-pipeline", PIPELINE_TRIGGER, () => {}, PIPELINE_OPTION],
     ["pick-profile", AGENT_TRIGGER, () => {}, AGENT_DEFAULT_ROW],
@@ -989,6 +1000,26 @@ describe("the completion guard", () => {
   });
 });
 
+/**
+ * FP of CORE-227: the node's session died during the tour, and « Reopen » —
+ * the one gesture that brings it back — sat under the dim while the step lit
+ * the node's terminal. On the steps about that node, its interrupted banner is
+ * lit beside the target and Reopen stays live.
+ */
+describe("a node whose session died during the tour", () => {
+  it.each(["talk-to-agent", "release-completion"])("leaves Reopen reachable on %s", (id) => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    const step = stepById(id);
+    expect(stepReadOnly(step, fake.obs())).toEqual([]);
+    fake.show(INTERRUPTED_BANNER, REOPEN);
+    expect(stepReadOnly(step, fake.obs())).toEqual([INTERRUPTED_BANNER]);
+    expect(step.explore).toContain(REOPEN);
+  });
+});
+
 describe("waiting for the node to finish", () => {
   const waitStep = () => stepById("wait-for-node");
 
@@ -1035,6 +1066,22 @@ describe("waiting for the node to finish", () => {
     expect(waitStep().target(fake.obs())).toEqual([INSPECTOR_RUN]);
     expect(waitStep().soft).toBe(true);
     expect(waitStep().waitingNote).toContain("no time limit");
+  });
+
+  /**
+   * FP of CORE-227: with the terminal enlarged over the whole app, the zone
+   * stayed the inspector's box — a dashed outline and a dim drawn across the
+   * enlarged terminal. The zone follows the terminal the reader enlarged.
+   */
+  it("follows the terminal the reader enlarged, instead of drawing across it", () => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    fake.show(ENLARGED_TERMINAL);
+    expect(waitStep().target(fake.obs())).toEqual([ENLARGED_TERMINAL]);
+    fake.hide(ENLARGED_TERMINAL);
+    expect(waitStep().target(fake.obs())).toEqual([INSPECTOR_RUN]);
   });
 
   it("slides on by itself when the node completes", () => {
@@ -1150,6 +1197,34 @@ describe("opening the output", () => {
     expect(needsConfirm(TOUR, run, fake.obs())).toBe(true);
     expect(canAdvance(TOUR, run, fake.obs())).toBe(true);
     expect(confirmStep(TOUR, run, fake.obs()).phase).toBe("finished");
+  });
+
+  /**
+   * FP of CORE-227 (F3-13): a reader who enlarged the terminal at the wait step
+   * finds the out row buried under it — the hole lit the terminal's screen, and
+   * its collapse button sat under the dim. The step aims at that button first,
+   * and says so; once the terminal is back in the inspector it aims at the row.
+   */
+  it("has the reader collapse an enlarged terminal before pointing at the row", () => {
+    const fake = new FakeApp();
+    const step = stepById("open-output");
+    fake.launch();
+    fake.openRun();
+    fake.selectNode();
+    fake.finishNode("completed");
+    fake.show(ENLARGED_TERMINAL, COLLAPSE_TERMINAL);
+
+    expect(step.target(fake.obs())).toEqual([COLLAPSE_TERMINAL]);
+    expect(stepSoft(step, fake.obs())).toBe(false);
+    expect(stepBody(step, fake.obs())).toContain("Collapse terminal");
+    let run = at(fake, "open-output");
+    for (const clock of [0, 20_000]) run = observeTour(TOUR, run, fake.obs(), clock);
+    expect(run.phase).not.toBe("failed");
+    expect(currentStep(TOUR, run)?.id).toBe("open-output");
+
+    fake.hide(ENLARGED_TERMINAL, COLLAPSE_TERMINAL);
+    expect(step.target(fake.obs())).toEqual([OUT_ROW]);
+    expect(stepBody(step, fake.obs())).not.toContain("Collapse terminal");
   });
 
   /** A node that failed writes nothing: the tour stops on the usual card, with a
@@ -1289,6 +1364,12 @@ describe("the definition holds the copy rules", () => {
     expect(stepById("talk-to-agent").copyBlock).toBe(TUTORIAL_TERMINAL_LINE);
   });
 
+  /** The card is placed beside its hole: the word « Auto » the copy points at
+   *  must be inside the hole, not under the card (FP of CORE-227). */
+  it("lights the Name field and the whole Auto control, word included", () => {
+    expect(stepById("name-run").target(new FakeApp().obs())).toEqual([NAME_INPUT, AUTO_NAME]);
+  });
+
   /** The name to paste carries this browser's Identité de tour, and the card
    *  says why in the one place the suffix is pasted. */
   it("suggests a Run name suffixed with this browser's identity", () => {
@@ -1296,7 +1377,7 @@ describe("the definition holds the copy rules", () => {
     expect(copyBlockOf(step)).toBe(MY_RUN_NAME);
     expect(firstRunName()).toBe(MY_RUN_NAME);
     expect(stepBody(step, new FakeApp().obs())).toBe(
-      "Untick Auto, next to the name, then paste the name. A name you chose is easier to find in the list; the four characters at the end are this browser's, so yours stays apart from other people's on a shared instance.",
+      "Untick Auto, next to the Name field, then paste the name. A name you chose is easier to find in the list; the four characters at the end are this browser's, so yours stays apart from other people's on a shared instance.",
     );
   });
 

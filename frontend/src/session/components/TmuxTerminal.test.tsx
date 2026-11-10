@@ -775,6 +775,8 @@ describe("TmuxTerminal", () => {
     });
 
     it("does not veil a node that settled under the user's eyes, its status arriving after the close", () => {
+      // Settled, the fallen terminal reads the pane the daemon froze.
+      fetchPaneMock.mockResolvedValue({ content: "", session_name: "pdo-run-1-impl-iter-1", resumed: false, stale: false, source: "snapshot" });
       const { rerender } = render(live());
       opened();
       act(() => probedStates[0]("hors_ligne"));
@@ -786,6 +788,67 @@ describe("TmuxTerminal", () => {
         vi.advanceTimersByTime(GRACE);
       });
       expect(screen.queryByTestId("term-veil")).toBeNull();
+    });
+
+    it("shows the frozen pane of a node that settled under the user's eyes, not a disconnected terminal", async () => {
+      fetchPaneMock.mockResolvedValue({
+        content: "all done",
+        session_name: "pdo-run-1-impl-iter-1",
+        resumed: false,
+        stale: false,
+        source: "snapshot",
+      });
+      const { rerender } = render(live());
+      opened();
+      expect(fetchPaneMock).not.toHaveBeenCalled();
+      // The daemon reaps the session (its socket closes), then the status arrives.
+      act(() => probedStates[0]("hors_ligne"));
+      rerender(live("completed"));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(fetchPaneMock).toHaveBeenCalledWith("run-1", "impl", 1);
+      expect(screen.getByText("snapshot · session reaped")).toBeInTheDocument();
+      expect(screen.queryByText("disconnected")).toBeNull();
+    });
+
+    it("keeps the live buffer of a settled node while its socket is still open", () => {
+      const { rerender } = render(live());
+      opened();
+      rerender(live("completed"));
+      expect(fetchPaneMock).not.toHaveBeenCalled();
+    });
+
+    /**
+     * FP of CORE-227: a node's session died, `pdo node restart` brought it back
+     * under the same name, and the terminal stayed on « Terminal connection
+     * closed » until Reconnect. The node going live again is the session
+     * coming back: the terminal reconnects by itself.
+     */
+    it("reconnects by itself when the node goes live again", () => {
+      const { rerender } = render(live());
+      opened();
+      fall();
+      expect(screen.getByTestId("term-veil")).toBeInTheDocument();
+
+      rerender(live("interrupted"));
+      expect(probedOpens).toHaveLength(1);
+
+      rerender(live("running"));
+      expect(probedOpens).toHaveLength(2);
+      expect(probedOpens[1].path).toContain("/sessions/pdo-run-1-impl-iter-1/pty");
+      opened();
+      expect(screen.queryByTestId("term-veil")).toBeNull();
+    });
+
+    it("does not reconnect on a status that is not the session coming back", () => {
+      const { rerender } = render(live());
+      opened();
+      fall();
+      rerender(live("awaiting_user"));
+      rerender(live("awaiting_user"));
+      // running → awaiting_user is the same session asking a question: no new socket.
+      expect(probedOpens).toHaveLength(1);
     });
 
     it("never writes the daemon's beat into the pane", () => {

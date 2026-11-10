@@ -28,7 +28,12 @@ export default function RunNameSection({ form }: { form: NewRunForm }) {
 export function AutoNameBox({ form }: { form: NewRunForm }) {
   const { autoName, setAutoName, mode } = form;
   return (
-    <label className="d-check ln-autoname" title={mode === "trigger" ? "Auto-name each fired run" : "Auto-name"}>
+    <label
+      className="d-check ln-autoname"
+      title={mode === "trigger" ? "Auto-name each fired run" : "Auto-name"}
+      // The whole control, box and word: what a guided tour lights.
+      data-testid="auto-name"
+    >
       <input
         type="checkbox"
         checked={autoName}

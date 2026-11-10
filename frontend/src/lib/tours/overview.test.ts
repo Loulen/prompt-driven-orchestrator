@@ -763,6 +763,11 @@ describe("gestures advance only on the observed state", () => {
     expect(stepReadOnly(stepById("open-implementer"), fake.obs())).toEqual([RIGHT]);
     expect(stepReadOnly(stepById("outputs"), fake.obs())).toEqual([RIGHT]);
     expect(stepReadOnly(stepById("terminal"), fake.obs())).toEqual([RIGHT]);
+    // FP of CORE-227 (Overview 8): an enlarged terminal covers the window; the
+    // right panel's box under it would draw a dashed outline across it.
+    fake.show(t("terminal-fullsize"));
+    expect(stepReadOnly(stepById("terminal"), fake.obs())).toEqual([]);
+    fake.hide(t("terminal-fullsize"));
     // The inspector's tabs stay clickable inside the read-only panel.
     // ADR-0085: on a Run followed in « pilotage » the second tab is Config, not Edit.
     expect(stepById("open-implementer").explore).toContain(TAB_CONFIG);

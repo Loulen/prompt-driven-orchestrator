@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, type ClipboardEvent, type ReactNode
 import { X } from "lucide-react";
 import { IconButton } from "./kit";
 import { FOCUSABLE } from "./kit/layer";
+import { markFocusGivenBack } from "./kit/focusGivenBack";
 
 /**
  * The kit's dialog frame (a 32 px title bar, the body, a 40 px footer) in a
@@ -69,6 +70,7 @@ export default function OverlayDialog({
     watch.observe(d, { subtree: true, childList: true, attributes: true, attributeFilter: ["disabled"] });
     return () => {
       watch.disconnect();
+      markFocusGivenBack(opener);
       opener?.focus?.({ preventScroll: true });
     };
   }, []);

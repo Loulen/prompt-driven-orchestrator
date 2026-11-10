@@ -233,7 +233,9 @@ describe("OutputPortCard — O3 tab-head card", () => {
     expect(screen.queryByLabelText("Expected content")).not.toBeInTheDocument();
 
     fireEvent.click(trigger);
-    fireEvent.mouseDown(screen.getByRole("button", { name: "Outside" }));
+    const outside = screen.getByRole("button", { name: "Outside" });
+    fireEvent.mouseDown(outside);
+    fireEvent.click(outside);
     expect(screen.queryByLabelText("Expected content")).not.toBeInTheDocument();
   });
 

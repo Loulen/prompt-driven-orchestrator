@@ -87,6 +87,34 @@ describe("useLibassistLifecycle (#594)", () => {
     expect(closeLibraryAssistant).not.toHaveBeenCalled();
   });
 
+  // A focus is declared once per change of the template it names: hops between a
+  // Run and the same template (or any re-run of the effect) send nothing new, and
+  // the heartbeat keeps its own 20 s rhythm instead of restarting on each hop.
+  it("sends one declaration per actual change of focus, however often the view hops", () => {
+    const { rerender } = render({ id: "alpha", scope: "user", open: true });
+    for (let i = 0; i < 17; i++) {
+      rerender({ id: null, scope: undefined, open: true });
+      rerender({ id: "alpha", scope: "user", open: true });
+    }
+    expect(putLibassistFocus).toHaveBeenCalledTimes(1);
+
+    rerender({ id: "beta", scope: "user", open: true });
+    expect(putLibassistFocus).toHaveBeenCalledTimes(2);
+    expect(putLibassistFocus).toHaveBeenLastCalledWith("beta");
+
+    act(() => {
+      vi.advanceTimersByTime(20_000);
+    });
+    expect(putLibassistFocus).toHaveBeenCalledTimes(3);
+  });
+
+  it("declares again once editing resumes after the reap", () => {
+    const { rerender } = render({ id: "alpha", scope: "user", open: true });
+    rerender({ id: null, scope: undefined, open: false });
+    rerender({ id: "alpha", scope: "user", open: true });
+    expect(putLibassistFocus).toHaveBeenCalledTimes(2);
+  });
+
   // One call, not two: the daemon clears the focus as part of the reap. Sending a
   // separate `PUT focus: null` is what let the two diverge on `pagehide`, where
   // only one keepalive request gets out — the session died and the focus lingered.

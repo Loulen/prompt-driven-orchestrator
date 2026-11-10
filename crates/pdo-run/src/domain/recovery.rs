@@ -43,15 +43,47 @@ impl RecoveryMechanism {
     }
 }
 
+/// What PDO can tell about the conversation a re-attach would resume.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Conversation {
+    /// The harness's transcript of this iteration is on disk.
+    OnDisk,
+    /// The harness writes a transcript PDO can find, and there is none for this
+    /// iteration: the session died before the agent wrote its first turn, or its
+    /// store is gone. `claude --resume` answers « No conversation found » and
+    /// exits, so a re-attach would only kill the session again.
+    Missing,
+    /// PDO reads no transcript for this harness: it cannot tell.
+    Unknown,
+}
+
+/// Why a harness that can resume was restarted instead — said in the
+/// `recover_node` response, so the fallback is never silent.
+pub const NO_CONVERSATION_TO_RESUME: &str =
+    "no conversation to resume: the session died before its agent wrote one, so the node \
+     starts fresh with its partial artifacts";
+
 /// Pick the recovery mechanism for a node whose frozen harness `can_resume` (or
 /// not) — ADR-0049 §3. The fallback is **automatic** — it is not a second human
 /// decision — which is why it lives here and not in a UI.
-pub fn choose_recovery(harness_can_resume: bool) -> RecoveryMechanism {
-    if harness_can_resume {
+///
+/// A harness that can resume is only re-attached when there is something to
+/// resume: a conversation PDO knows is missing falls back to the restart too.
+pub fn choose_recovery(harness_can_resume: bool, conversation: Conversation) -> RecoveryMechanism {
+    if harness_can_resume && conversation != Conversation::Missing {
         RecoveryMechanism::Reattach
     } else {
         RecoveryMechanism::RestartWithArtifacts
     }
+}
+
+/// The sentence a fallback carries, when it is not the harness's own limit.
+pub fn fallback_reason(
+    harness_can_resume: bool,
+    conversation: Conversation,
+) -> Option<&'static str> {
+    (harness_can_resume && conversation == Conversation::Missing)
+        .then_some(NO_CONVERSATION_TO_RESUME)
 }
 
 #[cfg(test)]
@@ -60,15 +92,37 @@ mod tests {
 
     #[test]
     fn a_resuming_harness_reattaches() {
-        assert_eq!(choose_recovery(true), RecoveryMechanism::Reattach);
+        assert_eq!(
+            choose_recovery(true, Conversation::OnDisk),
+            RecoveryMechanism::Reattach
+        );
+        // A harness PDO reads no transcript for: nothing says the resume would fail.
+        assert_eq!(
+            choose_recovery(true, Conversation::Unknown),
+            RecoveryMechanism::Reattach
+        );
     }
 
     #[test]
     fn a_non_resuming_harness_falls_back_to_restart_with_artifacts() {
         assert_eq!(
-            choose_recovery(false),
+            choose_recovery(false, Conversation::OnDisk),
             RecoveryMechanism::RestartWithArtifacts
         );
+    }
+
+    #[test]
+    fn a_resuming_harness_with_no_conversation_restarts_and_says_why() {
+        assert_eq!(
+            choose_recovery(true, Conversation::Missing),
+            RecoveryMechanism::RestartWithArtifacts
+        );
+        assert_eq!(
+            fallback_reason(true, Conversation::Missing),
+            Some(NO_CONVERSATION_TO_RESUME)
+        );
+        assert_eq!(fallback_reason(true, Conversation::OnDisk), None);
+        assert_eq!(fallback_reason(false, Conversation::Missing), None);
     }
 
     #[test]

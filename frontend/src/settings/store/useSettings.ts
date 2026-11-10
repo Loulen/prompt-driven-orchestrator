@@ -12,8 +12,18 @@ import { useHarnessCatalogueChanged } from "../../harness/store/useHarnessCatalo
  */
 export const SETTINGS_CHANGED = "pdo:settings-changed";
 
-export function announceSettingsChanged() {
-  window.dispatchEvent(new Event(SETTINGS_CHANGED));
+/**
+ * `settings`: what the write answered, when it answered the whole of `GET /settings`
+ * (the form's `PUT`). A listener applies it at once instead of re-reading — a read that
+ * probes Docker, a second or two behind the change. Absent, the listener re-reads.
+ */
+export function announceSettingsChanged(settings?: InstanceSettings) {
+  window.dispatchEvent(new CustomEvent<InstanceSettings | undefined>(SETTINGS_CHANGED, { detail: settings }));
+}
+
+/** The settings an announce carried, if any (see {@link announceSettingsChanged}). */
+export function announcedSettings(event: Event): InstanceSettings | undefined {
+  return event instanceof CustomEvent ? (event.detail as InstanceSettings | undefined) ?? undefined : undefined;
 }
 
 /**

@@ -39,6 +39,7 @@ import { carriedPorts, defaultConditionPort, withCarriedPorts } from "../edgePor
 import { requalifyWhen, rowsToWhen } from "../whenClause";
 import type { EditorNodeDef, EditorPipelineDef } from "../../pipeline/model/pipeline";
 import { probeReplay, type ReplayOutcome } from "../../test/tourReplay";
+import { workspaceButton } from "../nodeIsolation";
 
 const STEPS = FIRST_PIPELINE_TOUR.steps;
 
@@ -125,7 +126,7 @@ class FakeApp {
         variables: {},
         // The daemon's scaffold: a start and an end marker, no edges.
         nodes: [
-          { id: "start", name: "Start", type: "start", inputs: [], outputs: [], interactive: false },
+          { id: "start", name: "Start", type: "start", inputs: [], outputs: [{ name: "user_prompt" }], interactive: false },
           { id: "end", name: "End", type: "end", inputs: [], outputs: [], interactive: false },
         ],
         edges: [],
@@ -260,7 +261,8 @@ function gestures(fake: FakeApp): Record<string, () => void> {
   const inspector = () =>
     fake.show(NAME_INPUT, PROMPT_INPUT, outSlot, '[data-testid="node-interactive-toggle"]',
       '[data-testid="workspace-shared"]', '[data-testid="workspace-isolated"]',
-      '[data-testid="add-output-port"]', `${outSlot} [data-testid="output-schema-editor"]`);
+      '[data-testid="add-output-port"]', `${outSlot} [data-testid="output-schema-editor"]`,
+      `${outSlot} [data-testid="add-schema-field"]`);
 
   return {
     "pipelines-tab": () => fake.show('[data-testid="new-pipeline-button"]'),
@@ -460,6 +462,23 @@ describe("walking the whole tour", () => {
       { verdict: { eq: "fail" } },
       { verdict: { eq: "pass" } },
     ]);
+  });
+
+  /**
+   * FP of CORE-227: the pipeline the tour built had no Start → implementer
+   * edge. The implementer's only way in is the conditional edge back from the
+   * tester, so it is never an entry point (`graph_resolver::ready_nodes`), and
+   * the tester waits on it: a Run of it starts nothing. Start is wired.
+   */
+  it("wires Start to the implementer, or no Run of it would ever start", () => {
+    const fake = new FakeApp();
+    const script = gestures(fake);
+    for (const step of STEPS) script[step.id]();
+    const fromStart = fake.app.pipeline!.edges.filter((e) => e.source.node === "start");
+    expect(fromStart.map((e) => e.target.node)).toEqual(["n1"]);
+    expect(fromStart[0].when).toBeUndefined();
+    const ids = STEPS.map((s) => s.id);
+    expect(ids.indexOf("edge-start-implementer")).toBeLessThan(ids.indexOf("save"));
   });
 });
 
@@ -862,6 +881,20 @@ describe("the shape of every step", () => {
     expect(ids.indexOf("keep-or-delete")).toBe(ids.indexOf("validate") + 1);
   });
 
+  /**
+   * FP of CORE-227: step 10 said « Pick Run worktree » over a segmented control
+   * whose buttons read Isolated and Shared. A card names what is written on the
+   * button, and the end card says the same word.
+   */
+  it("names the Worktree choice the way its button reads", () => {
+    const step = STEPS.find((s) => s.id === "implementer-worktree")!;
+    expect(bodyOf(step)).toContain(`Pick ${workspaceButton(false)}`);
+    expect(`${step.title} ${bodyOf(step)}`).not.toContain("Run worktree");
+    const recap = FIRST_PIPELINE_TOUR.recap as { label: string; text: string }[];
+    const implementer = recap.find((r) => r.label === "implementer")!;
+    expect(implementer.text).toContain(workspaceButton(false));
+  });
+
   it("says in its recap what validating did", () => {
     const recap = FIRST_PIPELINE_TOUR.recap;
     const lines = Array.isArray(recap) ? recap : [];
@@ -1013,6 +1046,30 @@ describe("the Validate step", () => {
 
   it("can be skipped by a reader who keeps a test pipeline", () => {
     expect(step.skippable).toBe(true);
+  });
+});
+
+/**
+ * FP of CORE-227 (First pipeline 35/35): the Save window opened over the dimmer,
+ * unlit, while the card still pointed at the Save… button behind it.
+ */
+describe("the Save step", () => {
+  const step = STEPS.find((s) => s.id === "save")!;
+  const MODAL = '[data-testid="save-version-modal"]';
+
+  it("lights Save…, then the window it opens", () => {
+    const fake = new FakeApp();
+    expect(step.target(fake.obs())).toEqual(['[data-testid="save-button"]']);
+
+    fake.show(MODAL);
+    expect(step.target(fake.obs())).toEqual([MODAL]);
+    const soft = step.soft as (o: TourObservation) => boolean;
+    expect(soft(fake.obs())).toBe(true);
+    expect(stepBody(step, fake.obs())).toMatch(/^Click Save in the window\./);
+
+    fake.hide(MODAL);
+    expect(step.target(fake.obs())).toEqual(['[data-testid="save-button"]']);
+    expect(soft(fake.obs())).toBe(false);
   });
 });
 
@@ -1258,5 +1315,30 @@ describe("the last step, when the deletion closes the pipeline's tab", () => {
     expect(step.target(fake.obs())).toEqual(['[data-testid="library-row-my-own"]']);
     fake.app = { ...fake.app, libraryPipelineIds: [] };
     expect(step.done!(fake.obs())).toBe(true);
+  });
+});
+
+/**
+ * FP of CORE-227 (First pipeline, « Declare the verdict field »): the step lit
+ * the whole schema editor, 443 px wide, for a « + field » button of 52 px; a
+ * click in the lit zone but off the button did nothing.
+ */
+describe("the verdict-field step", () => {
+  const step = STEPS.find((s) => s.id === "tester-verdict")!;
+  const EDITOR = `[data-output-index="0"] [data-testid="output-schema-editor"]`;
+
+  it("lights + field until a field exists, then the editor to fill it in", () => {
+    const fake = new FakeApp();
+    fake.createPipeline();
+    fake.addAgent("n1");
+    fake.addAgent("n2");
+    fake.updateAgent(1, { outputs: [{ name: "out", instructions: "A short verdict" }] });
+    const [first] = step.target(fake.obs());
+    expect(first).toMatch(/\[data-testid="add-schema-field"\]$/);
+
+    fake.updateAgent(1, {
+      outputs: [{ name: "out", instructions: "A short verdict", frontmatter: { field: { type: "string" } } }],
+    });
+    expect(step.target(fake.obs())).toEqual([EDITOR]);
   });
 });

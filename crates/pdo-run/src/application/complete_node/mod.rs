@@ -54,8 +54,8 @@ impl Runs {
     /// auto-completion takes too, as a transition, without asking.
     ///
     /// The body lives in that shared function since #469 §3: the forgotten-run
-    /// refusal (#328), the completion guard (#212/#354), the sub-worktree
-    /// commit+merge, the non-isolated cleanliness check, output validation, the
+    /// refusal (#328), the completion guard (#212/#354), output validation, the
+    /// delivery (sub-worktree merge-back or shared-worktree commit), the
     /// terminal append, then the detached reap+advance tail (#304/ADR-0023).
     pub async fn complete_node(self: &Arc<Self>, actor: &Actor, command: CompleteNode) -> Response {
         let run_id = command.run_id.clone();
@@ -204,23 +204,6 @@ pub async fn complete_node_iteration(
         return CompletionAttempt::refused(refusal);
     }
 
-    // #654 / ADR-0060: the ONE delivery every completion path goes through, run
-    // before the terminal event and therefore before any downstream spawn.
-    if let Some(refusal) = deliver_node_run(
-        state,
-        &events,
-        &pre_run_state,
-        &repo_root,
-        &worktree_dir,
-        &run_id,
-        &node_id,
-        iter,
-    )
-    .await
-    {
-        return CompletionAttempt::refused(refusal);
-    }
-
     let pipeline_path =
         resolve_run_pipeline_path(&repo_root, &run_id, &pre_run_state.pipeline_name);
     let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
@@ -247,6 +230,26 @@ pub async fn complete_node_iteration(
         ) {
             freeze_node_pane(state, &repo_root, &run_id, &node_id, iter);
         }
+        return CompletionAttempt::refused(refusal);
+    }
+
+    // #654 / ADR-0060: the ONE delivery every completion path goes through, run
+    // before the terminal event and therefore before any downstream spawn — and
+    // after the output validation above, so a completion refused on its outputs
+    // commits nothing and records no `NodeDelivered`. The artifact store never
+    // travels through git (#796), so the validation does not need the delivery.
+    if let Some(refusal) = deliver_node_run(
+        state,
+        &events,
+        &pre_run_state,
+        &repo_root,
+        &worktree_dir,
+        &run_id,
+        &node_id,
+        iter,
+    )
+    .await
+    {
         return CompletionAttempt::refused(refusal);
     }
 

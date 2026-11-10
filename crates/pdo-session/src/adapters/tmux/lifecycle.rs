@@ -11,7 +11,8 @@ use super::tmux;
 /// `new-session -d -s <name> -c <working_dir> exec bash <file>`, where the file
 /// holds `script` ([`LaunchFile`]): the values the script exports never reach
 /// an argv. Then mouse mode on so that wheel events are forwarded as
-/// mouse-report escape sequences instead of being silently dropped. `what`
+/// mouse-report escape sequences instead of being silently dropped, and the
+/// status line off. `what`
 /// names the session kind in the error. The file is gone when this returns.
 pub(super) fn new_session(
     socket: &str,
@@ -23,6 +24,11 @@ pub(super) fn new_session(
     let label = what.map(|w| format!(" ({w})")).unwrap_or_default();
     let launch = LaunchFile::write(script)
         .with_context(|| format!("failed to write the launch file{label}"))?;
+    // A session of the same name that closed before (a relaunched iteration)
+    // left its closing time: this one has not closed. No server yet: no-op.
+    let _ = tmux(socket)
+        .args(["set-option", "-gu", &closed_option(name)])
+        .output();
     let output = tmux(socket)
         .args(["new-session", "-d", "-s", name, "-c"])
         .arg(working_dir)
@@ -43,7 +49,55 @@ pub(super) fn new_session(
     let _ = tmux(socket)
         .args(["set-option", "-t", name, "mouse", "on"])
         .output();
+    // The PDO terminal shows the pane alone: without a `~/.tmux.conf`, tmux's
+    // status line took its last row and named a session nobody chose.
+    let _ = tmux(socket)
+        .args(["set-option", "-t", name, "status", "off"])
+        .output();
+    record_closings(socket);
     Ok(())
+}
+
+/// The server-wide `session-closed` hook slot PDO owns: an index of its own, so
+/// a hook the user set on the bare `session-closed` is never replaced.
+const CLOSED_HOOK: &str = "session-closed[71]";
+
+/// The global user option that holds when `session` closed, in Unix seconds
+/// (`date +%s`: the same on GNU and BSD `date`, unlike a millisecond format).
+fn closed_option(session: &str) -> String {
+    format!("@pdo-closed-{session}")
+}
+
+/// Arm the hook that writes down when each session of the server closes
+/// ([`session_closed_at`]). Idempotent: it rewrites the same slot, so arming it
+/// on every new session is what keeps it on a server started afresh.
+///
+/// `#{q:…}` escapes the session name for the shell `run-shell` hands the line
+/// to: a node id is the pipeline author's, and must never run as a command.
+/// The time is lost when the closing session was the server's last one: tmux
+/// exits with it (the sweep then tells a bound, see `pdo-run`'s `assess`).
+fn record_closings(socket: &str) {
+    let command = format!(
+        "run-shell -b 'tmux -L {socket} set-option -g {} \"$(date +%s)\"'",
+        closed_option("#{q:hook_session_name}")
+    );
+    let _ = tmux(socket)
+        .args(["set-hook", "-g", CLOSED_HOOK, &command])
+        .output();
+}
+
+/// When tmux closed `session_name`, as written down by [`record_closings`];
+/// `None` while it lives, for a session it never saw, or once its server exited.
+pub(super) fn session_closed_at(socket: &str, session_name: &str) -> Option<std::time::SystemTime> {
+    let output = tmux(socket)
+        .args(["show-options", "-gqv", &closed_option(session_name)])
+        .output()
+        .ok()?;
+    let secs: u64 = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .ok()?;
+    Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
 }
 
 /// Capture the visible pane content (with ANSI escapes) for a session.

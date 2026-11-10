@@ -35,7 +35,9 @@ que l'écrivain est mort (#516). L'alternative « auto-retry borné, cap N » a 
 
 - **Resume de la session dans le worktree** (optimal) : réanimer l'agent dans le sous-worktree
   existant sans relancer le run. **Harness-spécifique**, conditionné à une capacité déclarée
-  (ADR-0045) — tous les harnais ne savent pas reprendre une session.
+  (ADR-0045) — tous les harnais ne savent pas reprendre une session. *Amendement (CORE-227)* : il
+  faut aussi que la conversation du node existe sur disque ; une session morte avant d'en écrire
+  une n'a rien à reprendre, et `recover_node` passe alors au restart en disant pourquoi.
 - **Restart avec les artefacts partiels fournis en input** (défaut, harness-agnostique) : un agent
   frais reçoit le travail partiel **en contexte**, jamais réécrit par-dessus.
 - **Abandon humain** → `Failed`.

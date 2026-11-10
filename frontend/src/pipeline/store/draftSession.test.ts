@@ -167,6 +167,17 @@ describe("a pipeline tab's shared draft", () => {
     expect(current().draft?.canRedo).toBe(true);
   });
 
+  // FP of CORE-227: drawing an edge stamps its anchors right after, folded into
+  // the same step. Undo removes the whole edge, and its tooltip names that.
+  it("names a drawn edge after what it is, not after its stamped anchors", () => {
+    join(serverDoc());
+    useEditStore.getState().addEdge({ source: { node: "a", port: "out" }, target: { node: "b", port: "in" } } as never);
+    useEditStore.getState().updateEdge(0, { target_side: "top", source_anchor: { side: "bottom" } } as never, { track: false });
+    expect(current().draft?.undoLabel).toBe("add edge");
+    useEditStore.getState().undo();
+    expect(current().pipeline.edges).toHaveLength(0);
+  });
+
   it("names the change Redo replays, as Undo does", () => {
     join(serverDoc());
     useEditStore.getState().updateNode("a", { name: "Designer" });

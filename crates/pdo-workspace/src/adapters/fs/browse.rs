@@ -132,8 +132,11 @@ pub fn list_level(resolved: &Path, include_files: bool, hidden: bool) -> Listing
         }
     };
 
-    // Each bucket collects at most `BROWSE_CAP + 1`: a (CAP+1)th survivor is all
-    // `truncated` needs.
+    // Every child is collected, then sorted, then capped (`merge_browse_entries`).
+    // An early stop at CAP+1 kept the alphabetically-first CAP of an arbitrary
+    // `read_dir` sample: in a `/tmp` of 1 118 folders, the repository the user was
+    // sent to pick was not listed at all. The stat per child was already paid for
+    // every listed entry; a level is one `read_dir`, names only.
     let mut dirs: Vec<BrowseEntry> = Vec::new();
     let mut files: Vec<BrowseEntry> = Vec::new();
     for child in read {
@@ -162,21 +165,13 @@ pub fn list_level(resolved: &Path, include_files: bool, hidden: bool) -> Listing
             is_symlink,
             is_dir,
         };
-        let bucket = if is_dir { &mut dirs } else { &mut files };
-        if bucket.len() <= BROWSE_CAP {
-            bucket.push(entry);
-        }
-        // The `!include_files` arm is load-bearing: without it, `files` staying
-        // empty under the defaults means a directory with > CAP subdirectories is
-        // walked in full instead of stopping at CAP+1.
-        if dirs.len() > BROWSE_CAP && (!include_files || files.len() > BROWSE_CAP) {
-            break;
+        if is_dir {
+            dirs.push(entry);
+        } else {
+            files.push(entry);
         }
     }
 
-    // Known limitation: when the early-stop fires, the collected CAP+1 entries are in
-    // arbitrary `read_dir` order, so the sort keeps the alphabetically-first CAP *of an
-    // arbitrary sample*. Inherent to capping without a global sort.
     let (entries, truncated) = merge_browse_entries(dirs, files, BROWSE_CAP);
     Listing {
         path,

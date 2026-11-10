@@ -21,12 +21,10 @@ pub(super) fn validate_completion(state: &RunState, event: &Event) -> Verdict {
         });
     }
 
+    if let Some(reason) = duplicate_completion(state, node_id, iter) {
+        return Verdict::noop(reason);
+    }
     match iteration_status(state, node_id, iter) {
-        // A `Skipped` iter is a settled completion too: a duplicate completion
-        // landing on it is a no-op, not a reject.
-        Some(NodeStatus::Completed) | Some(NodeStatus::Skipped) => Verdict::noop(format!(
-            "node {node_id} iter {iter} is already completed: duplicate completion ignored"
-        )),
         Some(NodeStatus::Running) | Some(NodeStatus::AwaitingUser) | Some(NodeStatus::Failed) => {
             Verdict::Allow
         }

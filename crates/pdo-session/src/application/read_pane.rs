@@ -1,6 +1,8 @@
 //! A node's pane (`GET /runs/{run_id}/nodes/{node_id}/pane`): the live session,
-//! else the snapshot of a terminal iteration, else — for the latest live
-//! iteration whose session died — a re-attach in place (ADR-0049 §3a).
+//! else the snapshot of a terminal or `Interrupted` iteration, else — for the
+//! latest live iteration whose session died — a re-attach in place (ADR-0049
+//! §3a). An `Interrupted` node is never re-attached by a read: it waits for a
+//! human gesture.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -77,10 +79,17 @@ impl ReadPane {
         // terminal iteration — a pane request must not violate the
         // one-live-iteration invariant.
         let snapshot_path = pane_snapshot_path(&target.repo_root, run_id, node_id, iter);
-        if target.terminal {
+        if target.terminal || target.interrupted {
             if let Ok(content) = std::fs::read_to_string(&snapshot_path) {
                 return Ok((session, Pane::new(content, PaneSource::Snapshot, stale)));
             }
+        }
+
+        // ADR-0049: an `Interrupted` node comes back on a human gesture only
+        // (`recover_node`, a restart). A read is not one, so it never relaunches
+        // the harness: no snapshot, nothing to show.
+        if target.interrupted {
+            return Ok((session, unavailable(stale)));
         }
 
         if target.latest_iter && !target.terminal && !target.pending {

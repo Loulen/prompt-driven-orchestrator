@@ -74,7 +74,7 @@ export const TESTER_STEPS: TourStep[] = [
   {
     id: "select-tester",
     title: "Select the second node",
-    body: "Click the new card so the inspector follows it. Both cards look alike until you name them.",
+    body: "Click the new card so the inspector follows it. It reads implementer-2 until you name it.",
     target: (o) => nodeSel(agent(o.app, 1)),
     waitingFor: "the second node on the canvas",
     done: (o) => selected(o.app, agent(o.app, 1)),
@@ -131,7 +131,13 @@ export const TESTER_STEPS: TourStep[] = [
     id: "tester-verdict",
     title: "Declare the verdict field",
     body: "Add a field named verdict, set its type to enum, and allow pass and fail. Edges read this frontmatter to decide where the Run goes next.",
-    target: () => [`${outputSlot(0)} [data-testid="output-schema-editor"]`],
+    // Two beats (FP of CORE-227): « + field » alone while out declares no
+    // field (the whole editor lit a 443 px zone for a 52 px button), then the
+    // editor, whose name, type and allowed values the step asks to fill in.
+    target: (o) =>
+      Object.keys(agent(o.app, 1)?.outputs[0]?.frontmatter ?? {}).length === 0
+        ? [`${outputSlot(0)} [data-testid="add-schema-field"]`]
+        : [`${outputSlot(0)} [data-testid="output-schema-editor"]`],
     waitingFor: "the output schema editor",
     done: (o) => {
       const decl = agent(o.app, 1)?.outputs[0]?.frontmatter?.verdict;
@@ -257,10 +263,13 @@ export const TESTER_STEPS: TourStep[] = [
     body: (o) =>
       saved(o)
         ? "Saved: the pipeline is in your Library as a version. Until you save, your changes are a draft."
-        : "Click Save. Until you do, all of this is a draft: Save makes it a version in your Library.",
-    // Re-aims onto the dialog Save opens, as « keep-or-delete » does onto its
-    // confirmation: left outside the hole, it was drawn under the dimming (CORE-232).
+        : o.present(SAVE_DIALOG)
+          ? "Click Save in the window. Each save numbers a new version of the pipeline; the earlier ones stay under Versions."
+          : "Click Save. Until you do, all of this is a draft: Save makes it a version in your Library.",
+    // Two beats, as Validate: the button, then the dialog it opens, lit rather
+    // than drawn under the dimming (CORE-227, CORE-232).
     target: (o) => (o.present(SAVE_DIALOG) ? [SAVE_DIALOG] : ['[data-testid="save-button"]']),
+    soft: (o) => o.present(SAVE_DIALOG),
     waitingFor: "the Save button",
     // Not skippable: everything after this reads the saved file.
     done: saved,

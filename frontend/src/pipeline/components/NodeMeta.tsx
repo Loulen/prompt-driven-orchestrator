@@ -7,7 +7,7 @@
 import { Coins, FileCode, FileImage, Files, FileText, GitFork, Images, Repeat, Timer, type LucideIcon } from "lucide-react";
 import type { PortType } from "../../shared/generated/PortType";
 import { formatDuration } from "../../run/model/runDuration";
-import { formatCostAmount } from "../../run/model/costLabel";
+import { nodeCostAmount } from "../../run/model/costLabel";
 import { useNow } from "../../run/model/iterationDuration";
 import type { ElementMarks } from "../../hooks/useElementMarks";
 import { RUN_CARD } from "../model/runCardElements";
@@ -94,7 +94,7 @@ export function NodeMeta({
       : null;
   const cost =
     run?.cost && run.cost.usd != null
-      ? formatCostAmount(run.cost.usd, run.cost.partial, run.cost.form !== "reported")
+      ? nodeCostAmount(run.cost)
       : null;
   const iter = run && run.iter > 0 ? (data.loopBadge || run.iterations > 1 ? `×${run.iter}` : String(run.iter)) : null;
   const cells = [

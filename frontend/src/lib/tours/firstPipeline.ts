@@ -34,6 +34,7 @@ import {
   tutorialPipelineName,
 } from "./firstPipelineReading";
 import { TESTER_STEPS } from "./firstPipelineTesterSteps";
+import { workspaceButton } from "../nodeIsolation";
 
 export { TUTORIAL_PIPELINE_ID, tutorialPipelineName } from "./firstPipelineReading";
 
@@ -159,8 +160,10 @@ const STEPS: TourStep[] = [
   },
   {
     id: "implementer-worktree",
-    title: "Put it in the Run worktree",
-    body: "Pick Shared, under Worktree. This node then works in the Run's own worktree and branch, so what it writes is what the Run carries.",
+    title: "Share the Run's worktree",
+    // Named the way the button reads (FP of CORE-227): the segmented control
+    // says Isolated and Shared; « Run worktree » is only its tooltip.
+    body: `Pick ${workspaceButton(false)}, under Worktree. This node then works in the Run's own worktree, the branch the Run owns, so what it writes is what the Run carries.`,
     target: () => ['[data-testid="workspace-shared"]'],
     waitingFor: "the Workspace choice",
     done: (o) => agent(o.app, 0)?.isolated_worktree === false,
@@ -200,11 +203,11 @@ export const FIRST_PIPELINE_TOUR: TourDef = {
   recap: [
     {
       label: "implementer",
-      text: "agent in the Run worktree, implements the request and runs the tests; interactive, so it completes only on your go.",
+      text: `agent in the Run's own worktree (${workspaceButton(false)}), implements the request and runs the tests; interactive, so it completes only on your go.`,
     },
     {
       label: "tester",
-      text: "agent in an isolated worktree, also interactive, returns a verdict (pass | fail) and an annotated screenshot.",
+      text: `agent in its own worktree (${workspaceButton(true)}), also interactive, returns a verdict (pass | fail) and an annotated screenshot.`,
     },
     {
       label: "Start",

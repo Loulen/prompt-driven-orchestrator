@@ -6,7 +6,7 @@ use axum::response::{IntoResponse, Response};
 use tracing::{info, warn};
 
 use crate::application::scheduler::advance as run_advance;
-use crate::domain::{completion_refusal, event};
+use crate::domain::{completion_refusal, event, state, transition_guard};
 
 /// What the shared completion head decided, in the two shapes an HTTP caller must
 /// answer differently (ADR-0035).
@@ -69,6 +69,26 @@ pub fn completion_head_gate(
         }
         run_advance::CompletionHead::Allow => None,
     }
+}
+
+/// The no-op a completion command answers **before** embedding a re-open
+/// (ADR-0049) when `(node_id, iter)` already holds a settled completion: a
+/// duplicate never re-opens a terminal Run only to be ignored on it.
+pub fn duplicate_completion_stop(
+    run_state: &state::RunState,
+    caller: &str,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+) -> Option<CompletionHeadStop> {
+    let reason = transition_guard::duplicate_completion(run_state, node_id, iter)?;
+    completion_head_gate(
+        run_advance::CompletionHead::NoOp { reason },
+        caller,
+        run_id,
+        node_id,
+        iter,
+    )
 }
 
 /// Who is asking for a node iteration to be completed.

@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
+import { useState } from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import OutputSchemaEditor from "./OutputSchemaEditor";
+import type { FrontmatterFieldDecl } from "../../shared/generated/FrontmatterFieldDecl";
 
 describe("OutputSchemaEditor", () => {
   it("renders empty state with add button", () => {
@@ -54,6 +56,54 @@ describe("OutputSchemaEditor", () => {
     expect(onChange).toHaveBeenCalledWith({
       title: { type: "bool" },
     });
+  });
+
+  /**
+   * FP of CORE-227 (F1-1): a type nobody knows (`banana`) read as `string` in
+   * the dropdown while the lint banner and the condition picker said `banana`,
+   * and any other edit of the schema rewrote it to `string` without a word. The
+   * dropdown names it, as unknown, and keeps it until the user picks a type.
+   */
+  it("names an unknown type as it is written, and keeps it through other edits", () => {
+    const onChange = vi.fn();
+    const schema = { ripe: { type: "banana" }, title: { type: "string" } };
+    render(<OutputSchemaEditor schema={schema} onChange={onChange} />);
+    const [ripe] = screen.getAllByTestId("schema-field-type") as HTMLSelectElement[];
+    expect(ripe.value).toBe("banana");
+    expect(ripe.selectedOptions[0]).toHaveTextContent("banana (unknown)");
+
+    fireEvent.change(screen.getAllByTestId("schema-field-name")[1], { target: { value: "heading" } });
+    expect(onChange).toHaveBeenLastCalledWith({ ripe: { type: "banana" }, heading: { type: "string" } });
+
+    fireEvent.change(ripe, { target: { value: "bool" } });
+    expect(onChange).toHaveBeenLastCalledWith({ ripe: { type: "bool" }, title: { type: "string" } });
+  });
+
+  it("keeps the allowed values of an unknown type through other edits", () => {
+    const onChange = vi.fn();
+    const schema = { verdict: { type: "Enum", allowed: ["PASS", "FAIL"] }, title: { type: "string" } };
+    render(<OutputSchemaEditor schema={schema} onChange={onChange} />);
+    fireEvent.change(screen.getAllByTestId("schema-field-name")[1], { target: { value: "heading" } });
+    expect(onChange).toHaveBeenLastCalledWith({
+      verdict: { type: "Enum", allowed: ["PASS", "FAIL"] },
+      heading: { type: "string" },
+    });
+  });
+
+  it("offers an unknown type only on the field that has it", () => {
+    render(<OutputSchemaEditor schema={{ title: { type: "string" } }} onChange={vi.fn()} />);
+    const select = screen.getByTestId("schema-field-type") as HTMLSelectElement;
+    expect(Array.from(select.options).map((o) => o.value)).toEqual(["enum", "int", "string", "bool", "list"]);
+    expect(select).not.toHaveAttribute("aria-invalid");
+  });
+
+  /** The closed dropdown is too narrow for « banana (unknown) »: it shows it
+   *  is wrong, and says why when hovered. */
+  it("marks a closed dropdown that holds an unknown type", () => {
+    render(<OutputSchemaEditor schema={{ ripe: { type: "banana" } }} onChange={vi.fn()} />);
+    const select = screen.getByTestId("schema-field-type");
+    expect(select).toHaveAttribute("aria-invalid", "true");
+    expect(select).toHaveAttribute("title", "Unknown type: banana");
   });
 
   it("shows allowed chip list when type is enum", () => {
@@ -207,5 +257,28 @@ describe("OutputSchemaEditor", () => {
         field_2: { type: "string" },
       }),
     );
+  });
+  /**
+   * FP of CORE-227 (HP-03): the new field's name came prefilled `field` with the
+   * caret after it, so typing `verdict` gave `fieldverdict`. The placeholder name
+   * is selected, so typing replaces it.
+   */
+  it("selects a new field's placeholder name so typing replaces it", async () => {
+    let latest: Record<string, FrontmatterFieldDecl> | undefined;
+    function Host() {
+      const [schema, setSchema] = useState<Record<string, FrontmatterFieldDecl> | undefined>({
+        title: { type: "string" },
+      });
+      latest = schema;
+      return <OutputSchemaEditor schema={schema} onChange={setSchema} />;
+    }
+    render(<Host />);
+    await userEvent.click(screen.getByTestId("add-schema-field"));
+    const names = screen.getAllByTestId("schema-field-name");
+    expect(names[1]).toHaveFocus();
+    await userEvent.keyboard("verdict");
+    expect(latest).toEqual({ title: { type: "string" }, verdict: { type: "string" } });
+    // An existing field is left alone: only the one just added is selected.
+    expect(names[0]).toHaveValue("title");
   });
 });

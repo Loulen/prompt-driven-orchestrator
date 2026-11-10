@@ -150,6 +150,69 @@ async fn reopen_run_refuses_a_live_run() {
     assert_eq!(body["error"], "not_reopenable");
 }
 
+/// A `restart_node` or `recover_node` the guard refuses on a **Completed** Run
+/// leaves the Run as it was. The embedded re-open (ADR-0049) is for a command
+/// that will act: it used to fire first, so the 409 came back on a Run lifted to
+/// `running` with no node live, its duration running on.
+#[tokio::test]
+async fn a_refused_restart_or_recover_does_not_reopen_a_completed_run() {
+    for kind in ["restart_node", "recover_node"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let pipe_name = "refused-on-completed";
+        write_pipeline_with_consumer(tmp.path(), pipe_name);
+
+        let state = test_state_with_dir(tmp.path()).await;
+        let run_id = "refused-on-completed-1";
+        for (ev_kind, node) in [
+            (event_log::EventKind::RunStarted, None),
+            (event_log::EventKind::NodeStarted, Some("worker")),
+            (event_log::EventKind::NodeCompleted, Some("worker")),
+            (event_log::EventKind::NodeStarted, Some("consumer")),
+            (event_log::EventKind::NodeCompleted, Some("consumer")),
+            (event_log::EventKind::RunCompleted, None),
+        ] {
+            let payload = (ev_kind == event_log::EventKind::RunStarted)
+                .then(|| serde_json::json!({ "pipeline_name": pipe_name }));
+            append_event(
+                &state,
+                &seed_event(run_id, ev_kind, node, node.map(|_| 1), payload),
+            )
+            .await
+            .unwrap();
+        }
+        let before = load_events(&state.db, run_id).await.unwrap().len();
+
+        let (status, _, body) = command_triplet(
+            &state,
+            run_id,
+            &format!(r#"{{"kind": "{kind}", "node_id": "worker", "iter": 1}}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{kind}: {body}");
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("already completed"),
+            "{kind}: the guard's prose names the cause; got {body}"
+        );
+
+        let events = load_events(&state.db, run_id).await.unwrap();
+        assert_eq!(
+            events.len(),
+            before,
+            "{kind}: a refusal appends nothing, not even the re-open: {:?}",
+            &events[before..]
+        );
+        assert_eq!(
+            event_log::project(&events).unwrap().status,
+            event_log::RunStatus::Completed,
+            "{kind}: the Run stays Completed"
+        );
+    }
+}
+
 #[tokio::test]
 async fn restart_node_rejected_while_newer_iteration_is_live() {
     // restart_node on a stale iter must not race the scheduler's
@@ -890,6 +953,63 @@ async fn resume_run_appends_command_issued_event() {
     assert_eq!(run_state.status, event_log::RunStatus::Running);
 }
 
+/// The allowed twin of `a_refused_restart_or_recover_does_not_reopen_a_completed_run`:
+/// a restart of a failed node on a **Failed** Run still embeds the re-open
+/// (ADR-0049). The guard reads a preview of it; the write comes once every
+/// probe has passed, before the re-spawn.
+#[tokio::test]
+async fn an_allowed_restart_on_a_failed_run_reopens_it_and_respawns() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_test_pipeline(tmp.path(), "restart-failed-pipe");
+    let state = test_state_with_dir(tmp.path()).await;
+    let run_id = "restart-failed-run";
+    seed_run_for_node_control(&state, run_id, "restart-failed-pipe").await;
+    for (kind, node) in [
+        (event_log::EventKind::NodeStarted, Some("worker")),
+        (event_log::EventKind::NodeFailed, Some("worker")),
+        (event_log::EventKind::RunFailed, None),
+    ] {
+        append_event(
+            &state,
+            &seed_event(run_id, kind, node, node.map(|_| 1), None),
+        )
+        .await
+        .unwrap();
+    }
+
+    let (status, _, body) = command_triplet(
+        &state,
+        run_id,
+        r#"{"kind":"restart_node","node_id":"worker","iter":1}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let events = load_events(&state.db, run_id).await.unwrap();
+    let commands: Vec<_> = events
+        .iter()
+        .filter(|e| e.kind == event_log::EventKind::CommandIssued)
+        .map(|e| e.payload.as_ref().unwrap()["command"].clone())
+        .collect();
+    assert_eq!(
+        commands,
+        vec![
+            serde_json::json!("reopen_run"),
+            serde_json::json!("restart_node")
+        ],
+        "the re-open is written, then the restart"
+    );
+    assert_eq!(
+        count_events(&events, event_log::EventKind::NodeStarted, "worker"),
+        2,
+        "the node is spawned again: {events:?}"
+    );
+    assert_eq!(
+        event_log::project(&events).unwrap().status,
+        event_log::RunStatus::Running
+    );
+}
+
 #[tokio::test]
 async fn restart_node_happy_path_emits_command_issued_and_restarts() {
     // The only arm with no happy-path coverage anywhere in the repo, and the one
@@ -987,6 +1107,81 @@ async fn a_non_isolated_spawn_records_the_run_worktree_head() {
     assert!(
         payload["base_sha"].is_null(),
         "no sub-worktree, no cut: {payload}"
+    );
+}
+
+#[tokio::test]
+async fn recover_node_restarts_a_node_whose_conversation_was_never_written() {
+    // The First run tour's node died before its agent wrote a turn. Re-attaching
+    // it ran `claude --resume <id>`, which answered « No conversation found » and
+    // exited: the node died again, twice, while `restart_node` worked. A
+    // resuming harness with no conversation on disk is restarted instead, and
+    // the answer says so.
+    let tmp = tempfile::tempdir().unwrap();
+    write_test_pipeline(tmp.path(), "recover-pipe");
+    let state = test_state_with_dir(tmp.path()).await;
+    let run_id = "recover-no-conversation";
+    seed_run_for_node_control(&state, run_id, "recover-pipe").await;
+    for (kind, payload) in [
+        (
+            event_log::EventKind::NodeStarted,
+            serde_json::json!({
+                "node_type": "agent",
+                "harness": "claude",
+                "session_id": "9d3c3a61-0000-4000-8000-000000000001",
+            }),
+        ),
+        (
+            event_log::EventKind::NodeInterrupted,
+            serde_json::json!({ "reason": "session died" }),
+        ),
+    ] {
+        let ev = event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: pdo_kernel::clock::now_iso(),
+            kind,
+            node_id: Some("worker".into()),
+            iter: Some(1),
+            payload: Some(payload),
+        };
+        append_event(&state, &ev).await.unwrap();
+    }
+
+    let (status, _, body) = command_triplet(
+        &state,
+        run_id,
+        r#"{"kind":"recover_node","node_id":"worker","iter":1}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "got {body}");
+    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(parsed["mechanism"], "restart_with_artifacts", "got {body}");
+    assert!(
+        parsed["reason"]
+            .as_str()
+            .is_some_and(|r| r.contains("no conversation to resume")),
+        "the fallback says why: {body}"
+    );
+    assert_eq!(
+        parsed["spawned"],
+        serde_json::json!([{ "node_id": "worker", "iter": 1 }]),
+        "the restart's own answer is kept: {body}"
+    );
+
+    let events = load_events(&state.db, run_id).await.unwrap();
+    let issued = events
+        .iter()
+        .find(|e| {
+            e.kind == event_log::EventKind::CommandIssued
+                && e.payload
+                    .as_ref()
+                    .is_some_and(|p| p["command"] == "recover_node")
+        })
+        .expect("recover_node appends a CommandIssued");
+    assert_eq!(
+        issued.payload.as_ref().unwrap()["mechanism"],
+        "restart_with_artifacts"
     );
 }
 
@@ -1191,6 +1386,52 @@ async fn kill_node_happy_path_event_payloads() {
     assert_eq!(payload["command"], "kill_node");
     assert_eq!(payload["node_id"], "worker");
     assert_eq!(payload["iter"], 1);
+}
+
+/// A `kill_node` on an iteration already completed kills nothing: the guard
+/// ignores its `NodeFailed`. The answer says so (`noop` plus the guard's
+/// reason), so `pdo node kill` prints « worker not killed: … » instead of
+/// « worker killed ».
+#[tokio::test]
+async fn a_kill_on_a_completed_iteration_answers_that_it_did_nothing() {
+    let state = test_state().await;
+    let run_id = "kill-completed";
+    for (kind, node) in [
+        (event_log::EventKind::RunStarted, None),
+        (event_log::EventKind::NodeStarted, Some("worker")),
+        (event_log::EventKind::NodeCompleted, Some("worker")),
+    ] {
+        let payload = (kind == event_log::EventKind::RunStarted)
+            .then(|| serde_json::json!({ "pipeline_name": "kill-pipe" }));
+        append_event(
+            &state,
+            &seed_event(run_id, kind, node, node.map(|_| 1), payload),
+        )
+        .await
+        .unwrap();
+    }
+
+    let (status, _, body) = command_triplet(
+        &state,
+        run_id,
+        r#"{"kind":"kill_node","node_id":"worker","iter":1}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["noop"], true, "{body}");
+    assert_eq!(
+        body["reason"],
+        "node worker iter 1 is already terminal: failure ignored"
+    );
+
+    let events = load_events(&state.db, run_id).await.unwrap();
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.kind == event_log::EventKind::NodeFailed),
+        "nothing was killed: {events:?}"
+    );
 }
 
 #[tokio::test]

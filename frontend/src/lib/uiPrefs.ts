@@ -37,7 +37,7 @@ export function saveTabsDisabled(v: boolean): void {
 
 /**
  * #783 — whether a parent row's child runs are expanded when the run list
- * loads (Settings › General › Interface, « Child runs »). Same nature as the
+ * loads (Settings › Appearance › Interface, « Child runs »). Same nature as the
  * theme: per-browser, saved at the change. Absent / unparseable → `true`
  * (« déplié par défaut », CONTEXT.md). Per-row toggles and the expand/collapse-all
  * button are session-only and never write here.
@@ -65,7 +65,7 @@ export function saveChildRunsExpanded(v: boolean): void {
 
 /**
  * #844 — how the wiring grid shows itself WHILE an edge is being drawn (Settings ›
- * General › Interface, « Wiring grid »). A reading aid, per browser, saved at the
+ * Appearance › Interface, « Wiring grid »). A reading aid, per browser, saved at the
  * change.
  *
  * The grid's STEP is a separate setting (`loadWiringGridSize` below, #877).
@@ -96,7 +96,7 @@ export function saveWiringGridFeedback(v: WiringGridFeedback): void {
 
 /**
  * #877 / ADR-0076 — the wiring-grid SIZE a pipeline draws with when it has no
- * `grid_size` of its own (Settings › General › Interface, « Wiring grid size »).
+ * `grid_size` of its own (Settings › Appearance › Interface, « Wiring grid size »).
  * Per browser, saved at the change, like the feedback above. A pipeline that
  * chose a size in its detail pane carries it in its file and ignores this one —
  * that is what keeps a shared pipeline's routes identical on every instance.

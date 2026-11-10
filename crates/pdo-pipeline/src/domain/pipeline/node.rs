@@ -75,7 +75,12 @@ impl NodeType {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[ts(export, optional_fields = nullable)]
 pub struct FrontmatterFieldDecl {
-    #[serde(rename = "type")]
+    /// Canonical on read: `boolean` / `integer` / `array` become `bool` / `int`
+    /// / `list` (see `field_type`).
+    #[serde(
+        rename = "type",
+        deserialize_with = "super::field_type::deserialize_field_type"
+    )]
     pub field_type: String,
     #[serde(default)]
     pub allowed: Option<Vec<String>>,

@@ -41,25 +41,13 @@ pub(super) async fn restart_node(
         }
     };
     let projected = projection::project(&events);
-    // A restart on a terminal (or incident-parked) Run re-opens it atomically
-    // before the guard below sees it — no "resume then restart" race.
-    let projected = match projected {
-        Some(rs) => {
-            match crate::application::reopen::embed_reopen_for_targeted_command(&state, &run_id, rs)
-                .await
-            {
-                Ok(s) => Some(s),
-                Err(e) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({ "error": format!("error: {e}") })),
-                    )
-                        .into_response();
-                }
-            }
-        }
-        None => None,
-    };
+    // A restart on a terminal (or incident-parked) Run re-opens it atomically,
+    // so the guard below sees a live Run — no "resume then restart" race. The
+    // guard reads a PREVIEW of that re-open: a refused restart must leave a
+    // Completed Run completed, so the re-open is written only once allowed.
+    let preview = projected
+        .clone()
+        .map(|rs| crate::application::reopen::preview_reopen(&events, rs));
     let restart_probe = event::Event {
         id: None,
         run_id: run_id.clone(),
@@ -73,7 +61,7 @@ pub(super) async fn restart_node(
     // `node_retry`: `validate_start` answers `Allow` on `live_iter == iter`,
     // and `restart_node` alone may re-spawn a live iteration. Do not narrow it
     // to `run_accepts_lifecycle`.
-    match transition_guard::validate_transition(projected.as_ref(), &restart_probe) {
+    match transition_guard::validate_transition(preview.as_ref(), &restart_probe) {
         transition_guard::Verdict::Allow => {}
         transition_guard::Verdict::Reject { reason } => {
             // ONE slug, the guard's prose in `message`. Three of the guard's
@@ -107,7 +95,9 @@ pub(super) async fn restart_node(
 
     // PRE-KILL PROBE 2: does the Run exist at all? `404` WITHOUT a trace —
     // this used to be answered after the kill and the `CommandIssued` append.
-    let Some(run_state) = projected else {
+    // The probes below read the preview too: the Run they judge is the
+    // re-opened one, and none of them may write.
+    let Some(run_state) = preview else {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "run not found" })),
@@ -198,6 +188,25 @@ pub(super) async fn restart_node(
     }
 
     // FROM HERE ON THERE ARE SIDE EFFECTS.
+
+    // Every probe passed: write the re-open the preview assumed. It is asked of
+    // the state as projected, not of the preview, which reads live already and
+    // so would need no re-open. `projected` is `Some` here: `preview` was.
+    if let Some(as_projected) = projected {
+        if let Err(e) = crate::application::reopen::embed_reopen_for_targeted_command(
+            &state,
+            &run_id,
+            as_projected,
+        )
+        .await
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("error: {e}") })),
+            )
+                .into_response();
+        }
+    }
 
     let session_name = pdo_session::domain::names::node_session_name(&run_id, &node_id, iter);
     // Deliberately a BARE kill, not `reap_node_session`: the helper's pane

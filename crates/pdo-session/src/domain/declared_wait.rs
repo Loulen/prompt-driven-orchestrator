@@ -263,12 +263,18 @@ pub struct InputSignal {
 
 /// Classify one binary frame from the PTY WebSocket. Escape sequences are
 /// skipped whole: `ESC [ … <final 0x40..=0x7e>` (CSI, which covers arrows, mouse
-/// reports and bracketed-paste markers), `ESC O <byte>` (SS3 keypad), the
-/// control strings `ESC ] … ` (OSC), `ESC P …` (DCS), `ESC _ …` (APC),
-/// `ESC ^ …` (PM) and `ESC X …` (SOS) up to their `ESC \` or BEL, plus a bare
-/// `ESC <byte>`. The control strings are what the browser's terminal answers by
-/// itself when the program in the pane queries it (its colours, its version):
-/// a person typed none of it.
+/// reports, bracketed-paste markers, focus reports and the DA / cursor-position
+/// replies), `ESC O <byte>` (SS3 keypad), the control strings `ESC ] …` (OSC),
+/// `ESC P …` (DCS), `ESC _ …` (APC), `ESC ^ …` (PM) and `ESC X …` (SOS) up to
+/// their `ESC \` or BEL terminator, plus a bare `ESC <byte>`.
+///
+/// The control strings matter because a terminal answers queries on its own:
+/// when a client attaches, tmux asks the browser's xterm.js for its colours
+/// (OSC 10/11) and its version (XTVERSION, a DCS reply), and xterm.js answers
+/// through the same bridge as the keyboard. Read byte by byte, `rgb:1e1e/…`
+/// would be a person typing, and opening a node's terminal would take the
+/// floor (`node_typed`) with no key pressed. A string cut at the frame's end
+/// swallows the rest of the frame.
 pub fn classify_input(bytes: &[u8]) -> InputSignal {
     let mut signal = InputSignal::default();
     let mut i = 0;
@@ -287,21 +293,7 @@ pub fn classify_input(bytes: &[u8]) -> InputSignal {
                     }
                 }
                 Some(b'O') => i += 2,
-                Some(b']' | b'P' | b'_' | b'^' | b'X') => {
-                    i += 1;
-                    while let Some(&c) = bytes.get(i) {
-                        i += 1;
-                        if c == 0x07 {
-                            break;
-                        }
-                        if c == 0x1b {
-                            if bytes.get(i) == Some(&b'\\') {
-                                i += 1;
-                            }
-                            break;
-                        }
-                    }
-                }
+                Some(b']' | b'P' | b'_' | b'^' | b'X') => i = skip_control_string(bytes, i + 1),
                 Some(_) => i += 1,
                 None => {}
             }
@@ -315,6 +307,22 @@ pub fn classify_input(bytes: &[u8]) -> InputSignal {
         i += 1;
     }
     signal
+}
+
+/// The index just past the control string whose body starts at `start`: past
+/// its BEL, or past its `ESC \` (ST). An `ESC` followed by anything else ends
+/// the string there, as a terminal would; no terminator swallows the frame.
+fn skip_control_string(bytes: &[u8], start: usize) -> usize {
+    let mut i = start;
+    while let Some(&c) = bytes.get(i) {
+        match c {
+            0x07 => return i + 1,
+            0x1b if bytes.get(i + 1) == Some(&b'\\') => return i + 2,
+            0x1b => return i,
+            _ => i += 1,
+        }
+    }
+    bytes.len()
 }
 
 #[cfg(test)]
@@ -374,6 +382,67 @@ mod tests {
         ] {
             assert_eq!(classify_input(seq), InputSignal::default(), "{seq:?}");
         }
+    }
+
+    /// A terminal answers queries on its own: tmux asks the browser's xterm.js
+    /// for its colours, its version and its attributes when a client attaches,
+    /// and xterm.js reports focus changes. None of those replies is a person
+    /// typing, so merely opening a node's terminal never takes the floor.
+    #[test]
+    fn terminal_replies_are_neither() {
+        for seq in [
+            // OSC 10/11 colour replies, ended by ST or by BEL.
+            &b"\x1b]10;rgb:d8d8/d8d8/d8d8\x1b\\"[..],
+            b"\x1b]11;rgb:1e1e/1e1e/1e1e\x07",
+            // DCS: XTVERSION and DECRQSS replies.
+            b"\x1bP>|xterm.js(5.5.0)\x1b\\",
+            b"\x1bP1$r0;1m\x1b\\",
+            // APC, PM and SOS strings.
+            b"\x1b_Gi=1;OK\x1b\\",
+            b"\x1b^private\x1b\\",
+            b"\x1bXstring\x1b\\",
+            // DA1, DA2, a cursor position report, focus in and out.
+            b"\x1b[?1;2c",
+            b"\x1b[>0;276;0c",
+            b"\x1b[12;40R",
+            b"\x1b[I",
+            b"\x1b[O",
+        ] {
+            assert_eq!(classify_input(seq), InputSignal::default(), "{seq:?}");
+        }
+        // Back to back, as one frame on attach.
+        assert_eq!(
+            classify_input(b"\x1b[?1;2c\x1b]11;rgb:0000/0000/0000\x1b\\\x1b[I"),
+            InputSignal::default()
+        );
+    }
+
+    /// A reply cut at the frame's end swallows the rest of the frame, never
+    /// counts it as typed; the next frame is read afresh.
+    #[test]
+    fn an_unterminated_string_reply_is_not_typed() {
+        assert_eq!(
+            classify_input(b"\x1b]11;rgb:0000/00"),
+            InputSignal::default()
+        );
+        assert_eq!(
+            classify_input(b"after\r"),
+            InputSignal {
+                typed: true,
+                enter: true
+            }
+        );
+    }
+
+    #[test]
+    fn text_typed_after_a_reply_still_counts() {
+        assert_eq!(
+            classify_input(b"\x1b]11;rgb:0000/0000/0000\x07yes\r"),
+            InputSignal {
+                typed: true,
+                enter: true
+            }
+        );
     }
 
     #[test]

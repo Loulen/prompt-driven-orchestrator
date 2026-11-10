@@ -2,6 +2,7 @@
 
 use super::definition::PipelineDef;
 use super::diagnostic::{Diagnostic, ParseError, ParseResult, Severity};
+use super::field_type::unknown_field_types;
 use super::legacy_ports::convert_legacy_ports;
 use super::node::{NodeDef, NodeType, Port, PortType};
 use super::normalize::normalize_node_value;
@@ -140,6 +141,13 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
                 }
             }
         }
+    }
+
+    for message in unknown_field_types(&pipeline) {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            message,
+        });
     }
 
     // Warnings here, refusals at run launch: see `dangling_edge_references`.

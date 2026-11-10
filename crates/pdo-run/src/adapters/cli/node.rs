@@ -171,7 +171,7 @@ pub fn run_node(action: NodeAction) -> Result<()> {
                 body["overrides"] = json!(port_contents(&outputs)?);
             }
             let answer = command(&daemon, &run_id, body)?;
-            said(&answer, json, &format!("{node_id} skipped"));
+            said(&answer, json, &done_line(&node_id, "skipped", &answer));
         }
         NodeAction::Restart {
             run_id,
@@ -330,8 +330,23 @@ fn node_command(
     let iter = iteration(daemon, run_id, node_id, iter)?;
     let body = json!({ "kind": kind, "node_id": node_id, "iter": iter });
     let answer: Value = command(daemon, run_id, body)?;
-    said(&answer, json, &format!("{node_id} {verb}"));
+    said(&answer, json, &done_line(node_id, verb, &answer));
     Ok(())
+}
+
+/// `worker recovered`, and why when the daemon says (a recovery that restarted
+/// a node instead of resuming it). A gesture the daemon ignored (`noop`, a
+/// duplicate completion) reads `worker not skipped: <why>`.
+fn done_line(node_id: &str, verb: &str, answer: &Value) -> String {
+    let verb = if answer["noop"].as_bool() == Some(true) {
+        format!("not {verb}")
+    } else {
+        verb.to_string()
+    };
+    match answer["reason"].as_str() {
+        Some(reason) => format!("{node_id} {verb}: {reason}"),
+        None => format!("{node_id} {verb}"),
+    }
 }
 
 /// The iteration a gesture targets: the one given, else the node's latest,
@@ -375,5 +390,44 @@ mod tests {
         assert_eq!(outputs["out"], "done");
         assert_eq!(outputs["notes"], "a=b", "only the first `=` splits");
         assert!(port_contents(&["nothing".into()]).is_err());
+    }
+
+    #[test]
+    fn a_gesture_line_says_why_when_the_daemon_does() {
+        assert_eq!(
+            done_line("worker", "recovered", &json!({ "ok": true })),
+            "worker recovered"
+        );
+        assert_eq!(
+            done_line(
+                "worker",
+                "recovered",
+                &json!({ "reason": "no conversation to resume" })
+            ),
+            "worker recovered: no conversation to resume"
+        );
+    }
+
+    /// FP of CORE-227: `pdo node skip` on a node already completed printed
+    /// « summarizer skipped » while the daemon ignored it as a duplicate.
+    #[test]
+    fn a_gesture_the_daemon_ignored_says_it_did_nothing() {
+        let duplicate = json!({ "ok": true, "noop": true, "reason": "node summarizer iter 1 is already completed: duplicate completion ignored" });
+        assert_eq!(
+            done_line("summarizer", "skipped", &duplicate),
+            "summarizer not skipped: node summarizer iter 1 is already completed: duplicate completion ignored"
+        );
+        assert_eq!(
+            done_line(
+                "worker",
+                "restarted",
+                &json!({ "noop": true, "reason": "already running" })
+            ),
+            "worker not restarted: already running"
+        );
+        assert_eq!(
+            done_line("summarizer", "done", &duplicate),
+            "summarizer not done: node summarizer iter 1 is already completed: duplicate completion ignored"
+        );
     }
 }

@@ -890,6 +890,13 @@
       clip-path: inset(50%);
       white-space: nowrap;
     }
+    /* Collapsed, the row's end action waits where it shows: an abspos flex child
+       otherwise sits at the row's start, over the name, so a pointer sent to the
+       action (voice control, automation) lands on the name and selects the row. */
+    .set-rrow:not(:hover, :focus-within) .set-hover:last-child {
+      top: 50%;
+      right: calc(var(--g-1) + 10px);
+    }
   }
   @media (hover: none) {
     .set-hover {

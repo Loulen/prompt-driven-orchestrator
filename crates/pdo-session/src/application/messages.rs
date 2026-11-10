@@ -8,9 +8,16 @@ use pdo_harness::steering::runtime_message;
 
 use crate::application::ports::Tmux;
 
-/// Type a **one-line message** into a harness session and submit it.
+/// Hand a **one-line message** to a harness session and submit it.
+///
+/// Pasted, never typed: `send-keys` with the text and its Enter in one call
+/// delivers a burst that Claude Code takes for a paste, so the Enter becomes a
+/// newline and the line sits unsent in the agent's input (FP of CORE-227: the
+/// release nudge never woke the agent). A bracketed paste then an Enter of its
+/// own is what submits, the path the operator's « write to node » already uses.
+/// It differs from [`paste_message`] only by what its callers hand it.
 pub fn send_message(tmux: &dyn Tmux, session: &str, text: &str) {
-    tmux.send_keys(session, &runtime_message(text));
+    paste_message(tmux, session, text);
 }
 
 /// Paste a **multi-line message** into a harness session as one bracketed paste

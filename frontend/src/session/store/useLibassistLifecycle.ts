@@ -30,9 +30,11 @@ const FOCUS_HEARTBEAT_MS = 20_000;
  * focus keeps naming the last one edited: it is still what the user would be
  * talking about, and the Assistant tab is not offered on a Run anyway.
  *
- * Three effects, one fact each:
- * - while a template tab is open, declare the focus and keep declaring it (the
- *   daemon reads it both as *what is open* and as *someone is still here*);
+ * Four effects, one fact each:
+ * - declare the focus when it changes (once per change, however often the view
+ *   hops between a Run and the same template);
+ * - while a template tab is open, keep declaring it on a heartbeat (the daemon
+ *   reads it both as *what is open* and as *someone is still here*);
  * - when the last template tab **closes**, reap (the `DELETE` clears the focus
  *   daemon-side, so leaving is one gesture, not two that can diverge);
  * - on `pagehide`, reap with `keepalive`. Not `beforeunload`: it does not fire
@@ -66,25 +68,36 @@ export function useLibassistLifecycle(
   // on every `activeId` change, so it is never read stale.
   const lastEdited = useRef<{ id: string; scope?: string } | null>(null);
 
+  // The template the daemon was last told about. A declaration goes out when the
+  // focus CHANGES, not each time this effect re-runs: a hop to a Run and back to
+  // the same template is no news, and re-declaring on every hop is what sent a
+  // burst of identical PUTs. The heartbeat below repeats it on its own clock.
+  const declared = useRef<string | null>(null);
+
   useEffect(() => {
     if (!hasEditView) return;
     if (activeId) lastEdited.current = { id: activeId, scope: activeScope };
     const target = lastEdited.current;
     if (!target) return;
     hasEdited.current = true;
-
-    const declare = () => {
-      void putLibassistFocus(target.id).catch(() => {});
-    };
-    declare();
-    const timer = setInterval(declare, FOCUS_HEARTBEAT_MS);
-    return () => clearInterval(timer);
+    if (declared.current === target.id) return;
+    declared.current = target.id;
+    void putLibassistFocus(target.id).catch(() => {});
   }, [hasEditView, activeId, activeScope]);
+
+  useEffect(() => {
+    if (!hasEditView) return;
+    const timer = setInterval(() => {
+      if (declared.current) void putLibassistFocus(declared.current).catch(() => {});
+    }, FOCUS_HEARTBEAT_MS);
+    return () => clearInterval(timer);
+  }, [hasEditView]);
 
   useEffect(() => {
     if (hasEditView || !hasEdited.current) return;
     hasEdited.current = false;
     lastEdited.current = null;
+    declared.current = null;
     // The last edit view closed. One call: the daemon clears the focus as part of
     // the reap, so there is no window where a stale focus outlives the session.
     void closeLibraryAssistant().catch(() => {});

@@ -77,7 +77,7 @@
 .cv-n__flag { display: inline-grid; place-items: center; flex: none; color: var(--text-3); }
 .cv-n__loop {
   flex: none;
-  max-width: 72px;
+  max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -492,3 +492,10 @@
 .cv-menu__item > svg { flex: none; color: var(--text-2); }
 .cv-menu__item[data-highlighted] { background: var(--hover); }
 .cv-menu__item[data-variant="destructive"], .cv-menu__item[data-variant="destructive"] > svg { color: var(--color-st-failed); }
+
+/* F1-5: a box-select (Shift + drag) selects cards, never the page's text
+   (boxSelectTextGuard). `!important` beats the panes' own `user-select: text`. */
+body.pdo-box-selecting,
+body.pdo-box-selecting * {
+  user-select: none !important;
+}

@@ -15,9 +15,10 @@ pub(super) async fn kill_node(
     // must come from the SAME projection. `reload_run_state`, not
     // `load_projected`: both of its failure modes mean the same thing here —
     // no overridden repo, no container to kill — so neither may become a 4xx.
-    let (repo_root, kill_sandbox) = reload_run_state(&state, &run_id)
-        .await
-        .map(|(_, s)| (effective_repo_root(&state, &s), !s.sandbox.is_off()))
+    let projected = reload_run_state(&state, &run_id).await.map(|(_, s)| s);
+    let (repo_root, kill_sandbox) = projected
+        .as_ref()
+        .map(|s| (effective_repo_root(&state, s), !s.sandbox.is_off()))
         .unwrap_or_else(|| (state.repo_root.clone(), false));
 
     // THE TERMINAL EVENT FIRST, THE REAP SECOND. Reaping first opens a
@@ -38,6 +39,12 @@ pub(super) async fn kill_node(
             "reason": "killed via kill_node command",
             "source": "kill_node",
         })),
+    };
+    // The guard ignores a failure on an iteration already terminal: the kill
+    // then kills nothing, and the answer says so instead of `ok` alone.
+    let ignored = match transition_guard::validate_transition(projected.as_ref(), &fail_event) {
+        transition_guard::Verdict::NoOp { reason } => Some(reason),
+        _ => None,
     };
     if let Err(e) = append_event(&state, &fail_event).await {
         return (
@@ -78,6 +85,14 @@ pub(super) async fn kill_node(
     // `waiting:true` would otherwise starve forever.
     retry_waiting_nodes(&state).await;
 
+    if let Some(reason) = ignored {
+        info!("kill_node no-op for {node_id} iter {iter} in run {run_id}: {reason}");
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({ "ok": true, "noop": true, "reason": reason })),
+        )
+            .into_response();
+    }
     info!("kill_node: node {node_id} iter {iter} in run {run_id}");
     (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
 }

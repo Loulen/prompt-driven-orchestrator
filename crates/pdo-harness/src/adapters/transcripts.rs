@@ -282,8 +282,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let projects = tmp.path().join(".claude").join("projects");
 
-        let node_dir =
-            Path::new("/home/user/code/pdo/.pdo/runs/20260623-100032-9b8331b/nodes/gzpYZA2m/iter-1");
+        let node_dir = Path::new(
+            "/home/user/code/pdo/.pdo/runs/20260623-100032-9b8331b/nodes/gzpYZA2m/iter-1",
+        );
 
         // The transcript dir CC writes: leading `-`, `.pdo` → `--pdo`.
         let cc_name = projects

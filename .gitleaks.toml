@@ -1,0 +1,12 @@
+# Secret scan: `gitleaks git .` (whole history) or `gitleaks dir .` (working tree).
+# The default rules, minus two literals the generic-api-key rule mistakes for keys.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Not secrets: Claude model ids in price tables, and a test fixture's fake secret"
+regexTarget = "secret"
+regexes = [
+  '''^claude-(opus|sonnet|haiku|fable)-[0-9a-z.-]+$''',
+  '''^s3cr3t-never-logged$''',
+]

@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::domain::state::RunState;
-use pdo_pipeline::domain::pipeline::PipelineDef;
+use pdo_pipeline::domain::pipeline::{EdgeDef, PipelineDef};
 
 /// The iteration of `source_node_id` whose artifacts a consumer should read.
 ///
@@ -105,8 +105,20 @@ pub fn absent_sources(
         .collect()
 }
 
+/// Does `edge` hand its consumer **every** completed lap of its source, rather
+/// than the latest one? A `repeated` edge does (#353), and so does the exit of
+/// a `kind: collection` region (member → non-member, ADR-0082): the node
+/// downstream of the region converges on every lap, one artifact per item, in
+/// item order (lap `n` works item `n`).
+pub fn pools_every_lap(pipeline: &PipelineDef, edge: &EdgeDef) -> bool {
+    edge.repeated
+        || crate::domain::loop_region::collection_region_for_member(pipeline, &edge.source.node)
+            .is_some_and(|region| !region.members.contains(&edge.target.node))
+}
+
 /// For one consumer node, the set of completed source iterations of every
-/// `repeated` incoming edge: `source node id -> completed iters (asc)` (#353).
+/// pooled incoming edge ([`pools_every_lap`]): `source node id -> completed
+/// iters (asc)` (#353).
 ///
 /// The set-valued twin of [`resolved_source_iters`], for `repeated`/pooled
 /// inputs that accumulate one artifact per completed source lap. Only
@@ -124,12 +136,12 @@ pub fn resolved_repeated_iters(
     pipeline
         .edges
         .iter()
-        .filter(|e| e.target.node == node_id && e.repeated)
+        .filter(|e| e.target.node == node_id && pools_every_lap(pipeline, e))
         .map(|e| {
-            (
-                e.source.node.clone(),
-                run_state.completed_iters(&e.source.node),
-            )
+            let mut iters = run_state.completed_iters(&e.source.node);
+            iters.sort_unstable();
+            iters.dedup();
+            (e.source.node.clone(), iters)
         })
         .collect()
 }
@@ -148,7 +160,8 @@ pub struct ResolvedInput {
     /// True when the source is the Start node — the input is the run's user
     /// prompt (`_input/output.md`), not a per-iteration artifact.
     pub from_start: bool,
-    /// True when the edge accumulates across iterations (#149 / #353).
+    /// True when the edge accumulates across iterations (#149 / #353), or is
+    /// the exit of a collection region (every lap, [`pools_every_lap`]).
     pub repeated: bool,
     /// True when the source port is a `files` output: each path is then the
     /// port folder, with every file the source dropped in it, not an
@@ -198,7 +211,7 @@ pub fn resolve_consumer_inputs(
                     && n.node_type == pdo_pipeline::domain::pipeline::NodeType::Start
             });
 
-            let repeated = edge.repeated;
+            let repeated = pools_every_lap(pipeline, edge);
             edge.emergent_inputs()
                 .into_iter()
                 .map(|(source_port, input_name)| {
@@ -848,6 +861,51 @@ mod tests {
                 PathBuf::from("/artifacts/planner/iter-1/spec/output.md"),
                 PathBuf::from("/artifacts/planner/iter-3/spec/output.md"),
             ]
+        );
+    }
+
+    #[test]
+    fn a_collection_exit_pools_every_lap_in_item_order() {
+        // CORE-240 F2-2: the preamble and the script env read this walk too.
+        let pipeline = pdo_pipeline::domain::pipeline::parse_pipeline(
+            r#"
+name: fanout
+nodes:
+  - { id: start, name: Start, type: start, outputs: [{ name: user_prompt }] }
+  - { id: itemizer, name: itemizer, type: agent, outputs: [{ name: item_note }] }
+  - { id: summarizer, name: summarizer, type: agent, outputs: [{ name: summary }] }
+  - { id: end, name: End, type: end, inputs: [{ name: result }] }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: itemizer, port: task }
+  - source: { node: itemizer, port: item_note }
+    target: { node: summarizer, port: notes }
+  - source: { node: summarizer, port: summary }
+    target: { node: end, port: result }
+loops:
+  - { id: fan, kind: collection, over: topics, members: [itemizer] }
+"#,
+        )
+        .unwrap()
+        .pipeline;
+        let state = state_with(vec![node_with_iterations(
+            "itemizer",
+            &[
+                (3, NodeStatus::Completed),
+                (1, NodeStatus::Completed),
+                (2, NodeStatus::Completed),
+            ],
+        )]);
+        let resolved =
+            resolve_over_seam(&pipeline, &state, Path::new("/artifacts"), "summarizer", 1);
+
+        assert_eq!(resolved.len(), 1);
+        assert!(resolved[0].repeated);
+        assert_eq!(
+            resolved[0].paths,
+            (1..=3)
+                .map(|n| PathBuf::from(format!("/artifacts/itemizer/iter-{n}/item_note/output.md")))
+                .collect::<Vec<_>>()
         );
     }
 }

@@ -99,6 +99,23 @@ pub fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<String> 
             continue;
         }
 
+        // ADR-0082: a node is ready once EVERY incoming edge is resolved. A
+        // conditional edge whose producer has not decided yet — not run, still
+        // at work, or a member of a bounded loop that can still start a lap (its
+        // guarded exit may fire on a later lap) — holds the node: the producer's
+        // routing spawns it once it decides. A pruned producer has decided. A
+        // feedback edge (its producer downstream of the node: a loop's back-edge,
+        // a self-edge) is no precondition of the node's first run.
+        let conditional_undecided = incoming
+            .iter()
+            .filter(|e| e.when.is_some() || e.is_else)
+            .map(|e| e.source.node.as_str())
+            .filter(|src| *src != node.id && !reaches(pipeline, &node.id, src))
+            .any(|src| conditional_source_undecided(pipeline, run_state, src));
+        if conditional_undecided {
+            continue;
+        }
+
         let all_completed = upstream.iter().all(|src| {
             // A collection-region member upstream is a BARRIER input (#269):
             // it counts as completed only once the whole region is done, never
@@ -122,6 +139,49 @@ pub fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<String> 
     }
 
     ready
+}
+
+/// Has the producer of a conditional edge not decided whether it fires yet?
+/// Read off the projection alone (the sweep holds no frontmatter): it has not
+/// settled, or it is a member of a bounded region still in flight
+/// ([`crate::domain::loop_region::bounded_region_in_flight`]).
+fn conditional_source_undecided(pipeline: &PipelineDef, run_state: &RunState, src: &str) -> bool {
+    if run_state.is_pruned(src) {
+        return false;
+    }
+    let settled = run_state
+        .nodes
+        .get(src)
+        .is_some_and(|n| n.status.is_settled_complete());
+    if !settled {
+        return true;
+    }
+    crate::domain::loop_region::bounded_region_for_member(pipeline, src).is_some_and(|region| {
+        crate::domain::loop_region::bounded_region_in_flight(pipeline, region, run_state)
+    })
+}
+
+/// True when a directed path of forward edges leads from `from` to `to`
+/// (self-edges excluded: a node does not reach itself through its own edge).
+pub(crate) fn reaches(pipeline: &PipelineDef, from: &str, to: &str) -> bool {
+    let mut visited: HashSet<&str> = HashSet::new();
+    let mut queue: Vec<&str> = vec![from];
+    while let Some(current) = queue.pop() {
+        for edge in pipeline
+            .edges
+            .iter()
+            .filter(|e| e.source.node == current && e.target.node != current)
+        {
+            let next = edge.target.node.as_str();
+            if next == to {
+                return true;
+            }
+            if visited.insert(next) {
+                queue.push(next);
+            }
+        }
+    }
+    false
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

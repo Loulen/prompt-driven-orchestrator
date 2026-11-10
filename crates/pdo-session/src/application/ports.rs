@@ -74,7 +74,8 @@ pub trait Tmux: Send + Sync {
     /// The visible pane (ANSI escapes kept), `None` when the session is gone.
     fn capture(&self, name: &str) -> Option<String>;
 
-    /// Type `text` then Enter, as keystrokes. Best-effort.
+    /// Type `text` then Enter, as keystrokes, for a shell. Best-effort. Never
+    /// for a harness agent: see `application::messages::send_message`.
     fn send_keys(&self, name: &str, text: &str);
 
     /// Hand `text` over as one bracketed paste, then Enter. Best-effort.

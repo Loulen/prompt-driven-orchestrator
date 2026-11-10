@@ -130,7 +130,13 @@ export const TESTER_STEPS: TourStep[] = [
     id: "tester-verdict",
     title: "Declare the verdict field",
     body: "Add a field named verdict, set its type to enum, and allow pass and fail. Edges read this frontmatter to decide where the Run goes next.",
-    target: () => [`${outputSlot(0)} [data-testid="output-schema-editor"]`],
+    // Two beats (FP of CORE-227): « + field » alone while out declares no
+    // field (the whole editor lit a 443 px zone for a 52 px button), then the
+    // editor, whose name, type and allowed values the step asks to fill in.
+    target: (o) =>
+      Object.keys(agent(o.app, 1)?.outputs[0]?.frontmatter ?? {}).length === 0
+        ? [`${outputSlot(0)} [data-testid="add-schema-field"]`]
+        : [`${outputSlot(0)} [data-testid="output-schema-editor"]`],
     waitingFor: "the output schema editor",
     done: (o) => {
       const decl = agent(o.app, 1)?.outputs[0]?.frontmatter?.verdict;

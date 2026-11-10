@@ -96,6 +96,19 @@ Runs and nodes:
 - An agent that ran `pdo complete` before its interactive node was released no longer waits for
   somebody to type in its terminal: the release writes it a `[pdo-runtime]` line telling it to
   complete now.
+- Every `[pdo-runtime]` line PDO writes to an agent (the release above, the frontmatter retry) is
+  now pasted, then submitted by a separate Enter. Typed with its Enter in one go, Claude Code took
+  the line for a paste and left it unsent in its input.
+- A `pdo node` gesture the daemon ignores (`skip` or `done` on a duplicate completion, `restart`
+  of a node already running…) prints `<node> not skipped: <the daemon's reason>` instead of
+  claiming it was done.
+- `+` › Node no longer drops a card under the right pane when the narrowed canvas has no free slot
+  on its grid: the card goes flush against a visible edge first.
+- *First pipeline*, "Declare the verdict field": the tour lights the "+ field" button alone,
+  then the schema editor once the field exists.
+- A "Session died" banner gives its reason whole, under its line, so the early-death hint is no
+  longer cut. The Run's Stats strip wraps instead of cutting the cost by harness.
+- An output field's type select is as wide as its widest option: `string` no longer reads `strin`.
 - Marking done or skipping a node that is already completed on a finished Run leaves the Run
   Completed. It used to reopen the Run, ignore the duplicate, and leave it running with every node
   done.

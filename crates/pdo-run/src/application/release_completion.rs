@@ -15,7 +15,7 @@ use crate::application::operations::on_node;
 use crate::domain::{event, projection};
 use crate::Runs;
 
-/// The line typed to an agent refused before the release: it went idle on the
+/// The line handed to an agent refused before the release: it went idle on the
 /// refusal and nothing else would wake it. The `[pdo-runtime]` prefix is posed
 /// by `send_message`.
 pub const COMPLETION_RELEASED_MESSAGE: &str =

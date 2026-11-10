@@ -90,30 +90,44 @@ function fitsInside(spot: Point, visible: Rect): boolean {
  * within a row: right before left, because a pipeline reads left to right. The
  * grid is anchored on `base` rather than on the viewport, so the answer is still
  * « where the user dropped it, moved aside » and not « wherever there is room ».
+ *
+ * `withEdges` adds, on each axis, the two places a card sits flush against the
+ * visible edges. A grid anchored on the drop point leaves a strip less than one
+ * step wide on each side: with the right pane open, a 614-unit-wide canvas fits
+ * a single column of the grid, and once that column was full the card walked
+ * blind off the right edge, under the pane, with room left of Start all along.
  */
-function onScreenCandidates(base: Point, visible: Rect): Point[] {
-  const span = (lo: number, hi: number): [number, number] => [
-    Math.max(-SPAN, Math.ceil(lo)),
-    Math.min(SPAN, Math.floor(hi)),
-  ];
-  const [iMin, iMax] = span(
-    (visible.x - base.x) / STEP_X,
-    (visible.x + visible.width - CARD_WIDTH - base.x) / STEP_X,
-  );
-  const [jMin, jMax] = span(
-    (visible.y - base.y) / STEP_Y,
-    (visible.y + visible.height - CARD_HEIGHT - base.y) / STEP_Y,
-  );
+function onScreenCandidates(base: Point, visible: Rect, withEdges = false): Point[] {
+  const steps = (lo: number, hi: number, step: number, origin: number): number[] => {
+    const out: number[] = [];
+    for (let k = Math.max(-SPAN, Math.ceil(lo)); k <= Math.min(SPAN, Math.floor(hi)); k++) out.push(origin + k * step);
+    return out;
+  };
+  const left = visible.x;
+  const right = visible.x + visible.width - CARD_WIDTH;
+  const top = visible.y;
+  const bottom = visible.y + visible.height - CARD_HEIGHT;
+  const xs = steps((left - base.x) / STEP_X, (right - base.x) / STEP_X, STEP_X, base.x);
+  const ys = steps((top - base.y) / STEP_Y, (bottom - base.y) / STEP_Y, STEP_Y, base.y);
+  if (withEdges) {
+    // Rounded inward: a card position is whole units, and still fits.
+    xs.push(Math.ceil(left), Math.floor(right));
+    ys.push(Math.ceil(top), Math.floor(bottom));
+  }
 
   // Nearest slot first (rings around the drop point), and within a ring: to the
   // right before anywhere else, then down, then up, and only then back to the
   // left. A pipeline reads left to right, so a card placed behind its neighbour
   // is the last acceptable answer — but it beats a card nobody can see.
   const out: { spot: Point; i: number; j: number }[] = [];
-  for (let j = jMin; j <= jMax; j++) {
-    for (let i = iMin; i <= iMax; i++) {
-      const spot = { x: base.x + i * STEP_X, y: base.y + j * STEP_Y };
-      if (fitsInside(spot, visible)) out.push({ spot, i, j });
+  const seen = new Set<string>();
+  for (const y of ys) {
+    for (const x of xs) {
+      const spot = { x, y };
+      const key = `${spot.x},${spot.y}`;
+      if (seen.has(key) || !fitsInside(spot, visible)) continue;
+      seen.add(key);
+      out.push({ spot, i: (spot.x - base.x) / STEP_X, j: (spot.y - base.y) / STEP_Y });
     }
   }
   return out
@@ -153,7 +167,10 @@ export function freeDropSpot(base: Point, existing: Point[], visible?: Rect | nu
     !existing.some((other) => overlaps(spot, other)) && !avoided.some((area) => covers(spot, area));
 
   if (visible && visible.width > 0 && visible.height > 0) {
-    const onScreen = onScreenCandidates(base, visible).find(free);
+    // The grid first, so the answer stays « the drop point, moved aside »; the
+    // slots flush against the edges only when the grid has none left.
+    const onScreen =
+      onScreenCandidates(base, visible).find(free) ?? onScreenCandidates(base, visible, true).find(free);
     // No free slot on screen: the visible canvas is genuinely full, and every
     // answer is a compromise. Not overlapping wins over being in frame — the
     // reader can pan to a card, they cannot click one under another.

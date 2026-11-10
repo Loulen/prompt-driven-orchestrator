@@ -67,7 +67,8 @@ Features validated while crossing the editing screens:
    re-originates on the current point. Drop on another card's **body** → an edge is created,
    carrying the source's **first declared output**, landing **perpendicular** to the side it was
    aimed at. The edge lands on the target's first declared input: a card made with `+` › Node
-   declares `in`, so the edge panel's header reads `<source>.out → <target>.in` and the target's
+   declares `in`, so the edge panel's header reads `<source> .out → <target>`, its route line just
+   under `<source>.out → <target>.in`, and the target's
    **Inputs** section, in the node inspector, reads `in ← <source>`. Only a target that declares
    no input gets one named after the output the edge carries. The toolbar Undo's tooltip names the
    new edge (« add edge »).

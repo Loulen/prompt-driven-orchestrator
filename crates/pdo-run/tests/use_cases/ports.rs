@@ -132,9 +132,12 @@ async fn the_release_tells_an_agent_refused_before_it_to_complete_now() {
             .await;
 
         assert_eq!(answer.status(), 200);
+        // Pasted then submitted, never typed with its Enter: a TUI harness
+        // takes that burst for a paste and leaves the line unsent (FP B1).
+        assert!(w.tmux.typed.lock().unwrap().is_empty());
         let told: Vec<String> = w
             .tmux
-            .typed
+            .pasted
             .lock()
             .unwrap()
             .iter()

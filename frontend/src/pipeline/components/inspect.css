@@ -629,16 +629,18 @@
     gap: 2px;
     min-width: 0;
   }
+  /* The type column is as wide as its widest option, so `string` reads whole
+     (`strin` in a fixed 64 px, FP of CORE-227), and an unknown type up to
+     160 px (`banana (unknown)`). */
   .ei-field {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 64px auto;
+    grid-template-columns: minmax(0, 1fr) max-content auto;
     align-items: center;
     gap: var(--g-2);
     min-width: 0;
   }
-  /* An unknown type gets room to be read (`banan…` in 64 px, FP of CORE-227). */
-  .ei-field:has(.ei-select[aria-invalid="true"]) {
-    grid-template-columns: minmax(0, 1fr) minmax(64px, 128px) auto;
+  .ei-field > .ei-select {
+    max-width: 160px;
   }
   .ei-field__enum {
     grid-column: 1 / -1;
@@ -964,17 +966,22 @@
   button.pi-newer:hover {
     background: color-mix(in oklab, var(--color-st-await) 20%, transparent);
   }
+  /* The strip wraps rather than cut a cell (FP of CORE-227: the cost of a Run
+     on three harnesses lost its slices): a cell too wide for what is left of
+     its row starts the next one, 28 px tall like the first. */
   .pi-stats {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     min-width: 0;
-    height: 28px;
+    min-height: 28px;
     border-bottom: 1px solid var(--line-soft);
   }
   .pi-stats__cell {
     display: flex;
     flex: 1 1 auto;
     align-items: center;
+    height: 28px;
     gap: 5px;
     min-width: 0;
     padding: 0 var(--pad-x);
@@ -1011,8 +1018,8 @@
   .pi-stats__link:hover {
     text-decoration-color: currentColor;
   }
-  /* A cost line wider than the strip (a Run on three harnesses) ellipsizes;
-     its tooltip carries all of it. */
+  /* A cost line wider than the whole strip still ellipsizes; its tooltip
+     carries all of it. */
   .pi-stats__value {
     min-width: 0;
     overflow: hidden;

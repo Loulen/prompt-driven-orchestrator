@@ -261,7 +261,8 @@ function gestures(fake: FakeApp): Record<string, () => void> {
   const inspector = () =>
     fake.show(NAME_INPUT, PROMPT_INPUT, outSlot, '[data-testid="node-interactive-toggle"]',
       '[data-testid="workspace-shared"]', '[data-testid="workspace-isolated"]',
-      '[data-testid="add-output-port"]', `${outSlot} [data-testid="output-schema-editor"]`);
+      '[data-testid="add-output-port"]', `${outSlot} [data-testid="output-schema-editor"]`,
+      `${outSlot} [data-testid="add-schema-field"]`);
 
   return {
     "pipelines-tab": () => fake.show('[data-testid="new-pipeline-button"]'),
@@ -1245,5 +1246,30 @@ describe("the last step, when the deletion closes the pipeline's tab", () => {
     expect(step.target(fake.obs())).toEqual(['[data-testid="library-row-my-own"]']);
     fake.app = { ...fake.app, libraryPipelineIds: [] };
     expect(step.done!(fake.obs())).toBe(true);
+  });
+});
+
+/**
+ * FP of CORE-227 (First pipeline, « Declare the verdict field »): the step lit
+ * the whole schema editor, 443 px wide, for a « + field » button of 52 px; a
+ * click in the lit zone but off the button did nothing.
+ */
+describe("the verdict-field step", () => {
+  const step = STEPS.find((s) => s.id === "tester-verdict")!;
+  const EDITOR = `[data-output-index="0"] [data-testid="output-schema-editor"]`;
+
+  it("lights + field until a field exists, then the editor to fill it in", () => {
+    const fake = new FakeApp();
+    fake.createPipeline();
+    fake.addAgent("n1");
+    fake.addAgent("n2");
+    fake.updateAgent(1, { outputs: [{ name: "out", instructions: "A short verdict" }] });
+    const [first] = step.target(fake.obs());
+    expect(first).toMatch(/\[data-testid="add-schema-field"\]$/);
+
+    fake.updateAgent(1, {
+      outputs: [{ name: "out", instructions: "A short verdict", frontmatter: { field: { type: "string" } } }],
+    });
+    expect(step.target(fake.obs())).toEqual([EDITOR]);
   });
 });

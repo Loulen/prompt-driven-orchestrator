@@ -275,7 +275,11 @@ pub struct FakeTmux {
     pub live: Mutex<HashSet<String>>,
     pub opened: Mutex<Vec<(String, PathBuf, String)>>,
     pub killed: Mutex<Vec<String>>,
+    /// Keystrokes typed with their Enter (`send_keys`): a shell's input.
     pub typed: Mutex<Vec<(String, String)>>,
+    /// Text handed over as a bracketed paste then submitted (`paste`): how a
+    /// message reaches a harness agent.
+    pub pasted: Mutex<Vec<(String, String)>>,
 }
 
 impl Tmux for FakeTmux {
@@ -326,10 +330,16 @@ impl Tmux for FakeTmux {
             .push((name.to_string(), text.to_string()));
     }
     fn paste(&self, name: &str, text: &str) {
-        self.send_keys(name, text);
+        self.pasted
+            .lock()
+            .unwrap()
+            .push((name.to_string(), text.to_string()));
     }
     fn paste_without_enter(&self, name: &str, text: &str) -> bool {
-        self.send_keys(name, text);
+        self.pasted
+            .lock()
+            .unwrap()
+            .push((name.to_string(), text.to_string()));
         true
     }
     fn press_enter(&self, _name: &str) -> bool {

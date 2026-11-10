@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { RotateCcw, Square } from "lucide-react";
 import { Button } from "../../../shared/ui/kit";
 import NodeBanner from "./NodeBanner";
@@ -16,12 +17,23 @@ const MERGE_CONFLICT_PREFIX = "merge_conflict: ";
  * since ADR-0082 no resolver takes it over, so the node parks here with its work
  * in its sub-worktree, and « Session died » sent the reader looking for a crash.
  */
-function interruptedBanner(reason: string | null | undefined): { title: string; text: string } {
+function interruptedBanner(reason: string | null | undefined): { title: string; text: string; children?: ReactNode } {
   if (reason?.startsWith(MERGE_CONFLICT_PREFIX)) {
     const detail = reason.slice(MERGE_CONFLICT_PREFIX.length);
     return { title: "Merge-back conflict", text: `${detail} · work kept in the node's worktree` };
   }
-  return { title: "Session died", text: `${reason ? `${reason} · ` : ""}work presumed intact` };
+  // The reason goes under the line, whole (FP of CORE-227): on the line, the
+  // early-death hint (« it ended within N s of its start; check that its
+  // harness is logged in… ») was cut before the half that says what to do.
+  return {
+    title: "Session died",
+    text: "work presumed intact",
+    children: reason ? (
+      <ul className="ri-banner__list" data-testid="interrupted-banner-reason">
+        <li>{reason}</li>
+      </ul>
+    ) : undefined,
+  };
 }
 
 /**

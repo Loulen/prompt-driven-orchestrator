@@ -147,8 +147,9 @@ Features validated while crossing the tour:
 14. **Continue** → the artifact modal closes and the *First pipeline* tour starts on a clear screen.
     Carry it to its end card and `Finish`; the name to paste is `tutorial-implement-test-<id>`.
     **Save…** opens the Save window, lit as a soft zone, and the card asks to click Save in it.
-    Adding the tester's `verdict`
-    field selects its placeholder name `field`, so typing `verdict` replaces it.
+    The tester's `verdict` step lights the « + field » button alone, then the whole schema editor
+    once the field exists. Adding the field selects its placeholder name `field`, so typing
+    `verdict` replaces it.
     Right after **Save**, the card asks to **Validate the
     pipeline**: Validate (next to Save) opens the modal; tick **All projects (current and future)**
     and **Save validation** → the modal closes, the tab bar's indicator turns to the globe « All »,

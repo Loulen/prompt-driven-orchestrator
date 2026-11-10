@@ -6,8 +6,8 @@ use pdo_session::adapters::tmux::TmuxCli;
 use pdo_session::application::messages::{paste_message, send_message};
 
 /// #792: every daemon message to a harness session starts with
-/// `[pdo-runtime]`, whichever path carries it — typed (`send_message`) or
-/// pasted (`paste_message`). A fake `tmux` on `PATH` logs the argv it receives
+/// `[pdo-runtime]`, whether one line (`send_message`) or several
+/// (`paste_message`); both are pasted, then submitted by an Enter of their own. A fake `tmux` on `PATH` logs the argv it receives
 /// and the stdin it is fed, and the assertion reads the text as the session
 /// would.
 #[test]
@@ -45,11 +45,21 @@ fn daemon_messages_reach_the_session_with_the_runtime_prefix_on_both_paths() {
     std::env::set_var("PATH", previous);
     let calls = std::fs::read_to_string(&log).unwrap();
 
+    // FP of CORE-227 (B1): typed with its Enter in one `send-keys`, the line
+    // arrives as a burst that Claude Code takes for a paste, so the Enter turns
+    // into a newline and the line sits unsent in the agent's input. The
+    // one-line message is pasted too, and submitted by an Enter of its own.
     assert!(
-        calls.contains(
-            "[send-keys] [-t] [pdo-r1-solo-iter-1] [[pdo-runtime] your output is missing frontmatter] [Enter]"
-        ),
-        "typed path: {calls}"
+        calls.contains("STDIN:[pdo-runtime] your output is missing frontmatter\n"),
+        "one-line path: {calls}"
+    );
+    assert!(
+        calls.contains("[send-keys] [-t] [pdo-r1-solo-iter-1] [Enter]"),
+        "one-line path, submitted apart: {calls}"
+    );
+    assert!(
+        !calls.contains("[send-keys] [-t] [pdo-r1-solo-iter-1] [[pdo-runtime]"),
+        "never typed with its Enter: {calls}"
     );
     assert!(
         calls.contains("STDIN:[pdo-runtime] Review batch\n- comment one\n- comment two\n"),

@@ -75,7 +75,7 @@ jobs:
 
   e2e:
     name: Frontend E2E (layer 3b)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # Playwright 1.59 has no chromium for ubuntu-latest (26.04)
     needs: frontend
     steps:
       - uses: actions/checkout@v4

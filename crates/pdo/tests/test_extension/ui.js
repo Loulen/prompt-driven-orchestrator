@@ -678,6 +678,39 @@ export function EntityBadge({ entity, context }) {
   );
 }
 
+// Decoration of `trigger/item`: the boxed « T » in a button, as an extension
+// puts a gesture on a Trigger's row. A click stays off the row
+// (it does not select the Trigger), counts in `data-clicks` and says so in a
+// toast, so a test sees the button is reachable while the row's hover bar shows.
+export function TriggerMark({ entity, context }) {
+  const [clicks, setClicks] = React.useState(0);
+  return h(
+    "button",
+    {
+      type: "button",
+      "data-testid": "test-trigger-action",
+      "data-clicks": clicks,
+      "aria-label": `Test action on ${entity?.name ?? "the trigger"}`,
+      onClick: (e) => {
+        e.stopPropagation();
+        setClicks((n) => n + 1);
+        toast(`Test action on ${entity?.name ?? "the trigger"}`);
+      },
+      onKeyDown: (e) => e.stopPropagation(),
+      style: {
+        display: "inline-flex",
+        alignItems: "center",
+        padding: 0,
+        border: 0,
+        background: "transparent",
+        color: "inherit",
+        cursor: "pointer",
+      },
+    },
+    h(EntityBadge, { entity, context }),
+  );
+}
+
 // Tab of `stats/tab` (0.9): the period of the Stats header and the Refresh
 // count, as its context hands them over.
 export function StatsTab({ context }) {

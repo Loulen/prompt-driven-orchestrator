@@ -8,9 +8,6 @@
 use pdo_kernel::{Operation, ResourceKind, Verb};
 use tracing::warn;
 
-use crate::application::create_run::project::named_project;
-use crate::application::create_run::CreateRunRequest;
-use crate::application::session_claim::SessionClaim;
 use crate::Runs;
 
 /// `action` on the node `node_id` of `run_id`.
@@ -48,22 +45,6 @@ impl Runs {
                 warn!("the Projets of run {run_id} cannot be read: {e:#}");
                 Vec::new()
             }
-        }
-    }
-
-    /// The Projets a new Run would be in: for a Run created from a node
-    /// session, the one of that session's Run, which it inherits (ADR-0064,
-    /// ADR-0087); else the one the request names. A claim the creation
-    /// refuses later never creates anything.
-    pub async fn projects_of_new_run(
-        &self,
-        req: &CreateRunRequest,
-        session: Option<&SessionClaim>,
-    ) -> Vec<String> {
-        match (session, named_project(req)) {
-            (Some(claim), _) => self.projects_of_run(&claim.run_id).await,
-            (None, Some(project)) => vec![project.to_string()],
-            (None, None) => Vec::new(),
         }
     }
 

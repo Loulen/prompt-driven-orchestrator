@@ -14,6 +14,29 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- A Run lives in the Project of its repository. `pdo run create`, `POST /runs` and a Run an
+  extension creates through its host, naming no Project, launch the Run in the one Project holding
+  its repository, and ask for `run` × `create` there. **Breaking**: a repository held by several Projects is refused with a `400` naming them
+  ("This repository is in Payments and Risk: pick its Project.", the Projects also listed in the
+  body's `projects`), and `pdo run create` adds the `--project` to pass. Before, such a Run was
+  launched in no Project.
+- A Run launched in no Project works in a repository read from the disk: its creation also asks
+  `repository` × `read` in no Project, which an authorization extension can refuse. So does a Run
+  naming a secondary repository outside its Project. Refused, no Run and no branch are created.
+- A Run created from a node session works in its parent Run's Project: a `--target-repo` outside
+  it is refused, and a parent in no Project only targets a repository of no Project.
+- New Run, for an actor who may not read the disk: the Repo field searches the repositories of
+  their Projects ("Search your Projects' repositories"), grouped by Project, a repository of
+  several Projects under each with its `+1`. What is typed only filters the list, and Enter on a
+  search that matches nothing does nothing. Picking a repository under a Project sets the form's
+  Project ("set from the repo"), and choosing another Project empties a repository that is not
+  one of its own. The form opens on the last Project chosen, else on none ("Pick a project…"),
+  and "No project" is no longer offered to them.
+- New Run with "No project" on a repository of several Projects says "This repository is in …:
+  pick its Project." under the field, and Launch stays greyed with that sentence.
+
 ## 2.76.1
 
 - The release builds the Apple Silicon macOS archive on `macos-15`: GitHub retired the `macos-14` runner dist used by default, so 2.76.0 published no release.

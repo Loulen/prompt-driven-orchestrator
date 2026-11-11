@@ -5,7 +5,7 @@
  */
 
 import type { Project } from "../../workspace/model/project";
-import type { RunCreationRights } from "./runCreationRights";
+import { canCreateOutsideProjects, type RepoGroup, type RunCreationRights } from "./runCreationRights";
 
 /** Where the last Projet chosen in New Run is remembered (this browser). */
 export const LAST_PROJECT_KEY = "pdo.newRun.lastProject";
@@ -23,24 +23,26 @@ export function offeredProjects(rights: RunCreationRights, projects: Project[]):
 
 /** Whether « No project » is offered: a Run may be created in no Projet. */
 export function offersNoProject(rights: RunCreationRights): boolean {
-  return rights.outsideProjects;
+  return canCreateOutsideProjects(rights);
 }
 
 /**
  * The Projet the form opens on: the one chosen last time while it is still
  * offered (« No project » included, when allowed), else the first one offered,
- * else none.
+ * else none. `searchOnly`, none rather than the first one: the repository
+ * picked will set it.
  */
 export function initialProject(
   offered: Project[],
   rights: RunCreationRights,
   last: string | null,
+  searchOnly = false,
 ): string | null {
   if (last !== null) {
     if (last === NO_PROJECT && offersNoProject(rights)) return null;
     if (offered.some((p) => p.id === last)) return last;
   }
-  return offered[0]?.id ?? null;
+  return searchOnly ? null : (offered[0]?.id ?? null);
 }
 
 /** The repositories of `project` the form offers as secondaries: every member but the primary. */
@@ -50,11 +52,44 @@ export function projectSecondaries(project: Project | null, primary: string): st
   return project.members.filter((repo) => repo !== chosen);
 }
 
-/** Whether `repo` is a member of `project` (verbatim, ADR-0033), or no Projet is chosen. */
-export function launchesInProject(project: Project | null, repo: string): boolean {
-  if (!project) return true;
+/** Whether `repo` is a member of `project` (verbatim, ADR-0033, or without its trailing `/` or `/.`). */
+function holds(project: Project, repo: string): boolean {
   const path = repo.trim().replace(/\/+$/, "").replace(/\/\.$/, "");
   return project.members.some((member) => member === repo.trim() || member === path);
+}
+
+/** Whether `repo` is a member of `project` (verbatim, ADR-0033), or no Projet is chosen. */
+export function launchesInProject(project: Project | null, repo: string): boolean {
+  return !project || holds(project, repo);
+}
+
+/** The Projets of `projects` holding `repo`, in their order. */
+export function projectsHolding(projects: Project[], repo: string): Project[] {
+  return repo.trim() === "" ? [] : projects.filter((project) => holds(project, repo));
+}
+
+/** « Alpha », « Alpha and Beta », « Alpha, Beta and Gamma ». */
+function andList(names: string[]): string {
+  return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/**
+ * A launch in no Projet on a repository several Projets hold: the daemon
+ * refuses it with this sentence (the CLI says the same), the form before.
+ */
+export function ambiguousRepository(names: string[]): string {
+  return `This repository is in ${andList(names)}: pick its Project.`;
+}
+
+/**
+ * The repositories the search-only field offers: those of the chosen Projet,
+ * else of every Projet offered, each under its Projet (a repository of two
+ * Projets under both).
+ */
+export function projectRepoGroups(offered: Project[], chosen: Project | null): RepoGroup[] {
+  return (chosen ? [chosen] : offered)
+    .filter((p) => p.members.length > 0)
+    .map((p) => ({ label: p.name, repos: [...p.members], projectId: p.id }));
 }
 
 /** « 3 repos », « 1 repo ». */

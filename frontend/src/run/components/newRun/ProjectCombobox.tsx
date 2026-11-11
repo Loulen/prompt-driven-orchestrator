@@ -14,15 +14,18 @@ interface Props {
   allowNone: boolean;
   /** One line closing the menu (« 1 Project(s) hidden… »). */
   note?: string | null;
+  /** The Projet was set by the repository picked (« set from the repo »). */
+  fromRepo?: boolean;
 }
 
 /**
  * The Projet a Run is launched in (ADR-0087), first row of New Run › Where:
  * the kit's dropdown, the repository count at its end; in the list, each
  * Projet with its folders as the row's meta, « No project » last when the
- * Droits allow it.
+ * Droits allow it. Without « No project », none chosen yet reads « Pick a
+ * project… ».
  */
-export default function ProjectCombobox({ value, onChange, projects, allowNone, note }: Props) {
+export default function ProjectCombobox({ value, onChange, projects, allowNone, note, fromRepo = false }: Props) {
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(-1);
   const btn = useRef<HTMLButtonElement>(null);
@@ -47,7 +50,7 @@ export default function ProjectCombobox({ value, onChange, projects, allowNone, 
         type="button"
         id="launch-project"
         className="d-sel ln-grow"
-        title={selected ? `${selected.name} · ${memberNames(selected)}` : "No project"}
+        title={selected ? `${selected.name} · ${memberNames(selected)}` : allowNone ? "No project" : "Pick a project…"}
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => (open ? setOpen(false) : openList())}
@@ -71,8 +74,17 @@ export default function ProjectCombobox({ value, onChange, projects, allowNone, 
         data-testid="project-combobox"
       >
         <Briefcase className="d-sel__lead" size={13} strokeWidth={1.5} aria-hidden />
-        <span className={selected ? "d-sel__val" : "d-sel__val d-sel__val--ph"}>{selected ? selected.name : "No project"}</span>
-        {selected && <span className="ln-sel__count">{repoCount(selected)}</span>}
+        <span className={selected ? "d-sel__val" : "d-sel__val d-sel__val--ph"}>
+          {selected ? selected.name : allowNone ? "No project" : "Pick a project…"}
+        </span>
+        {selected &&
+          (fromRepo ? (
+            <span className="ln-sel__count" data-testid="project-from-repo">
+              set from the repo
+            </span>
+          ) : (
+            <span className="ln-sel__count">{repoCount(selected)}</span>
+          ))}
         <ChevronDown className="d-sel__chev" size={12} strokeWidth={1.5} aria-hidden />
       </button>
       <AnchoredPanel anchor={btn} open={open} onClose={() => setOpen(false)}>

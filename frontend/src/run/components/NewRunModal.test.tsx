@@ -712,6 +712,24 @@ describe("NewRunModal — the Projet a Run is launched in (ADR-0087)", () => {
     expect(vi.mocked(createRun).mock.calls[0][0].project_id).toBeUndefined();
   });
 
+  it("says, in no Projet, that a repository of two Projets needs its Projet, and greys Launch with it", async () => {
+    renderModal();
+    await settleRepo("/code/shop-web");
+    await chooseProject(null);
+    await enterValidRepo("/code/design-system");
+    const sentence = "This repository is in Checkout and Mobile: pick its Project.";
+    expect(screen.getByTestId("primary-ambiguous")).toHaveTextContent(sentence);
+    expect(screen.getByLabelText(/target repository/i)).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByTestId("launch-button")).toBeDisabled();
+    expect(screen.getByTestId("launch-button-wrapper")).toHaveTextContent(sentence);
+    // The loupe and the typed path stay: who reads the disk is not restricted.
+    expect(screen.getByTestId("target-repo-input")).toHaveAttribute("placeholder", "Path or URL");
+
+    // Its Projet picked, the launch goes.
+    await chooseProject("Mobile");
+    expect(screen.queryByTestId("primary-ambiguous")).toBeNull();
+  });
+
   it("says a repository outside the Projet once, without the verdict of a valid repository", async () => {
     renderModal();
     await settleRepo("/code/shop-web");

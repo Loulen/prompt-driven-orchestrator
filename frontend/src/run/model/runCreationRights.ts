@@ -79,37 +79,58 @@ export function isRestricted(rights: RunCreationRights): boolean {
   );
 }
 
+/**
+ * The repository field only searches the repositories of the caller's
+ * Projets: it may not read the disk, so no path or URL of its own, and no Run
+ * in no Projet (a repository of no Projet is read from the disk).
+ */
+export function searchesOnly(rights: RunCreationRights): boolean {
+  return rights.known && !rights.canBrowse;
+}
+
+/** A Run may be created in no Projet: allowed there, and the disk may be read. */
+export function canCreateOutsideProjects(rights: RunCreationRights): boolean {
+  return rights.outsideProjects && rights.canBrowse;
+}
+
 /** A Run may be created somewhere (the « New Run » button is enabled). */
 export function canCreateSomeRun(rights: RunCreationRights): boolean {
-  return !rights.known || rights.outsideProjects || rights.allowedProjects.length > 0;
+  return !rights.known || canCreateOutsideProjects(rights) || rights.allowedProjects.length > 0;
 }
 
 /**
- * Why « New Run » is greyed: no Projet allows a Run; the sentence the
- * extension gave with the refusal, else the core's generic one. `undefined`
+ * Why « New Run » is greyed: no Projet allows a Run, nor the disk a Run in
+ * none; the sentence the extension gave with the refusal, else the core's
+ * generic one. `undefined`
  * when a Run may be created somewhere.
  */
 export function whyNoRunAnywhere(rights: RunCreationRights): string | undefined {
-  return canCreateSomeRun(rights) ? undefined : (rights.createRefused ?? GENERIC_REFUSAL);
+  if (canCreateSomeRun(rights)) return undefined;
+  // A Run in no Projet allowed but not the disk: the disk is what is missing.
+  const disk = rights.outsideProjects ? rights.browseRefused : undefined;
+  return disk ?? rights.createRefused ?? rights.browseRefused ?? GENERIC_REFUSAL;
 }
 
 /** A group of repositories the restricted form offers, under its Projet's name. */
 export interface RepoGroup {
   label: string;
   repos: string[];
+  /** The Projet of the group; none for « Other ». */
+  projectId?: string;
 }
 
 /**
  * The repositories the restricted form offers: each allowed Projet's, under
- * its name (sorted by name), then — when a Run may be created in no Projet —
- * the recent repositories no Projet owns, under « Other ».
+ * its name (sorted by name), then — when a Run may be created in no Projet
+ * ({@link canCreateOutsideProjects}) — the recent repositories no Projet
+ * owns, under « Other ».
  */
 export function repoGroups(rights: RunCreationRights, recentRepos: string[], projects: Project[]): RepoGroup[] {
   const groups: RepoGroup[] = [...rights.allowedProjects]
     .sort((a, b) => a.name.localeCompare(b.name))
     .filter((p) => p.members.length > 0)
-    .map((p) => ({ label: p.name, repos: [...p.members] }));
-  if (rights.outsideProjects) {
+    .map((p) => ({ label: p.name, repos: [...p.members], projectId: p.id }));
+  if (canCreateOutsideProjects(rights)) {
     const owned = new Set(projects.flatMap((p) => p.members));
     const others = recentRepos.filter((repo) => !owned.has(repo));
     if (others.length > 0) groups.push({ label: "Other", repos: others });
@@ -120,13 +141,15 @@ export function repoGroups(rights: RunCreationRights, recentRepos: string[], pro
 /**
  * The repository the form opens on. Unrestricted, the most recent one.
  * Restricted, the most recent one the form offers ({@link repoGroups}), else
- * the first one it offers: never a repository of a Projet where a Run may not
- * be created. `null` when there is none.
+ * the first one it offers (search-only, none): never a repository of a
+ * Projet where a Run may not be created. `null` when there is none.
  */
 export function prefillRepo(rights: RunCreationRights, recentRepos: string[], projects: Project[]): string | null {
   if (!isRestricted(rights)) return recentRepos[0] ?? null;
   const offered = repoGroups(rights, recentRepos, projects).flatMap((g) => g.repos);
-  return recentRepos.find((repo) => offered.includes(repo)) ?? offered[0] ?? null;
+  const recent = recentRepos.find((repo) => offered.includes(repo)) ?? null;
+  // Search-only, a recent repository or none: the repository picked sets the Projet.
+  return searchesOnly(rights) ? recent : (recent ?? offered[0] ?? null);
 }
 
 /** « N Project(s) hidden… », or `null` when none is. */

@@ -278,6 +278,10 @@ pub trait NodeSkills: Send + Sync {
 pub trait Projects: Send + Sync {
     /// The Projet `id`; `None` when there is none.
     fn project<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<Option<Project>, String>>;
+    /// The Projets holding the repository `path` (any of its spellings,
+    /// `/repo/` and `/repo/.` standing for `/repo`), in the order it joined
+    /// them; none when it is no member.
+    fn holding<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Result<Vec<Project>, String>>;
     /// The provisioning rules a Run launched in `project` freezes: the
     /// instance's, the Projet's, then `run`'s own (ADR-0063).
     fn provisioning_rules<'a>(

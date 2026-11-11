@@ -20,6 +20,7 @@ interface SubmitDeps {
   primaryInProject: boolean;
   /** The Projet the Run is launched in; `null` for none. */
   launchProject: Project | null;
+  /** In no Projet, why the repository needs its Projet named. */ ambiguousReason?: string;
   /** The draft a launch of the pipeline would leave out, if any (ADR-0088). */
   draftLaunchOf: (pipelineId: string) => DraftLaunch | null;
   /** Freeze the draft of the tab `tabId` as a new version: the pipeline's id
@@ -70,7 +71,7 @@ export async function createdRun(runId: string, runName: string): Promise<Entity
  */
 export function useNewRunSubmit(
   s: NewRunState,
-  { primaryInProject, launchProject, draftLaunchOf, saveDraftVersion, attachmentsOverLimit, onCreated, onClose, onTriggerSaved, saveSections, provideSections }: SubmitDeps,
+  { primaryInProject, launchProject, ambiguousReason, draftLaunchOf, saveDraftVersion, attachmentsOverLimit, onCreated, onClose, onTriggerSaved, saveSections, provideSections }: SubmitDeps,
 ) {
   // The Projet as chosen, even one the form does not list (an edited Trigger's
   // hidden one): sending none would take the Run or the Trigger out of it.
@@ -223,7 +224,7 @@ export function useNewRunSubmit(
     sandboxDoomed,
     // #465: every non-empty secondary must have resolved before Launch.
     secondariesReady,
-  }) && primaryInProject;
+  }) && primaryInProject && !ambiguousReason;
   // ADR-0087: a Run launched in a Projet works in one of its repositories. An
   // empty field names no repository: it is not outside the Projet.
   const outsideProjectReason =
@@ -231,7 +232,7 @@ export function useNewRunSubmit(
       ? `${targetRepo.trim()} is not a repository of ${launchProject.name}.`
       : undefined;
   // Notion #7: the reason the disabled Launch spells out; a path refused on its own gives the field's.
-  const repoReason = repoValid === false && repoError ? repoError : outsideProjectReason;
+  const repoReason = repoValid === false && repoError ? repoError : (outsideProjectReason ?? ambiguousReason);
   const launchBlockReason = repoReason ?? (provisioningValid ? undefined : provisioningBlockReason);
 
   // The cron the Trigger will be created with: a compiled preset, or the raw escape hatch.

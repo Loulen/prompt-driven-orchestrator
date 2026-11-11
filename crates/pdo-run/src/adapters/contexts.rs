@@ -43,6 +43,15 @@ impl Projects for WorkspaceProjects {
         Box::pin(async move { self.0.project(id).await.map_err(|e| e.to_string()) })
     }
 
+    fn holding<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Result<Vec<Project>, String>> {
+        Box::pin(async move {
+            self.0
+                .projects_holding(path)
+                .await
+                .map_err(|e| e.to_string())
+        })
+    }
+
     fn provisioning_rules<'a>(
         &'a self,
         project: Option<&'a str>,

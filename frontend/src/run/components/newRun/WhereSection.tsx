@@ -10,6 +10,7 @@ import type { NewRunForm } from "../../store/newRun/useNewRunForm";
 import type { Project } from "../../../workspace/model/project";
 import { useRunCreationRightsStore } from "../../store/runCreationRightsStore";
 import { hiddenProjectsNote, isRestricted, repoGroups } from "../../model/runCreationRights";
+import { projectRepoGroups } from "../../model/launchProject";
 import { isRemoteUrl } from "../../../workspace/model/clone";
 import { Button } from "../../../shared/ui/kit";
 import FormRow from "../../../shared/ui/FormRow";
@@ -42,6 +43,7 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
     recentRepos, updateSecondary, removeSecondary, addSecondary, settings,
     offeredProjects, allowNoProject, launchProject, projectNote, chooseProject, projectRepos,
     toggleProjectSecondary, outsideProjectReason, projectId, remoteUrl, projects, loadPipelines,
+    searchOnly, pickRepo, projectFromRepo, ambiguousReason,
   } = form;
   // CORE-5: where the caller may create a Run. Restricted, the field offers the
   // repositories of the allowed Projets only, and the loupe is greyed, with
@@ -55,7 +57,11 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
     launchProject != null && targetRepo.trim() !== "" && launchProject.primary_repo === targetRepo.trim();
   // In a Projet, the field offers its repositories, then the recents; in none,
   // the recents (or, restricted, the repositories of the allowed Projets).
-  const groups = launchProject
+  // Search-only, the repositories of the chosen Projet, else of every Projet
+  // offered, nothing else.
+  const groups = searchOnly
+    ? projectRepoGroups(offeredProjects, launchProject)
+    : launchProject
     ? [
         { label: launchProject.name, repos: launchProject.members },
         ...(restricted ? [] : [{ label: "Recent", repos: recentRepos.filter((r) => !launchProject.members.includes(r)) }]),
@@ -74,9 +80,18 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
   const noProjectYet = !showProject && projects !== null && projects.length === 0;
   const projectRightsAnswer = useProjectRights(projects ?? [], noProjectYet);
   const [creating, setCreating] = useState(false);
-  // The other Projets holding a repository (ADR-0087).
-  const alsoIn = (path: string) =>
-    offeredProjects.filter((p) => p.id !== launchProject?.id && p.members.includes(path)).map((p) => p.name);
+  // The other Projets holding a repository (ADR-0087): than the one chosen,
+  // or than the group it is listed under.
+  const alsoIn = (path: string, besides = launchProject?.id) =>
+    offeredProjects.filter((p) => p.id !== besides && p.members.includes(path)).map((p) => p.name);
+  const alsoMark = (others: string[]) =>
+    others.length > 0 ? (
+      <span className="ln-faint ln-also" title={`Also in ${others.join(", ")}`} data-testid="repo-also-in">
+        +{others.length}
+      </span>
+    ) : null;
+  // In no Projet (the run mode's Launch), a repository several Projets hold.
+  const ambiguity = mode === "run" ? ambiguousReason : undefined;
   const typedPath = targetRepo.trim() && !isRemoteUrl(targetRepo.trim()) ? [targetRepo.trim()] : [];
   // CORE-205: the fast-forward greyed, with why, when the caller may not move the
   // branch: asked in the Projets holding the repository, as the daemon asks it.
@@ -103,6 +118,7 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
             projects={offeredProjects}
             allowNone={allowNoProject}
             note={projectNote}
+            fromRepo={projectFromRepo}
           />
         </FormRow>
       ) : (
@@ -139,17 +155,30 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
             explorerStartPath={repoExplorerStartPath}
             browseRefused={rights.browseRefused}
             groups={groups}
-            groupsNote={!launchProject && restricted ? hiddenProjectsNote(rights) : null}
+            groupsNote={!launchProject && restricted && !searchOnly ? hiddenProjectsNote(rights) : null}
+            searchOnly={searchOnly}
+            onPick={searchOnly ? pickRepo : undefined}
             home={home}
             // CORE-97: a URL is cloned first, then launched on.
             leading={remoteUrl ? <Globe size={13} strokeWidth={1.5} className="ln-field__lead ln-field__lead--url" aria-hidden /> : undefined}
             hint={remoteUrl ? <RemoteRepoHint clone={form} home={home} /> : undefined}
             badge={isProjectDefault ? <DefaultPill of={launchProject.name} testId="project-default-badge" /> : undefined}
-            rowBadge={(path) => (launchProject?.primary_repo === path ? <DefaultPill of={launchProject.name} /> : null)}
+            rowBadge={(path, group) => (
+              <>
+                {launchProject?.primary_repo === path && group.projectId === launchProject.id && (
+                  <DefaultPill of={launchProject.name} />
+                )}
+                {group.projectId && alsoMark(alsoIn(path, group.projectId))}
+              </>
+            )}
             refusal={
               outsideProjectReason && !remoteUrl ? (
                 <span className="ln-err" data-testid="primary-outside-project">
                   {outsideProjectReason}
+                </span>
+              ) : ambiguity && !remoteUrl ? (
+                <span className="ln-err" data-testid="primary-ambiguous">
+                  {ambiguity}
                 </span>
               ) : undefined
             }
@@ -192,13 +221,7 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
           <div className="ln-secs">
             {projectRepos.map((path) => {
               const index = secondaryRepos.findIndex((r) => r.path.trim() === path);
-              const others = alsoIn(path);
-              const also =
-                others.length > 0 ? (
-                  <span className="ln-faint ln-also" title={`Also in ${others.join(", ")}`}>
-                    +{others.length}
-                  </span>
-                ) : null;
+              const also = alsoMark(alsoIn(path));
               if (index >= 0) {
                 return (
                   <SecondaryRepoRow
@@ -248,7 +271,8 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
             </div>
           </FormRow>
         ))}
-      {repoValid && (
+      {/* A repository outside the Projet is read from the disk: search-only, none. */}
+      {repoValid && !searchOnly && (
         <FormRow label="">
           <Button
             size="sm"

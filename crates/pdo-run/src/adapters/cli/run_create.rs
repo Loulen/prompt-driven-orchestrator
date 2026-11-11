@@ -62,6 +62,22 @@ pub(crate) fn parse_ext_args(raw: &[String]) -> Result<serde_json::Value> {
     Ok(serde_json::Value::Object(extensions))
 }
 
+/// The flag a refusal naming the Projets of the repository asks for (its
+/// `projects`, a repository in several of them and none named): ` Pass
+/// --project <id>: <name> (<id>), …`. `None` for any other refusal.
+fn project_hint(raw: &str) -> Option<String> {
+    let body: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let projects = body.get("projects")?.as_array()?;
+    let named: Vec<String> = projects
+        .iter()
+        .filter_map(|p| Some(format!("{} ({})", p["name"].as_str()?, p["id"].as_str()?)))
+        .collect();
+    if named.is_empty() {
+        return Some(" Pass --project <id>.".to_string());
+    }
+    Some(format!(" Pass --project <id>: {}.", named.join(", ")))
+}
+
 /// One-shot `pdo run create` (issue #721, ADR-0064): the thin CLI client of the
 /// daemon's `POST /runs`. Like the other one-shots, blocking `reqwest` and no
 /// tokio runtime (see `crates/pdo/src/entry.rs`); plain `Result` → `0`/`1` exit mapping — only
@@ -203,7 +219,8 @@ pub fn run_run_create(action: RunAction) -> Result<()> {
         let detail = super::run_list::daemon_sentence(&raw).unwrap_or_else(|| {
             intermediary_refusal_detail(&url, status.as_u16(), attachment_bytes, &raw)
         });
-        anyhow::bail!("daemon refused run creation ({status}): {detail}");
+        let hint = project_hint(&raw).unwrap_or_default();
+        anyhow::bail!("daemon refused run creation ({status}): {detail}{hint}");
     }
     let parsed: serde_json::Value = serde_json::from_str(&raw)
         .with_context(|| format!("unreadable success body from daemon: {raw}"))?;
@@ -225,6 +242,22 @@ pub fn run_run_create(action: RunAction) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refusal_naming_the_projets_of_the_repository_asks_for_one() {
+        let raw = r#"{"error":"This repository is in Alpha and Beta: pick its Project.",
+            "projects":[{"id":"p1","name":"Alpha"},{"id":"p2","name":"Beta"}]}"#;
+        assert_eq!(
+            project_hint(raw).as_deref(),
+            Some(" Pass --project <id>: Alpha (p1), Beta (p2).")
+        );
+        assert_eq!(
+            project_hint(r#"{"error":"x","projects":[]}"#).as_deref(),
+            Some(" Pass --project <id>.")
+        );
+        assert_eq!(project_hint(r#"{"error":"unknown project `p`"}"#), None);
+        assert_eq!(project_hint("<html>"), None);
+    }
 
     #[test]
     fn run_create_skills_arg_accepts_ids_and_json() {

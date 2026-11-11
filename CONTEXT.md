@@ -615,7 +615,7 @@ La brique **unique** de sélection de chemin à la souris : un listing à **un n
 
 Un **Projet** est un regroupement **nommé** de dépôts qui se travaillent ensemble (un front et un back, par exemple). Il porte un nom éditable et une liste de chemins **membres**, comparés verbatim comme partout ailleurs (cf. *Repo cible*).
 
-- **Un dépôt peut appartenir à plusieurs Projets.** Le **Projet d'un Run** est choisi au lancement et enregistré sur le Run, jamais déduit de son dépôt ; un Run lancé hors Projet n'en a pas (ADR-0087).
+- **Un dépôt peut appartenir à plusieurs Projets.** Le **Projet d'un Run** est choisi au lancement et enregistré sur le Run, jamais recalculé (ADR-0087). Une création qui n'en nomme pas est lancée dans **le** Projet qui tient son dépôt ; si plusieurs le tiennent, elle doit en nommer un ; si aucun, le Run est hors Projet et sa création demande la lecture du disque. Un Run créé depuis une session de nœud reste dans le Projet de son parent et n'y cible qu'un de ses dépôts (ADR draft-un-run-dans-le-projet-de-son-depot).
 - **Dépôt primaire par défaut** *(terme)* : le dépôt qu'un Projet présélectionne comme primaire au lancement ; ses autres dépôts sont proposés comme secondaires, en lecture seule par défaut.
 - **Créé explicitement** (Settings › Projects, où le crayon d'un en-tête de groupe mène aussi) ; tant qu'aucun n'existe, les listes se groupent sur le libellé dérivé du chemin. Un dépôt s'y ajoute par un chemin local, un dépôt récent, un dossier neuf (initialisé) ou une **URL distante**, clonée en entier dans le **dossier des clones** de l'instance.
 - **Supprimé**, un Projet reste celui de ses Runs : les listes les rangent sous un Projet marqué supprimé. Ses dépôts restent sur le disque et dans les autres Projets.

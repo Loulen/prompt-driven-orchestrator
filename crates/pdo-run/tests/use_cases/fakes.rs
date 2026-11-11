@@ -8,7 +8,7 @@ use pdo_extension_api::{Authorization, RequestParts};
 use pdo_harness::agent_choice::ResolvedCombo;
 use pdo_kernel::event_bus::EventBus;
 use pdo_kernel::extension_host::ExtensionHost;
-use pdo_kernel::{Actor, Operation};
+use pdo_kernel::{Actor, Operation, ResourceKind};
 use pdo_pipeline::domain::pipeline::parse_pipeline;
 use pdo_run::application::ports::*;
 use pdo_run::domain::event::{edge_info_from_pipeline, node_def_from_pipeline, Event, EventKind};
@@ -397,6 +397,29 @@ impl Projects for FakeProjects {
         })
     }
 
+    fn holding<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Result<Vec<Project>, String>> {
+        Box::pin(async move {
+            if *self.1.lock().unwrap() {
+                return Err("the workspace store is unreadable".to_string());
+            }
+            let spellings = pdo_kernel::repository_path::member_spellings(path);
+            for spelling in spellings {
+                let holding: Vec<Project> = self
+                    .0
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|p| p.has_member(&spelling))
+                    .cloned()
+                    .collect();
+                if !holding.is_empty() {
+                    return Ok(holding);
+                }
+            }
+            Ok(Vec::new())
+        })
+    }
+
     fn provisioning_rules<'a>(
         &'a self,
         project: Option<&'a str>,
@@ -633,11 +656,13 @@ impl pdo_pipeline::application::ports::SkillBank for NoBank {
 
 /// An extension host that records every Operation it is asked about, and
 /// refuses them all once told to; or only the reads in the Projets
-/// `refuse_reads_in`.
+/// `refuse_reads_in`; or reading the disk (`repository` × `read` in no
+/// Projet) when `refuse_disk`.
 #[derive(Default)]
 pub struct Host {
     pub refuse: Mutex<bool>,
     pub refuse_reads_in: Mutex<Vec<String>>,
+    pub refuse_disk: Mutex<bool>,
     pub asked: Mutex<Vec<(Actor, Operation)>>,
 }
 
@@ -658,6 +683,12 @@ impl ExtensionHost for Host {
                 .any(|p| refused_projects.contains(p))
         {
             Authorization::deny("the test host refuses this read")
+        } else if *self.refuse_disk.lock().unwrap()
+            && operation.resource == ResourceKind::Repository
+            && operation.is_read()
+            && operation.is_outside_projects()
+        {
+            Authorization::deny("the test host refuses reading the disk")
         } else if *self.refuse.lock().unwrap() {
             Authorization::deny("the test host refuses everything")
         } else {

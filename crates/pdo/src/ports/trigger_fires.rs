@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 
-use pdo_stats::application::ports::{BoxFuture, TriggerFires};
+use pdo_stats::application::ports::{BoxFuture, TriggerFires, TriggerProject};
 use pdo_stats::domain::overview::fires::DELETED_TRIGGER;
 use pdo_stats::domain::overview::TriggersCreatedRuns;
 
@@ -96,12 +96,12 @@ async fn triggers_created_runs(
 }
 
 /// Every Trigger and the Projet it launches its Runs in.
-async fn trigger_projects(db: &sqlx::SqlitePool) -> anyhow::Result<Vec<(String, Option<String>)>> {
-    Ok(sqlx::query_as::<_, (String, Option<String>)>(
-        "SELECT id, project_id FROM triggers ORDER BY id",
+async fn trigger_projects(db: &sqlx::SqlitePool) -> anyhow::Result<Vec<TriggerProject>> {
+    Ok(
+        sqlx::query_as::<_, TriggerProject>("SELECT id, project_id FROM triggers ORDER BY id")
+            .fetch_all(db)
+            .await?,
     )
-    .fetch_all(db)
-    .await?)
 }
 
 impl TriggerFires for TriggerTableFires {
@@ -123,7 +123,7 @@ impl TriggerFires for TriggerTableFires {
         Box::pin(triggers_created_runs(&self.db, from, to, triggers))
     }
 
-    fn trigger_projects(&self) -> BoxFuture<'_, anyhow::Result<Vec<(String, Option<String>)>>> {
+    fn trigger_projects(&self) -> BoxFuture<'_, anyhow::Result<Vec<TriggerProject>>> {
         Box::pin(trigger_projects(&self.db))
     }
 }

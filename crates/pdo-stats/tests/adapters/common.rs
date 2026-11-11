@@ -20,7 +20,7 @@ use pdo_stats::adapters::run_files::DiskRunFiles;
 use pdo_stats::adapters::sqlite_absorptions::SqliteAbsorptions;
 use pdo_stats::adapters::transcripts::HarnessTranscripts;
 use pdo_stats::application::ports::{
-    Announcements, AuditJournal, BoxFuture, Projects, TriggerFires,
+    Announcements, AuditJournal, BoxFuture, Projects, TriggerFires, TriggerProject,
 };
 use pdo_stats::domain::overview::TriggersCreatedRuns;
 use pdo_stats::{Stats, StatsOptions, StatsPorts};
@@ -88,7 +88,7 @@ impl TriggerFires for DbFires {
         })
     }
 
-    fn trigger_projects(&self) -> BoxFuture<'_, anyhow::Result<Vec<(String, Option<String>)>>> {
+    fn trigger_projects(&self) -> BoxFuture<'_, anyhow::Result<Vec<TriggerProject>>> {
         Box::pin(async move {
             let ids: Vec<(String,)> = sqlx::query_as("SELECT id FROM triggers")
                 .fetch_all(&self.0)

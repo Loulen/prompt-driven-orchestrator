@@ -220,7 +220,7 @@ impl TriggerFires for NoFires {
         })
     }
 
-    fn trigger_projects(&self) -> BoxFuture<'_, anyhow::Result<Vec<(String, Option<String>)>>> {
+    fn trigger_projects(&self) -> BoxFuture<'_, anyhow::Result<Vec<TriggerProject>>> {
         Box::pin(async { Ok(vec![("t1".to_string(), Some("p1".to_string()))]) })
     }
 }

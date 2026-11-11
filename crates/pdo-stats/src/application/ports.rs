@@ -85,8 +85,11 @@ pub trait TriggerFires: Send + Sync {
     ) -> BoxFuture<'a, anyhow::Result<TriggersCreatedRuns>>;
     /// Every Trigger, with the Projet it launches its Runs in: what the read
     /// filter judges a Trigger by.
-    fn trigger_projects(&self) -> BoxFuture<'_, anyhow::Result<Vec<(String, Option<String>)>>>;
+    fn trigger_projects(&self) -> BoxFuture<'_, anyhow::Result<Vec<TriggerProject>>>;
 }
+
+/// A Trigger's id and the Projet it launches its Runs in, if any.
+pub type TriggerProject = (String, Option<String>);
 
 /// The Projets, as the workspace context holds them.
 pub trait Projects: Send + Sync {

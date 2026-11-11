@@ -54,8 +54,9 @@
 //!   not archived, and that menu also offers [`FAIL`], a command that throws.
 //!   Since #31, one element at each other location: a tab (`EntityTab`), a
 //!   section (`EntitySection`, which records its host's Save in `/sections`), a
-//!   decoration (`EntityBadge`; plus one that throws, `Exploding`, on the status
-//!   bar) and a list filter (`StartedByFilter`) wherever the catalogue accepts
+//!   decoration (`EntityBadge`, in a button that counts its clicks on a
+//!   Trigger's row, `TriggerMark`; plus one that throws, `Exploding`, on the
+//!   status bar) and a list filter (`StartedByFilter`) wherever the catalogue accepts
 //!   one.
 //! - **`cli`** / **`run_cli`**: `pdo ext test echo|cat|exit|panic` (see
 //!   [`TestExtension::run_cli`]); each call is recorded ([`Control::cli_calls`]).
@@ -831,11 +832,13 @@ impl Extension for TestExtension {
                 "Test",
                 "EntityBadge",
             ))
+            // A button around the badge: a gesture on the row, which its
+            // hover bar never covers.
             .contribute(UiContribution::decoration(
                 UiLocation::TriggerItem,
                 "trigger-badge",
                 "Test",
-                "EntityBadge",
+                "TriggerMark",
             ))
             .contribute(UiContribution::decoration(
                 UiLocation::PipelineItem,

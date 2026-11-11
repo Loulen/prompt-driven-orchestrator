@@ -8,7 +8,11 @@
 //!   `trigger_id` on `/ws`, and so does a suspension the extension sets;
 //! - a refused read of the Triggers in P2 hides them from the list, refuses
 //!   their detail and their fires, and keeps what `/ws` says of them from
-//!   that connection; another caller sees them; without extension, all pass.
+//!   that connection; another caller sees them; without extension, all pass;
+//! - (0.26) a Trigger is judged in its Projet everywhere: the extension is
+//!   asked about its suspension with it before any fire, told of its creation
+//!   and its edits in it, and a probe of `POST /authorize` on it is placed in
+//!   it, like the gesture.
 
 use std::time::Duration;
 
@@ -257,6 +261,7 @@ async fn the_signal_of_the_triggers_reaches_ws_as_a_trigger_updated_without_id()
 struct World {
     daemon: TestDaemon,
     control: crate::test_extension::Control,
+    p1: String,
     p2: String,
     t1: String,
     t2: String,
@@ -278,6 +283,7 @@ async fn world() -> World {
     World {
         daemon,
         control,
+        p1,
         p2,
         t1,
         t2,
@@ -378,6 +384,111 @@ async fn ws_says_nothing_of_a_trigger_to_a_connection_that_may_not_read_it() {
         alice_seen.iter().all(|m| m.get("read_guard").is_none()),
         "the guard never leaves the daemon: {alice_seen:?}"
     );
+}
+
+#[tokio::test]
+async fn a_trigger_is_judged_in_its_projet_by_its_suspension_its_operations_and_a_probe() {
+    let w = world().await;
+
+    // Never fired, already asked about with its Projet.
+    let (status, asks) = get(&w.daemon, "/ext/test/trigger-asks").await;
+    assert_eq!(status, 200, "{asks}");
+    let asked_in = |asks: &Value, id: &str| -> Vec<Value> {
+        asks.as_array()
+            .unwrap()
+            .iter()
+            .filter(|t| t["id"] == id)
+            .map(|t| t["project"].clone())
+            .collect()
+    };
+    let t1_asks = asked_in(&asks, &w.t1);
+    assert!(!t1_asks.is_empty(), "asked at its creation: {asks}");
+    assert!(t1_asks.iter().all(|p| *p == json!(w.p1)), "{asks}");
+    assert!(asked_in(&asks, &w.t2).iter().all(|p| *p == json!(w.p2)));
+    let (_, fires) = get(&w.daemon, &format!("/triggers/{}/fires", w.t1)).await;
+    assert_eq!(fires.as_array().unwrap().len(), 0, "never fired");
+
+    // Its creation and its edit reach the extension in its Projet.
+    let (status, body) = send(
+        &w.daemon,
+        reqwest::Method::PATCH,
+        &format!("/triggers/{}", w.t1),
+        Some(json!({ "name": "renamed" })),
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    // Announced off the request path: wait for the edit's.
+    let applied_to_t1 = |events: Vec<Value>| -> Vec<(Value, Value)> {
+        events
+            .into_iter()
+            .filter(|e| {
+                e["type"] == "operation_applied"
+                    && e["operation"]["resource"] == "trigger"
+                    && e["entity"]["id"] == w.t1.as_str()
+            })
+            .map(|e| {
+                (
+                    e["operation"]["verb"].clone(),
+                    e["operation"]["projects"].clone(),
+                )
+            })
+            .collect()
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let applied = loop {
+        let applied = applied_to_t1(w.control.events());
+        if applied.iter().any(|(verb, _)| verb == "update") {
+            break applied;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the edit never came: {applied:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert_eq!(
+        applied,
+        vec![
+            (json!("create"), json!([w.p1])),
+            (json!("update"), json!([w.p1])),
+        ]
+    );
+
+    // A probe is judged in the Projet of the Trigger, as the edit itself.
+    w.control
+        .set(Refusal::parse(&format!("trigger:update@{}", w.p1)).unwrap());
+    let (status, answer) = post(
+        &w.daemon,
+        "/authorize",
+        json!({ "operations": [
+            { "resource": "trigger", "verb": "update", "target": w.t1 },
+            { "resource": "trigger", "verb": "update", "target": w.t2 },
+        ]}),
+    )
+    .await;
+    assert_eq!(status, 200, "{answer}");
+    assert_eq!(answer["decisions"][0]["decision"], "deny", "{answer}");
+    assert_eq!(answer["decisions"][1]["decision"], "allow", "{answer}");
+    let probed: Vec<Vec<String>> = w
+        .control
+        .asked()
+        .into_iter()
+        .filter(|(_, op)| op.verb == pdo::extension_api::Verb::Update)
+        .rev()
+        .take(2)
+        .map(|(_, op)| op.projects)
+        .collect();
+    assert_eq!(probed, vec![vec![w.p2.clone()], vec![w.p1.clone()]]);
+    let (status, body) = send(
+        &w.daemon,
+        reqwest::Method::PATCH,
+        &format!("/triggers/{}", w.t1),
+        Some(json!({ "name": "again" })),
+        None,
+    )
+    .await;
+    assert_eq!(status, 403, "the gesture is refused alike: {body}");
 }
 
 #[tokio::test]

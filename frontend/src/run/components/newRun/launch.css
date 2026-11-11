@@ -161,8 +161,12 @@
     font-size: var(--fs-xs);
     cursor: pointer;
   }
-  .ln-link:hover {
+  .ln-link:hover:not(:disabled) {
     text-decoration: underline;
+  }
+  .ln-link:disabled {
+    color: var(--text-3);
+    cursor: not-allowed;
   }
   .ln-alert {
     display: flex;

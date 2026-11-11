@@ -8,7 +8,12 @@ import {
   updateProject,
 } from "../../api/projects";
 import { createRepo, startClone, validateRepo } from "../../api/repos";
-import { runCountByProject, sortedProjects, type ProjectsEntry } from "../../model/projectsSettings";
+import {
+  repositoriesFromMyProjects,
+  runCountByProject,
+  sortedProjects,
+  type ProjectsEntry,
+} from "../../model/projectsSettings";
 import { useProjectRights } from "../../store/useProjectRights";
 import { useRepoRemotes } from "../../store/useRepoRemotes";
 import { useRecentReposStore } from "../../../stores/recentReposStore";
@@ -92,10 +97,8 @@ export default function ProjectsPanel({
       if (!check.valid) throw new Error(check.error ?? `${path} is not a git repository`);
       await changed(addProjectMember(selected.id, path));
     },
-    createRepository: async (parent, name) => {
-      const repo = await createRepo(parent, name);
-      await changed(addProjectMember(selected.id, repo.path));
-    },
+    // Made for the Projet, the repository joins it in the same gesture.
+    createRepository: (parent, name) => changed(createRepo(parent, name, [], selected.id)),
     cloneRepository: (url, path) =>
       startClone({ url, project_id: selected.id, ...(path ? { path } : {}) }),
     refresh: onChanged,
@@ -169,12 +172,13 @@ export default function ProjectsPanel({
               projects={projects}
               runs={counts.get(selected.id) ?? 0}
               remotes={remotes}
+              fromProjects={repositoriesFromMyProjects(list, selected, rights.readsRepositoriesOf)}
               recent={recent}
               home={home}
               editRefused={rights.why.update.get(selected.id)}
               deleteRefused={rights.why.delete.get(selected.id)}
               browseRefused={rights.why.browse}
-              createRepositoryRefused={rights.why.createRepository}
+              createRepositoryRefused={rights.why.createRepository.get(selected.id)}
               gestures={gestures}
             />
           )}

@@ -99,7 +99,12 @@ mod tests {
             .fetch_remotes(&Actor::LocalOperator, "/elsewhere")
             .await
             .unwrap();
-        let asked = f.host.asked();
+        let asked: Vec<_> = f
+            .host
+            .asked()
+            .into_iter()
+            .filter(|o| !o.is_read())
+            .collect();
         assert_eq!(asked[0].projects, vec!["a".to_string()], "the member's add");
         assert_eq!(asked[1].projects, vec!["a".to_string()]);
         assert!(asked[2].is_outside_projects());

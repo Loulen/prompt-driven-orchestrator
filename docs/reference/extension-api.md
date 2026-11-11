@@ -90,9 +90,19 @@ The core fills `projects` for its own Operations:
 | `review_comment` | the Projets of the Run in its target |
 | `project` (targeted) | that Projet |
 | `repository` (`fetch`, `fast_forward`) | every Projet the repository is a member of |
+| `repository` × `create` | a repository made for a Projet (`POST /repos/clones`, `POST /repos/create` with a `project_id`): that Projet; without one, none |
+| `repository` × `read`, targeted by the repository's path | a repository brought into a Projet (`POST /projects/{id}/members`, the members of `POST /projects`): one of the Projets it is a member of, asked in each until one allows; a path in no Projet is the disk's read (no target, in none) |
 | `trigger` (0.11) | the Projet the Trigger launches its Runs in (`project_id`); none without one. An edit moving it to another Projet is asked, and announced applied, in each |
 | `page_mount` | a mount asked from a node session: the Projet of that session's Run; an unmount (targeted by the page's name): the Projet of the Run the mount belongs to, whoever asks. A mount outside any Run, or its unmount, is in none |
 | everything else | none |
+
+Adding a repository to a Projet is judged in that Projet, never on the disk: a clone or a new
+empty repository made for a Projet asks `repository` × `create` there and `project` × `update` on
+it. A folder of the caller's choosing (a clone's `path`, a `parent` other than the clones folder)
+asks the disk's read. A folder already a member of other Projets (a clone reused, an empty folder
+taken) is taken only by who may read it in one of them, and a repository already there that a new
+empty one would take as it is is judged as a repository brought in (above). Who asked for a clone
+follows it: reads and cancels it.
 
 A Run, its nodes, sessions and review comments are in one Projet at most: the one recorded at
 its launch, never recomputed when a Projet's members change. A repository may be a member of
@@ -118,7 +128,8 @@ The core asks `authorize` before it serves these reads (0.8, CORE-5), with the v
 | `GET /projects` | `project` × `read`, per Projet | the Projet is absent |
 | `GET /projects/{id}` | `project` × `read` | `403` |
 | `GET /fs/browse` (the loupe, the explorers) | `repository` × `read`, no target, in no Projet | `403` |
-| `GET /repos/clone-target`, `/repos/clones`, `/repos/clones/{id}` (a repository added by its URL) | `repository` × `read`, no target, in no Projet | `403` |
+| `GET /repos/clone-target` (a repository added by its URL) | with a `project_id`: `repository` × `create` in that Projet and `project` × `update` on it; without one: `repository` × `read`, no target, in no Projet | `403` |
+| `GET /repos/clones`, `/repos/clones/{id}`, `DELETE /repos/clones/{id}` | none for the clones the caller asked for (started or joined); the others: `repository` × `read`, no target, in no Projet (and, to cancel one, `repository` × `create` in no Projet) | the clone is absent, or `404` as an unknown one |
 | `GET /runs/presences` (0.12) | `run` × `read`, targeted, per Run listed | the Run is absent |
 | `/ws`, a Presence (0.12) | `run` × `read` on the Run a `presence_arrived` or `presence_left` is about, per connection (answer kept 5 s) | the message is not sent to that connection |
 | `GET /repos/recent` (the New Run prefill) | `run` × `read` on the last Run of each repository, in the repository's Projet | the repository is absent |

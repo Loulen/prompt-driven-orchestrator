@@ -169,6 +169,10 @@ mod extension_reads;
 #[path = "extension_projets_triggers.rs"]
 mod extension_projets_triggers;
 
+// Adding a repository to a Projet, judged in that Projet.
+#[path = "extension_repository_projects.rs"]
+mod extension_repository_projects;
+
 // API 0.11: an extension's event guarded by a read on `/ws`, and the
 // `operation_applied` on an extension's Ressource guarded by its entity's.
 #[path = "extension_event_guard.rs"]

@@ -527,6 +527,41 @@ describe("primitives", () => {
     expect(screen.getAllByTestId("menu-disabled-reason").map((n) => n.textContent)).toEqual([why]);
   });
 
+  it("Menu with reasons in tooltips says why on the greyed entry, not at its foot", async () => {
+    const user = userEvent.setup();
+    const pick = vi.fn();
+    const why = "Adding a local folder needs disk access. Ask an administrator.";
+    render(
+      <Menu
+        label="Add repository"
+        reasons="tooltip"
+        trigger={({ toggle }) => (
+          <button type="button" onClick={toggle}>
+            Add
+          </button>
+        )}
+        entries={[
+          { label: "Clone from a URL…", onSelect: pick },
+          { label: "Local folder…", onSelect: pick, disabledReason: why },
+        ]}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Add" }));
+    const menu = await screen.findByRole("menu", { name: "Add repository" });
+    await waitFor(() => expect(within(menu).getByRole("menuitem", { name: "Clone from a URL…" })).toHaveFocus());
+    expect(screen.queryByTestId("menu-disabled-reason")).toBeNull();
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    // The arrows stop on it: its keyboard focus says why.
+    await user.keyboard("{ArrowDown}");
+    const local = within(menu).getByRole("menuitem", { name: "Local folder…" });
+    expect(local).toHaveFocus();
+    expect(local).toHaveAttribute("aria-disabled", "true");
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(why);
+    await user.keyboard("{Enter}");
+    await user.click(local);
+    expect(pick).not.toHaveBeenCalled();
+  });
+
   it("Menu without a refused entry has no foot", async () => {
     const user = userEvent.setup();
     render(

@@ -3,6 +3,7 @@
 
 use std::sync::Mutex;
 
+use pdo_kernel::Actor;
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -44,8 +45,39 @@ pub struct CloneJob {
 
 struct Entry {
     job: CloneJob,
+    /// Who asked for it: who started it, and who joined it while it ran.
+    requested_by: Vec<Actor>,
     /// Fires the cancel of a running clone.
     cancel: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+/// A clone, and who asked for it (never on the wire: a clone shows to who
+/// asked for it, [`Workspace::clone_jobs`](super::Workspace::clone_jobs)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Tracked {
+    pub job: CloneJob,
+    pub requested_by: Vec<Actor>,
+}
+
+impl Entry {
+    fn tracked(&self) -> Tracked {
+        Tracked {
+            job: self.job.clone(),
+            requested_by: self.requested_by.clone(),
+        }
+    }
+
+    /// `actor` asked for it too, for `project_ids`.
+    fn asked_by(&mut self, actor: &Actor, project_ids: impl IntoIterator<Item = String>) {
+        for id in project_ids {
+            if !self.job.project_ids.contains(&id) {
+                self.job.project_ids.push(id);
+            }
+        }
+        if !self.requested_by.contains(actor) {
+            self.requested_by.push(actor.clone());
+        }
+    }
 }
 
 /// The clones of the daemon, running and recently finished. In memory: a
@@ -60,37 +92,41 @@ impl CloneJobs {
         self.entries.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    pub(super) fn list(&self) -> Vec<CloneJob> {
-        self.lock().iter().rev().map(|e| e.job.clone()).collect()
+    pub(super) fn list(&self) -> Vec<Tracked> {
+        self.lock().iter().rev().map(Entry::tracked).collect()
     }
 
-    pub(super) fn get(&self, id: &str) -> Option<CloneJob> {
+    pub(super) fn get(&self, id: &str) -> Option<Tracked> {
         self.lock()
             .iter()
             .find(|e| e.job.id == id)
-            .map(|e| e.job.clone())
+            .map(Entry::tracked)
     }
 
-    /// The running clone into `path`, now also for `project_id`.
-    pub(super) fn join(&self, path: &str, project_id: Option<&str>) -> Option<CloneJob> {
+    /// The running clone into `path`, now also asked by `actor` for
+    /// `project_id`.
+    pub(super) fn join(
+        &self,
+        path: &str,
+        actor: &Actor,
+        project_id: Option<&str>,
+    ) -> Option<CloneJob> {
         let mut entries = self.lock();
         let entry = entries
             .iter_mut()
             .find(|e| e.job.state == CloneState::Running && e.job.path == path)?;
-        if let Some(id) = project_id {
-            if !entry.job.project_ids.iter().any(|p| p == id) {
-                entry.job.project_ids.push(id.to_string());
-            }
-        }
+        entry.asked_by(actor, project_id.map(str::to_string));
         Some(entry.job.clone())
     }
 
-    /// Records a running clone, unless one into the same folder runs already:
-    /// that one, then also for the Projets of `job`, is returned. One lock
-    /// for both, so two asks at once never start two clones of one folder.
+    /// Records a running clone asked by `actor`, unless one into the same
+    /// folder runs already: that one, then also asked by `actor` for the
+    /// Projets of `job`, is returned. One lock for both, so two asks at once
+    /// never start two clones of one folder.
     pub(super) fn start(
         &self,
         job: CloneJob,
+        actor: &Actor,
         cancel: tokio::sync::oneshot::Sender<()>,
     ) -> Option<CloneJob> {
         let mut entries = self.lock();
@@ -98,19 +134,20 @@ impl CloneJobs {
             .iter_mut()
             .find(|e| e.job.state == CloneState::Running && e.job.path == job.path)
         {
-            for id in job.project_ids {
-                if !entry.job.project_ids.contains(&id) {
-                    entry.job.project_ids.push(id);
-                }
-            }
+            entry.asked_by(actor, job.project_ids);
             return Some(entry.job.clone());
         }
-        push(&mut entries, job, Some(cancel));
+        push(&mut entries, job, actor, Some(cancel));
         None
     }
 
-    pub(super) fn push(&self, job: CloneJob, cancel: Option<tokio::sync::oneshot::Sender<()>>) {
-        push(&mut self.lock(), job, cancel);
+    pub(super) fn push(
+        &self,
+        job: CloneJob,
+        actor: &Actor,
+        cancel: Option<tokio::sync::oneshot::Sender<()>>,
+    ) {
+        push(&mut self.lock(), job, actor, cancel);
     }
 
     pub(super) fn update(&self, id: &str, change: impl FnOnce(&mut CloneJob)) {
@@ -147,9 +184,19 @@ impl CloneJobs {
     }
 }
 
-/// Adds `job`, dropping the oldest finished clones beyond [`FINISHED_KEPT`].
-fn push(entries: &mut Vec<Entry>, job: CloneJob, cancel: Option<tokio::sync::oneshot::Sender<()>>) {
-    entries.push(Entry { job, cancel });
+/// Adds `job` asked by `actor`, dropping the oldest finished clones beyond
+/// [`FINISHED_KEPT`].
+fn push(
+    entries: &mut Vec<Entry>,
+    job: CloneJob,
+    actor: &Actor,
+    cancel: Option<tokio::sync::oneshot::Sender<()>>,
+) {
+    entries.push(Entry {
+        job,
+        requested_by: vec![actor.clone()],
+        cancel,
+    });
     let finished = entries
         .iter()
         .filter(|e| e.job.state != CloneState::Running)
@@ -184,19 +231,34 @@ mod tests {
         }
     }
 
+    fn person(id: &str) -> Actor {
+        Actor::Identified {
+            namespace: "test".into(),
+            id: id.into(),
+        }
+    }
+
     #[test]
     fn a_second_start_of_one_folder_joins_the_first() {
         let jobs = CloneJobs::default();
+        let (alice, bob) = (person("alice"), person("bob"));
         let (tx, _rx) = tokio::sync::oneshot::channel();
-        assert_eq!(jobs.start(job("a", "p1"), tx), None);
+        assert_eq!(jobs.start(job("a", "p1"), &alice, tx), None);
         let (tx, _rx) = tokio::sync::oneshot::channel();
-        let running = jobs.start(job("b", "p2"), tx).unwrap();
+        let running = jobs.start(job("b", "p2"), &bob, tx).unwrap();
         assert_eq!(running.id, "a");
         assert_eq!(
             running.project_ids,
             vec!["p1".to_string(), "p2".to_string()]
         );
-        assert_eq!(jobs.list().len(), 1);
+        let listed = jobs.list();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].requested_by, vec![alice.clone(), bob.clone()]);
+        // Joined again by who asked already: named once.
+        jobs.join("/clones/app", &alice, Some("p3")).unwrap();
+        let tracked = jobs.get("a").unwrap();
+        assert_eq!(tracked.requested_by, vec![alice, bob]);
+        assert_eq!(tracked.job.project_ids, ["p1", "p2", "p3"]);
     }
 
     #[test]
@@ -204,11 +266,12 @@ mod tests {
         let jobs = CloneJobs::default();
         let mut failed = job("a", "p");
         failed.state = CloneState::Failed;
-        jobs.push(failed, None);
+        let actor = Actor::LocalOperator;
+        jobs.push(failed, &actor, None);
         let (tx, mut rx) = tokio::sync::oneshot::channel();
         let mut running = job("b", "p");
         running.path = "/clones/other".into();
-        assert_eq!(jobs.start(running, tx), None);
+        assert_eq!(jobs.start(running, &actor, tx), None);
 
         assert_eq!(jobs.cancel("a").unwrap().state, CloneState::Failed);
         assert_eq!(jobs.get("a"), None);
@@ -224,10 +287,10 @@ mod tests {
         for i in 0..FINISHED_KEPT + 5 {
             let mut done = job(&i.to_string(), "p");
             done.state = CloneState::Done;
-            jobs.push(done, None);
+            jobs.push(done, &Actor::LocalOperator, None);
         }
         let listed = jobs.list();
         assert_eq!(listed.len(), FINISHED_KEPT);
-        assert_eq!(listed[0].id, (FINISHED_KEPT + 4).to_string());
+        assert_eq!(listed[0].job.id, (FINISHED_KEPT + 4).to_string());
     }
 }

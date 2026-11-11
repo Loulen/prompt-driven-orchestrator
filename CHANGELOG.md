@@ -14,6 +14,12 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- Adding a repository to a Project is judged in that Project, without the disk. A clone by URL or a new empty repository made for a Project asks `repository` × `create` in it (plus `project` × `update`); a new empty one goes in the clones folder. A repository of another Project joins when its reader may read it there (`repository` × `read` on its path, in one of its Projects); a path in no Project, a folder of one's own to clone or create into, ask the disk's read, from the UI and the CLI alike (`pdo project member add`, `pdo project create --member`). **Breaking** for an extension that granted these gestures on the instance-wide `repository` × `create` alone.
+- A clone is followed by who asked for it: `GET /repos/clones`, `/repos/clones/{id}` and its cancel answer the clones the caller started or joined, every clone to who may read the disk; another one is not found. A clone started by a member of a Project no longer stops on "Starting the clone…". `GET /repos/clone-target` takes a `project_id`; `POST /repos/create` takes a `project_id`, its `parent` then optional.
+- Settings › Projects › "Add repository": "From my Projects" lists the repositories of the caller's other Projects it may read (the Project's name aside); without disk access the menu opens on Clone from a URL… and New empty repository… (a name only), and "Local folder…" stays greyed, its reason in a tooltip. The kit's `Menu` takes `reasons="tooltip"` to say why an entry is greyed in its tooltip rather than at its foot.
+
 ## 2.76.1
 
 - The release builds the Apple Silicon macOS archive on `macos-15`: GitHub retired the `macos-14` runner dist used by default, so 2.76.0 published no release.

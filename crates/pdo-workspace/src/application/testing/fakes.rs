@@ -14,7 +14,7 @@ use crate::domain::scaffold::{ScaffoldFile, ScaffoldOutcome};
 
 use super::ready;
 
-/// A git with one repository, `/repo`, holding a local `main` one commit
+/// A git with one repository, `/repo` (and its clone `/clones/repo`), holding a local `main` one commit
 /// behind `origin/main` and an `up-to-date` branch level with its upstream.
 #[derive(Default)]
 pub struct FakeGit {
@@ -23,6 +23,8 @@ pub struct FakeGit {
     moved: Mutex<Vec<String>>,
     created: Mutex<Vec<PathBuf>>,
     cloned: Mutex<Vec<PathBuf>>,
+    /// The repositories already there: a creation reuses them.
+    existing: Mutex<Vec<PathBuf>>,
     /// The clones wait for their cancel instead of ending.
     hold: std::sync::atomic::AtomicBool,
 }
@@ -42,6 +44,10 @@ impl FakeGit {
     }
     pub fn cloned(&self) -> Vec<PathBuf> {
         self.cloned.lock().unwrap().clone()
+    }
+    /// `path` already is a repository: creating it reuses it.
+    pub fn reuse(&self, path: &str) {
+        self.existing.lock().unwrap().push(PathBuf::from(path));
     }
     pub fn hold_clones(&self) {
         self.hold.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -105,7 +111,8 @@ impl Git for FakeGit {
         })
     }
     fn remote_url(&self, repo: &Path) -> Option<String> {
-        (repo == Path::new("/repo")).then(|| "https://me:token@example.com/acme/repo.git".into())
+        (repo == Path::new("/repo") || repo == Path::new("/clones/repo"))
+            .then(|| "https://me:token@example.com/acme/repo.git".into())
     }
     fn create_repository(
         &self,
@@ -117,6 +124,12 @@ impl Git for FakeGit {
             return Err(format!("parent must be an absolute path: {parent}"));
         }
         let path = Path::new(parent).join(name);
+        if self.existing.lock().unwrap().contains(&path) {
+            return Ok(ScaffoldOutcome {
+                path,
+                created: false,
+            });
+        }
         self.created.lock().unwrap().push(path.clone());
         Ok(ScaffoldOutcome {
             path,

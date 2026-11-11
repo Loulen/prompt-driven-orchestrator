@@ -115,6 +115,9 @@ pub struct TriggerRef {
     /// The Actor of its last creation or edit; `None` for a Trigger no one
     /// edited since the core started recording editors.
     pub last_editor: Option<Actor>,
+    /// The Projet it launches its Runs in, so the one it is judged in (0.26);
+    /// `None` for a Trigger in no Projet.
+    pub project: Option<String>,
 }
 
 impl TriggerRef {
@@ -123,7 +126,14 @@ impl TriggerRef {
             id: id.into(),
             name: name.into(),
             last_editor,
+            project: None,
         }
+    }
+
+    /// The same Trigger, in the Projet `project`.
+    pub fn in_project(mut self, project: impl Into<String>) -> Self {
+        self.project = Some(project.into());
+        self
     }
 }
 
@@ -148,5 +158,17 @@ mod tests {
                 "repository": "/repo", "project": "p1",
             })
         );
+    }
+
+    #[test]
+    fn a_trigger_serializes_its_projet() {
+        let trigger = TriggerRef::new("t1", "Nightly", None).in_project("p1");
+        assert_eq!(
+            serde_json::to_value(&trigger).unwrap(),
+            serde_json::json!({
+                "id": "t1", "name": "Nightly", "last_editor": null, "project": "p1",
+            })
+        );
+        assert_eq!(TriggerRef::new("t1", "Nightly", None).project, None);
     }
 }

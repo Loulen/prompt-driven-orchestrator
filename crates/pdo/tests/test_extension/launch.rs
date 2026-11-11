@@ -7,7 +7,9 @@
 //!   /ext/test/launch {"preamble": "Ligne de fixture"}`);
 //! - **`trigger_suspension`**: the reason [`Launch::suspend`] gave for a
 //!   Trigger (`PUT /ext/test/suspensions {"trigger_id", "reason"}`, `DELETE
-//!   /ext/test/suspensions/<id>` lifts it).
+//!   /ext/test/suspensions/<id>` lifts it). Every Trigger it is asked about
+//!   is recorded with its Projet (0.26, [`Launch::trigger_asks`], `GET
+//!   /ext/test/trigger-asks`).
 //!
 //! - **`session_env`** / **`session_preamble`** (API 0.13), for a session
 //!   that is no Node (the Pipeline Manager, the library assistant): the same

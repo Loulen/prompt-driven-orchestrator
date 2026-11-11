@@ -509,6 +509,16 @@
   }
 
   /* ---------------------------------------------------------------- triggers */
+  /* Two lines: the hover bar (24 px) sits on the second line, its top at the
+     first line's lower edge, so the first line and the extensions' marks at
+     its end (`trigger/item`) stay visible and clickable; on the second line it
+     covers the last and the next fire, which their tooltips and the right
+     panel say. One line keeps it centred. */
+  .lp-row[data-trigger-row][data-lines="2"] > .lp-hover {
+    top: auto;
+    bottom: 1px;
+    transform: none;
+  }
   .lp-row > .lp-lead--trigger {
     justify-content: center;
     padding-left: 4px;

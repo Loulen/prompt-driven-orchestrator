@@ -169,8 +169,11 @@ pub(super) fn router(control: Control) -> Router {
 /// API 0.8: what the extension gives a Node's launch, and its suspensions.
 /// A suspension set or lifted is signalled to the core (API 0.11), as an
 /// extension whose cause changed outside a Trigger's mutation does.
+/// `/trigger-asks` lists every Trigger it was asked about, with its Projet
+/// (0.26).
 fn launch_routes(launch: super::launch::Launch, creation: super::creation::Creation) -> Router {
-    let (read, configure, list, suspend, lift, git_read, git_set) = (
+    let (read, configure, list, suspend, lift, git_read, git_set, asks) = (
+        launch.clone(),
         launch.clone(),
         launch.clone(),
         launch.clone(),
@@ -222,6 +225,13 @@ fn launch_routes(launch: super::launch::Launch, creation: super::creation::Creat
                 }
                 let all = suspend.suspensions();
                 async move { Json(all) }
+            }),
+        )
+        .route(
+            "/trigger-asks",
+            get(move || {
+                let asked = json!(asks.trigger_asks());
+                async move { Json(asked) }
             }),
         )
         .route(

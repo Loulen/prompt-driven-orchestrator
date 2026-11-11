@@ -27,6 +27,9 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - With an extension installed, adding a URL already cloned reuses the clone only once the remote
   answers to the credentials of whoever adds it, and a clone running into the same folder is joined
   only with the same credentials (otherwise the add is refused until that clone ends).
+- A Trigger's row keeps its first line clear on hover: on a two-line row, the hover bar (Run now, Edit, Delete, ⋯) sits on the second line, over the last and next fire, so a button an extension puts at the end of the first line (`trigger/item`) stays visible and clickable. A row the Appearance reduces to one line keeps the bar centred. "Delete trigger" still asks for confirmation.
+- Extension API: `TriggerRef` carries `project`, the Projet the Trigger launches its Runs in (`TriggerRef::in_project`); `trigger_suspension` receives it from the Trigger's creation on, before any fire. The `operation_applied` of a Trigger's creation and edits names that Projet.
+- `POST /authorize` places a targeted `trigger` Operation (`update`, `delete`, `fire`…) in the Projet of the Trigger, as the gesture itself is: a probe of the interface and the real gesture are judged alike.
 
 ## 2.76.1
 

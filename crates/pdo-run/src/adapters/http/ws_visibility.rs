@@ -154,12 +154,25 @@ fn run_of_message(message: &Value) -> Option<(&str, bool)> {
 /// Session hébergée) is guarded by the read of the sessions of its Projets,
 /// as its `hosted_session_changed` is reached by those who may read it.
 /// `None` for the other messages, and for a creation whose entity nobody
-/// knows.
+/// knows. One on the shared configuration (a pipeline, the library, an
+/// agentic profile, a skill, the instance settings) is guarded by the read of
+/// that configuration, untargeted, in no Projet, as its `GET` is.
 fn entity_read_of(message: &Value) -> Option<Value> {
     if message["type"] != "operation_applied" {
         return None;
     }
     let operation: Operation = serde_json::from_value(message["operation"].clone()).ok()?;
+    if matches!(
+        operation.resource,
+        ResourceKind::Pipeline
+            | ResourceKind::LibraryEntry
+            | ResourceKind::AgentProfile
+            | ResourceKind::Skill
+            | ResourceKind::SkillFolder
+            | ResourceKind::InstanceSettings
+    ) {
+        return serde_json::to_value(Operation::new(operation.resource, Verb::Read)).ok();
+    }
     if !matches!(
         operation.resource,
         ResourceKind::Trigger | ResourceKind::Session | ResourceKind::Extension { .. }
@@ -306,6 +319,30 @@ mod tests {
             entity_read_of(&json!({ "type": "trigger_updated", "trigger_id": "t1" })),
             None
         );
+    }
+
+    #[test]
+    fn an_operation_on_the_shared_configuration_is_guarded_by_its_read() {
+        for resource in [
+            "pipeline",
+            "library_entry",
+            "agent_profile",
+            "skill",
+            "skill_folder",
+            "instance_settings",
+        ] {
+            let applied = json!({
+                "type": "operation_applied",
+                "operation": { "resource": resource, "verb": "update", "target": "x1" },
+            });
+            assert_eq!(
+                entity_read_of(&applied),
+                Some(
+                    json!({ "resource": resource, "verb": "read", "target": null, "projects": [] })
+                ),
+                "{resource}"
+            );
+        }
     }
 
     #[test]

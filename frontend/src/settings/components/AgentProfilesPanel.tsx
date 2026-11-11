@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Lock, Pencil, Plus, Trash2 } from "lucide-react";
+import { Bot, Lock, Pencil, Plus, Trash2 } from "lucide-react";
+import ListEmpty from "../../shared/ui/leftList/ListEmpty";
 import { deleteAgentProfile, fetchAgentProfileReferents } from "../api/agentProfiles";
 import type { AgentProfile } from "../../shared/generated/AgentProfile";
 import { relativeTime } from "../../platform/model/updateStatus";
@@ -35,14 +36,20 @@ const COLUMNS = ["Name", "Harness", "Model", "Effort", "Edited"];
  * CORE-205: a gesture the caller may not make (`agent_profile` × create,
  * update, delete, as `POST /authorize` answers) stays, greyed, its tooltip
  * saying the refusal's sentence; the modal opens to read, its Save greyed.
+ *
+ * CORE-248: when the caller may not read the profiles (`refused`), the table gives way to
+ * the refusal's sentence, with no New profile.
  */
 export default function AgentProfilesPanel({
   section,
   profiles,
+  refused = null,
   onChanged,
 }: {
   section: SettingsSection;
   profiles: AgentProfile[];
+  /** Why the caller may not read the profiles, `null` when it may. */
+  refused?: string | null;
   onChanged: () => Promise<void>;
 }) {
   // The profile open in the modal, `"new"` for New profile, `null` when closed.
@@ -76,6 +83,16 @@ export default function AgentProfilesPanel({
   };
 
   const references = deleting ? referenceList(deleting.referents) : [];
+
+  if (refused !== null) {
+    return (
+      <Section section={section}>
+        <SectionExtra>
+          <ListEmpty icon={Bot} title={refused} testId="agent-profiles-refused" />
+        </SectionExtra>
+      </Section>
+    );
+  }
 
   return (
     <Section

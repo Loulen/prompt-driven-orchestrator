@@ -14,6 +14,13 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- A read refused by an extension no longer leaks what lies outside the caller's Projects. Stats (overview, cost, performance, `pdo stats`) count only the Runs and Triggers the caller may read, with the filter of the Runs list: a caller who reads no Run sees zeros and no Project's name. `GET /runs/costs` is no longer mistaken for the read of a Run named `costs`.
+- New seam, concealed refusal: an extension marks a refusal `concealed` (`Authorization::concealed`, `Denied::is_concealed`, `"concealed": true` in `POST /authorize`). On the read of one Run (and everything under `/runs/{id}`), Trigger or hosted session, the daemon then answers exactly as for an unknown id, HTTP and CLI alike. Without the mark, the readable `403` stays. **Breaking** for extensions: `Authorization::Deny` and `Denied` gain the field `concealed`; a pattern listing every field needs `..`, a literal `Denied { … }` becomes `Denied::new(…).saying(…)`.
+- New seam, reads of the shared configuration: the pipelines (YAML, versions, document, shared draft), the library, the agentic profiles, the skills and their folders, the instance settings and the new Resource `audit` are each read through their Operation `read`, in no Project, declared in the catalogue. Refused, the read answers `403` with the sentence, and the view shows the sentence in its empty list, without its "New …" button.
+- Settings: without the right to change the instance settings, every field of the instance categories is greyed, the refusal's sentence in its tooltip, and the Save bar never shows. Your account and This device stay editable.
+
 ## 2.76.1
 
 - The release builds the Apple Silicon macOS archive on `macos-15`: GitHub retired the `macos-14` runner dist used by default, so 2.76.0 published no release.

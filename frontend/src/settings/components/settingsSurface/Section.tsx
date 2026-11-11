@@ -1,6 +1,7 @@
 import { useContext, type ReactNode } from "react";
 import type { SettingsSection } from "../../model/settingsCategories";
 import { ScopeIcon } from "./fields";
+import { holdsInstanceFields, InstanceLockContext, SectionLockContext } from "./lock";
 import { matches, PageContext, searching, SearchContext, SectionMatchContext } from "./search";
 
 /**
@@ -23,6 +24,8 @@ export default function Section({
   children: ReactNode;
 }) {
   const page = useContext(PageContext);
+  const instanceLock = useContext(InstanceLockContext);
+  const lock = holdsInstanceFields(section) ? instanceLock : undefined;
   const query = useContext(SearchContext);
   const inSearch = searching(query);
   const labelMatch = inSearch && !query.modifiedOnly && matches(query.needle, section.label);
@@ -50,9 +53,11 @@ export default function Section({
         {tools && <span className="set-sec__tools">{tools}</span>}
       </header>
       <SectionMatchContext.Provider value={labelMatch}>
-        <div className="set-sec__body" data-filtered={inSearch && !labelMatch ? "true" : undefined}>
-          {children}
-        </div>
+        <SectionLockContext.Provider value={lock}>
+          <div className="set-sec__body" data-filtered={inSearch && !labelMatch ? "true" : undefined}>
+            {children}
+          </div>
+        </SectionLockContext.Provider>
       </SectionMatchContext.Provider>
     </section>
   );

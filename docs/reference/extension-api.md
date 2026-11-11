@@ -124,6 +124,14 @@ The core asks `authorize` before it serves these reads (0.8, CORE-5), with the v
 | `GET /repos/recent` (the New Run prefill) | `run` × `read` on the last Run of each repository, in the repository's Projet | the repository is absent |
 | `GET /triggers` (0.11) | `trigger` × `read`, targeted, per Trigger listed, in the Projet it launches its Runs in | the Trigger is absent |
 | `GET /triggers/{id}`, `/triggers/{id}/fires` (0.11) | `trigger` × `read` on `{id}` | `403` `operation_refused` |
+| `GET /stats/overview`, `/stats/cost`, `/stats/performance` (0.26), and so `pdo stats` | `run` × `read` per Run of the log, in the Projet recorded at its launch (the filter of `GET /runs`); `trigger` × `read` per Trigger, in its Projet | the Run is not counted, nor the Projet's name it would bring; the Trigger's fires are not counted, nor the Trigger among the enabled ones |
+| `GET /pipelines`, `/pipelines/{id}…` (its YAML, versions, document, shared draft) (0.26) | `pipeline` × `read`, no target, in no Projet | `403` |
+| `GET /library` (0.26) | `library_entry` × `read`, no target, in no Projet | `403` |
+| `GET /settings/agent-profiles…` (0.26) | `agent_profile` × `read`, no target, in no Projet | `403` |
+| `GET /settings/skills…` (0.26) | `skill` × `read`, no target, in no Projet | `403` |
+| `GET /settings/skill-folders…` (0.26) | `skill_folder` × `read`, no target, in no Projet | `403` |
+| `GET /settings`, `/settings/provisioning` (0.26) | `instance_settings` × `read`, no target, in no Projet | `403` |
+| `GET /audit` (0.26) | `audit` × `read`, no target, in no Projet | `403` |
 | `/ws`, about a Trigger (0.11) | `trigger` × `read` on the Trigger a message is about (`trigger_created`, `trigger_updated`, `trigger_deleted`, `trigger_fired`, `operation_applied` on it), in its Projet, per connection (answer kept 5 s) | the message is not sent to that connection |
 | `/ws`, an extension's event guarded by a read (0.11) | the read the event carries (`ExtensionEvent::guarded_by`), per connection (answer kept 5 s) | the event is not sent to that connection |
 | `/ws`, an `operation_applied` on an extension's Ressource (0.11) | `<extension>/<kind>` × `read` on the entity it is about (its target, or the entity a creation made), in the Projets of its Operation, per connection (answer kept 5 s) | the message is not sent to that connection |
@@ -134,7 +142,43 @@ upgrade request. A read is never announced as `operation_applied`, and a refusal
 `debug` only. Without extension nothing is asked: the lists are served as before.
 
 **Refuse a read on its resource and verb.** An extension that refused every Operation whatever its
-verb now hides the Runs and the Projets too.
+verb now hides the Runs and the Projets too, and since 0.26 the shared configuration: the
+pipelines, the library, the agentic profiles, the skills, the instance settings and the audit
+journal.
+
+### A concealed refusal (0.26)
+
+A refused read of one entity says the entity exists: a `403` with a sentence about its Projet,
+where an id nobody knows answers `404`. A refusal marked **concealed** says nothing: on a read of
+one entity, the core answers exactly as for an id it does not know, the same status and the same
+body.
+
+```rust
+fn authorize(&self, actor: &Actor, operation: &Operation) -> Authorization {
+    Authorization::deny("not a member of the Projects of this Run")
+        .saying("You can't see this Run.")
+        .concealed()
+}
+```
+
+- It applies to the reads of one entity: a Run and everything under `GET /runs/{id}…` (its nodes,
+  their pane, its artifacts, its review comments…), `pdo run status|events`; a Trigger and its
+  fires; a Session hébergée (its detail, events, live artifacts, terminal zoom). Elsewhere (a list,
+  a mutation, a read of the shared configuration), a concealed refusal is an ordinary one: a list
+  leaves the entity out, a single read of something else answers `403` with the sentence.
+- An id the core does not know is asked in no Projet. An extension that conceals the entities of a
+  Projet from a caller should conceal its refusals in no Projet from that caller too, or the
+  difference between `403` and `404` says which ids exist.
+- Without the mark, nothing changes: the readable `403` stays. A caller who knows the Projet
+  (a Member missing one right) is better served by the sentence.
+- On the wire, a concealed decision of `POST /authorize` adds `"concealed": true`. `Denied` carries
+  `concealed` too (`Denied::concealed()`, `Denied::is_concealed()`); its `403` body is unchanged.
+- In the core, a read of one entity asks `authorize_entity_read`, which answers
+  `EntityRead::Shown` or `EntityRead::AsUnknown`.
+
+**Breaking (0.26).** `Authorization::Deny` and `Denied` gain the field `concealed: bool`: a pattern
+`Authorization::Deny { reason, sentence }` becomes `Authorization::Deny { reason, sentence, .. }`,
+a literal `Denied { reason, sentence }` becomes `Denied::new(reason).saying(sentence)`.
 
 ### The question of authorization
 
@@ -311,7 +355,7 @@ An `Actor` on the wire: `{"kind": "local_operator"}`, `{"kind": "agent", "run_id
 
 ## The catalogue of the Ressources
 
-The core's 19 Ressources, then each extension's declarations in registration order:
+The core's 20 Ressources, then each extension's declarations in registration order:
 
 ```http
 GET /resources
@@ -341,6 +385,12 @@ verbs maps this one too, or the Validate button is refused.
 
 `pipeline` × `open_assistant` (0.13) opens the caller's library assistant (`POST
 /sessions/libassist`), untargeted, in no Projet; see *The launch of every session*.
+
+Since 0.26, the shared configuration is read too: `pipeline`, `library_entry`, `agent_profile`,
+`skill`, `skill_folder` and `instance_settings` list `read`, and the Ressource `audit` (the audit
+journal of the instance) has the one verb `read`. Each read is untargeted, in no Projet (*The
+reads*). An extension of rights that maps no right to these reads refuses them, and its callers see
+empty views with the refusal's sentence.
 
 ## The launch of a Node (0.8)
 

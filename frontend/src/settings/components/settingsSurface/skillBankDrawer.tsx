@@ -13,6 +13,7 @@ export function skillBankDrawer({
   onClose,
   bank,
   loaded,
+  refused = null,
   home,
   refresh,
 }: {
@@ -20,6 +21,8 @@ export function skillBankDrawer({
   onClose: () => void;
   bank: SkillBank;
   loaded: boolean;
+  /** CORE-248: why the caller may not read the skills, `null` when it may. */
+  refused?: string | null;
   home: string | null;
   refresh: () => Promise<unknown>;
 }): ShellDrawer | null {
@@ -35,6 +38,7 @@ export function skillBankDrawer({
       <SkillBankPanel
         bank={bank}
         loaded={loaded}
+        refused={refused}
         home={home}
         onChanged={async () => {
           await refresh();

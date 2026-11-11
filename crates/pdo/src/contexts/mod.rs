@@ -200,12 +200,14 @@ pub(crate) fn wire_over(
         .merge(pdo_settings::router(settings.clone()))
         .merge(pdo_telemetry::router(telemetry.clone()))
         .merge(crate::authorize::router(
-            host,
+            host.clone(),
             run.clone(),
             platform.clone(),
         ));
     // CORE-5: every read of one Run, whichever context serves it, asks first.
     let router = pdo_run::adapters::http::read_guard::guard_run_reads(router, run.clone());
+    // So does every read of the shared configuration, in no Projet.
+    let router = crate::shared_reads::guard_shared_reads(router, host);
     // ADR-0090: every request measured while the export runs, by its route.
     let router = router.layer(axum::middleware::from_fn_with_state(
         telemetry.clone(),

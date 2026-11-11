@@ -24,7 +24,8 @@ import { ConfirmCloseDialog } from "./settingsSurface/overlays";
 import SandboxSections from "./settingsSurface/SandboxSections";
 import ExtensionPanels from "./settingsSurface/ExtensionPanels";
 import { SearchContext, searching, type SettingsQuery } from "./settingsSurface/search";
-import { NoSettings, SearchLine, SettingsLoading } from "./settingsSurface/SearchLine";
+import { NoSettings, SearchLine, SettingsLoading, SettingsRefused } from "./settingsSurface/SearchLine";
+import { InstanceLockContext, lockedSetter, useInstanceLock } from "./settingsSurface/lock";
 import SettingsRail from "./settingsSurface/SettingsRail";
 import { settingsRail } from "./settingsSurface/rail";
 import SettingsFooter from "./settingsSurface/SettingsFooter";
@@ -80,9 +81,11 @@ export default function SettingsSurface({
   projects,
   entities,
 }: SettingsSurfaceProps) {
-  const { settings, settled, save, refresh } = useSettings(open);
-  const { profiles: agentProfiles, refresh: refreshAgentProfiles } = useAgentProfiles(open);
-  const { bank: skillBank, loaded: skillsLoaded, refresh: refreshSkills } = useSkillBank(open);
+  const { settings, settled, refused: readRefused, save, refresh } = useSettings(open);
+  const updateRefused = useInstanceLock(open);
+  const { profiles: agentProfiles, refused: agentProfilesRefused, refresh: refreshAgentProfiles } =
+    useAgentProfiles(open);
+  const skills = useSkillBank(open);
   const { saveButtonRef, ...form } = useSettingsForm({ settings, save, onSaved });
   const { values, rollup, isDirty, setField } = form;
 
@@ -189,7 +192,8 @@ export default function SettingsSurface({
   // An extension page (or the Extensions entry) whose extension left: back to General.
   const shownCategory = known || (category === EXTENSIONS && extensionPanels.length > 0) ? category : "general";
   const catalog = settings ? harnessCatalog(settings.harness_descriptors) : null;
-  const formProps = values && settings ? { values, settings, dirty: rollup.fields, setField } : null;
+  const instanceSetField = lockedSetter(setField, updateRefused);
+  const formProps = values && settings ? { values, settings, dirty: rollup.fields, setField: instanceSetField } : null;
   const inSearch = searching(query);
   const shownLabel = rail.find((item) => item.id === shownCategory)?.label ?? "";
 
@@ -207,14 +211,12 @@ export default function SettingsSurface({
   const shellDrawer = skillBankDrawer({
     open: drawerOpen,
     onClose: () => setDrawerOpen(false),
-    bank: skillBank,
-    loaded: skillsLoaded,
+    ...skills,
     home: settings?.home ?? null,
-    refresh: refreshSkills,
   });
 
-  // Under a search, a category still loading shows nothing.
-  const loading = inSearch ? null : <SettingsLoading />;
+  // Under a search, a category still loading shows nothing; a refused read says why (CORE-248).
+  const loading = inSearch ? null : readRefused !== null ? <SettingsRefused sentence={readRefused} /> : <SettingsLoading />;
 
   return (
     <>
@@ -259,6 +261,7 @@ export default function SettingsSurface({
             />
           )}
           <SearchContext.Provider value={query}>
+            <InstanceLockContext.Provider value={updateRefused}>
             <div ref={pagesRef} className={inSearch ? "set-pages set-pages--search" : "set-pages"}>
             {SETTINGS_CATEGORIES.map((item) => (
               <CategoryPage
@@ -299,13 +302,15 @@ export default function SettingsSurface({
                       {...formProps}
                       catalog={catalog}
                       agentProfiles={agentProfiles}
+                      agentProfilesRefused={agentProfilesRefused}
+                      skillsRefused={skills.refused}
                       onProfilesChanged={async () => {
                         await refreshAgentProfiles();
                         announceAgentProfilesChanged();
                         onSaved?.();
                       }}
-                      skillBank={skillBank}
-                      skillsLoaded={skillsLoaded}
+                      skillBank={skills.bank}
+                      skillsLoaded={skills.loaded}
                       onOpenSkillBank={() => setDrawerOpen(true)}
                     />
                   ) : (
@@ -358,6 +363,7 @@ export default function SettingsSurface({
                 />
               )}
             </div>
+            </InstanceLockContext.Provider>
           </SearchContext.Provider>
           {/* An extension's page owns its writes: Save would read as saving it. */}
           {!extensionPages.active && (

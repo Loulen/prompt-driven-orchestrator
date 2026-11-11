@@ -1,11 +1,16 @@
-//! The three reads: they ask nothing, fold what the ports answer, and the
-//! Performance memo spares a second fold when nothing moved.
+//! The three reads: they fold what the ports answer for the Runs and the
+//! Triggers their reader may read, and the Performance memo spares a second
+//! fold when nothing moved.
 
 use pdo_run::application::ports::{NodeStart, RunStart};
 use pdo_stats::application::performance::{PerformanceError, PerformanceRead};
 use pdo_stats::application::read_overview::{ReadError, StatsRead};
 
+use pdo_kernel::Actor;
+
 use crate::fakes::{row, Build, Host, Store, Transcripts};
+
+const LOCAL: Actor = Actor::LocalOperator;
 
 fn read(bucket: &str) -> StatsRead {
     StatsRead {
@@ -55,7 +60,7 @@ async fn the_overview_folds_the_counts_the_fires_and_the_sessions_under_the_abso
     let overview = world
         .stats
         .read_overview()
-        .execute(&read("day"))
+        .execute(&LOCAL, &read("day"))
         .await
         .unwrap();
     assert_eq!(overview.buckets, ["2026-07-15", "2026-07-16", "2026-07-17"]);
@@ -64,16 +69,21 @@ async fn the_overview_folds_the_counts_the_fires_and_the_sessions_under_the_abso
     assert_eq!(overview.fires_by_pipeline[0].pipeline_id, "new");
     assert_eq!(overview.fires_by_pipeline[0].count, 3);
     assert_eq!(overview.triggers_created_runs.fired, 3);
-    // A read asks nothing, even of an extension that refuses everything.
-    assert!(world.host.asked.lock().unwrap().is_empty());
+    // A read asks the read of each Run and each Trigger, never a mutation.
+    let asked = world.host.asked.lock().unwrap().clone();
+    assert!(!asked.is_empty());
+    assert!(asked.iter().all(|op| op.is_read()), "{asked:?}");
 
     let raw = world
         .stats
         .read_overview()
-        .execute(&StatsRead {
-            uncombined: true,
-            ..read("day")
-        })
+        .execute(
+            &LOCAL,
+            &StatsRead {
+                uncombined: true,
+                ..read("day")
+            },
+        )
         .await
         .unwrap();
     assert_eq!(raw.sessions_by_pipeline[0].id, "old");
@@ -82,12 +92,12 @@ async fn the_overview_folds_the_counts_the_fires_and_the_sessions_under_the_abso
 #[tokio::test]
 async fn an_unknown_bucket_is_refused_before_any_read() {
     let world = Build::default().world();
-    let refused = world.stats.read_cost().execute(&read("year")).await;
+    let refused = world.stats.read_cost().execute(&LOCAL, &read("year")).await;
     assert_eq!(
         refused.unwrap_err(),
         ReadError::InvalidBucket("year".into())
     );
-    let refused = world.stats.read_overview().execute(&read("")).await;
+    let refused = world.stats.read_overview().execute(&LOCAL, &read("")).await;
     assert_eq!(
         refused.unwrap_err(),
         ReadError::InvalidBucket(String::new())
@@ -99,7 +109,12 @@ async fn the_cost_folds_every_run_of_the_cohort_with_the_price_table() {
     let mut build = Build::default();
     build.events.run_starts = vec![run_start("r1", "p"), run_start("r2", "q")];
     let world = build.world();
-    let cost = world.stats.read_cost().execute(&read("day")).await.unwrap();
+    let cost = world
+        .stats
+        .read_cost()
+        .execute(&LOCAL, &read("day"))
+        .await
+        .unwrap();
     // A Run with no readable cost still counts in its Pipeline's row.
     let rows: Vec<(&str, Option<u64>)> = cost
         .by_pipeline
@@ -149,7 +164,7 @@ async fn the_rolled_up_cost_recomposes_the_cohort_by_root() {
     let world = build.world();
     let read_cost = world.stats.read_cost();
 
-    let plain = read_cost.execute(&read("day")).await.unwrap();
+    let plain = read_cost.execute(&LOCAL, &read("day")).await.unwrap();
     let rows: Vec<(&str, Option<u64>)> = plain
         .by_pipeline
         .iter()
@@ -158,7 +173,10 @@ async fn the_rolled_up_cost_recomposes_the_cohort_by_root() {
     assert_eq!(rows, [("implement", Some(2)), ("orchestrate", Some(1))]);
     assert!(plain.by_pipeline.iter().all(|r| r.roll_up.is_none()));
 
-    let rolled = read_cost.execute_rolled_up(&read("day")).await.unwrap();
+    let rolled = read_cost
+        .execute_rolled_up(&LOCAL, &read("day"))
+        .await
+        .unwrap();
     let rows: Vec<(&str, Option<u64>)> = rolled
         .by_pipeline
         .iter()
@@ -192,21 +210,33 @@ async fn the_performance_memo_folds_again_only_when_a_footprint_moves() {
     let world = build.world();
     let performance = world.stats.read_performance();
     let (from, to) = ("2026-07-15T00:00:00Z", "2026-07-18T00:00:00Z");
-    performance.execute(&performance_read(false)).await.unwrap();
-    performance.execute(&performance_read(false)).await.unwrap();
+    performance
+        .execute(&LOCAL, &performance_read(false))
+        .await
+        .unwrap();
+    performance
+        .execute(&LOCAL, &performance_read(false))
+        .await
+        .unwrap();
     assert_eq!(
         performance.recomputes(from, to),
         1,
         "the second read hits the memo"
     );
     *world.files.footprint.lock().unwrap() = 7;
-    performance.execute(&performance_read(false)).await.unwrap();
+    performance
+        .execute(&LOCAL, &performance_read(false))
+        .await
+        .unwrap();
     assert_eq!(
         performance.recomputes(from, to),
         2,
         "a moved footprint folds again"
     );
-    performance.execute(&performance_read(true)).await.unwrap();
+    performance
+        .execute(&LOCAL, &performance_read(true))
+        .await
+        .unwrap();
     assert_eq!(
         performance.recomputes(from, to),
         3,
@@ -240,7 +270,7 @@ async fn an_unreadable_transcript_source_fails_the_whole_read() {
     let failed = world
         .stats
         .read_performance()
-        .execute(&performance_read(false))
+        .execute(&LOCAL, &performance_read(false))
         .await;
     match failed {
         Err(PerformanceError::SourceUnreadable(message)) => {
@@ -266,4 +296,123 @@ fn event(
             serde_json::json!({ "node_type": "agent", "harness": "claude", "session_id": "s1" }),
         ),
     }
+}
+
+fn run_in(run_id: &str, pipeline: &str, project: &str) -> RunStart {
+    RunStart {
+        payload: serde_json::json!({
+            "pipeline_id": pipeline, "pipeline_name": pipeline, "project_id": project,
+        }),
+        ..run_start(run_id, pipeline)
+    }
+}
+
+fn node_start(run: &RunStart) -> NodeStart {
+    NodeStart {
+        bucket: "2026-07-15".into(),
+        run_id: run.run_id.clone(),
+        run_ts: run.ts.clone(),
+        run_payload: run.payload.clone(),
+        event_id: Some(2),
+        node_id: Some("worker".into()),
+        iter: Some(1),
+        payload: serde_json::json!({ "harness": "claude" }),
+    }
+}
+
+/// A Run in P1, another in P2, a Trigger launching in P1; `host` judges the
+/// reads.
+fn two_projects(host: std::sync::Arc<Host>) -> crate::fakes::World {
+    let mut build = Build {
+        host,
+        ..Build::default()
+    };
+    let (r1, r2) = (run_in("r1", "alpha", "p1"), run_in("r2", "beta", "p2"));
+    build
+        .events
+        .counts
+        .insert("run_started".into(), vec![("2026-07-15".into(), 2)]);
+    build.events.node_starts = vec![node_start(&r1), node_start(&r2)];
+    build.events.run_starts = vec![r1, r2];
+    build.world()
+}
+
+#[tokio::test]
+async fn a_reader_of_no_run_counts_nothing() {
+    let world = two_projects(Host::reading_only_in(""));
+    let overview = world
+        .stats
+        .read_overview()
+        .execute(&LOCAL, &read("day"))
+        .await
+        .unwrap();
+    assert!(overview.runs.iter().all(|b| b.count == 0), "{overview:?}");
+    assert!(overview.sessions_by_pipeline.is_empty());
+    assert!(overview.fires_by_pipeline.is_empty());
+    assert_eq!(overview.triggers_created_runs.fired, 0);
+    assert_eq!(overview.triggers_created_runs.enabled_triggers, 0);
+
+    let cost = world
+        .stats
+        .read_cost()
+        .execute(&LOCAL, &read("day"))
+        .await
+        .unwrap();
+    assert!(cost.by_pipeline.is_empty());
+    assert!(cost.by_project.is_empty(), "no Projet's name shows");
+    let performance = world
+        .stats
+        .read_performance()
+        .execute(&LOCAL, &performance_read(false))
+        .await
+        .unwrap();
+    assert_eq!(performance, world_without_runs().await);
+}
+
+/// The Performance of a world with no Run at all.
+async fn world_without_runs() -> pdo_stats::domain::performance::StatsPerformance {
+    Build::default()
+        .world()
+        .stats
+        .read_performance()
+        .execute(&LOCAL, &performance_read(false))
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_reader_of_one_project_counts_its_runs_only() {
+    let world = two_projects(Host::reading_only_in("p1"));
+    let overview = world
+        .stats
+        .read_overview()
+        .execute(&LOCAL, &read("day"))
+        .await
+        .unwrap();
+    let pipelines: Vec<&str> = overview
+        .sessions_by_pipeline
+        .iter()
+        .map(|p| p.id.as_str())
+        .collect();
+    assert_eq!(pipelines, ["alpha"]);
+    // The Trigger launches in P1: its fires count.
+    assert_eq!(overview.triggers_created_runs.fired, 3);
+
+    let cost = world
+        .stats
+        .read_cost()
+        .execute(&LOCAL, &read("day"))
+        .await
+        .unwrap();
+    let pipelines: Vec<&str> = cost.by_pipeline.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(pipelines, ["alpha"]);
+    assert_eq!(cost.by_project.len(), 1, "the Projet of r1 only");
+
+    // Asked as the list of the Runs asks: `run` × `read` in the Run's Projet.
+    let asked = world.host.asked.lock().unwrap().clone();
+    assert!(asked
+        .iter()
+        .any(|op| op.resource == pdo_kernel::ResourceKind::Run
+            && op.target.as_deref() == Some("r2")
+            && op.projects == ["p2".to_string()]));
 }

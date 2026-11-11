@@ -2,12 +2,12 @@
 //! drives it from any Poste (the API's gestures). Each gesture is the
 //! extension's on the same session: the same Opération on the Ressource
 //! `session`, in its Projet, asked once. A refused caller learns nothing of
-//! the session.
+//! the session; a concealed refusal answers as for a name no session has.
 
 use std::sync::Arc;
 
 use pdo_extension_api::{HostedConfig, HostedRefusal, HostedSession, LiveArtifact};
-use pdo_kernel::authorization::{authorize_read, Denied};
+use pdo_kernel::authorization::{authorize_entity_read, Denied, EntityRead};
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 
 use super::{Hosted, CONFIGURE, RELAUNCH, TERMINATE};
@@ -41,13 +41,17 @@ impl From<HostedRefusal> for HostedByIdError {
 impl Hosted {
     /// The session named `id`, for `actor`: the Opération `session` × `read`
     /// on it, in its Projet, first; then `404` for a name no Session
-    /// hébergée has.
+    /// hébergée has, or that a concealed refusal hides.
     pub fn read_by_id(&self, actor: &Actor, id: &str) -> Result<HostedRecord, HostedByIdError> {
         let read = Operation::new(ResourceKind::Session, Verb::Read)
             .on(id)
             .in_projects(self.registry.projects_of(id));
-        authorize_read(self.host.as_ref(), actor, &read).map_err(HostedByIdError::Refused)?;
-        self.registry.by_id(id).ok_or_else(|| not_found(id).into())
+        let seen = authorize_entity_read(self.host.as_ref(), actor, &read)
+            .map_err(HostedByIdError::Refused)?;
+        match seen {
+            EntityRead::Shown => self.registry.by_id(id).ok_or_else(|| not_found(id).into()),
+            EntityRead::AsUnknown => Err(not_found(id).into()),
+        }
     }
 
     /// The journal of the session named `id`, oldest first, read as

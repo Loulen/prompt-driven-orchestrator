@@ -1,13 +1,15 @@
 //! `GET /stats/overview`, `/stats/cost` and `/stats/performance`: the three
 //! reads of the Stats cockpit (ADR-0029). Everything is derived on read — no
-//! snapshot table, no metric-freezing event (ADR-0022).
+//! snapshot table, no metric-freezing event (ADR-0022). Each counts only the
+//! Runs (and the Triggers) its caller may read.
 
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::{Extension, Json};
+use pdo_kernel::Actor;
 use serde::Deserialize;
 
 use super::error;
@@ -95,9 +97,10 @@ fn read_error(e: ReadError) -> Response {
 /// `GET /stats/overview` — Class A cheap indexed SQL.
 pub(super) async fn overview(
     State(stats): State<Arc<Stats>>,
+    Extension(actor): Extension<Actor>,
     Query(q): Query<StatsQuery>,
 ) -> Response {
-    match stats.read_overview().execute(&q.read()).await {
+    match stats.read_overview().execute(&actor, &q.read()).await {
         Ok(overview) => Json(overview).into_response(),
         Err(e) => read_error(e),
     }
@@ -106,13 +109,17 @@ pub(super) async fn overview(
 /// `GET /stats/cost` — Class B, memo + app-side fold. Heavy (fans over the
 /// `~/.claude` corpus); fetched lazily by the client only when the cost tab is
 /// shown.
-pub(super) async fn cost(State(stats): State<Arc<Stats>>, Query(q): Query<StatsQuery>) -> Response {
+pub(super) async fn cost(
+    State(stats): State<Arc<Stats>>,
+    Extension(actor): Extension<Actor>,
+    Query(q): Query<StatsQuery>,
+) -> Response {
     let roll_up = q.roll_up_children;
     let read = q.read();
     let cost = if roll_up {
-        stats.read_cost().execute_rolled_up(&read).await
+        stats.read_cost().execute_rolled_up(&actor, &read).await
     } else {
-        stats.read_cost().execute(&read).await
+        stats.read_cost().execute(&actor, &read).await
     };
     match cost {
         Ok(cost) => Json(cost).into_response(),
@@ -125,6 +132,7 @@ pub(super) async fn cost(State(stats): State<Arc<Stats>>, Query(q): Query<StatsQ
 /// this handler never runs on a timer.
 pub(super) async fn performance(
     State(stats): State<Arc<Stats>>,
+    Extension(actor): Extension<Actor>,
     Query(q): Query<PerformanceQuery>,
 ) -> Response {
     let read = PerformanceRead {
@@ -134,7 +142,7 @@ pub(super) async fn performance(
         completed_only: q.completed_only,
         uncombined: q.uncombined,
     };
-    match stats.read_performance().execute(&read).await {
+    match stats.read_performance().execute(&actor, &read).await {
         Ok(payload) => Json(payload).into_response(),
         Err(PerformanceError::SourceUnreadable(message)) => {
             error(StatusCode::INTERNAL_SERVER_ERROR, message)

@@ -34,17 +34,23 @@ export default function AgentsSections({
   setField,
   catalog,
   agentProfiles,
+  agentProfilesRefused = null,
   onProfilesChanged,
   skillBank,
   skillsLoaded,
+  skillsRefused = null,
   onOpenSkillBank,
 }: Omit<FormSectionProps, "section"> & {
   sections: SettingsSection[];
   catalog: HarnessCatalog;
   agentProfiles: AgentProfile[];
+  /** CORE-248: why the caller may not read the profiles, `null` when it may. */
+  agentProfilesRefused?: string | null;
   onProfilesChanged: () => Promise<void>;
   skillBank: SkillBank;
   skillsLoaded: boolean;
+  /** CORE-248: why the caller may not read the skills, `null` when it may. */
+  skillsRefused?: string | null;
   onOpenSkillBank: () => void;
 }) {
   // Manager on demand (#432 tombstone): a stored pin whose profile no longer
@@ -147,6 +153,7 @@ export default function AgentsSections({
         key={agentProfiles[0]?.id ?? "loading"}
         section={sections[1]}
         profiles={agentProfiles}
+        refused={agentProfilesRefused}
         onChanged={onProfilesChanged}
       />
 
@@ -206,7 +213,7 @@ export default function AgentsSections({
         tools={
           <>
             <span className="set-faint text-xs" data-testid="setting-skills-count">
-              {skillsLoaded
+              {skillsLoaded && skillsRefused === null
                 ? `${skillBank.skills.length} skill${skillBank.skills.length === 1 ? "" : "s"} · ${skillBank.folders.length} folder${skillBank.folders.length === 1 ? "" : "s"}`
                 : ""}
             </span>

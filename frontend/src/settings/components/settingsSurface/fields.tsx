@@ -7,12 +7,13 @@
 
 import { CircleX, Monitor, UserRound, Zap } from "lucide-react";
 import { useId, type ReactNode } from "react";
-import { Switch, TextInput } from "../../../shared/ui/kit";
+import { Switch, TextInput, Tooltip } from "../../../shared/ui/kit";
 import { cx } from "../../../shared/ui/kit/util";
 import type { SettingField } from "../../model/settings";
 import { sourceNote } from "../../model/sourceNotes";
 import { rangeError } from "./range";
 import { useRowVisible } from "./search";
+import { useRowLock } from "./lock";
 
 /**
  * Where a value is kept when it is not the instance form: the Actor's Apparence (on the
@@ -66,6 +67,16 @@ export interface SettingRowProps {
 }
 
 /** A setting: name left, control right, 30 px. */
+/** « changed »: the value differs from its default, which its tooltip says. */
+function ChangedMark({ changed, testId }: { changed?: SettingRowProps["changed"]; testId?: string }) {
+  if (!changed) return null;
+  return (
+    <span className="set-changed" title={`Default: ${changed.default}`} data-testid={testId && `${testId}-changed`}>
+      changed
+    </span>
+  );
+}
+
 export function SettingRow({
   label,
   help,
@@ -84,6 +95,7 @@ export function SettingRow({
   children,
 }: SettingRowProps) {
   const id = useId();
+  const locked = useRowLock(scope);
   const visible = useRowVisible(`${label} ${help ?? ""} ${keywords ?? ""}`, !!dirty || !!changed);
   if (!visible) return null;
   const tip = [help, source].filter(Boolean).join("\n") || label;
@@ -107,14 +119,25 @@ export function SettingRow({
           {tip}
         </span>
       )}
-      <div className="set-row__ctl">
-        {changed && (
-          <span className="set-changed" title={`Default: ${changed.default}`} data-testid={testId && `${testId}-changed`}>
-            changed
-          </span>
-        )}
-        {children}
-      </div>
+      {locked ? (
+        // CORE-248: the instance form, read only. A disabled fieldset greys every control
+        // in it; the pointer lands on the fieldset, whose tooltip says why.
+        <Tooltip label={locked}>
+          <fieldset
+            className="set-row__ctl set-row__ctl--locked"
+            disabled
+            data-testid={testId && `${testId}-locked`}
+          >
+            <ChangedMark changed={changed} testId={testId} />
+            {children}
+          </fieldset>
+        </Tooltip>
+      ) : (
+        <div className="set-row__ctl">
+          <ChangedMark changed={changed} testId={testId} />
+          {children}
+        </div>
+      )}
       <ScopeIcon scope={scope} />
       {note && (
         <div

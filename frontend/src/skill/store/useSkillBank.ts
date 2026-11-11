@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchSkillBank } from "../api/bank";
 import type { SkillBank } from "../model/skill";
+import { refusalSentence } from "../../shared/authorization/refusal";
 
 /**
  * Window bus fired after every write to the Banque de skills (#668), on the
@@ -19,6 +20,8 @@ export function useSkillBank(enabled = true) {
   const [bank, setBank] = useState<SkillBank>(EMPTY);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // CORE-248: the sentence when the caller may not read the skills.
+  const [refused, setRefused] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!enabled) return;
@@ -29,8 +32,14 @@ export function useSkillBank(enabled = true) {
       }
       setBank(result);
       setError(null);
+      setRefused(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to load skills");
+      const sentence = refusalSentence(cause);
+      if (sentence !== null) {
+        setBank(EMPTY);
+        setRefused(sentence);
+      }
     } finally {
       setLoaded(true);
     }
@@ -49,11 +58,13 @@ export function useSkillBank(enabled = true) {
         }
         setBank(result);
         setError(null);
+        setRefused(null);
         setLoaded(true);
       })
       .catch((cause) => {
         if (cancelled) return;
         setError(cause instanceof Error ? cause.message : "Failed to load skills");
+        setRefused(refusalSentence(cause));
         setLoaded(true);
       });
     window.addEventListener(SKILLS_CHANGED, refresh);
@@ -63,5 +74,5 @@ export function useSkillBank(enabled = true) {
     };
   }, [enabled, refresh]);
 
-  return { bank, loaded, error, refresh };
+  return { bank, loaded, error, refused, refresh };
 }

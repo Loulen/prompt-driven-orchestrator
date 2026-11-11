@@ -186,4 +186,18 @@ describe("LibraryDropdown", () => {
       expect(tab.pipeline.nodes[0].isolated_worktree).toBe(false);
     });
   });
+
+  it("says why the caller may not read the library, with no search (CORE-248)", () => {
+    renderDropdown({
+      entries: [],
+      refused: "You can't see this instance's library.",
+      onDelete: vi.fn(),
+      onAddNodeFromYaml: vi.fn(),
+    });
+    fireEvent.click(screen.getByTestId("toolbar-library"));
+    expect(screen.getByTestId("library-refused")).toHaveTextContent("You can't see this instance's library.");
+    expect(screen.queryByText("No saved node")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Search nodes" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("library-add-node-from-yaml")).not.toBeInTheDocument();
+  });
 });

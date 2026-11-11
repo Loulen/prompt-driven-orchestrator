@@ -1,5 +1,5 @@
 import { forwardRef } from "react";
-import { CircleDot, Loader2, Search } from "lucide-react";
+import { CircleDot, Loader2, Lock, Search } from "lucide-react";
 import { Button, EmptyState, IconButton } from "../../../shared/ui/kit";
 
 /** The search line above the page: a few words, or only the changed settings. */
@@ -66,6 +66,17 @@ export function SettingsLoading() {
     <div className="set-extra" data-testid="settings-loading">
       <EmptyState icon={Loader2} spin layout="row">
         Loading…
+      </EmptyState>
+    </div>
+  );
+}
+
+/** A category whose content the caller may not read (CORE-248): the refusal's sentence. */
+export function SettingsRefused({ sentence }: { sentence: string }) {
+  return (
+    <div className="set-extra" data-testid="settings-refused">
+      <EmptyState icon={Lock} layout="row">
+        {sentence}
       </EmptyState>
     </div>
   );

@@ -67,8 +67,17 @@ fn behind(dir: &std::path::Path) -> Option<u32> {
     main.behind
 }
 
+fn repositories() -> GitRepositories {
+    GitRepositories::new(
+        std::sync::Arc::new(pdo_workspace::adapters::git::GitCli),
+        std::sync::Arc::new(pdo_kernel::extension_host::NoExtensions),
+    )
+}
+
 async fn refresh(targets: &[String]) -> Option<FetchError> {
-    GitRepositories.refresh(targets).await
+    repositories()
+        .refresh(targets, &pdo_kernel::Actor::LocalOperator, None)
+        .await
 }
 
 #[tokio::test]
@@ -140,13 +149,13 @@ async fn the_pre_cut_fetch_stays_silent_about_a_path_that_is_not_a_repository() 
 fn a_required_repo_is_a_git_repository() {
     let (_origin, work) = init_repo_with_remote();
     let path = work.path().to_str().unwrap();
-    assert!(GitRepositories.required(Some(path)).is_ok());
-    assert!(GitRepositories
+    assert!(repositories().required(Some(path)).is_ok());
+    assert!(repositories()
         .required(None)
         .unwrap_err()
         .contains("target_repo"));
-    assert!(GitRepositories.required(Some("   ")).is_err());
-    assert!(GitRepositories
+    assert!(repositories().required(Some("   ")).is_err());
+    assert!(repositories()
         .required(Some("/no/such/path/pdo-guard-dry-run-xyz"))
         .is_err());
 }

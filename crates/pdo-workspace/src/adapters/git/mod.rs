@@ -18,6 +18,8 @@ pub mod worktrees;
 
 use std::path::{Path, PathBuf};
 
+use pdo_kernel::extension_host::GitCredentials;
+
 use crate::application::ports::{BoxFuture, Git};
 use crate::domain::branches::{BranchList, FetchError};
 use crate::domain::clone::CloneFailure;
@@ -37,8 +39,12 @@ impl Git for GitCli {
         branches::branch_list(repo)
     }
 
-    fn fetch<'a>(&'a self, repo: &'a Path) -> BoxFuture<'a, Option<FetchError>> {
-        Box::pin(fetch::fetch_all_remotes(repo))
+    fn fetch<'a>(
+        &'a self,
+        repo: &'a Path,
+        credentials: &'a GitCredentials,
+    ) -> BoxFuture<'a, Option<FetchError>> {
+        Box::pin(fetch::fetch_all_remotes(repo, &credentials.env))
     }
 
     fn is_local_branch(&self, repo: &Path, branch: &str) -> bool {
@@ -70,9 +76,20 @@ impl Git for GitCli {
         &'a self,
         url: &'a str,
         dest: &'a Path,
+        credentials: &'a GitCredentials,
         on_progress: Box<dyn Fn(&str) + Send + Sync + 'a>,
         cancel: tokio::sync::oneshot::Receiver<()>,
     ) -> BoxFuture<'a, Result<(), CloneFailure>> {
-        Box::pin(async move { clone::clone_full(url, dest, on_progress.as_ref(), cancel).await })
+        Box::pin(async move {
+            clone::clone_full(url, dest, &credentials.env, on_progress.as_ref(), cancel).await
+        })
+    }
+
+    fn reach<'a>(
+        &'a self,
+        url: &'a str,
+        credentials: &'a GitCredentials,
+    ) -> BoxFuture<'a, Result<(), CloneFailure>> {
+        Box::pin(clone::ls_remote(url, &credentials.env))
     }
 }

@@ -14,7 +14,7 @@ pub mod tick;
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
-use pdo_kernel::Verb;
+use pdo_kernel::{Actor, Verb};
 use tracing::warn;
 
 use super::ports::RunFromTrigger;
@@ -108,12 +108,26 @@ impl Triggers {
         // read-decide-act, and the act needs the decision's inputs to still be true.
         // `next_fire_at` was written before, so a slow fetch delays THIS fire without
         // ever shifting the schedule.
+        //
+        // The fetch is its last editor's, who answers for the Run it fires: the
+        // credentials the extensions provide for them, else the daemon's. A Trigger
+        // no one edited since editors were recorded fetches as itself.
+        let editor = trigger
+            .last_editor
+            .clone()
+            .unwrap_or_else(|| Actor::Trigger {
+                trigger_id: trigger.id.clone(),
+            });
         let source_fetch_error = self
             .repositories
-            .refresh(&targets::fetch_targets(
-                trigger.target_repo.as_deref(),
-                trigger.target_repos.as_deref(),
-            ))
+            .refresh(
+                &targets::fetch_targets(
+                    trigger.target_repo.as_deref(),
+                    trigger.target_repos.as_deref(),
+                ),
+                &editor,
+                trigger.project_id.as_deref(),
+            )
             .await;
         let started = self
             .runs

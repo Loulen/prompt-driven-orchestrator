@@ -6,6 +6,8 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
+use pdo_kernel::extension_host::GitCredentials;
+
 use crate::domain::delivery::{DeliveryReport, SkippedSkill};
 use crate::domain::error::SkillError;
 use crate::domain::import::{Candidate, ScanOutcome};
@@ -131,16 +133,21 @@ pub struct KeptScan {
     pub root: PathBuf,
     pub source: ParsedSource,
     pub commit: Option<String>,
+    /// The fingerprint of the credentials it was cloned with
+    /// (`GitCredentials::fingerprint`): another Actor's write scans again.
+    pub credentials: u64,
 }
 
 /// The Sources skills are imported from: cloned (or opened), walked, kept for
 /// a while under a client-chosen scan id.
 pub trait SourceScanner: Send + Sync {
-    /// Clone (or open) the source, scan it, and keep it under `scan_id`.
+    /// Clone (or open) the source with `credentials`, scan it, and keep it
+    /// under `scan_id`. A clone the remote refuses names whose credentials.
     fn scan<'a>(
         &'a self,
         scan_id: &'a str,
         source: &'a ParsedSource,
+        credentials: &'a GitCredentials,
     ) -> BoxFuture<'a, Result<ScanOutcome, ImportError>>;
     /// Kill the clone running under `scan_id`; `true` when there was one.
     fn cancel(&self, scan_id: &str) -> bool;

@@ -1,6 +1,7 @@
-//! Page mounts in SQLite: the `page_mounts` table of `pdo.db`. The guide is a
-//! JSON column of the mount's row, so it goes with the row.
+//! Page mounts in SQLite: the `page_mounts` table of `pdo.db`. The guide and
+//! the owner are JSON columns of the mount's row, so they go with the row.
 
+use pdo_kernel::Actor;
 use sqlx::{Row, SqlitePool};
 
 use crate::application::ports::{BoxFuture, InsertError, PageMountRepository, StorageError};
@@ -20,22 +21,38 @@ fn storage(error: sqlx::Error) -> StorageError {
     StorageError(error.to_string())
 }
 
-const COLUMNS: &str = "name, directory, run_id, node_id, created_at, guide";
+const COLUMNS: &str = "name, directory, run_id, node_id, created_at, guide, owner, project_id";
+
+/// A JSON column, decoded.
+fn json_column<T: serde::de::DeserializeOwned>(
+    row: &sqlx::sqlite::SqliteRow,
+    column: &str,
+) -> Result<Option<T>, sqlx::Error> {
+    let raw: Option<String> = row.try_get(column)?;
+    raw.map(|raw| serde_json::from_str(&raw))
+        .transpose()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))
+}
 
 fn row_to_mount(row: &sqlx::sqlite::SqliteRow) -> Result<PageMount, sqlx::Error> {
-    let guide: Option<String> = row.try_get("guide")?;
-    let guide = guide
-        .map(|raw| serde_json::from_str(&raw))
-        .transpose()
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
     Ok(PageMount {
         name: row.try_get("name")?,
         directory: row.try_get("directory")?,
         run_id: row.try_get("run_id")?,
         node_id: row.try_get("node_id")?,
         created_at: row.try_get("created_at")?,
-        guide,
+        guide: json_column(row, "guide")?,
+        owner: json_column(row, "owner")?,
+        project_id: row.try_get("project_id")?,
     })
+}
+
+/// A value as its JSON column holds it.
+fn to_json<T: serde::Serialize>(value: Option<&T>) -> Result<Option<String>, StorageError> {
+    value
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| StorageError(e.to_string()))
 }
 
 async fn get(db: &SqlitePool, name: &str) -> Result<Option<PageMount>, sqlx::Error> {
@@ -79,7 +96,7 @@ impl PageMountRepository for SqlitePageMounts {
                 .execute(&self.db)
                 .await
                 .map_err(storage)?;
-            for column in ["node_id", "guide"] {
+            for column in ["node_id", "guide", "owner", "project_id"] {
                 add_column(&self.db, column).await.map_err(storage)?;
             }
             Ok(())
@@ -88,12 +105,10 @@ impl PageMountRepository for SqlitePageMounts {
 
     fn insert<'a>(&'a self, mount: &'a PageMount) -> BoxFuture<'a, Result<(), InsertError>> {
         Box::pin(async move {
-            let guide = match mount.guide.as_ref().map(serde_json::to_string).transpose() {
-                Ok(guide) => guide,
-                Err(e) => return Err(InsertError::Storage(StorageError(e.to_string()))),
-            };
+            let guide = to_json(mount.guide.as_ref())?;
+            let owner = to_json(mount.owner.as_ref())?;
             let result = sqlx::query(&format!(
-                "INSERT INTO page_mounts ({COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)"
+                "INSERT INTO page_mounts ({COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
             ))
             .bind(&mount.name)
             .bind(&mount.directory)
@@ -101,6 +116,8 @@ impl PageMountRepository for SqlitePageMounts {
             .bind(&mount.node_id)
             .bind(&mount.created_at)
             .bind(guide)
+            .bind(owner)
+            .bind(&mount.project_id)
             .execute(&self.db)
             .await;
             match result {
@@ -149,6 +166,24 @@ impl PageMountRepository for SqlitePageMounts {
         })
     }
 
+    fn place<'a>(
+        &'a self,
+        name: &'a str,
+        owner: Option<&'a Actor>,
+        project_id: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<(), StorageError>> {
+        Box::pin(async move {
+            sqlx::query("UPDATE page_mounts SET owner = ?, project_id = ? WHERE name = ?")
+                .bind(to_json(owner)?)
+                .bind(project_id)
+                .bind(name)
+                .execute(&self.db)
+                .await
+                .map_err(storage)?;
+            Ok(())
+        })
+    }
+
     fn remove_for_run<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Result<u64, StorageError>> {
         Box::pin(async move {
             Ok(sqlx::query("DELETE FROM page_mounts WHERE run_id = ?")
@@ -186,6 +221,11 @@ mod tests {
             node_id: run_id.map(|_| "n1".to_string()),
             created_at: "2026-09-26T00:00:00.000Z".into(),
             guide: None,
+            owner: run_id.map(|_| Actor::Identified {
+                namespace: "test".into(),
+                id: "alice".into(),
+            }),
+            project_id: run_id.map(|_| "p1".to_string()),
         }
     }
 
@@ -244,6 +284,22 @@ mod tests {
         repo.init().await.unwrap();
         let old = repo.get("old").await.unwrap().unwrap();
         assert_eq!((old.node_id, old.guide), (None, None));
+        assert_eq!((old.owner, old.project_id), (None, None));
+    }
+
+    #[tokio::test]
+    async fn a_mount_is_placed_with_its_owner_and_its_projet() {
+        let repo = repository().await;
+        repo.insert(&mount("a", None)).await.unwrap();
+        let bob = Actor::Identified {
+            namespace: "test".into(),
+            id: "bob".into(),
+        };
+        repo.place("a", Some(&bob), Some("p2")).await.unwrap();
+        let placed = repo.get("a").await.unwrap().unwrap();
+        assert_eq!(placed.owner, Some(bob));
+        assert_eq!(placed.project_id.as_deref(), Some("p2"));
+        assert_eq!(repo.list().await.unwrap(), vec![placed]);
     }
 
     #[tokio::test]

@@ -30,6 +30,15 @@ pub fn authorize(
     Ok(())
 }
 
+/// Allow `actor` to run `operation` by a rule of the core, without asking
+/// the extensions: the owner of a page unmounting it. Recorded as an allowed
+/// mutation, announced once its gesture succeeded.
+pub fn granted(actor: &Actor, operation: &Operation) {
+    if !operation.is_read() {
+        crate::applied::allowed(actor, operation);
+    }
+}
+
 /// Whether `actor` may read what `operation` names (CORE-5): a Run, a Projet,
 /// the disk. Never recorded as applied, and a refusal is logged at `debug`
 /// only: a list asks once per entity it holds. Without extension, no

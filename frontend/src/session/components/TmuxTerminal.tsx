@@ -3,7 +3,7 @@ import { RefreshCw } from "lucide-react";
 import { Tooltip } from "../../shared/ui/tooltip";
 import { Button } from "../../shared/ui/kit";
 import { attachSession } from "../api/sessions";
-import { READ_ONLY_HINT } from "../model/terminalRole";
+import { isWatching, READ_ONLY_HINT, readOnlyHint, readOnlyOf } from "../model/terminalRole";
 import {
   paneIndicator,
   REAPED_STATUSES,
@@ -137,7 +137,10 @@ export default function TmuxTerminal({
   }, [session]);
 
   const { statusLabel } = paneIndicator(mode, connected, status, frozen);
-  const spectating = mode === "live" && termRole.role === "spectator";
+  // A spectator, or a connection that may read the session but never type in
+  // it (`readOnly` says why), whatever its role.
+  const spectating = mode === "live" && isWatching(termRole);
+  const readOnly = mode === "live" ? readOnlyOf(termRole) : undefined;
   const watchers =
     mode === "live" && termRole.role === "pilot" ? termRole.spectators : 0;
 
@@ -149,9 +152,12 @@ export default function TmuxTerminal({
   // A file dropped anywhere on the terminal opens the import, pre-filled.
   // Always claimed while an import handler exists, so a missed drop never
   // navigates the tab to the file; the modal says when the node cannot take it.
+  // A read-only connection imports nothing: its drop is claimed and dropped.
   const handleFileDrop = useCallback(
-    (dt: DataTransfer) => onImportFiles?.(Array.from(dt.files)),
-    [onImportFiles],
+    (dt: DataTransfer) => {
+      if (!readOnly) onImportFiles?.(Array.from(dt.files));
+    },
+    [onImportFiles, readOnly],
   );
   const { dragging: fileDrag, handlers: dropHandlers } = useFileDropTarget(handleFileDrop);
   const importEnabled = onImportFiles !== undefined;
@@ -165,7 +171,7 @@ export default function TmuxTerminal({
       data-testid="tmux-terminal"
       {...(importEnabled ? dropHandlers : {})}
     >
-      {importEnabled && fileDrag !== null && (
+      {importEnabled && !readOnly && fileDrag !== null && (
         <DropOverlay
           count={fileDrag}
           title={`Drop to import ${fileDrag} file${fileDrag === 1 ? "" : "s"} into this node`}
@@ -177,18 +183,19 @@ export default function TmuxTerminal({
         statusLabel={statusLabel}
         connected={connected}
         spectating={spectating}
+        takeControlRefusal={readOnly}
         takenOver={xterm.takenOver}
         watchers={watchers}
         hasSelection={xterm.hasSelection}
         copyFeedback={xterm.copyFeedback}
         expanded={expanded}
-        onDetach={mode !== "frozen" ? () => void handleDetach() : undefined}
+        onDetach={mode !== "frozen" && !readOnly ? () => void handleDetach() : undefined}
         onExpand={onExpand}
         onCopy={xterm.copySelection}
         onTakeControl={xterm.takeControl}
         identity={toolbarIdentity}
         actions={toolbarActions}
-        onImport={onImportFiles ? () => onImportFiles([]) : undefined}
+        onImport={onImportFiles && !readOnly ? () => onImportFiles([]) : undefined}
         importDisabledReason={importDisabledReason}
       />
 
@@ -197,11 +204,11 @@ export default function TmuxTerminal({
           remount it and lose the xterm inside. A spectator's grid may be larger
           than the area at the font floor: then the area scrolls. */}
       <div className="relative flex min-h-0 flex-1 flex-col">
-        <Tooltip content={READ_ONLY_HINT} disabled={!spectating}>
+        <Tooltip content={readOnly ? readOnlyHint(readOnly) : READ_ONLY_HINT} disabled={!spectating}>
           <div
             ref={containerRef}
             // Out of the app's zoom (see `useXtermSession`): the font carries the scale.
-            className={`ri-term-screen pdo-unzoom min-h-0 flex-1${spectating ? " overflow-auto" : ""}`}
+            className={`ri-term-screen pdo-unzoom min-h-0 flex-1${termRole.role === "spectator" && mode === "live" ? " overflow-auto" : ""}`}
             style={TERMINAL_TYPOGRAPHY_RESET}
             data-testid="xterm-container"
             data-role={mode === "live" ? termRole.role : undefined}

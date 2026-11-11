@@ -1,6 +1,6 @@
 //! The Runs, as the platform context sees them: a page mount's session claim,
 //! the command it records, the Runs and nodes its guide links to, the live
-//! Runs an update's confirm counts, the Projets a mount is judged in.
+//! Runs an update's confirm counts, the Projet a mount is in and who owns it.
 
 use std::sync::Arc;
 
@@ -69,6 +69,18 @@ impl PlatformRuns for RunsOfPlatform {
 
     fn projects_of_run<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Vec<String>> {
         Box::pin(async move { self.0.projects_of_run(run_id).await })
+    }
+
+    fn creator_of_run<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Option<pdo_kernel::Actor>> {
+        Box::pin(async move {
+            match self.0.store().summary(run_id).await {
+                Ok(summary) => summary.and_then(|summary| summary.created_by),
+                Err(e) => {
+                    tracing::warn!("the creator of run {run_id} cannot be read: {e:#}");
+                    None
+                }
+            }
+        })
     }
 
     /// Live Runs (`Running` / `AwaitingUser` / `Paused`) — what the update's

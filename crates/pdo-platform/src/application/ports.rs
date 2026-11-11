@@ -52,6 +52,14 @@ pub trait PageMountRepository: Send + Sync {
     ) -> BoxFuture<'a, Result<Option<PageMount>, StorageError>>;
     /// Remove every mount a Run made; how many went.
     fn remove_for_run<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Result<u64, StorageError>>;
+    /// Set the owner and the Projet of the mount `name`: what a mount older
+    /// than them takes from its Run.
+    fn place<'a>(
+        &'a self,
+        name: &'a str,
+        owner: Option<&'a pdo_kernel::Actor>,
+        project_id: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<(), StorageError>>;
 }
 
 /// A file read beneath a mount.
@@ -99,6 +107,9 @@ pub trait Runs: Send + Sync {
     /// The Projets `run_id` was launched in; none for an unknown Run or a Run
     /// launched in no Projet.
     fn projects_of_run<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Vec<String>>;
+    /// Who created `run_id`; `None` for an unknown Run or one that names
+    /// nobody.
+    fn creator_of_run<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Option<pdo_kernel::Actor>>;
 }
 
 /// The out-of-Run audit journal.

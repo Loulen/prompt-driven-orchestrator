@@ -34,6 +34,16 @@ A spectator **takes control** with the hand icon above the terminal (**Take cont
 
 When the pilot closes the terminal, the first browser to have arrived among the others takes over. If only one browser is left, it is solo again, with the normal size and font.
 
+### Watching without the right to type
+
+With an extension of rights, someone who may read a session but not attach to it (a Reader of
+the Run's Projet, for example) still opens its terminal: they watch it. The bar reads
+**Watching**, with **Take control** greyed out; hovering it, or the terminal, says why they
+can't type (« Read-only — you can't type in this terminal. » followed by the reason). Their
+keystrokes never reach the session, the hand never comes to them, even when they are alone on the
+terminal, and **Import** and **Detach to OS terminal** are not offered. When their rights
+change, **Take control** comes back at the next connection.
+
 A direct `tmux attach` (over SSH) and **Detach to OS terminal** open ordinary tmux clients outside these roles: they still weigh on the window size and can type.
 
 

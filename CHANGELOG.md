@@ -14,6 +14,14 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- A mounted page has an owner and a Project. A page mounted from a node is in the Project of its Run and belongs to whoever created that Run; `pdo page mount --project <id>` puts a page in a Project, and without it the page is in none. Pages mounted earlier take the Project and the creator of their Run at the next start.
+- Reading a mounted page is judged in its Project: `GET /pages` lists only the pages you may read (`page_mount` × `read`, a new verb of the catalogue), and the page and its files answer the refusal to anyone else. Its owner unmounts it; anyone else needs `page_mount` × `delete` in its Project. **Breaking** for an extension that refuses every Operation whatever its verb: it now hides the mounted pages too.
+- `pdo page mount|unmount|list` print the refusal's sentence, as the other commands do; `pdo page unmount` of an unknown page exits `4`; `pdo page list` adds the page's Project.
+- Someone who may read a session but not attach to it (`session` × `read` without `session` × `attach`) now opens its terminal read-only instead of being refused: the bar reads "Watching" with "Take control" greyed out and the refusal's sentence in its tooltip, the screen says "Read-only — you can't type in this terminal.", and neither Import nor Detach is offered. Their keystrokes never reach the session and the hand never comes to them, even alone on the terminal. The terminal's `role` frames carry `read_only`, the refusal's sentence.
+- **Breaking** for an extension: opening a terminal (`WS /sessions/{id}/pty`) refused `session` × `attach` now asks `session` × `read`, and only both refusals close it with `403`. An extension that refused `attach` to keep someone out of a terminal must refuse `read` too.
+
 ## 2.76.1
 
 - The release builds the Apple Silicon macOS archive on `macos-15`: GitHub retired the `macos-14` runner dist used by default, so 2.76.0 published no release.

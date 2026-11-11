@@ -228,8 +228,8 @@ fn core_entry(
         ),
         ResourceKind::PageMount => (
             "Mounted pages",
-            "Mount and unmount static pages",
-            &[CREATE, DELETE],
+            "Read, mount and unmount static pages",
+            &[READ, CREATE, DELETE],
         ),
         ResourceKind::ReviewComment => (
             "Review comments",
@@ -324,8 +324,12 @@ mod tests {
             .filter(|r| r.verbs.iter().any(|v| v == "read"))
             .map(|r| r.resource.as_str())
             .collect();
-        // A session is read too (CORE-124): its events on `/ws`, its Zoom du terminal.
-        assert_eq!(readable, ["run", "project", "repository", "session"]);
+        // A session is read too (CORE-124): its events on `/ws`, its Zoom du
+        // terminal, its terminal watched; a mounted page, its list and its files.
+        assert_eq!(
+            readable,
+            ["run", "project", "page_mount", "repository", "session"]
+        );
         assert!(Resource::of_core(&ResourceKind::extension("test", "note")).is_none());
     }
 

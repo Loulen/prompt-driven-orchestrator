@@ -1,21 +1,18 @@
 //! The shared terminal's presence registry (#867, ADR-0075): per tmux session,
 //! the live PTY-bridge connections (their poste, their arrival order, their
 //! last size) and the pilot poste. It decides roles; the bridge applies them —
-//! a spectator's client carries `ignore-size`, flipped live through the
-//! [`Tmux`] port (never a re-attach), and its input frames are dropped. It
+//! a spectator's client carries `ignore-size`, flipped live
+//! ([`ignore_size`](super::ignore_size)), and its input frames are dropped. It
 //! also answers who pilots a terminal, for the gestures that write into it
 //! without going through the bridge.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use pdo_kernel::Actor;
 use tokio::sync::{mpsc, watch};
-use tracing::warn;
 
-use crate::application::ports::Tmux;
 use crate::domain::shared_terminal::{ConnId, Role, RoleMsg, TermSize, INITIAL_SIZE};
 
 /// What the bridge needs to act on a connection's role.
@@ -54,6 +51,15 @@ struct Connection {
     last_sent: Option<RoleMsg>,
     spectator: Arc<AtomicBool>,
     ignore_size: watch::Sender<bool>,
+    /// The sentence of the refusal that keeps it from ever driving the
+    /// terminal; `None` when it may.
+    read_only: Option<String>,
+}
+
+impl Connection {
+    fn may_drive(&self) -> bool {
+        self.read_only.is_none()
+    }
 }
 
 #[derive(Default)]
@@ -79,14 +85,31 @@ impl SessionPresence {
         firsts.into_iter().map(|(p, _)| p).collect()
     }
 
+    /// The postes that may drive, first arrived first: those with a
+    /// connection that is not read-only.
+    fn drivers(&self) -> Vec<&str> {
+        self.postes()
+            .into_iter()
+            .filter(|poste| {
+                self.connections
+                    .iter()
+                    .any(|c| c.poste == *poste && c.may_drive())
+            })
+            .collect()
+    }
+
+    /// The latest connection of `poste` that may drive.
+    fn latest_driving(&self, poste: &str) -> Option<&Connection> {
+        self.connections
+            .iter()
+            .filter(|c| c.poste == poste && c.may_drive())
+            .max_by_key(|c| c.arrived)
+    }
+
     /// The pilot, with the Actor of its latest connection; `None` while solo.
     fn pilot(&self) -> Option<Pilot> {
         let poste = self.pilot.as_ref()?;
-        let latest = self
-            .connections
-            .iter()
-            .filter(|c| &c.poste == poste)
-            .max_by_key(|c| c.arrived)?;
+        let latest = self.latest_driving(poste)?;
         Some(Pilot {
             poste: poste.clone(),
             actor: latest.actor.clone(),
@@ -94,13 +117,13 @@ impl SessionPresence {
     }
 
     /// The poste whose keystrokes reach the pane: the pilot, or the one poste
-    /// of a solo terminal.
+    /// of a solo terminal when it may drive.
     fn driver(&self) -> Option<String> {
         if self.pilot.is_some() {
             return self.pilot.clone();
         }
-        match self.postes().as_slice() {
-            [only] => Some(only.to_string()),
+        match (self.postes().as_slice(), self.drivers().as_slice()) {
+            ([only], [driver]) if only == driver => Some(only.to_string()),
             _ => None,
         }
     }
@@ -108,35 +131,54 @@ impl SessionPresence {
     /// Re-derive the pilot and push to every connection what changed for it.
     fn settle(&mut self) {
         let postes: Vec<String> = self.postes().into_iter().map(str::to_string).collect();
+        let drivers: Vec<String> = self.drivers().into_iter().map(str::to_string).collect();
         if postes.len() <= 1 {
             self.pilot = None;
         } else if !self
             .pilot
             .as_ref()
-            .is_some_and(|p| postes.iter().any(|q| q == p))
+            .is_some_and(|p| drivers.iter().any(|q| q == p))
         {
             // The pilot left (or there was none yet): the hand goes to the first
-            // arrived of the postes still here.
-            self.pilot = postes.first().cloned();
+            // arrived of the postes still here that may drive; none among
+            // read-only postes only.
+            self.pilot = drivers.first().cloned();
         }
 
-        let pilot_size = self.pilot.as_ref().and_then(|pilot| {
+        // The poste whose grid the others render: the pilot; among read-only
+        // postes only, the first arrived; none while solo.
+        let leader = match &self.pilot {
+            Some(pilot) => Some(pilot.clone()),
+            None if postes.len() > 1 => postes.first().cloned(),
+            None => None,
+        };
+        let piloted = self.pilot.is_some();
+        let leader_size = leader.as_ref().and_then(|leader| {
             self.connections
                 .iter()
-                .filter(|c| &c.poste == pilot)
+                .filter(|c| &c.poste == leader && (c.may_drive() || !piloted))
                 .max_by_key(|c| c.resized)
                 .map(|c| c.size)
         });
         let spectators = postes.len().saturating_sub(1);
 
         for c in &mut self.connections {
-            let msg = match (&self.pilot, pilot_size) {
-                (Some(pilot), _) if *pilot == c.poste => RoleMsg::Pilot { spectators },
-                (Some(_), Some(size)) => RoleMsg::Spectator { pilot: size },
-                _ => RoleMsg::Solo,
+            let read_only = c.read_only.clone();
+            let msg = match (&leader, leader_size) {
+                (Some(pilot), _) if *pilot == c.poste && piloted && read_only.is_none() => {
+                    RoleMsg::Pilot { spectators }
+                }
+                (Some(leader), _) if *leader == c.poste && !piloted => RoleMsg::Solo { read_only },
+                (Some(_), Some(size)) => RoleMsg::Spectator {
+                    pilot: size,
+                    read_only,
+                },
+                _ => RoleMsg::Solo { read_only },
             };
             let spectator = msg.role() == Role::Spectator;
-            c.spectator.store(spectator, Ordering::SeqCst);
+            // A read-only connection's keystrokes are dropped, whatever its role.
+            c.spectator
+                .store(spectator || !c.may_drive(), Ordering::SeqCst);
             c.ignore_size.send_if_modified(|current| {
                 let changed = *current != spectator;
                 *current = spectator;
@@ -183,6 +225,32 @@ impl SharedTerminalRegistry {
         actor: Actor,
         role_tx: mpsc::UnboundedSender<String>,
     ) -> Membership {
+        self.enter(session, poste, actor, role_tx, None)
+    }
+
+    /// Register a read-only connection of `actor` on `session`, as
+    /// [`Self::join`] does: it may read the session but not attach to it, and
+    /// `why` is the sentence of that refusal. It never drives the terminal nor
+    /// takes control of it; its keystrokes are dropped.
+    pub fn join_read_only(
+        &self,
+        session: &str,
+        poste: Option<String>,
+        actor: Actor,
+        role_tx: mpsc::UnboundedSender<String>,
+        why: String,
+    ) -> Membership {
+        self.enter(session, poste, actor, role_tx, Some(why))
+    }
+
+    fn enter(
+        &self,
+        session: &str,
+        poste: Option<String>,
+        actor: Actor,
+        role_tx: mpsc::UnboundedSender<String>,
+        read_only: Option<String>,
+    ) -> Membership {
         let mut inner = self.inner.lock().unwrap();
         let id = inner.tick();
         let poste = poste.unwrap_or_else(|| format!("anonymous-socket-{id}"));
@@ -201,6 +269,7 @@ impl SharedTerminalRegistry {
             last_sent: None,
             spectator: spectator.clone(),
             ignore_size: ignore_tx,
+            read_only,
         });
         presence.settle();
         let driver_after = presence.driver();
@@ -220,17 +289,12 @@ impl SharedTerminalRegistry {
 
     /// Who drives `session`: the Actor of the latest connection of the poste
     /// whose keystrokes reach the pane (the pilot, or the one poste of a solo
-    /// terminal); `None` while no one shows it.
+    /// terminal), never a read-only one; `None` while no one does.
     pub fn driver(&self, session: &str) -> Option<Actor> {
         let inner = self.inner.lock().unwrap();
         let presence = inner.sessions.get(session)?;
         let poste = presence.driver()?;
-        presence
-            .connections
-            .iter()
-            .filter(|c| c.poste == poste)
-            .max_by_key(|c| c.arrived)
-            .map(|c| c.actor.clone())
+        presence.latest_driving(&poste).map(|c| c.actor.clone())
     }
 
     /// The pilot of `session` when `poste` watches it as a spectator; `None`
@@ -262,13 +326,18 @@ impl SharedTerminalRegistry {
 
     /// A spectator takes control (#870): its poste becomes the pilot. Returns
     /// `false` (and changes nothing) when the connection is not a spectator —
-    /// the pilot's own request, a solo terminal, an unknown connection.
+    /// the pilot's own request, a solo terminal, an unknown connection — or
+    /// is read-only.
     pub fn take_control(&self, session: &str, id: ConnId) -> bool {
         let mut inner = self.inner.lock().unwrap();
         let Some(presence) = inner.sessions.get_mut(session) else {
             return false;
         };
-        let Some(conn) = presence.connections.iter().find(|c| c.id == id) else {
+        let Some(conn) = presence
+            .connections
+            .iter()
+            .find(|c| c.id == id && c.may_drive())
+        else {
             return false;
         };
         let spectator = presence
@@ -296,50 +365,6 @@ impl SharedTerminalRegistry {
             presence.settle();
         }
     }
-}
-
-/// Keep the tmux client of `client_pid` in line with the `ignore-size` wanted
-/// for its connection, until the connection leaves (the sender is dropped).
-///
-/// The client may not be attached yet when a change lands (the flag was decided
-/// before `tmux attach` spawned), so each application retries for a short while.
-/// `watch` only ever yields the latest value: a quick flip-flop applies the final
-/// state, never an out-of-order one.
-pub async fn follow_ignore_size(
-    tmux: Arc<dyn Tmux>,
-    client_pid: u32,
-    mut wanted: watch::Receiver<bool>,
-) {
-    while wanted.changed().await.is_ok() {
-        let flag = *wanted.borrow_and_update();
-        let port = tmux.clone();
-        let applied =
-            tokio::task::spawn_blocking(move || set_ignore_size(&*port, client_pid, flag))
-                .await
-                .unwrap_or(false);
-        if !applied {
-            warn!(
-                "Could not set ignore-size={flag} on the tmux client of pid {client_pid} \
-                 (socket {})",
-                tmux.socket()
-            );
-        }
-    }
-}
-
-/// `ignore-size` on the client whose process is `client_pid`, retried while the
-/// client is not listed yet.
-fn set_ignore_size(tmux: &dyn Tmux, client_pid: u32, flag: bool) -> bool {
-    const ATTEMPTS: u32 = 30;
-    for attempt in 0..ATTEMPTS {
-        if attempt > 0 {
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        if tmux.set_client_ignore_size(client_pid, flag) {
-            return true;
-        }
-    }
-    false
 }
 
 #[cfg(test)]
@@ -683,5 +708,99 @@ mod tests {
             "a poste not showing it"
         );
         assert_eq!(reg.spectated_pilot("other", "B"), None, "another session");
+    }
+
+    const WHY: &str =
+        "You can't attach this session here. Ask an administrator of the test extension.";
+
+    fn watch(reg: &SharedTerminalRegistry, poste: &str) -> Probe {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let m = reg.join_read_only("s", Some(poste.to_string()), named("rita"), tx, WHY.into());
+        Probe { m, rx }
+    }
+
+    #[test]
+    fn a_reader_alone_sizes_the_terminal_but_never_drives_it() {
+        let reg = SharedTerminalRegistry::default();
+        let mut w = watch(&reg, "W");
+        let frame = w.last().unwrap();
+        assert_eq!(frame["role"], "solo");
+        assert_eq!(frame["read_only"], WHY);
+        assert!(w.spectator(), "its keystrokes are dropped");
+        assert!(!w.ignore_size(), "alone, its grid is the terminal's");
+        assert!(!w.m.took_the_hand);
+        assert_eq!(reg.driver("s"), None);
+        assert_eq!(reg.pilot("s"), None);
+        assert!(!reg.take_control("s", w.m.id));
+    }
+
+    #[test]
+    fn a_reader_beside_a_pilot_watches_and_cannot_take_control() {
+        let reg = SharedTerminalRegistry::default();
+        let mut a = join_as(&reg, "A", named("alice"));
+        reg.resize("s", a.m.id, size(120, 40));
+        let mut w = watch(&reg, "W");
+        let fa = a.last().unwrap();
+        assert_eq!(fa["role"], "pilot");
+        assert_eq!(fa["spectators"], 1);
+        assert!(fa.get("read_only").is_none(), "{fa}");
+        let fw = w.last().unwrap();
+        assert_eq!(fw["role"], "spectator");
+        assert_eq!(fw["pilot"]["cols"], 120);
+        assert_eq!(fw["read_only"], WHY);
+        assert!(w.spectator() && w.ignore_size());
+        assert!(!reg.take_control("s", w.m.id));
+        assert_eq!(reg.driver("s"), Some(named("alice")));
+        assert!(w.last().is_none(), "nothing changed");
+    }
+
+    #[test]
+    fn a_poste_that_may_drive_takes_the_hand_from_a_reader_there_first() {
+        let reg = SharedTerminalRegistry::default();
+        let mut w = watch(&reg, "W");
+        let a = join_as(&reg, "A", named("alice"));
+        assert!(a.m.took_the_hand);
+        reg.resize("s", a.m.id, size(100, 30));
+        assert_eq!(reg.driver("s"), Some(named("alice")));
+        let fw = w.last().unwrap();
+        assert_eq!(fw["role"], "spectator");
+        assert_eq!(fw["pilot"]["cols"], 100);
+        assert_eq!(fw["read_only"], WHY);
+        assert!(w.ignore_size());
+    }
+
+    #[test]
+    fn the_hand_never_passes_to_a_reader() {
+        let reg = SharedTerminalRegistry::default();
+        let a = join_as(&reg, "A", named("alice"));
+        let mut w = watch(&reg, "W");
+        let mut b = join_as(&reg, "B", named("bob"));
+        reg.resize("s", b.m.id, size(90, 30));
+        reg.leave("s", a.m.id);
+        assert_eq!(b.last().unwrap()["role"], "pilot", "B, though W came first");
+        assert_eq!(w.last().unwrap()["pilot"]["cols"], 90);
+        assert_eq!(reg.driver("s"), Some(named("bob")));
+        reg.leave("s", b.m.id);
+        let fw = w.last().unwrap();
+        assert_eq!(fw["role"], "solo");
+        assert_eq!(fw["read_only"], WHY);
+        assert!(w.spectator() && !w.ignore_size());
+        assert_eq!(reg.driver("s"), None);
+    }
+
+    #[test]
+    fn readers_alone_follow_the_first_arrived() {
+        let reg = SharedTerminalRegistry::default();
+        let mut v = watch(&reg, "V");
+        reg.resize("s", v.m.id, size(110, 33));
+        let mut w = watch(&reg, "W");
+        assert_eq!(v.last().unwrap()["role"], "solo");
+        let fw = w.last().unwrap();
+        assert_eq!(fw["role"], "spectator");
+        assert_eq!(fw["pilot"]["cols"], 110);
+        assert!(!v.ignore_size() && w.ignore_size());
+        assert!(v.spectator() && w.spectator());
+        assert_eq!(reg.driver("s"), None);
+        assert_eq!(reg.pilot("s"), None);
     }
 }

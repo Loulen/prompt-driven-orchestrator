@@ -25,6 +25,8 @@ use pdo_session::domain::reaper::{NodeRunInfo, SweepTtls};
 #[derive(Default)]
 pub struct Host {
     pub refuse: bool,
+    /// With `refuse`: reads are allowed all the same.
+    pub allow_reads: bool,
     pub asked: Mutex<Vec<Operation>>,
     pub contribution: Mutex<NodeContribution>,
     pub launches: Mutex<Vec<SessionLaunch>>,
@@ -40,6 +42,15 @@ impl Host {
     pub fn refusing() -> Arc<Self> {
         Arc::new(Self {
             refuse: true,
+            ..Self::default()
+        })
+    }
+
+    /// Refuses everything but the reads.
+    pub fn refusing_all_but_reads() -> Arc<Self> {
+        Arc::new(Self {
+            refuse: true,
+            allow_reads: true,
             ..Self::default()
         })
     }
@@ -60,7 +71,7 @@ impl ExtensionHost for Host {
 
     fn authorize(&self, _actor: &Actor, operation: &Operation) -> Authorization {
         self.asked.lock().unwrap().push(operation.clone());
-        if self.refuse {
+        if self.refuse && !(self.allow_reads && operation.is_read()) {
             Authorization::deny("admins only")
         } else {
             Authorization::Allow

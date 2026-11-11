@@ -1,6 +1,6 @@
-//! A page mounted from a node session is judged in the Projet of its Run: on a
-//! real daemon with the test extension, which grants the page mounts only in
-//! the Projet `P`. A node of a Run of `P` mounts and unmounts a page without
+//! A page mounted from a node session is in the Projet of its Run, owned by
+//! the Run's creator, read and unmounted there: on a real daemon with the test
+//! extension, which grants the page mounts only in the Projet `P`. A node of a Run of `P` mounts and unmounts a page without
 //! any instance-wide grant; a node of a Run of another Projet `Q` is refused;
 //! a mount outside any Run names no Projet. The question of authorization
 //! answers the same.
@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 
 use crate::common::flow::{seed_solo, wait_node_status};
 use crate::common::TestDaemon;
-use crate::test_extension::{Control, Refusal, TestExtension};
+use crate::test_extension::{Control, Refusal, TestExtension, ACTOR_HEADER};
 use pdo::extension_api::{Actor, Operation, ResourceKind, Verb};
 
 async fn daemon() -> (TestDaemon, Control) {
@@ -39,6 +39,23 @@ async fn call(
         request = request.json(&body);
     }
     let resp = request.send().await.unwrap();
+    let status = resp.status().as_u16();
+    (status, resp.json().await.unwrap_or(Value::Null))
+}
+
+/// `method path` as `actor` (the test extension's header), without a body.
+async fn call_as(
+    daemon: &TestDaemon,
+    method: reqwest::Method,
+    path: &str,
+    actor: &str,
+) -> (u16, Value) {
+    let resp = reqwest::Client::new()
+        .request(method, format!("{}{path}", daemon.url()))
+        .header(ACTOR_HEADER, actor)
+        .send()
+        .await
+        .unwrap();
     let status = resp.status().as_u16();
     (status, resp.json().await.unwrap_or(Value::Null))
 }
@@ -206,8 +223,8 @@ async fn the_unmount_of_a_runs_mount_is_judged_in_the_projet_of_that_run() {
     .await;
     assert_eq!(status, 201, "{body}");
 
-    // The operator unmounts the Run's page: still judged in the Run's Projet.
-    let (status, body) = call(&daemon, reqwest::Method::DELETE, "/pages/owned", None, None).await;
+    // Bob, who does not own it, unmounts the Run's page: judged in its Projet.
+    let (status, body) = call_as(&daemon, reqwest::Method::DELETE, "/pages/owned", "bob").await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(last_asked(&control, Verb::Delete).1.projects, [p]);
 }
@@ -272,4 +289,165 @@ async fn the_question_of_authorization_places_a_mount_in_the_projet_of_the_run()
         .map(|(_, o)| o.projects)
         .collect::<Vec<_>>();
     assert_eq!(&mounts[mounts.len() - 3..], [vec![p], vec![q], vec![]]);
+}
+
+/// The names `actor` lists.
+async fn listed_by(daemon: &TestDaemon, actor: &str) -> Vec<String> {
+    let (status, mounts) = call_as(daemon, reqwest::Method::GET, "/pages", actor).await;
+    assert_eq!(status, 200, "{mounts}");
+    mounts
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|mount| mount["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// The status of `/pages/{name}/` read by `actor`.
+async fn served_to(daemon: &TestDaemon, name: &str, actor: &str) -> u16 {
+    reqwest::Client::new()
+        .get(format!("{}/pages/{name}/", daemon.url()))
+        .header(ACTOR_HEADER, actor)
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .as_u16()
+}
+
+/// FP 1 and 2: a page mounted by a node of a Run of P has the Run's creator
+/// for owner and P for Projet. A reader of P lists and reads it; an actor
+/// outside P neither lists it nor reads it, and may not unmount it; its owner
+/// unmounts it without being asked.
+#[tokio::test]
+async fn a_page_of_a_run_of_p_is_read_in_p_and_unmounted_by_its_owner() {
+    let (daemon, control) = daemon().await;
+    let p = projet(&daemon, "P").await;
+    let in_p = running_run_in(&daemon, &p).await;
+    let pages = tempfile::tempdir().unwrap();
+    std::fs::write(pages.path().join("index.html"), "<h1>Mock-up</h1>").unwrap();
+    let (status, body) = call(
+        &daemon,
+        reqwest::Method::POST,
+        "/pages",
+        Some((&in_p, "worker")),
+        Some(json!({ "name": "mockup", "directory": pages.path() })),
+    )
+    .await;
+    assert_eq!(status, 201, "{body}");
+    assert_eq!(body["project_id"], p.as_str());
+    assert_eq!(body["owner"], json!({ "kind": "local_operator" }), "{body}");
+
+    // Olga may neither read nor unmount pages in P; Rita reads them.
+    control.set(
+        Refusal::parse(&format!(
+            "page_mount:read@{p}~olga,page_mount:delete@{p}~olga,page_mount:delete@{p}~rita"
+        ))
+        .unwrap(),
+    );
+    assert_eq!(listed_by(&daemon, "rita").await, ["mockup"]);
+    assert_eq!(served_to(&daemon, "mockup", "rita").await, 200);
+    let (_, read) = last_asked(&control, Verb::Read);
+    assert_eq!(read.target.as_deref(), Some("mockup"));
+    assert_eq!(read.projects, std::slice::from_ref(&p));
+    assert!(listed_by(&daemon, "olga").await.is_empty());
+    assert_eq!(served_to(&daemon, "mockup", "olga").await, 403);
+    let redirect = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
+        .get(format!("{}/pages/mockup", daemon.url()))
+        .header(ACTOR_HEADER, "olga")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(redirect.status().as_u16(), 403);
+
+    // Neither Olga nor Rita may unmount it: the refusal says why.
+    for actor in ["olga", "rita"] {
+        let (status, body) =
+            call_as(&daemon, reqwest::Method::DELETE, "/pages/mockup", actor).await;
+        assert_eq!(status, 403, "{actor}: {body}");
+        assert_eq!(body["error"], "operation_refused");
+        assert_eq!(
+            body["sentence"],
+            "You can't delete this page_mount here. Ask an administrator of the test extension."
+        );
+    }
+    assert_eq!(listed(&daemon).await, ["mockup"]);
+
+    // Its owner, the Run's creator, unmounts it without being asked.
+    let asked = control.seen().len();
+    let (status, body) = call(
+        &daemon,
+        reqwest::Method::DELETE,
+        "/pages/mockup",
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        control.seen()[asked..]
+            .iter()
+            .all(|(_, operation)| operation.verb != Verb::Delete),
+        "{:#?}",
+        &control.seen()[asked..]
+    );
+    assert!(listed(&daemon).await.is_empty());
+}
+
+/// A person names the Projet of the page they mount; their mount is judged
+/// there.
+#[tokio::test]
+async fn a_person_mounts_a_page_in_the_projet_they_name() {
+    let (daemon, control) = daemon().await;
+    let p = projet(&daemon, "P").await;
+    let pages = tempfile::tempdir().unwrap();
+    std::fs::write(pages.path().join("index.html"), "page").unwrap();
+    let (status, body) = call(
+        &daemon,
+        reqwest::Method::POST,
+        "/pages",
+        None,
+        Some(json!({ "name": "theirs", "directory": pages.path(), "project_id": p })),
+    )
+    .await;
+    assert_eq!(status, 201, "{body}");
+    assert_eq!(body["project_id"], p.as_str());
+    assert_eq!(
+        last_asked(&control, Verb::Create).1.projects,
+        std::slice::from_ref(&p)
+    );
+}
+
+/// `pdo page mount`, refused, prints the refusal's sentence.
+#[tokio::test]
+async fn the_cli_prints_the_sentence_of_a_refused_mount() {
+    let (daemon, control) = daemon().await;
+    control.set(Refusal::parse("page_mount:create@").unwrap());
+    let pages = tempfile::tempdir().unwrap();
+    std::fs::write(pages.path().join("index.html"), "page").unwrap();
+    let daemon_url = daemon.url();
+    let directory = pages.path().display().to_string();
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_pdo"))
+            .args(["page", "mount", "demo", directory.as_str()])
+            .env("PDO_DAEMON_URL", daemon_url)
+            .env_remove("PDO_RUN_ID")
+            .env_remove("PDO_NODE_ID")
+            .env_remove("PDO_TOKEN")
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "You can't create this page_mount here. Ask an administrator of the test extension."
+        ),
+        "{stderr}"
+    );
 }

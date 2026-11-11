@@ -14,6 +14,8 @@ const page: PageMount = {
   run_id: "r1",
   node_id: "designer",
   created_at: "now",
+  owner: null,
+  project_id: null,
   guide: [
     { title: "Start with option A", text: "The chosen snap.", link: "#snap-a" },
     { title: "Where it plugs", text: "", link: "#/runs/r1/nodes/designer" },

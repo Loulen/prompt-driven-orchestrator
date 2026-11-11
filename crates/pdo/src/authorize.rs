@@ -80,6 +80,14 @@ async fn ask(
     for operation in question.operations {
         let decision = if asked.host.allows_everything() {
             Authorization::Allow
+        } else if asked
+            .platform
+            .place_page_mount()
+            .owned_by(&actor, &operation)
+            .await
+        {
+            // The owner of a page unmounts it without the extensions.
+            Authorization::Allow
         } else {
             let operation = placed(&asked, &actor, operation).await;
             asked.host.authorize(&actor, &operation)

@@ -91,7 +91,7 @@ The core fills `projects` for its own Operations:
 | `project` (targeted) | that Projet |
 | `repository` (`fetch`, `fast_forward`) | every Projet the repository is a member of |
 | `trigger` (0.11) | the Projet the Trigger launches its Runs in (`project_id`); none without one. An edit moving it to another Projet is asked, and announced applied, in each |
-| `page_mount` | a mount asked from a node session: the Projet of that session's Run; an unmount (targeted by the page's name): the Projet of the Run the mount belongs to, whoever asks. A mount outside any Run, or its unmount, is in none |
+| `page_mount` | a mount asked from a node session: the Projet of that session's Run; any other mount: the Projet it names (`project_id`), else none. A read or an unmount (targeted by the page's name): the Projet the mount is in, whoever asks |
 | everything else | none |
 
 A Run, its nodes, sessions and review comments are in one Projet at most: the one recorded at
@@ -126,12 +126,29 @@ The core asks `authorize` before it serves these reads (0.8, CORE-5), with the v
 | `GET /triggers/{id}`, `/triggers/{id}/fires` (0.11) | `trigger` × `read` on `{id}` | `403` `operation_refused` |
 | `/ws`, about a Trigger (0.11) | `trigger` × `read` on the Trigger a message is about (`trigger_created`, `trigger_updated`, `trigger_deleted`, `trigger_fired`, `operation_applied` on it), in its Projet, per connection (answer kept 5 s) | the message is not sent to that connection |
 | `/ws`, an extension's event guarded by a read (0.11) | the read the event carries (`ExtensionEvent::guarded_by`), per connection (answer kept 5 s) | the event is not sent to that connection |
+| `GET /pages` | `page_mount` × `read`, targeted, per page listed, in the Projet the page is in | the page is absent |
+| `GET /pages/{name}`, `/pages/{name}/…` (the page and its files) | `page_mount` × `read` on `{name}`, in its Projet | `403` `operation_refused` |
+| `/ws`, an `operation_applied` on a page mount | `page_mount` × `read` on the page (untargeted for a mount), in the Projets of its Operation, per connection (answer kept 5 s) | the message is not sent to that connection |
+| `WS /sessions/{id}/pty` (a terminal) | `session` × `attach` on `{id}`; refused, `session` × `read` on it | `attach` refused, `read` allowed: the terminal opens read-only (below); both refused: `403` |
 | `/ws`, an `operation_applied` on an extension's Ressource (0.11) | `<extension>/<kind>` × `read` on the entity it is about (its target, or the entity a creation made), in the Projets of its Operation, per connection (answer kept 5 s) | the message is not sent to that connection |
 
 A read is in the same Projets as the gestures on its entity: a Run's in the Projet of its primary
 repository, a Trigger's in the Projet of its target repository, a Projet's in itself. The actor is the one `identify` found: on `/ws`, the one of the
 upgrade request. A read is never announced as `operation_applied`, and a refusal is logged at
 `debug` only. Without extension nothing is asked: the lists are served as before.
+
+**A page has an owner and a Projet.** A page mounted from a node session is in the Projet of its
+Run and its owner is the Run's creator; any other is in the Projet `pdo page mount --project`
+names (none without it) and its owner is who mounted it. Its owner unmounts it without being
+asked, and `POST /authorize` answers `allow` to them; anyone else (an agent of its Run included) is asked `page_mount` × `delete` in its Projet.
+Pages mounted before take the Projet and the creator of their Run at the daemon's start, if it
+has them.
+
+**A terminal watched read-only.** An Actor allowed `session` × `read` but refused `session` ×
+`attach` connects to the terminal all the same, read-only: it receives the output, its
+keystrokes are dropped, it never drives the terminal and never takes control of it (its
+`take_control` is not even asked). Its `role` frames carry `read_only`, the refusal's
+`sentence`, which the interface shows. Its rights are read again at its next connection.
 
 **Refuse a read on its resource and verb.** An extension that refused every Operation whatever its
 verb now hides the Runs and the Projets too.
@@ -157,8 +174,8 @@ POST /authorize
 Whether the caller may run each Operation, in order, **without running any**: nothing changes,
 nothing is announced. An Operation that names no Projet is placed where the core places its own: a
 targeted `run` or `node` in the Projet of its Run, a targeted `project` in itself, a `page_mount`
-creation asked from a node session in the Projet of its Run and a targeted `page_mount` deletion in
-the Projet of the mount's Run. At most 500
+creation asked from a node session in the Projet of its Run and a targeted `page_mount` read or
+deletion in the Projet of the mount. At most 500
 Operations per question; an unreadable one answers `400` `invalid_question`. Without extension,
 every decision is `allow`. The core's UI asks it to grey the gestures the caller may not make,
 their tooltip saying the refusal's `sentence`, and to leave out of the New Run form the Projets a
@@ -541,7 +558,8 @@ let session = host
   and ends (`exited`) those whose process is gone. The live sessions of an extension the
   restarted daemon does not have are terminated (`terminated`), their record kept. The orphan
   sweep never kills a session recorded live, and kills any other name with its prefix. Attaching
-  its terminal is `session` × `attach` in the Projet of its record.
+  its terminal is `session` × `attach` in the Projet of its record; with `session` × `read`
+  alone, the terminal opens read-only (see *A terminal watched read-only*).
 - **Its declared wait**: `pdo wait-user [--message]` typed by its agent (it reads
   `PDO_SESSION_ID` when there is no `PDO_RUN_ID`) asks `session` × `wait_user` on it for the
   caller (the Actor its token names) and makes it `awaiting_user`, with its `wait_message`; a

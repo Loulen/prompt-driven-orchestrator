@@ -18,12 +18,12 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 
 - New seam `git_env` of the extension API: an extension gives the environment of the network git
   operations the daemon runs for an Actor (the clone of a repository added by its URL, the fetch
-  of New Run, the clone of a Source de skills, and the fetch before a Trigger fires, for its last
+  of New Run, the clone of a skills source, and the fetch before a Trigger fires, for its last
   editor), a credential helper through `GIT_CONFIG_*` for instance. The values reach git's
   environment, never an argv; the core's own git variables are never overwritten.
-- A refused clone, fetch or Source de skills says whose credentials were refused: « The
-  credentials provided for <Actor> were refused for <host> » or « The daemon's git credentials
-  were refused for <host> », which now names the host rather than the URL.
+- A refused clone, fetch or skills source says whose credentials were refused: "The credentials
+  provided for <Actor> were refused for <host>" or "The daemon's git credentials were refused for
+  <host>", which now names the host rather than the URL.
 - With an extension installed, adding a URL already cloned reuses the clone only once the remote
   answers to the credentials of whoever adds it, and a clone running into the same folder is joined
   only with the same credentials (otherwise the add is refused until that clone ends).

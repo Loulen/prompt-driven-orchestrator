@@ -277,7 +277,11 @@ describe("ProjectsPanel", () => {
     fireEvent.change(screen.getByTestId("project-clone-url"), {
       target: { value: "git@github.com:acme/shop-web.git" },
     });
-    expect(await screen.findByTestId("project-clone-reused")).toBeInTheDocument();
+    // The reuse waits for the remote to accept the adder's credentials: the chip promises no more.
+    expect(await screen.findByTestId("project-clone-reused")).toHaveAttribute(
+      "title",
+      expect.stringContaining("once the remote accepts your git credentials"),
+    );
     expect(screen.getByTestId("project-clone-start")).toHaveTextContent("Add");
     fireEvent.click(screen.getByTestId("project-clone-change"));
     fireEvent.change(screen.getByTestId("project-clone-path"), { target: { value: "~/src/shop-web" } });
@@ -306,7 +310,7 @@ describe("ProjectsPanel", () => {
     await waitFor(() => expect(api.cancelClone).toHaveBeenCalledWith("c1"));
 
     api.fetchClones.mockResolvedValue([
-      cloneJob({ state: "failed", error: "The daemon's git credentials were refused for https://github.com/acme/analytics.git" }),
+      cloneJob({ state: "failed", error: "The daemon's git credentials were refused for github.com" }),
     ]);
     await waitFor(
       () =>

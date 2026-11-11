@@ -14,6 +14,8 @@
 
 mod collections;
 #[cfg(test)]
+mod convergence_sweep_tests;
+#[cfg(test)]
 mod convergence_tests;
 mod diagnostics;
 pub mod dispatcher;

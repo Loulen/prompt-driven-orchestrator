@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { Project } from "./project";
 import {
   alsoIn,
+  clonesFolderTarget,
   newRepositoryTarget,
   projectsEntryOf,
   recentToAdd,
   repoCount,
+  repositoriesFromMyProjects,
   runCount,
   runCountByProject,
   sortedProjects,
@@ -51,6 +53,22 @@ describe("projectsSettings", () => {
 
   it("offers the recent repositories the Projet does not hold", () => {
     expect(recentToAdd(["/r/a", "/r/b", "/r/c"], project("p", "P", ["/r/b"]))).toEqual(["/r/a", "/r/c"]);
+    expect(recentToAdd(["/r/a", "/r/c"], project("p", "P"), ["/r/c"])).toEqual(["/r/a"]);
+  });
+
+  it("offers the repositories of the other Projets whose repositories may be read, each once", () => {
+    const payments = project("p", "Payments", ["/c/payments-api"]);
+    const projects = [
+      payments,
+      project("r", "Risk", ["/c/risk-models", "/c/payments-api"]),
+      project("q", "Quotes", ["/c/quotes-web", "/c/risk-models"]),
+      project("s", "Secret", ["/c/secret"]),
+    ];
+    expect(repositoriesFromMyProjects(projects, payments, new Set(["p", "q", "r"]))).toEqual([
+      { path: "/c/quotes-web", projectName: "Quotes" },
+      { path: "/c/risk-models", projectName: "Quotes" },
+    ]);
+    expect(repositoriesFromMyProjects(projects, payments, new Set())).toEqual([]);
   });
 
   it("cuts the folder of a new repository into its parent and its name", () => {
@@ -62,6 +80,11 @@ describe("projectsSettings", () => {
     expect(newRepositoryTarget("/", null)).toBeNull();
     expect(newRepositoryTarget("/home/me/..", null)).toBeNull();
     expect(newRepositoryTarget("", "/home/me")).toBeNull();
+  });
+
+  it("takes a name alone for a new repository in the clones folder", () => {
+    expect(clonesFolderTarget(" ledger ")).toEqual({ parent: null, name: "ledger" });
+    for (const typed of ["", " ", ".", "..", "a/b", "~/x", "a\\b"]) expect(clonesFolderTarget(typed)).toBeNull();
   });
 });
 

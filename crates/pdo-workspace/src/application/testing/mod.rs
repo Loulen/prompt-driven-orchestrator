@@ -21,6 +21,9 @@ fn ready<'a, T: Send + 'a>(value: T) -> BoxFuture<'a, T> {
     Box::pin(async move { value })
 }
 
+/// Whether an Operation asked by an Actor is refused.
+type Refuses = Box<dyn Fn(&Actor, &Operation) -> bool + Send + Sync>;
+
 /// An extension host that records every Operation and refuses them all when
 /// given a reason.
 #[derive(Default)]
@@ -28,6 +31,8 @@ pub struct RecordingHost {
     refusal: Option<String>,
     /// Refuse only the reads in these Projets (CORE-5).
     reads_refused_in: Vec<String>,
+    /// Refuse what this says, with « refused ».
+    refuses: Option<Refuses>,
     asked: Mutex<Vec<Operation>>,
     git_asked: Mutex<Vec<GitOperation>>,
     /// Stands for a daemon without extension (`allows_everything`).
@@ -59,8 +64,11 @@ impl ExtensionHost for RecordingHost {
     fn identify(&self, _request: &RequestParts) -> Actor {
         Actor::LocalOperator
     }
-    fn authorize(&self, _actor: &Actor, operation: &Operation) -> Authorization {
+    fn authorize(&self, actor: &Actor, operation: &Operation) -> Authorization {
         self.asked.lock().unwrap().push(operation.clone());
+        if self.refuses.as_ref().is_some_and(|f| f(actor, operation)) {
+            return Authorization::deny("refused");
+        }
         if operation.is_read()
             && operation
                 .projects
@@ -177,4 +185,33 @@ pub fn denying_reads_in(projects: &[&str]) -> Fixture {
         reads_refused_in: projects.iter().map(|p| p.to_string()).collect(),
         ..RecordingHost::default()
     })
+}
+
+/// A workspace whose extension refuses what `refuses` says, with « refused ».
+pub fn refusing(refuses: impl Fn(&Actor, &Operation) -> bool + Send + Sync + 'static) -> Fixture {
+    build_with(RecordingHost {
+        refuses: Some(Box::new(refuses)),
+        ..RecordingHost::default()
+    })
+}
+
+/// A person identified by the test extension.
+pub fn person(id: &str) -> Actor {
+    Actor::Identified {
+        namespace: "test".into(),
+        id: id.into(),
+    }
+}
+
+/// Whether `operation` is a creation of a repository or a read of one in no
+/// Projet (the disk), or an update of a Projet other than `project`: what
+/// a person who may only write in `project` is refused.
+pub fn outside_of(project: &str, operation: &Operation) -> bool {
+    use pdo_kernel::{ResourceKind, Verb};
+    let in_project = operation.projects.iter().any(|p| p == project);
+    match (&operation.resource, &operation.verb) {
+        (ResourceKind::Repository, _) => !in_project,
+        (ResourceKind::Project, Verb::Update) => !in_project,
+        _ => false,
+    }
 }

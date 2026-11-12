@@ -4,6 +4,7 @@ use crate::domain::graph_resolver;
 use crate::domain::state::NodeStatus;
 use crate::domain::state::RunState;
 use pdo_pipeline::domain::pipeline::PipelineDef;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadySpawn {
@@ -20,6 +21,63 @@ pub fn compute_ready_to_spawn(pipeline: &PipelineDef, run_state: &RunState) -> V
         })
         .map(|node_id| ReadySpawn { node_id, iter: 1 })
         .collect()
+}
+
+/// Drop from `ready` the nodes still held by a bounded loop's guarded exit,
+/// read off every completed producer's frontmatter (ADR-0082). The projection
+/// alone leaves a window open: a member settled on a FAIL lap whose routing has
+/// not appended the next lap yet looks idle, so [`compute_ready_to_spawn`] reads
+/// its exit as decided. Its own back-edge says the loop goes on: the node is
+/// held, and the loop's routing starts it once the loop exits — PASS,
+/// exhaustion, `end_region` or a `force_route` release it
+/// ([`super::liveness::bounded_loop_still_iterating`]).
+pub fn hold_pending_loop_exits(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    ready: Vec<ReadySpawn>,
+    frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
+    vars: &HashMap<String, serde_yaml::Value>,
+) -> Vec<ReadySpawn> {
+    ready
+        .into_iter()
+        .filter(|r| {
+            !loop_exit_pending_into(pipeline, run_state, &r.node_id, frontmatter_by_node, vars)
+        })
+        .collect()
+}
+
+/// Is a guarded edge into `node_id` fed by a settled bounded-loop member that
+/// may still fire it on a later lap ([`super::liveness::loop_exit_pending`])?
+/// Feedback edges (the producer downstream of the node) are no precondition.
+fn loop_exit_pending_into(
+    pipeline: &PipelineDef,
+    run_state: &RunState,
+    node_id: &str,
+    frontmatter_by_node: &HashMap<String, HashMap<String, serde_yaml::Value>>,
+    vars: &HashMap<String, serde_yaml::Value>,
+) -> bool {
+    pipeline
+        .edges
+        .iter()
+        .filter(|e| e.target.node == node_id && (e.when.is_some() || e.is_else))
+        .map(|e| e.source.node.as_str())
+        .filter(|src| *src != node_id && !graph_resolver::reaches(pipeline, node_id, src))
+        .filter(|src| {
+            run_state
+                .nodes
+                .get(*src)
+                .is_some_and(|n| n.status.is_settled_complete())
+        })
+        .any(|src| {
+            super::liveness::loop_exit_pending(
+                pipeline,
+                run_state,
+                src,
+                node_id,
+                frontmatter_by_node,
+                vars,
+            )
+        })
 }
 
 /// Nodes currently throttled into the `Waiting` state for this run.

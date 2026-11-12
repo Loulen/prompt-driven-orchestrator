@@ -5,7 +5,7 @@ import { useClones } from "../../store/useClones";
 import { FolderGit2, Pencil, Plus, SlidersHorizontal, Trash2 } from "lucide-react";
 import { Button, EmptyState, IconButton, TextInput } from "../../../shared/ui/kit";
 import type { Project } from "../../model/project";
-import { alsoIn, recentToAdd, runCount } from "../../model/projectsSettings";
+import { alsoIn, recentToAdd, runCount, type ProjectRepository } from "../../model/projectsSettings";
 import FsExplorerModal from "../FsExplorerModal";
 import AddRepositoryMenu, { type AddRepositoryChoice } from "./AddRepositoryMenu";
 import CloneRepositoryForm from "./CloneRepositoryForm";
@@ -18,7 +18,8 @@ export interface ProjectGestures {
   addRepository: (path: string) => Promise<void>;
   /** Validates the folder picked in the explorer, then adds it. */
   addLocalFolder: (path: string) => Promise<void>;
-  createRepository: (parent: string, name: string) => Promise<void>;
+  /** Creates a repository for this Projet (`parent` `null`: in the clones folder) and adds it. */
+  createRepository: (parent: string | null, name: string) => Promise<void>;
   /** Clones `url` (into `path` when given) for this Projet, in the daemon (CORE-97). */
   cloneRepository: (url: string, path: string | null) => Promise<CloneJob>;
   /** A clone of this Projet ended: read the Projets again. */
@@ -42,6 +43,7 @@ export default function ProjectDetail({
   projects,
   runs,
   remotes,
+  fromProjects,
   recent,
   home,
   editRefused,
@@ -54,15 +56,17 @@ export default function ProjectDetail({
   projects: Project[];
   runs: number;
   remotes: Map<string, string | null>;
+  /** The repositories of the caller's other Projets it may bring in (« From my Projects »). */
+  fromProjects: ProjectRepository[];
   recent: string[];
   home: string | null;
   /** CORE-205: why the caller may not change it (its gestures greyed), else absent. */
   editRefused?: string;
   /** CORE-205: why the caller may not delete it (Delete greyed), else absent. */
   deleteRefused?: string;
-  /** CORE-205: why the caller may not browse the disk, else absent. */
+  /** CORE-205: why the caller may not read the disk, else absent. */
   browseRefused?: string;
-  /** CORE-205: why the caller may not create a repository, else absent. */
+  /** CORE-205: why the caller may not create a repository for this Projet, else absent. */
   createRepositoryRefused?: string;
   gestures: ProjectGestures;
 }) {
@@ -114,7 +118,7 @@ export default function ProjectDetail({
   }
 
   function choose(choice: AddRepositoryChoice) {
-    if (choice.kind === "recent") void attempt(() => gestures.addRepository(choice.path));
+    if (choice.kind === "recent" || choice.kind === "project") void attempt(() => gestures.addRepository(choice.path));
     else {
       if (choice.kind === "clone") setCloneUrl("");
       setAdding(choice.kind);
@@ -241,7 +245,9 @@ export default function ProjectDetail({
             // A retry fills the form again.
             key={cloneUrl}
             home={home}
+            projectId={project.id}
             projectName={project.name}
+            pathRefused={browseRefused}
             initialUrl={cloneUrl}
             onClone={async (url, path) => {
               const job = await gestures.cloneRepository(url, path);
@@ -264,7 +270,12 @@ export default function ProjectDetail({
           />
         ) : (
           <AddRepositoryMenu
-            recent={recentToAdd(recent, project)}
+            fromProjects={fromProjects}
+            recent={recentToAdd(
+              recent,
+              project,
+              fromProjects.map((repo) => repo.path),
+            )}
             home={home}
             browseRefused={browseRefused}
             createRepositoryRefused={createRepositoryRefused}

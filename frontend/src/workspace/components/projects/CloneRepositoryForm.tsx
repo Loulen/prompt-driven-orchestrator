@@ -19,7 +19,9 @@ import type { CloneTarget } from "../../../shared/generated/CloneTarget";
  */
 export default function CloneRepositoryForm({
   home,
+  projectId,
   projectName,
+  pathRefused,
   job,
   initialUrl = "",
   onClone,
@@ -28,7 +30,11 @@ export default function CloneRepositoryForm({
   onRetry,
 }: {
   home: string | null;
+  /** The Projet the clone is for: where it is judged. */
+  projectId?: string;
   projectName: string;
+  /** CORE-205: why the caller may not clone into a folder of its choosing (« change » greyed), else absent. */
+  pathRefused?: string;
   job?: CloneJob;
   initialUrl?: string;
   /** Starts the clone (into `path` when the folder was changed); rejects with the sentence to show. */
@@ -53,7 +59,7 @@ export default function CloneRepositoryForm({
     if (job || !valid) return;
     let current = true;
     const timer = setTimeout(() => {
-      fetchCloneTarget(typed)
+      fetchCloneTarget(typed, projectId)
         .then((answer) => current && setTarget(answer))
         .catch(() => current && setTarget(null));
     }, 250);
@@ -61,7 +67,7 @@ export default function CloneRepositoryForm({
       current = false;
       clearTimeout(timer);
     };
-  }, [job, valid, typed]);
+  }, [job, valid, typed, projectId]);
 
   const shownTarget = valid ? target : null;
   const path = job?.path ?? editingPath ?? shownTarget?.path ?? null;
@@ -196,6 +202,8 @@ export default function CloneRepositoryForm({
                   type="button"
                   onClick={() => setEditingPath(tildify(path, home))}
                   className="ln-link"
+                  disabled={!!pathRefused}
+                  title={pathRefused}
                   data-testid="project-clone-change"
                 >
                   change

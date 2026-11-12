@@ -6,6 +6,7 @@
 mod add_project_member;
 mod clone_jobs;
 mod clone_repository;
+mod clone_run;
 mod create_project;
 mod create_repository;
 mod delete_project;

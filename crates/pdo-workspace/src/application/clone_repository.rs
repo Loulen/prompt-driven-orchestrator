@@ -14,23 +14,19 @@
 //! adds a repository by reusing a clone they could not have made.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use pdo_kernel::authorization::authorize_read;
-use pdo_kernel::extension_host::{GitCredentials, GitOperation, GitOperationKind};
+use pdo_kernel::extension_host::{GitOperation, GitOperationKind};
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use serde::Serialize;
 use ts_rs::TS;
 
-use super::clone_jobs::{CloneJob, CloneJobs, CloneState, Join, Tracked};
-use crate::domain::clone::{
-    clone_failure, expand_home, is_remote_url, parse_progress, repository_name, same_remote,
-    CloneFailure,
-};
+use super::clone_jobs::{CloneJob, CloneState, Join, Tracked};
+use super::clone_run::{joined, Running};
+use crate::domain::clone::{expand_home, is_remote_url, repository_name, same_remote};
 use crate::domain::remote::shown_remote;
 
 use super::error::{WorkspaceError, WorkspaceResult};
-use super::ports::{Git, ProjectEvents, ProjectRepository};
 use super::read_access::{browse_disk, create_repository_in, read_project};
 use super::workspace::Workspace;
 
@@ -245,7 +241,10 @@ impl Workspace {
 
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
         // Asked at the same moment as another clone of this folder.
-        match self.clones.start(job.clone(), actor, fingerprint, cancel_tx) {
+        match self
+            .clones
+            .start(job.clone(), actor, fingerprint, cancel_tx)
+        {
             Join::Free => {}
             Join::Joined(running) => return Ok(running),
             Join::Busy(running) => return Err(busy(&running)),
@@ -294,105 +293,6 @@ impl Workspace {
         self.git
             .remote_url(&repo)
             .is_some_and(|remote| same_remote(&remote, url))
-    }
-}
-
-/// What the background clone needs of the workspace, and the credentials of
-/// the Actor who asked for it.
-struct Running {
-    git: Arc<dyn Git>,
-    projects: Arc<dyn ProjectRepository>,
-    events: Arc<dyn ProjectEvents>,
-    clones: Arc<CloneJobs>,
-    credentials: GitCredentials,
-}
-
-impl Running {
-    /// Reuse the clone at `dest` once `url` answers to the credentials.
-    async fn reuse(
-        self,
-        id: String,
-        url: String,
-        dest: PathBuf,
-        cancel: tokio::sync::oneshot::Receiver<()>,
-    ) {
-        let outcome = tokio::select! {
-            biased;
-            Ok(()) = cancel => Err(CloneFailure::Cancelled),
-            reached = self.git.reach(&url, &self.credentials) => reached,
-        };
-        let path = dest.to_string_lossy().into_owned();
-        match outcome {
-            Ok(()) => {
-                let projects = self.clones.finish(&id, CloneState::Done, None);
-                joined(&*self.projects, &*self.events, &projects, &path).await;
-            }
-            Err(failure) => self.failed(&id, &url, failure),
-        }
-    }
-
-    fn failed(&self, id: &str, url: &str, failure: CloneFailure) {
-        match failure {
-            CloneFailure::Cancelled => {
-                self.clones.finish(id, CloneState::Cancelled, None);
-            }
-            CloneFailure::Failed(stderr) => {
-                let error = clone_failure(url, &stderr, &self.credentials);
-                tracing::warn!("{error}");
-                self.clones.finish(id, CloneState::Failed, Some(error));
-            }
-        }
-    }
-
-    async fn clone_into(
-        self,
-        id: String,
-        url: String,
-        dest: PathBuf,
-        cancel: tokio::sync::oneshot::Receiver<()>,
-    ) {
-        let clones = self.clones.clone();
-        let progress_id = id.clone();
-        let on_progress = Box::new(move |line: &str| {
-            if let Some(progress) = parse_progress(line) {
-                clones.update(&progress_id, |job| job.progress = Some(progress));
-            }
-        });
-        let outcome = self
-            .git
-            .clone_repository(&url, &dest, &self.credentials, on_progress, cancel)
-            .await;
-        let path = dest.to_string_lossy().into_owned();
-        match outcome {
-            Ok(()) => {
-                let projects = self.clones.finish(&id, CloneState::Done, None);
-                joined(&*self.projects, &*self.events, &projects, &path).await;
-            }
-            Err(failure) => self.failed(&id, &url, failure),
-        }
-    }
-}
-
-/// `path` joins each of `projects` it is not yet in (the actor was asked when
-/// the clone was).
-async fn joined(
-    projects: &dyn ProjectRepository,
-    events: &dyn ProjectEvents,
-    ids: &[String],
-    path: &str,
-) {
-    for id in ids {
-        match projects.get(id).await {
-            Ok(Some(project)) if !project.has_member(path) => {
-                if let Err(e) = projects.add_member(id, path).await {
-                    tracing::warn!("the clone {path} could not join project {id}: {e}");
-                    continue;
-                }
-                events.project_changed(id).await;
-            }
-            Ok(_) => {}
-            Err(e) => tracing::warn!("project {id} cannot be read: {e}"),
-        }
     }
 }
 

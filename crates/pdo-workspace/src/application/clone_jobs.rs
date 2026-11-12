@@ -141,7 +141,13 @@ impl CloneJobs {
         cancel: tokio::sync::oneshot::Sender<()>,
     ) -> Join {
         let mut entries = self.lock();
-        let found = joined(&mut entries, &job.path, actor, &job.project_ids, credentials);
+        let found = joined(
+            &mut entries,
+            &job.path,
+            actor,
+            &job.project_ids,
+            credentials,
+        );
         if found == Join::Free {
             push(&mut entries, job, actor, Some(cancel), credentials);
         }
@@ -302,7 +308,10 @@ mod tests {
         };
         assert_eq!(running.project_ids, vec!["p1".to_string()], "p2 not added");
         let (tx, _rx) = tokio::sync::oneshot::channel();
-        assert!(matches!(jobs.start(job("b", "p2"), &bob, 8, tx), Join::Busy(_)));
+        assert!(matches!(
+            jobs.start(job("b", "p2"), &bob, 8, tx),
+            Join::Busy(_)
+        ));
         let listed = jobs.list();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].requested_by, vec![alice], "bob did not join it");

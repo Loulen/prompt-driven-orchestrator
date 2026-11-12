@@ -175,13 +175,13 @@ fn core_entry(
         ),
         ResourceKind::Pipeline => (
             "Pipelines",
-            "Create, edit, validate and delete the pipeline templates; open the library assistant",
-            &[CREATE, UPDATE, DELETE, "validate", "open_assistant"],
+            "See, create, edit, validate and delete the pipeline templates; open the library assistant",
+            &[READ, CREATE, UPDATE, DELETE, "validate", "open_assistant"],
         ),
         ResourceKind::LibraryEntry => (
             "Library entries",
-            "Add and remove the pipelines of the library",
-            &[CREATE, DELETE],
+            "See, add and remove the pipelines of the library",
+            &[READ, CREATE, DELETE],
         ),
         ResourceKind::Project => (
             "Projects",
@@ -195,13 +195,14 @@ fn core_entry(
         ),
         ResourceKind::AgentProfile => (
             "Agent profiles",
-            "Create, edit and delete the agentic profiles",
-            &[CREATE, UPDATE, DELETE],
+            "See, create, edit and delete the agentic profiles",
+            &[READ, CREATE, UPDATE, DELETE],
         ),
         ResourceKind::Skill => (
             "Skills",
-            "Create, edit, import and delete the skills of the bank",
+            "See, create, edit, import and delete the skills of the bank",
             &[
+                READ,
                 CREATE,
                 UPDATE,
                 DELETE,
@@ -213,8 +214,8 @@ fn core_entry(
         ),
         ResourceKind::SkillFolder => (
             "Skill folders",
-            "Create, edit, rescan and delete the folders of the bank",
-            &[CREATE, UPDATE, DELETE, "rescan"],
+            "See, create, edit, rescan and delete the folders of the bank",
+            &[READ, CREATE, UPDATE, DELETE, "rescan"],
         ),
         ResourceKind::SandboxProfile => (
             "Sandbox profiles",
@@ -223,8 +224,8 @@ fn core_entry(
         ),
         ResourceKind::InstanceSettings => (
             "Instance settings",
-            "Change the settings of the instance; probe the models of a harness again",
-            &[UPDATE, "refresh_catalogue"],
+            "See and change the settings of the instance; probe the models of a harness again",
+            &[READ, UPDATE, "refresh_catalogue"],
         ),
         ResourceKind::PageMount => (
             "Mounted pages",
@@ -282,6 +283,11 @@ fn core_entry(
             "Sync the price table the costs are priced with",
             &["sync"],
         ),
+        ResourceKind::Audit => (
+            "Audit journal",
+            "See the journal of the actions done on the instance",
+            &[READ],
+        ),
         ResourceKind::Extension { .. } => return None,
     })
 }
@@ -308,7 +314,7 @@ mod tests {
     fn the_core_lists_each_of_its_resources_with_a_label_and_its_verbs() {
         let core = core_resources();
         assert_eq!(core.len(), ResourceKind::CORE.len());
-        assert_eq!(core.len(), 19);
+        assert_eq!(core.len(), 20);
         for resource in &core {
             assert!(!resource.label.is_empty(), "{resource:?}");
             assert!(!resource.description.is_empty(), "{resource:?}");
@@ -325,10 +331,24 @@ mod tests {
             .map(|r| r.resource.as_str())
             .collect();
         // A session is read too (CORE-124): its events on `/ws`, its Zoom du
-        // terminal, its terminal watched; a mounted page, its list and its files.
+        // terminal, its terminal watched; a mounted page, its list and its files;
+        // and the shared configuration, in no Projet.
         assert_eq!(
             readable,
-            ["run", "project", "page_mount", "repository", "session"]
+            [
+                "run",
+                "pipeline",
+                "library_entry",
+                "project",
+                "agent_profile",
+                "skill",
+                "skill_folder",
+                "instance_settings",
+                "page_mount",
+                "repository",
+                "session",
+                "audit",
+            ]
         );
         assert!(Resource::of_core(&ResourceKind::extension("test", "note")).is_none());
     }
@@ -347,7 +367,7 @@ mod tests {
             ));
         let bare = Manifest::new("bare", "Bare", "0.0.0");
         let catalogue = catalogue([&test, &bare]);
-        assert_eq!(catalogue.len(), 21);
+        assert_eq!(catalogue.len(), 22);
         let note = catalogue.last().unwrap();
         assert_eq!(
             serde_json::to_value(note).unwrap(),
@@ -359,8 +379,8 @@ mod tests {
                 "extension": "test",
             })
         );
-        assert_eq!(catalogue[19].resource, "test/folder");
-        assert_eq!(catalogue[19].description, "The folders");
+        assert_eq!(catalogue[20].resource, "test/folder");
+        assert_eq!(catalogue[20].description, "The folders");
         assert_eq!(
             serde_json::to_value(&catalogue[0]).unwrap()["extension"],
             serde_json::Value::Null

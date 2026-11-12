@@ -73,6 +73,14 @@
 //! It suspends a Trigger on `PUT /ext/test/suspensions {"trigger_id", "reason"}`
 //! and lifts it on `DELETE /ext/test/suspensions/<id>`.
 //!
+//! It gives an Actor's network git operations (clone by URL, New Run's fetch,
+//! a Source de skills, a Trigger's fetch) variables on `PUT /ext/test/git-env
+//! {"actor": "alice", "env": {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0":
+//! "credential.helper", "GIT_CONFIG_VALUE_0": "<helper script>", …}, "label":
+//! "…"}` (the id of an identified Actor, else `local_operator`; an empty `env`
+//! removes them); `GET /ext/test/git-env` lists the names given and the
+//! operations asked about.
+//!
 //! The test extension keeps its data under `$HOME/.pdo/extensions/test/`: give
 //! the demo daemon a disposable `HOME`.
 //!

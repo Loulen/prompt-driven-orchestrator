@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 use pdo_platform::domain::audit::NewAuditEntry;
-use pdo_run::application::ports::{EventWindow, NodeStart, RunStart};
+use pdo_run::application::ports::{EventWindow, NodeStart, RunProject, RunStart};
 use pdo_run::domain::event::Event;
 use pdo_run::domain::prices::{Price, PriceTable};
 use pdo_run::domain::run_cost::CostContribution;
@@ -58,9 +58,15 @@ pub trait RunEvents: Send + Sync {
     /// still holds — whatever their own start: what « Roll up child runs »
     /// walks from each root (ADR-0101).
     fn child_run_starts(&self) -> BoxFuture<'_, anyhow::Result<Vec<RunStart>>>;
+    /// Every Run of the log, with the Projet recorded at its launch: what
+    /// the read filter judges a Run by.
+    fn run_projects(&self) -> BoxFuture<'_, anyhow::Result<Vec<RunProject>>>;
 }
 
-/// The Triggers' fires, as the trigger context holds them.
+/// The Triggers' fires, as the trigger context holds them. `triggers`, when
+/// given, narrows every count to the fires and the Triggers of that set (the
+/// ones a caller may read); a fire whose Trigger was deleted is then left
+/// out.
 pub trait TriggerFires: Send + Sync {
     /// The fires of the window per Pipeline key; a fire whose Trigger was
     /// deleted counts under `"(deleted trigger)"`.
@@ -68,14 +74,22 @@ pub trait TriggerFires: Send + Sync {
         &'a self,
         from: &'a str,
         to: &'a str,
+        triggers: Option<&'a BTreeSet<String>>,
     ) -> BoxFuture<'a, anyhow::Result<Vec<(String, i64)>>>;
     /// The « triggers that created a Run » KPI of the window.
     fn created_runs<'a>(
         &'a self,
         from: &'a str,
         to: &'a str,
+        triggers: Option<&'a BTreeSet<String>>,
     ) -> BoxFuture<'a, anyhow::Result<TriggersCreatedRuns>>;
+    /// Every Trigger, with the Projet it launches its Runs in: what the read
+    /// filter judges a Trigger by.
+    fn trigger_projects(&self) -> BoxFuture<'_, anyhow::Result<Vec<TriggerProject>>>;
 }
+
+/// A Trigger's id and the Projet it launches its Runs in, if any.
+pub type TriggerProject = (String, Option<String>);
 
 /// The Projets, as the workspace context holds them.
 pub trait Projects: Send + Sync {

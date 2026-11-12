@@ -1,6 +1,7 @@
 import type { LiveArtifact } from "../shared/generated/LiveArtifact";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { fetchLibrary } from "../pipeline/api/library";
+import { refusalSentence } from "../shared/authorization/refusal";
 import type { LibraryEntry } from "../pipeline/model/library";
 import type { PortDef } from "../shared/generated/PortDef";
 import { deepEqual } from "../lib/deepEqual";
@@ -12,13 +13,21 @@ export type LibrarySyncState = "outline" | "synced" | "diverged";
 export function useLibrary() {
   const [entries, setEntries] = useState<LibraryEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  // CORE-248: the sentence when the caller may not read the library.
+  const [refused, setRefused] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
       setEntries(await fetchLibrary());
-    } catch {
-      // ignore
+      setRefused(null);
+    } catch (error) {
+      // A refused read empties the library and says why; anything else keeps it.
+      const sentence = refusalSentence(error);
+      if (sentence !== null) {
+        setEntries([]);
+        setRefused(sentence);
+      }
     } finally {
       setLoading(false);
     }
@@ -30,13 +39,15 @@ export function useLibrary() {
       .then((data) => {
         if (!cancelled) setEntries(data);
       })
-      .catch(() => {});
+      .catch((error: unknown) => {
+        if (!cancelled) setRefused(refusalSentence(error));
+      });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  return { entries, loading, refresh };
+  return { entries, loading, refused, refresh };
 }
 
 /** Live artifacts as the daemon stores them: defaults dropped, so a markdown

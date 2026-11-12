@@ -2319,6 +2319,7 @@ dependencies = [
  "pdo-session",
  "pdo-skill",
  "pdo-workspace",
+ "percent-encoding",
  "pretty_assertions",
  "reqwest",
  "serde",

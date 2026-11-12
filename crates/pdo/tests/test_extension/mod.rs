@@ -54,8 +54,9 @@
 //!   not archived, and that menu also offers [`FAIL`], a command that throws.
 //!   Since #31, one element at each other location: a tab (`EntityTab`), a
 //!   section (`EntitySection`, which records its host's Save in `/sections`), a
-//!   decoration (`EntityBadge`; plus one that throws, `Exploding`, on the status
-//!   bar) and a list filter (`StartedByFilter`) wherever the catalogue accepts
+//!   decoration (`EntityBadge`, in a button that counts its clicks on a
+//!   Trigger's row, `TriggerMark`; plus one that throws, `Exploding`, on the
+//!   status bar) and a list filter (`StartedByFilter`) wherever the catalogue accepts
 //!   one.
 //! - **`cli`** / **`run_cli`**: `pdo ext test echo|cat|exit|panic` (see
 //!   [`TestExtension::run_cli`]); each call is recorded ([`Control::cli_calls`]).
@@ -85,6 +86,9 @@
 //! - **`node_env`** / **`node_preamble`** / **`trigger_suspension`** (API
 //!   0.8, `launch.rs`): the variables, the preamble and the suspensions the
 //!   test sets ([`Control::launch`]).
+//! - **`git_env`** (`launch.rs`): the variables the test gives an Actor's
+//!   network git operations (`PUT /ext/test/git-env`), each operation
+//!   recorded.
 //! - **`session_env`** / **`session_preamble`** (API 0.13, `launch.rs`): for a
 //!   Node, its `node_env` / `node_preamble`; for the Pipeline Manager and the
 //!   library assistant, the same variables plus `TEST_STARTED_BY` (the id of
@@ -164,9 +168,9 @@ use std::time::Duration;
 
 use pdo::extension_api::{
     Actor, ActorDisplay, Admission, Attributes, Authorization, CliInvocation, CliOutput, CliSpec,
-    EntityRef, Extension, ExtensionContext, ExtensionSkill, Manifest, NodeEnv, NodeLaunch,
-    Operation, RequestParts, ResourceDeclaration, ResourceKind, SessionLaunch, Slot, TriggerRef,
-    UiCommand, UiContribution, UiContributions, UiLocation, UiSlot, Verb, When,
+    EntityRef, Extension, ExtensionContext, ExtensionSkill, GitEnv, GitOperation, Manifest,
+    NodeEnv, NodeLaunch, Operation, RequestParts, ResourceDeclaration, ResourceKind, SessionLaunch,
+    Slot, TriggerRef, UiCommand, UiContribution, UiContributions, UiLocation, UiSlot, Verb, When,
 };
 use serde_json::Value;
 
@@ -282,12 +286,19 @@ pub struct Rule {
     /// Refuse without a sentence for a person (a trailing `!`): the core
     /// shows its generic one.
     pub silent: bool,
+    /// Refuse concealed (a trailing `?`): on a read of one entity, the core
+    /// answers as for an entity it does not know.
+    pub concealed: bool,
 }
 
 impl Rule {
-    /// `<resource>:<verb>[@<project>][~<actor>][!]`.
+    /// `<resource>:<verb>[@<project>][~<actor>][!][?]`.
     fn parse(text: &str) -> Result<Self, String> {
         let text = text.trim();
+        let (text, concealed) = match text.strip_suffix('?') {
+            Some(rest) => (rest, true),
+            None => (text, false),
+        };
         let (text, silent) = match text.strip_suffix('!') {
             Some(rest) => (rest, true),
             None => (text, false),
@@ -318,6 +329,7 @@ impl Rule {
             project,
             actor,
             silent,
+            concealed,
         })
     }
 
@@ -343,8 +355,9 @@ impl Refusal {
     /// (`project:update`, `trigger:fire` for the action `fire`, `run:read`,
     /// `a/item:create` for an extension's resource), then optionally
     /// `@<project id>` (only in that Projet; a bare `@`: only in no Projet)
-    /// and `~<actor>` (only for that identified caller):
-    /// `run:read@p2,repository:read,run:create@,run:create@p2~bob`.
+    /// and `~<actor>` (only for that identified caller), then `!` (no
+    /// sentence for a person) and `?` (a concealed refusal):
+    /// `run:read@p2,repository:read,run:create@,run:create@p2~bob,run:read@p2~bob?`.
     pub fn parse(text: &str) -> Result<Self, String> {
         match text.trim() {
             "none" => Ok(Refusal::Nothing),
@@ -364,6 +377,7 @@ impl Refusal {
                         project: None,
                         actor: None,
                         silent: false,
+                        concealed: false,
                     }] => Ok(Refusal::Only(resource.clone(), verb.clone())),
                     _ => Ok(Refusal::Rules(rules)),
                 }
@@ -384,12 +398,20 @@ impl Refusal {
 
     /// Whether the rule refusing `operation` gives no sentence for a person.
     fn silent(&self, actor: &Actor, operation: &Operation) -> bool {
+        self.rule(actor, operation).is_some_and(|rule| rule.silent)
+    }
+
+    /// Whether the rule refusing `operation` conceals the entity.
+    fn concealed(&self, actor: &Actor, operation: &Operation) -> bool {
+        self.rule(actor, operation)
+            .is_some_and(|rule| rule.concealed)
+    }
+
+    /// The rule refusing `operation`, when the refusal is made of rules.
+    fn rule(&self, actor: &Actor, operation: &Operation) -> Option<&Rule> {
         match self {
-            Refusal::Rules(rules) => rules
-                .iter()
-                .find(|rule| rule.matches(actor, operation))
-                .is_some_and(|rule| rule.silent),
-            _ => false,
+            Refusal::Rules(rules) => rules.iter().find(|rule| rule.matches(actor, operation)),
+            _ => None,
         }
     }
 }
@@ -659,6 +681,10 @@ impl Extension for TestExtension {
         self.control.launch.trigger_suspension(trigger)
     }
 
+    fn git_env(&self, operation: &GitOperation) -> GitEnv {
+        self.control.launch.git_env(operation)
+    }
+
     fn on_create(&self, actor: &Actor, _entity: &EntityRef) -> Attributes {
         let started_by = match actor {
             Actor::Identified { id, .. } => id.clone(),
@@ -831,11 +857,13 @@ impl Extension for TestExtension {
                 "Test",
                 "EntityBadge",
             ))
+            // A button around the badge: a gesture on the row, which its
+            // hover bar never covers.
             .contribute(UiContribution::decoration(
                 UiLocation::TriggerItem,
                 "trigger-badge",
                 "Test",
-                "EntityBadge",
+                "TriggerMark",
             ))
             .contribute(UiContribution::decoration(
                 UiLocation::PipelineItem,
@@ -1043,12 +1071,14 @@ impl Extension for TestExtension {
             panic!("the test extension panics in authorize");
         }
         if refusal.refuses(actor, operation) {
-            let deny = Authorization::deny(reason(operation));
-            if refusal.silent(actor, operation) {
-                deny
-            } else {
-                deny.saying(sentence(operation))
+            let mut deny = Authorization::deny(reason(operation));
+            if !refusal.silent(actor, operation) {
+                deny = deny.saying(sentence(operation));
             }
+            if refusal.concealed(actor, operation) {
+                deny = deny.concealed();
+            }
+            deny
         } else {
             Authorization::Allow
         }
@@ -1155,6 +1185,7 @@ fn a_refusal_reads_from_its_text_form() {
                 project: Some("p2".into()),
                 actor: None,
                 silent: false,
+                concealed: false,
             },
             Rule {
                 resource: ResourceKind::Repository,
@@ -1162,6 +1193,7 @@ fn a_refusal_reads_from_its_text_form() {
                 project: None,
                 actor: None,
                 silent: false,
+                concealed: false,
             },
             Rule {
                 resource: ResourceKind::Run,
@@ -1169,6 +1201,7 @@ fn a_refusal_reads_from_its_text_form() {
                 project: Some("p2".into()),
                 actor: Some("bob".into()),
                 silent: false,
+                concealed: false,
             },
         ]))
     );
@@ -1178,6 +1211,16 @@ fn a_refusal_reads_from_its_text_form() {
     assert!(silent.silent(&Actor::LocalOperator, &create));
     let read_repo = Operation::new(ResourceKind::Repository, Verb::Read);
     assert!(!silent.silent(&Actor::LocalOperator, &read_repo));
+    let concealed = Refusal::parse("run:read@p2~bob!?,project:read").unwrap();
+    let hidden = Operation::new(ResourceKind::Run, Verb::Read).in_projects(["p2"]);
+    let bob_here = Actor::Identified {
+        namespace: ID.into(),
+        id: "bob".into(),
+    };
+    assert!(concealed.concealed(&bob_here, &hidden));
+    assert!(concealed.silent(&bob_here, &hidden));
+    let read_project = Operation::new(ResourceKind::Project, Verb::Read);
+    assert!(!concealed.concealed(&bob_here, &read_project));
     let outside = Refusal::parse("run:create@,repository:read").unwrap();
     let create = Operation::new(ResourceKind::Run, Verb::Create);
     let actor = Actor::LocalOperator;

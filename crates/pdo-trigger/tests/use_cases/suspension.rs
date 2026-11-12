@@ -181,3 +181,42 @@ async fn a_fire_hands_the_trigger_and_its_last_editor_to_the_run() {
     let started = w.runs.started.lock().unwrap().clone();
     assert_eq!(started[0].trigger.last_editor, Some(alice()));
 }
+
+#[tokio::test]
+async fn the_fetch_before_a_fire_is_the_last_editors_not_the_callers() {
+    let w = world();
+    let created = w
+        .triggers
+        .create(&alice(), ActorHint::Ui, request(json!({})))
+        .await
+        .unwrap();
+    w.triggers
+        .run_now(&Actor::LocalOperator, &created.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        w.repos.fetched_for.lock().unwrap().clone(),
+        vec![(alice(), None)],
+        "the Trigger's Responsable answers for its fetch"
+    );
+
+    // A Trigger no one edited since editors were recorded fetches as itself.
+    w.store
+        .triggers
+        .lock()
+        .unwrap()
+        .iter_mut()
+        .for_each(|t| t.last_editor = None);
+    w.triggers
+        .run_now(&Actor::LocalOperator, &created.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        w.repos.fetched_for.lock().unwrap()[1].0,
+        Actor::Trigger {
+            trigger_id: created.id.clone()
+        }
+    );
+}

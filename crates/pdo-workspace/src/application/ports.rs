@@ -5,6 +5,8 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
+use pdo_kernel::extension_host::GitCredentials;
+
 use crate::domain::branches::{BranchList, FetchError};
 use crate::domain::browse::{BrowseEntry, BrowseRootError};
 use crate::domain::clone::CloneFailure;
@@ -159,8 +161,13 @@ pub trait Git: Send + Sync {
     fn validate_repository(&self, path: &str) -> Result<PathBuf, String>;
     /// The branches a Run can be cut from, read locally.
     fn branches(&self, repo: &Path) -> Result<BranchList, String>;
-    /// Fetch every remote; `None` on success, else why it did not happen.
-    fn fetch<'a>(&'a self, repo: &'a Path) -> BoxFuture<'a, Option<FetchError>>;
+    /// Fetch every remote with `credentials`; `None` on success, else why it
+    /// did not happen.
+    fn fetch<'a>(
+        &'a self,
+        repo: &'a Path,
+        credentials: &'a GitCredentials,
+    ) -> BoxFuture<'a, Option<FetchError>>;
     /// Whether `branch` is a local branch of `repo`.
     fn is_local_branch(&self, repo: &Path, branch: &str) -> bool;
     fn fast_forward(
@@ -177,15 +184,23 @@ pub trait Git: Send + Sync {
         name: &str,
         files: &[ScaffoldFile],
     ) -> Result<ScaffoldOutcome, String>;
-    /// Clone `url` in full into `dest` with the daemon's credentials, telling
+    /// Clone `url` in full into `dest` with `credentials`, telling
     /// `on_progress` each line git prints; nothing is left of `dest` when it
     /// fails or `cancel` fires.
     fn clone_repository<'a>(
         &'a self,
         url: &'a str,
         dest: &'a Path,
+        credentials: &'a GitCredentials,
         on_progress: Box<dyn Fn(&str) + Send + Sync + 'a>,
         cancel: tokio::sync::oneshot::Receiver<()>,
+    ) -> BoxFuture<'a, Result<(), CloneFailure>>;
+    /// Whether `url` answers to `credentials`, reading nothing but its refs;
+    /// `Err` carries why not, as a clone's failure does.
+    fn reach<'a>(
+        &'a self,
+        url: &'a str,
+        credentials: &'a GitCredentials,
     ) -> BoxFuture<'a, Result<(), CloneFailure>>;
 }
 

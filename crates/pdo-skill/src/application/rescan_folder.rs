@@ -32,7 +32,8 @@ impl Skills {
             .ok_or(SkillError::FolderNotFound)?;
         let source = source_of_folder(&folder)?;
         let previous_commit = folder.source.as_ref().and_then(|s| s.commit.clone());
-        let outcome = self.scanner.scan(scan_id, &source).await?;
+        let credentials = self.source_credentials(actor, &source);
+        let outcome = self.scanner.scan(scan_id, &source, &credentials).await?;
         let kept = self.scanner.kept(scan_id).ok_or(ImportError::ScanExpired)?;
         let skills = self.skills.list().await?;
         let folders = self.folders.list().await?;

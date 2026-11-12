@@ -2,12 +2,16 @@
 //! the event log and the Triggers' fires, then the Sessions fold over the Node
 //! starts of the Runs started in the window.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use pdo_kernel::extension_host::ExtensionHost;
+use pdo_kernel::Actor;
 use pdo_run::application::ports::EventWindow;
 
 use super::absorptions::load_resolver;
 use super::ports::{AbsorptionStore, RunEvents, TriggerFires};
+use super::readable::{readable_runs, readable_triggers};
 use crate::domain::bucket::strftime_fmt;
 use crate::domain::overview::fires::fires_by_pipeline;
 use crate::domain::overview::sessions::session_stats;
@@ -30,11 +34,14 @@ pub struct StatsRead {
 }
 
 impl StatsRead {
-    pub fn window(&self) -> EventWindow<'_> {
+    /// The window of the read, over the Runs of `runs` only when given (the
+    /// ones its reader may read).
+    pub fn window<'a>(&'a self, runs: Option<&'a BTreeSet<String>>) -> EventWindow<'a> {
         EventWindow {
             from: &self.from,
             to: &self.to,
             completed_only: self.completed_only,
+            runs,
         }
     }
 }
@@ -58,6 +65,7 @@ pub struct ReadOverview {
     events: Arc<dyn RunEvents>,
     triggers: Arc<dyn TriggerFires>,
     absorptions: Arc<dyn AbsorptionStore>,
+    extensions: Arc<dyn ExtensionHost>,
 }
 
 impl ReadOverview {
@@ -65,15 +73,22 @@ impl ReadOverview {
         events: Arc<dyn RunEvents>,
         triggers: Arc<dyn TriggerFires>,
         absorptions: Arc<dyn AbsorptionStore>,
+        extensions: Arc<dyn ExtensionHost>,
     ) -> Self {
         Self {
             events,
             triggers,
             absorptions,
+            extensions,
         }
     }
 
-    pub async fn execute(&self, read: &StatsRead) -> Result<StatsOverview, ReadError> {
+    /// The overview `actor` reads: the Runs and the Triggers it may read.
+    pub async fn execute(
+        &self,
+        actor: &Actor,
+        read: &StatsRead,
+    ) -> Result<StatsOverview, ReadError> {
         let Some(fmt) = strftime_fmt(&read.bucket) else {
             return Err(ReadError::InvalidBucket(read.bucket.clone()));
         };
@@ -81,7 +96,14 @@ impl ReadOverview {
         let resolver = load_resolver(self.absorptions.as_ref(), read.uncombined)
             .await
             .map_err(failed)?;
-        let window = read.window();
+        let host = self.extensions.as_ref();
+        let runs = readable_runs(host, self.events.as_ref(), actor)
+            .await
+            .map_err(failed)?;
+        let triggers = readable_triggers(host, self.triggers.as_ref(), actor)
+            .await
+            .map_err(failed)?;
+        let window = read.window(runs.as_ref());
         // `run_skipped` is NOT an error (invariant #4): errors = `run_failed` only.
         let runs = self.events.count_by_period("run_started", fmt, window);
         let runs = buckets(runs.await.map_err(failed)?);
@@ -92,9 +114,13 @@ impl ReadOverview {
         // series itself is the cohort's fold below.
         let node_starts = self.events.count_by_period("node_started", fmt, window);
         let node_starts = buckets(node_starts.await.map_err(failed)?);
-        let fires = self.triggers.by_pipeline(&read.from, &read.to);
+        let fires = self
+            .triggers
+            .by_pipeline(&read.from, &read.to, triggers.as_ref());
         let fires = fires_by_pipeline(fires.await.map_err(failed)?, &resolver);
-        let created = self.triggers.created_runs(&read.from, &read.to);
+        let created = self
+            .triggers
+            .created_runs(&read.from, &read.to, triggers.as_ref());
         let created = created.await.map_err(failed)?;
         let rows = self.events.node_starts(fmt, window).await.map_err(failed)?;
         let sessions = session_stats(rows, &resolver);

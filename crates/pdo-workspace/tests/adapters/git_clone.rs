@@ -1,6 +1,7 @@
 //! A shallow clone for the contexts that read a repository without working in
 //! it, and the index queries of a worktree.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use pdo_workspace::adapters::git::clone::{clone_full, clone_shallow, CloneError};
@@ -20,9 +21,16 @@ async fn a_repository_is_cloned_one_commit_deep() {
     let target = dest.path().join("clone");
     let (_tx, rx) = tokio::sync::oneshot::channel();
     let url = format!("file://{}", origin.path().display());
-    clone_shallow(&url, None, &target, rx, Duration::from_secs(60))
-        .await
-        .unwrap();
+    clone_shallow(
+        &url,
+        None,
+        &target,
+        &BTreeMap::new(),
+        rx,
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
     assert!(target.join("second.txt").is_file());
     let log = std::process::Command::new("git")
         .args(["rev-list", "--count", "HEAD"])
@@ -40,6 +48,7 @@ async fn a_missing_repository_fails_with_gits_message_and_a_cancel_stops_the_clo
         "file:///definitely/not/a/repo.git",
         None,
         &dest.path().join("x"),
+        &BTreeMap::new(),
         rx,
         Duration::from_secs(60),
     )
@@ -56,6 +65,7 @@ async fn a_missing_repository_fails_with_gits_message_and_a_cancel_stops_the_clo
         "https://example.invalid/o/r",
         None,
         &dest.path().join("y"),
+        &BTreeMap::new(),
         rx,
         Duration::from_secs(60),
     )
@@ -83,6 +93,7 @@ async fn a_full_clone_takes_every_commit_into_a_new_parent_and_reports_progress(
     clone_full(
         &url,
         &target,
+        &BTreeMap::new(),
         &|line: &str| lines.lock().unwrap().push(line.to_string()),
         rx,
     )
@@ -106,7 +117,9 @@ async fn a_full_clone_takes_every_commit_into_a_new_parent_and_reports_progress(
     let empty = dest.path().join("empty");
     std::fs::create_dir(&empty).unwrap();
     let (_tx, rx) = tokio::sync::oneshot::channel();
-    clone_full(&url, &empty, &|_: &str| {}, rx).await.unwrap();
+    clone_full(&url, &empty, &BTreeMap::new(), &|_: &str| {}, rx)
+        .await
+        .unwrap();
     assert!(empty.join("second.txt").is_file());
 }
 
@@ -118,6 +131,7 @@ async fn a_failed_or_cancelled_full_clone_leaves_nothing() {
     let err = clone_full(
         "file:///definitely/not/a/repo.git",
         &target,
+        &BTreeMap::new(),
         &|_: &str| {},
         rx,
     )
@@ -135,7 +149,7 @@ async fn a_failed_or_cancelled_full_clone_leaves_nothing() {
     let (tx, rx) = tokio::sync::oneshot::channel();
     tx.send(()).unwrap();
     let url = format!("file://{}", origin.path().display());
-    let err = clone_full(&url, &target, &|_: &str| {}, rx)
+    let err = clone_full(&url, &target, &BTreeMap::new(), &|_: &str| {}, rx)
         .await
         .unwrap_err();
     assert_eq!(err, CloneFailure::Cancelled);

@@ -43,6 +43,10 @@ tokio.workspace = true
 tracing.workspace = true
 ts-rs.workspace = true
 uuid.workspace = true
+# The guard of a Run's reads routes a concealed read again, as an unknown Run.
+tower = { version = "0.5", features = ["util"] }
+# The Run id of a guarded path, decoded as the route's `Path` decodes it.
+percent-encoding = "2"
 futures-util = "0.3"
 libc = "0.2"
 reqwest.workspace = true
@@ -61,5 +65,4 @@ pdo-extension-api.workspace = true
 pretty_assertions.workspace = true
 tempfile.workspace = true
 filetime = "0.2"
-tower = { version = "0.5", features = ["util"] }
 tokio-tungstenite = "0.26"

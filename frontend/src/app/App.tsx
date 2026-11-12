@@ -52,7 +52,7 @@ import { useWaitingAlerts } from "../run/store/useWaitingAlerts";
  *  center, the inspector on the right, the status bar, and every global modal. */
 export default function App() {
   const { status, subscribe } = useDaemonSocket();
-  const { entries: libraryEntries, refresh: refreshLibrary } = useLibrary();
+  const { entries: libraryEntries, refused: libraryRefused, refresh: refreshLibrary } = useLibrary();
   const { runs, runsLoaded, refresh: refreshRuns } = useRuns();
   const { sessions, refresh: refreshSessions } = useDaemonSessions();
   // #697: the daemon's cached version-check state, for the status-bar badge.
@@ -275,6 +275,7 @@ export default function App() {
               orchestratorReturn={orchestratorReturn}
               onBackToOrchestrator={handleBackToOrchestrator}
               libraryEntries={libraryEntries}
+              libraryRefused={libraryRefused}
               refreshLibrary={refreshLibrary}
               infoPanelOpen={info.infoActive}
               assistantActive={info.assistantActive}

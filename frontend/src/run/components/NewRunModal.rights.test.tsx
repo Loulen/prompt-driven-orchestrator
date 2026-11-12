@@ -135,6 +135,14 @@ describe("New Run without reading the disk: the repositories of the caller's Pro
     expect(screen.queryByText("/home/bob/code/secret")).toBeNull();
   });
 
+  it("does not open on a recent repository of both Projets, which would ask to pick its Project", async () => {
+    useRecentReposStore.setState({ recentRepos: [SHARED, "/home/bob/code/pdo-widgets"] });
+    renderModal();
+    await waitFor(() => expect(repoField()).toHaveAttribute("placeholder", "Search your Projects' repositories"));
+    await waitFor(() => expect(repoField().value).toBe("/home/bob/code/pdo-widgets"));
+    expect(screen.queryByTestId("primary-ambiguous")).toBeNull();
+  });
+
   it("sets the Projet from the repository picked under it, then empties a repository the next Projet lacks", async () => {
     renderModal();
     await waitFor(() => expect(repoField()).toHaveAttribute("placeholder", "Search your Projects' repositories"));

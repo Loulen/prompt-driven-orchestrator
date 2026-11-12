@@ -213,12 +213,19 @@ impl Runs {
     }
 
     /// A repository held by `several` Projets, named to `actor`: the Projets
-    /// it may read by name, the others counted.
+    /// it may read by name, sorted by name (case aside, then as written: the
+    /// New Run form's order, for the same sentence), the others counted.
     fn ambiguous(&self, actor: &Actor, several: &[Project]) -> Refusal {
-        let (readable, hidden): (Vec<&Project>, Vec<&Project>) =
+        let (mut readable, hidden): (Vec<&Project>, Vec<&Project>) =
             several.iter().partition(|project| {
                 authorize_read(self.extensions(), actor, &read_project(&project.id)).is_ok()
             });
+        readable.sort_by(|a, b| {
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then_with(|| a.name.cmp(&b.name))
+        });
         let mut names: Vec<String> = readable.iter().map(|p| p.name.clone()).collect();
         match hidden.len() {
             0 => {}

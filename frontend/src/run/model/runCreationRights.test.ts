@@ -113,6 +113,18 @@ describe("the rights to create a Run (CORE-5)", () => {
       expect(prefillRepo(restricted, ["/home/bob/code/secret", "/loose"], [PDO, EXT, SECRET])).toBeNull();
     });
 
+    it("skips, when the field only searches, a recent repository of several Projets, unless the last Projet chosen holds it", () => {
+      const BOTH = project("p4", "Ledger", ["/home/bob/code/PDO-v2"]);
+      const searching = runCreationRights([PDO, EXT, BOTH], [DENY, DENY, ALLOW, ALLOW, ALLOW]);
+      const recent = ["/home/bob/code/PDO-v2", "/home/bob/code/pdo-widgets"];
+      // No Projet to open on: the form would open on « pick its Project ».
+      expect(prefillRepo(searching, recent, [PDO, EXT, BOTH])).toBe("/home/bob/code/pdo-widgets");
+      expect(prefillRepo(searching, recent, [PDO, EXT, BOTH], "p2")).toBe("/home/bob/code/pdo-widgets");
+      // The form opens on a Projet holding it: no ambiguity.
+      expect(prefillRepo(searching, recent, [PDO, EXT, BOTH], "p4")).toBe("/home/bob/code/PDO-v2");
+      expect(prefillRepo(searching, ["/home/bob/code/PDO-v2"], [PDO, EXT, BOTH])).toBeNull();
+    });
+
     it("is none when the form offers nothing", () => {
       const nowhere = runCreationRights([SECRET], [DENY, DENY, DENY]);
       expect(prefillRepo(nowhere, ["/home/bob/code/secret"], [SECRET])).toBeNull();

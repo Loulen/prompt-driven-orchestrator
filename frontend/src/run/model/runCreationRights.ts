@@ -141,15 +141,24 @@ export function repoGroups(rights: RunCreationRights, recentRepos: string[], pro
 /**
  * The repository the form opens on. Unrestricted, the most recent one.
  * Restricted, the most recent one the form offers ({@link repoGroups}), else
- * the first one it offers (search-only, none): never a repository of a
- * Projet where a Run may not be created. `null` when there is none.
+ * the first one it offers: never a repository of a Projet where a Run may not
+ * be created. Search-only, a recent one or none, and not one several Projets
+ * hold unless `lastProject` (the Projet the form opens on) does: the form
+ * would open asking to pick its Project. `null` when there is none.
  */
-export function prefillRepo(rights: RunCreationRights, recentRepos: string[], projects: Project[]): string | null {
+export function prefillRepo(
+  rights: RunCreationRights,
+  recentRepos: string[],
+  projects: Project[],
+  lastProject: string | null = null,
+): string | null {
   if (!isRestricted(rights)) return recentRepos[0] ?? null;
   const offered = repoGroups(rights, recentRepos, projects).flatMap((g) => g.repos);
-  const recent = recentRepos.find((repo) => offered.includes(repo)) ?? null;
-  // Search-only, a recent repository or none: the repository picked sets the Projet.
-  return searchesOnly(rights) ? recent : (recent ?? offered[0] ?? null);
+  if (!searchesOnly(rights)) return recentRepos.find((repo) => offered.includes(repo)) ?? offered[0] ?? null;
+  const opensOn = rights.allowedProjects.find((p) => p.id === lastProject);
+  const unambiguous = (repo: string) =>
+    opensOn?.members.includes(repo) || projects.filter((p) => p.members.includes(repo)).length <= 1;
+  return recentRepos.find((repo) => offered.includes(repo) && unambiguous(repo)) ?? null;
 }
 
 /** « N Project(s) hidden… », or `null` when none is. */

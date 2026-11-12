@@ -271,6 +271,44 @@ async fn a_repository_of_several_projets_needs_its_projet_named() {
 }
 
 #[tokio::test]
+async fn an_ambiguous_repository_names_its_projets_by_name_whatever_their_order() {
+    let w = world();
+    let repo = w.repo.path().to_string_lossy().into_owned();
+    for (id, name) in [("p1", "Payments"), ("p2", "ledger"), ("p3", "Audit")] {
+        let mut project = Project::named(id, name);
+        project.members = vec![repo.clone()];
+        w.projects.0.lock().unwrap().push(project);
+    }
+
+    let (code, answer) = body(
+        w.runs
+            .create_run(
+                &Actor::LocalOperator,
+                create_request(&repo),
+                Vec::new(),
+                None,
+            )
+            .await,
+    )
+    .await;
+
+    assert_eq!(code, 400, "{answer}");
+    // The New Run form sorts them the same way: the same sentence.
+    assert_eq!(
+        answer["error"],
+        "This repository is in Audit, ledger and Payments: pick its Project."
+    );
+    assert_eq!(
+        answer["projects"],
+        serde_json::json!([
+            { "id": "p3", "name": "Audit" },
+            { "id": "p2", "name": "ledger" },
+            { "id": "p1", "name": "Payments" },
+        ])
+    );
+}
+
+#[tokio::test]
 async fn the_projets_of_an_ambiguous_repository_the_actor_may_not_read_are_counted() {
     let w = world_with_shared_repo();
     w.host.refuse_reads_in.lock().unwrap().push("p2".into());

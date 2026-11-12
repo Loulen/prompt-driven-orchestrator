@@ -73,12 +73,20 @@ function andList(names: string[]): string {
   return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
+/** By name, case aside, then as written: the daemon's order, for the same sentence. */
+function byName(a: string, b: string): number {
+  const [la, lb] = [a.toLowerCase(), b.toLowerCase()];
+  if (la !== lb) return la < lb ? -1 : 1;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 /**
  * A launch in no Projet on a repository several Projets hold: the daemon
  * refuses it with this sentence (the CLI says the same), the form before.
+ * The Projets are named by name, in the daemon's order.
  */
 export function ambiguousRepository(names: string[]): string {
-  return `This repository is in ${andList(names)}: pick its Project.`;
+  return `This repository is in ${andList([...names].sort(byName))}: pick its Project.`;
 }
 
 /**

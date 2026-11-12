@@ -5,6 +5,7 @@ import { cronToPreset, parseDailyTime } from "../../../trigger/model/cronPresets
 import { EMPTY_PROVISIONING_RULES } from "../../../workspace/model/provisioning";
 import { prefillOf, type NewRunPrefill, type OpenIntent } from "../../model/openIntent";
 import { prefillRepo } from "../../model/runCreationRights";
+import { readLastProject } from "../../model/launchProject";
 import { useRunCreationRightsStore } from "../runCreationRightsStore";
 import type { NewRunState } from "./useNewRunState";
 
@@ -211,7 +212,7 @@ export function useOpenIntentSeeding(open: boolean, openIntent: OpenIntent, s: N
     // API 0.22: the repositories an extension opened the form with win.
     if (prefillOf(openIntent)?.repositories?.length) return;
     // CORE-5: restricted, only a repository the form offers (`prefillRepo`).
-    const repo = prefillRepo(rights, recentRepos, rightsProjects);
+    const repo = prefillRepo(rights, recentRepos, rightsProjects, readLastProject());
     if (!prefillDone.current && repo && !targetRepo) {
       prefillDone.current = true;
       prefilled.current = repo;

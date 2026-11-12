@@ -88,6 +88,10 @@ describe("the Projet of a launch (ADR-0087)", () => {
     expect(projectsHolding([checkout, mobile], "  ")).toEqual([]);
     expect(ambiguousRepository(["Payments", "Risk"])).toBe("This repository is in Payments and Risk: pick its Project.");
     expect(ambiguousRepository(["A", "B", "C"])).toBe("This repository is in A, B and C: pick its Project.");
+    // By name, whatever their order, as the daemon's 400 says it.
+    expect(ambiguousRepository(["Payments", "ledger", "Audit"])).toBe(
+      "This repository is in Audit, ledger and Payments: pick its Project.",
+    );
   });
 
   it("offers the Projet's other repositories as secondaries", () => {

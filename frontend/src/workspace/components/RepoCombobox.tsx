@@ -148,6 +148,12 @@ export default function RepoCombobox({
     [onChange, onPick],
   );
 
+  // Closing the list drops a search: the field shows the repository picked again.
+  const closeList = useCallback(() => {
+    setDropdownOpen(false);
+    setQuery(null);
+  }, []);
+
   const openExplorer = useCallback(() => {
     setDropdownOpen(false);
     setExplorerOpen(true);
@@ -169,7 +175,7 @@ export default function RepoCombobox({
             shrinks before it and never runs under it. */}
         <div ref={fieldRef} className="ln-field" data-invalid={invalid || undefined} data-open={showList || undefined}>
           {leading ??
-            (searchOnly && (focused || value.trim() === "") ? (
+            (searchOnly && (query !== null || value.trim() === "") ? (
               <Search size={13} strokeWidth={1.5} className="ln-field__lead" aria-hidden data-testid="repo-search-icon" />
             ) : (
               <FolderGit2 size={13} strokeWidth={1.5} className="ln-field__lead" aria-hidden />
@@ -209,13 +215,17 @@ export default function RepoCombobox({
                 // The rows and the chevron keep the focus here (mousedown is
                 // cancelled on them): a blur is leaving the field.
                 setFocused(false);
-                setDropdownOpen(false);
-                setQuery(null);
+                closeList();
               }}
               onKeyDown={(e) => {
                 if (e.key === "ArrowDown" && !dropdownOpen) {
                   e.preventDefault();
                   setDropdownOpen(true);
+                } else if (searchOnly && e.key === "Escape" && query !== null) {
+                  // The list already closed: Escape still drops the search, not the form.
+                  e.preventDefault();
+                  e.stopPropagation();
+                  closeList();
                 } else if (searchOnly && e.key === "Enter") {
                   // A search is no repository: Enter takes the first match, if any.
                   e.preventDefault();
@@ -276,7 +286,7 @@ export default function RepoCombobox({
       <AnchoredPanel
         anchor={fieldRef}
         open={showList}
-        onClose={() => setDropdownOpen(false)}
+        onClose={closeList}
         className="ln-repo__pop"
         role="listbox"
         aria-label="Repositories"

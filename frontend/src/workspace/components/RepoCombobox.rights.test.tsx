@@ -155,4 +155,24 @@ describe("RepoCombobox searching only the Projets' repositories (no disk)", () =
     expect(screen.getByTestId("target-repo-path")).toHaveTextContent("~/clones/payments-api");
     expect(screen.queryByTestId("repo-search-icon")).toBeNull();
   });
+
+  it("keeps the repository's icon on the repository picked, the field focused, until something is typed", () => {
+    renderSearch({ value: "/home/bob/clones/payments-api", repoValid: true });
+    const input = screen.getByTestId("target-repo-input");
+    fireEvent.focus(input);
+    expect(screen.queryByTestId("repo-search-icon")).toBeNull();
+    fireEvent.change(input, { target: { value: "risk" } });
+    expect(screen.getByTestId("repo-search-icon")).toBeInTheDocument();
+  });
+
+  it("gives the repository picked back to the field when Escape drops the search", () => {
+    renderSearch({ value: "/home/bob/clones/payments-api", repoValid: true });
+    const input = screen.getByTestId("target-repo-input");
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: "zzz-nothing" } });
+    expect(input).toHaveValue("zzz-nothing");
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(input).toHaveValue("/home/bob/clones/payments-api");
+    expect(screen.queryByTestId("repo-no-match")).toBeNull();
+  });
 });

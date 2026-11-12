@@ -188,6 +188,9 @@ impl Projects for NoProjects {
     fn project<'a>(&'a self, _id: &'a str) -> BoxFuture<'a, Result<Option<Project>, String>> {
         Box::pin(async { Ok(None) })
     }
+    fn holding<'a>(&'a self, _path: &'a str) -> BoxFuture<'a, Result<Vec<Project>, String>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
     fn provisioning_rules<'a>(
         &'a self,
         _project: Option<&'a str>,

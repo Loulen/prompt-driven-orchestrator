@@ -65,6 +65,8 @@ export function useNewRunState(open: boolean) {
   // own default no longer replaces it.
   const [projectId, setProjectId] = useState<string | null>(null);
   const [projectChosen, setProjectChosen] = useState(false);
+  // The Projet the last pick of a repository set (search-only), while it is the form's.
+  const [setFromRepo, setSetFromRepo] = useState<string | null>(null);
 
   const [runName, setRunName] = useState("");
   const [autoName, setAutoName] = useState(true);
@@ -200,7 +202,8 @@ export function useNewRunState(open: boolean) {
   }, []);
 
   return {
-    projectId, setProjectId, projectChosen, setProjectChosen, toggleProjectSecondary,
+    projectId, setProjectId, projectChosen, setProjectChosen, setFromRepo, setSetFromRepo,
+    toggleProjectSecondary,
     pipelines, projects, selectedPipeline, selectedPipelineId, setSelectedPipelineId,
     pipelineChosen, setPipelineChosen, loadPipelines, branches,
     branchesLoading, sourceBranch, setSourceBranch, loadBranches, clearBranches, lastFetchAt,

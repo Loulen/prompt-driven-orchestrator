@@ -95,6 +95,7 @@ export function useNewRunForm({ open, openIntent, onClose, onCreated, onTriggerS
   const submit = useNewRunSubmit(state, {
     primaryInProject: launch.primaryInProject,
     launchProject: launch.launchProject,
+    ambiguousReason: launch.ambiguousReason,
     draftLaunchOf,
     saveDraftVersion,
     attachmentsOverLimit: attachmentState.attachmentsOverLimit,

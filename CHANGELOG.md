@@ -24,6 +24,28 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   out), so it revokes what it handed it, also when the request of a dry-run or a "Run now" is
   dropped while its guard runs (then `failed`). An extension that answers `git_env` whatever its
   kind now hands its variables to the guards too. Without an extension, the guard runs as before.
+- A Run lives in the Project of its repository. `pdo run create`, `POST /runs` and a Run an
+  extension creates through its host, naming no Project, launch the Run in the one Project holding
+  its repository, and ask for `run` × `create` there. **Breaking**: a repository held by several Projects is refused with a `400` naming them by name
+  ("This repository is in Payments and Risk: pick its Project.", the Projects also listed in the
+  body's `projects`, in the same order), and `pdo run create` adds the `--project` to pass. Before, such a Run was
+  launched in no Project.
+- A Run launched in no Project works in a repository read from the disk: its creation also asks
+  `repository` × `read` in no Project, which an authorization extension can refuse. So does a Run
+  naming a secondary repository outside its Project. Refused, no Run and no branch are created.
+- A Run created from a node session works in its parent Run's Project: a `--target-repo` outside
+  it is refused, and a parent in no Project only targets a repository of no Project.
+- New Run, for an actor who may not read the disk: the Repo field searches the repositories of
+  their Projects ("Search your Projects' repositories"), grouped by Project, a repository of
+  several Projects under each with its `+1`. What is typed only filters the list, and Enter on a
+  search that matches nothing does nothing; Escape drops the search. Picking a repository under a Project sets the form's
+  Project ("set from the repo"), and choosing another Project empties a repository that is not
+  one of its own. The form opens on the last Project chosen, else on none ("Pick a project…"),
+  and "No project" is no longer offered to them; it does not open on a recent repository of
+  several Projects that Project does not hold.
+- New Run with "No project" on a repository of several Projects says "This repository is in …:
+  pick its Project." under the field, the same sentence as the `400`, and Launch stays greyed
+  with it.
 - A mounted page has an owner and a Project. A page mounted from a node is in the Project of its Run and belongs to whoever created that Run; `pdo page mount --project <id>` puts a page in a Project, and without it the page is in none. Pages mounted earlier take the Project and the creator of their Run at the next start.
 - Reading a mounted page is judged in its Project: `GET /pages` lists only the pages you may read (`page_mount` × `read`, a new verb of the catalogue), and the page and its files answer the refusal to anyone else. Its owner unmounts it; anyone else needs `page_mount` × `delete` in its Project. **Breaking** for an extension that refuses every Operation whatever its verb: it now hides the mounted pages too.
 - `pdo page mount|unmount|list` print the refusal's sentence, as the other commands do; `pdo page unmount` of an unknown page exits `4`; `pdo page list` adds the page's Project.

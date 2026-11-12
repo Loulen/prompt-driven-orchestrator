@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, type ReactNode } from "react";
-import { Check, ChevronDown, CircleCheck, FolderGit2, FolderSearch, History, LoaderCircle } from "lucide-react";
+import { Check, ChevronDown, CircleCheck, FolderGit2, FolderSearch, History, LoaderCircle, Search } from "lucide-react";
 import FsExplorerModal from "./FsExplorerModal";
 import { tildify } from "../../lib/homePath";
 import { AnchoredPanel } from "../../shared/ui/kit/layer";
@@ -10,6 +10,8 @@ import MidPath from "../../shared/ui/MidPath";
 export interface RepoChoiceGroup {
   label: string;
   repos: string[];
+  /** The Projet the group is, when it is one: a repository picked under it is picked in it. */
+  projectId?: string;
 }
 
 interface Props {
@@ -45,8 +47,16 @@ interface Props {
   home?: string | null;
   /** A mark after the path (New Run's « default »): never over the path. */
   badge?: ReactNode;
-  /** A mark after a path of the list (« default » on the Projet's primary). */
-  rowBadge?: (path: string) => ReactNode;
+  /** A mark after a path of the list (« default » on the Projet's primary), in its group. */
+  rowBadge?: (path: string, group: RepoChoiceGroup) => ReactNode;
+  /**
+   * The field only searches the offered repositories: what is typed filters
+   * the list and is never taken as a repository; a repository is picked from
+   * the list. For whoever may not read the disk (no path or URL of its own).
+   */
+  searchOnly?: boolean;
+  /** A repository picked from the list, with the group it was picked under. */
+  onPick?: (path: string, group: RepoChoiceGroup) => void;
   /** The icon at the start of the field (New Run's globe for a URL, CORE-97). */
   leading?: ReactNode;
   /** Replaces the verdict under the field (a URL has none: it is cloned first). */
@@ -69,7 +79,8 @@ interface Props {
  * the field is not focused (CORE-108), the verdict at its end; the chevron
  * (or focusing the field) lists the recent repositories, or the groups the
  * Droits allow (CORE-5), each path cut in its middle. The loupe, beside the
- * field, opens the folder explorer.
+ * field, opens the folder explorer. Search-only, the field types a search
+ * through the offered repositories, never a path.
  */
 export default function RepoCombobox({
   value,
@@ -91,6 +102,8 @@ export default function RepoCombobox({
   refusal,
   ariaLabel,
   id = "target-repo",
+  searchOnly = false,
+  onPick,
 }: Props) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   // CORE-108: out of focus, the path is shown cut in its middle over the input;
@@ -101,33 +114,45 @@ export default function RepoCombobox({
   // The filesystem explorer (#131, `FsExplorerModal` since #431): the picking
   // flow runs through `onChange` and its validation, like a typed path.
   const [explorerOpen, setExplorerOpen] = useState(false);
+  // Search-only: what is typed, a filter of the list, never the value; `null`
+  // until something is typed (the field shows the repository picked).
+  const [query, setQuery] = useState<string | null>(null);
 
   // CORE-5: the restricted form offers its groups; otherwise the recents, in
   // one group. A value picked from them shows every choice again; a typed one
   // narrows them.
   const grouped = groups !== undefined;
   const offered: RepoChoiceGroup[] = grouped ? groups : [{ label: "Recent", repos: recentRepos }];
-  const narrowing = !offered.some((g) => g.repos.includes(value));
-  const needle = value.toLowerCase();
+  const narrowing = searchOnly ? !!query?.trim() : !offered.some((g) => g.repos.includes(value));
+  const needle = (searchOnly ? (query ?? "").trim() : value).toLowerCase();
   const shownGroups = offered
     .map((g) => ({
       ...g,
       repos: narrowing ? g.repos.filter((r) => r.toLowerCase().includes(needle)) : g.repos,
     }))
     .filter((g) => g.repos.length > 0);
-  const showList = dropdownOpen && !explorerOpen && (shownGroups.length > 0 || (grouped && !!groupsNote));
+  const noMatch = searchOnly && shownGroups.length === 0;
+  const showList = dropdownOpen && !explorerOpen && (shownGroups.length > 0 || noMatch || (grouped && !!groupsNote));
 
   const showPath = !focused && value.trim() !== "";
   const invalid = !hint && (repoValid === false || !!repoError || !!refusal);
 
   const handleSelect = useCallback(
-    (repo: string) => {
-      onChange(repo);
+    (repo: string, group: RepoChoiceGroup) => {
+      if (onPick) onPick(repo, group);
+      else onChange(repo);
+      setQuery(null);
       setDropdownOpen(false);
       inputRef.current?.focus();
     },
-    [onChange],
+    [onChange, onPick],
   );
+
+  // Closing the list drops a search: the field shows the repository picked again.
+  const closeList = useCallback(() => {
+    setDropdownOpen(false);
+    setQuery(null);
+  }, []);
 
   const openExplorer = useCallback(() => {
     setDropdownOpen(false);
@@ -149,41 +174,63 @@ export default function RepoCombobox({
             the chevron. The mark is a sibling of the text box, so a long path
             shrinks before it and never runs under it. */}
         <div ref={fieldRef} className="ln-field" data-invalid={invalid || undefined} data-open={showList || undefined}>
-          {leading ?? <FolderGit2 size={13} strokeWidth={1.5} className="ln-field__lead" aria-hidden />}
+          {leading ??
+            (searchOnly && (query !== null || value.trim() === "") ? (
+              <Search size={13} strokeWidth={1.5} className="ln-field__lead" aria-hidden data-testid="repo-search-icon" />
+            ) : (
+              <FolderGit2 size={13} strokeWidth={1.5} className="ln-field__lead" aria-hidden />
+            ))}
           <div className="ln-field__box">
             <input
               ref={inputRef}
               id={id}
               className={showPath ? "ln-field__input text-transparent" : "ln-field__input"}
-              placeholder="Path or URL"
+              placeholder={searchOnly ? "Search your Projects' repositories" : "Path or URL"}
               aria-label={ariaLabel}
               aria-invalid={invalid || undefined}
               aria-expanded={showList}
               aria-haspopup="listbox"
               title={value || undefined}
-              value={value}
+              value={searchOnly && query !== null ? query : value}
               onChange={(e) => {
                 const next = e.target.value;
+                if (searchOnly) {
+                  setQuery(next);
+                  setDropdownOpen(true);
+                  return;
+                }
                 onChange(next);
                 // A path typed (or pasted) whole is a pick: the list steps aside.
                 setDropdownOpen(!offered.some((g) => g.repos.includes(next)));
               }}
-              onFocus={() => {
+              onFocus={(e) => {
                 setFocused(true);
+                // Search-only, typing replaces the repository shown with a search.
+                if (searchOnly) e.target.select();
                 // A field that already holds one of the offered repositories
                 // opens its list on the chevron or ↓, not on a mere focus.
-                if (narrowing) setDropdownOpen(true);
+                if (narrowing || (searchOnly && value.trim() === "")) setDropdownOpen(true);
               }}
               onBlur={() => {
                 // The rows and the chevron keep the focus here (mousedown is
                 // cancelled on them): a blur is leaving the field.
                 setFocused(false);
-                setDropdownOpen(false);
+                closeList();
               }}
               onKeyDown={(e) => {
                 if (e.key === "ArrowDown" && !dropdownOpen) {
                   e.preventDefault();
                   setDropdownOpen(true);
+                } else if (searchOnly && e.key === "Escape" && query !== null) {
+                  // The list already closed: Escape still drops the search, not the form.
+                  e.preventDefault();
+                  e.stopPropagation();
+                  closeList();
+                } else if (searchOnly && e.key === "Enter") {
+                  // A search is no repository: Enter takes the first match, if any.
+                  e.preventDefault();
+                  const first = shownGroups[0];
+                  if (dropdownOpen && first) handleSelect(first.repos[0], first);
                 }
               }}
               spellCheck={false}
@@ -239,14 +286,14 @@ export default function RepoCombobox({
       <AnchoredPanel
         anchor={fieldRef}
         open={showList}
-        onClose={() => setDropdownOpen(false)}
+        onClose={closeList}
         className="ln-repo__pop"
         role="listbox"
         aria-label="Repositories"
       >
         <div className="d-pop__list" data-testid={grouped ? "repo-groups-dropdown" : "recent-repos-dropdown"}>
           {shownGroups.map((group) => (
-            <div key={group.label} role="group" aria-label={group.label} data-testid="repo-group">
+            <div key={group.projectId ?? group.label} role="group" aria-label={group.label} data-testid="repo-group" data-project-id={group.projectId}>
               <div className="d-caps d-pop__group ln-repo__group" title={group.label}>
                 {group.label}
               </div>
@@ -259,18 +306,23 @@ export default function RepoCombobox({
                   className="d-pop__row ln-repo__row"
                   onMouseDown={(e) => {
                     e.preventDefault();
-                    handleSelect(repo);
+                    handleSelect(repo, group);
                   }}
                   data-testid={grouped ? "repo-group-item" : "recent-repo-item"}
                 >
                   <span className="d-pop__mark">{repo === value && <Check size={12} strokeWidth={2} aria-hidden />}</span>
                   <History size={13} strokeWidth={1.5} className="d-pop__ic" aria-hidden />
                   <MidPath path={tildify(repo, home)} title={false} className="ln-repo__rowpath" />
-                  {rowBadge?.(repo)}
+                  {rowBadge?.(repo, group)}
                 </div>
               ))}
             </div>
           ))}
+          {noMatch && (
+            <div className="d-pop__empty" data-testid="repo-no-match">
+              No repository matches.
+            </div>
+          )}
           {groupsNote && (
             <div className="d-pop__empty ln-repo__note" data-testid="repo-groups-note">
               {groupsNote}

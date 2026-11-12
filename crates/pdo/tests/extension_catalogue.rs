@@ -160,7 +160,7 @@ async fn without_extension_the_catalogue_is_the_cores() {
 }
 
 #[tokio::test]
-async fn creating_a_run_reaches_the_extension_in_the_projet_it_names_or_in_none() {
+async fn creating_a_run_reaches_the_extension_in_the_projet_of_its_repository_or_in_none() {
     // Refused: the Operations are asked about, and nothing runs.
     let (ext, control) = TestExtension::new(Refusal::Only(ResourceKind::Run, Verb::Create));
     let daemon = TestDaemon::spawn_with_extensions(seed, ext.boxed())
@@ -172,10 +172,13 @@ async fn creating_a_run_reaches_the_extension_in_the_projet_it_names_or_in_none(
 
     let (status, _) = create_run_on(&daemon, &daemon.target_repo(), Some(&projet)).await;
     assert_eq!(status, 403);
-    // ADR-0087: a repository of the Projet, launched in none, is in none.
+    // Naming no Projet, a repository of the Projet is judged in it...
     let (status, _) = create_run_on(&daemon, &daemon.target_repo(), None).await;
     assert_eq!(status, 403);
-    let _ = &outside;
+    // ...and a repository of no Projet in none.
+    let outside_repo = outside.path().to_string_lossy().into_owned();
+    let (status, _) = create_run_on(&daemon, &outside_repo, None).await;
+    assert_eq!(status, 403);
 
     let creations: Vec<Operation> = control
         .seen()
@@ -186,7 +189,11 @@ async fn creating_a_run_reaches_the_extension_in_the_projet_it_names_or_in_none(
     let creation = Operation::new(ResourceKind::Run, Verb::Create);
     assert_eq!(
         creations,
-        vec![creation.clone().in_projects([projet.as_str()]), creation,]
+        vec![
+            creation.clone().in_projects([projet.as_str()]),
+            creation.clone().in_projects([projet.as_str()]),
+            creation,
+        ]
     );
 
     // The same, read where a Feature Path reads it.
@@ -199,10 +206,11 @@ async fn creating_a_run_reaches_the_extension_in_the_projet_it_names_or_in_none(
         .iter()
         .filter(|seen| seen["operation"]["resource"] == "run")
         .collect();
-    assert_eq!(runs.len(), 2);
+    assert_eq!(runs.len(), 3);
     assert_eq!(runs[0]["operation"]["projects"], json!([projet]));
     assert_eq!(runs[0]["actor"], json!({ "kind": "local_operator" }));
-    assert_eq!(runs[1]["operation"]["projects"], json!([]));
+    assert_eq!(runs[1]["operation"]["projects"], json!([projet]));
+    assert_eq!(runs[2]["operation"]["projects"], json!([]));
 }
 
 #[tokio::test]

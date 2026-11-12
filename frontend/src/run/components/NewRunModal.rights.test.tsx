@@ -101,6 +101,84 @@ function renderModal() {
   return render(<NewRunModal open={true} onClose={() => {}} onCreated={() => {}} />);
 }
 
+const SHARED = "/home/bob/code/shared-lib";
+
+describe("New Run without reading the disk: the repositories of the caller's Projets", () => {
+  const PDO_SHARED = project("p1", "PDO", ["/home/bob/code/PDO-v2", SHARED]);
+  const EXT_SHARED = project("p2", "pdo-widgets", ["/home/bob/code/pdo-widgets", SHARED]);
+
+  beforeEach(() => {
+    useRunCreationRightsStore.setState({ rights: UNKNOWN_RIGHTS, projects: [PDO_SHARED, EXT_SHARED, SECRET] });
+    vi.mocked(askAuthorization).mockImplementation(async (q) => answerAsBob(q));
+  });
+
+  it("opens on no Projet and searches every Projet's repositories, typing no path", async () => {
+    renderModal();
+    await waitFor(() => expect(repoField()).toHaveAttribute("placeholder", "Search your Projects' repositories"));
+    expect(screen.getByTestId("project-combobox")).toHaveTextContent("Pick a project…");
+    fireEvent.focus(repoField());
+    fireEvent.change(repoField(), { target: { value: "/tmp/mine" } });
+    expect(screen.getByTestId("repo-no-match")).toHaveTextContent("No repository matches.");
+    fireEvent.keyDown(repoField(), { key: "Enter" });
+    fireEvent.blur(repoField());
+    expect(repoField().value).toBe("");
+    expect(screen.queryByTestId("repo-error")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("repo-groups-trigger"));
+    expect(screen.getAllByTestId("repo-group").map((g) => g.getAttribute("aria-label"))).toEqual(["PDO", "pdo-widgets"]);
+    // The repository of both Projets is under each, marked with the other one.
+    const also = screen.getAllByTestId("repo-also-in");
+    expect(also.map((a) => a.textContent)).toEqual(["+1", "+1"]);
+    expect(also.map((a) => a.getAttribute("title"))).toEqual(["Also in pdo-widgets", "Also in PDO"]);
+    // No sentence closes the list, and no Projet where a Run may not be created.
+    expect(screen.queryByTestId("repo-groups-note")).toBeNull();
+    expect(screen.queryByText("/home/bob/code/secret")).toBeNull();
+  });
+
+  it("does not open on a recent repository of both Projets, which would ask to pick its Project", async () => {
+    useRecentReposStore.setState({ recentRepos: [SHARED, "/home/bob/code/pdo-widgets"] });
+    renderModal();
+    await waitFor(() => expect(repoField()).toHaveAttribute("placeholder", "Search your Projects' repositories"));
+    await waitFor(() => expect(repoField().value).toBe("/home/bob/code/pdo-widgets"));
+    expect(screen.queryByTestId("primary-ambiguous")).toBeNull();
+  });
+
+  it("sets the Projet from the repository picked under it, then empties a repository the next Projet lacks", async () => {
+    renderModal();
+    await waitFor(() => expect(repoField()).toHaveAttribute("placeholder", "Search your Projects' repositories"));
+    fireEvent.click(screen.getByTestId("repo-groups-trigger"));
+    const widgets = screen.getAllByTestId("repo-group").find((g) => g.getAttribute("data-project-id") === "p2")!;
+    const shared = Array.from(widgets.querySelectorAll("[data-testid=repo-group-item]")).find(
+      (i) => i.getAttribute("title") === SHARED,
+    )!;
+    fireEvent.mouseDown(shared);
+
+    expect(repoField().value).toBe(SHARED);
+    expect(screen.getByTestId("project-combobox")).toHaveTextContent("pdo-widgets");
+    expect(screen.getByTestId("project-from-repo")).toHaveTextContent("set from the repo");
+
+    // PDO holds it too: it stays, the mark goes.
+    fireEvent.click(screen.getByTestId("project-combobox"));
+    fireEvent.mouseDown(screen.getAllByTestId("project-option").find((o) => o.getAttribute("data-project-id") === "p1")!);
+    expect(repoField().value).toBe(SHARED);
+    expect(screen.queryByTestId("project-from-repo")).toBeNull();
+
+    // Then the list is PDO's, and a repository of pdo-widgets only is emptied
+    // when PDO is chosen again over it.
+    fireEvent.click(screen.getByTestId("repo-groups-trigger"));
+    expect(screen.getAllByTestId("repo-group").map((g) => g.getAttribute("aria-label"))).toEqual(["PDO"]);
+    fireEvent.click(screen.getByTestId("project-combobox"));
+    fireEvent.mouseDown(screen.getAllByTestId("project-option").find((o) => o.getAttribute("data-project-id") === "p2")!);
+    fireEvent.click(screen.getByTestId("repo-groups-trigger"));
+    fireEvent.mouseDown(
+      screen.getAllByTestId("repo-group-item").find((i) => i.getAttribute("title") === "/home/bob/code/pdo-widgets")!,
+    );
+    fireEvent.click(screen.getByTestId("project-combobox"));
+    fireEvent.mouseDown(screen.getAllByTestId("project-option").find((o) => o.getAttribute("data-project-id") === "p1")!);
+    expect(repoField().value).toBe("");
+  });
+});
+
 describe("New Run under the rights of the caller (CORE-5)", () => {
   it("asks at each open, then greys the loupe and offers the allowed Projets' repositories", async () => {
     vi.mocked(askAuthorization).mockImplementation(async (q) => answerAsBob(q));
@@ -116,7 +194,7 @@ describe("New Run under the rights of the caller (CORE-5)", () => {
     // The greyed loupe says why: no line of help the core would make up.
     expect(screen.queryByTestId("repo-help")).toBeNull();
     // ADR-0087: the allowed Projets head the form, « No project » is not offered
-    // (no Run in no Projet), and the hidden one is said.
+    // (no Run in no Projet, nor the disk), and the hidden one is said.
     fireEvent.click(screen.getByTestId("project-combobox"));
     expect(screen.getAllByTestId("project-option").map((o) => o.getAttribute("data-project-id"))).toEqual([
       "p1",
@@ -126,7 +204,11 @@ describe("New Run under the rights of the caller (CORE-5)", () => {
     expect(screen.getByTestId("project-combobox-note")).toHaveTextContent(
       "1 Project(s) hidden: you can't create Runs there.",
     );
-    // The repository field offers the chosen Projet's repositories.
+    // No Projet chosen yet, the repository field offers every allowed Projet's
+    // repositories; chosen, that Projet's.
+    fireEvent.click(screen.getByTestId("repo-groups-trigger"));
+    expect(screen.getAllByTestId("repo-group").map((g) => g.getAttribute("aria-label"))).toEqual(["PDO", "pdo-widgets"]);
+    fireEvent.mouseDown(screen.getAllByTestId("project-option").find((o) => o.getAttribute("data-project-id") === "p1")!);
     fireEvent.click(screen.getByTestId("repo-groups-trigger"));
     const groups = screen.getAllByTestId("repo-group").map((g) => g.getAttribute("aria-label"));
     expect(groups).toEqual(["PDO"]);
@@ -151,6 +233,11 @@ describe("New Run under the rights of the caller (CORE-5)", () => {
     vi.mocked(askAuthorization).mockImplementation(async (q) => answerAsBob(q));
     renderModal();
     const context = () => JSON.parse(screen.getByTestId("run-new-context").textContent ?? "{}");
+    await waitFor(() => expect(useRunCreationRightsStore.getState().rights.known).toBe(true));
+    // Search-only, the form opens on no Projet: picking a repository sets it.
+    expect(context().targetProject ?? null).toBeNull();
+    fireEvent.click(screen.getByTestId("repo-groups-trigger"));
+    fireEvent.mouseDown(screen.getAllByTestId("repo-group-item").find((i) => i.getAttribute("title") === "/home/bob/code/PDO-v2")!);
     await waitFor(() =>
       expect(context().targetProject).toEqual({ id: "p1", name: "PDO", attributes: {} }),
     );
@@ -180,7 +267,9 @@ describe("New Run under the rights of the caller (CORE-5)", () => {
       vi.mocked(askAuthorization).mockImplementation(async (q) => answerAsBob(q));
       useRecentReposStore.setState({ recentRepos: ["/home/bob/code/secret"] });
       renderModal();
-      await waitFor(() => expect(repoField().value).toBe("/home/bob/code/PDO-v2"));
+      await waitFor(() => expect(useRunCreationRightsStore.getState().rights.known).toBe(true));
+      // Search-only, no recent repository is offered: the field is left to search.
+      await waitFor(() => expect(repoField().value).toBe(""));
     });
 
     it("leaves a repository the caller typed alone", async () => {

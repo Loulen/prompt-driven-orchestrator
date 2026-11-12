@@ -35,6 +35,9 @@ mod cli_operator;
 #[path = "cli_run_create.rs"]
 mod cli_run_create;
 
+#[path = "run_project_of_repository.rs"]
+mod run_project_of_repository;
+
 #[path = "cli_review.rs"]
 mod cli_review;
 

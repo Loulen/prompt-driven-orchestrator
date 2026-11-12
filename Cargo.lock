@@ -2506,6 +2506,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "clap",
+ "libc",
  "pdo-extension-api",
  "pdo-harness",
  "pdo-kernel",

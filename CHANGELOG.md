@@ -24,6 +24,10 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   out), so it revokes what it handed it, also when the request of a dry-run or a "Run now" is
   dropped while its guard runs (then `failed`). An extension that answers `git_env` whatever its
   kind now hands its variables to the guards too. Without an extension, the guard runs as before.
+- A Trigger's guard runs in its own process group, killed whole when the guard ends, whatever its
+  end (passed, skipped, timed out, or its request dropped): what the guard started no longer
+  outlives it with its environment. Before, a timeout killed only the guard's `sh`, and a process
+  it left in the background kept running.
 - A Run lives in the Project of its repository. `pdo run create`, `POST /runs` and a Run an
   extension creates through its host, naming no Project, launch the Run in the one Project holding
   its repository, and ask for `run` × `create` there. **Breaking**: a repository held by several Projects is refused with a `400` naming them by name

@@ -880,6 +880,11 @@ guard, whatever its end, whether or not the extension gave anything, on the Trig
 it quick. A request dropped while its guard runs (a "Run now", a dry-run) kills the guard and ends
 it `failed`.
 
+The guard runs in its own process group, and the daemon kills that group whole as the guard ends:
+on a timeout, on a dropped request, and also when a guard exits on its own but leaves a process in
+the background. What the guard started dies with it, the token
+along. A process that leaves the group (`setsid`, a daemon that detaches) escapes this.
+
 Without an extension answering, the guard runs exactly as before: the daemon's environment and
 `PDO_TARGET_REPO`.
 

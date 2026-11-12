@@ -16,6 +16,14 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 
 ## Unreleased
 
+- New seam, the environment and the end of a Trigger's guard: before a guard runs, `git_env` is
+  asked with the new kind `guard`, for the Trigger's last editor in its Project (the dry-run: for
+  who runs it, in the Project `POST /triggers/guard/test` now takes as `project_id`), and the
+  variables reach the guard's shell, never its argv; `PDO_TARGET_REPO` stays the core's. The new
+  hook `guard_ended` tells every extension the guard ended (passed, skipped, failed or timed
+  out), so it revokes what it handed it, also when the request of a dry-run or a "Run now" is
+  dropped while its guard runs (then `failed`). An extension that answers `git_env` whatever its
+  kind now hands its variables to the guards too. Without an extension, the guard runs as before.
 - A mounted page has an owner and a Project. A page mounted from a node is in the Project of its Run and belongs to whoever created that Run; `pdo page mount --project <id>` puts a page in a Project, and without it the page is in none. Pages mounted earlier take the Project and the creator of their Run at the next start.
 - Reading a mounted page is judged in its Project: `GET /pages` lists only the pages you may read (`page_mount` × `read`, a new verb of the catalogue), and the page and its files answer the refusal to anyone else. Its owner unmounts it; anyone else needs `page_mount` × `delete` in its Project. **Breaking** for an extension that refuses every Operation whatever its verb: it now hides the mounted pages too.
 - `pdo page mount|unmount|list` print the refusal's sentence, as the other commands do; `pdo page unmount` of an unknown page exits `4`; `pdo page list` adds the page's Project.

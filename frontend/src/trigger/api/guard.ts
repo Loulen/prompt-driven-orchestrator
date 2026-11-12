@@ -17,15 +17,21 @@ export interface TestGuardResponse {
  * `run_guard` seam with **zero side effects** (no Run, no fire history, no
  * `next_fire_at` bump) and returns the verdict. `target_repo` is the repository
  * the guard runs in: like a real fire, the daemon refuses (400) a guard nobody
- * named a repository for.
+ * named a repository for. `project_id` is the Project the Trigger is (or will
+ * be) in: the guard runs with what the extensions give the caller there, as a
+ * fire runs it with what they give the Trigger's last editor.
  */
 export function testGuard(
   guard_command: string,
   target_repo?: string,
+  project_id?: string,
 ): Promise<TestGuardResponse> {
   return request<TestGuardResponse>(
     "POST",
     "/triggers/guard/test",
-    { body: { guard_command, target_repo }, label: "POST /triggers/guard/test" },
+    {
+      body: { guard_command, target_repo, project_id },
+      label: "POST /triggers/guard/test",
+    },
   );
 }

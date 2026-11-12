@@ -42,7 +42,7 @@ pub use launch::{is_env_name, NodeContribution, TriggerSuspension};
 pub use neutral::NoExtensions;
 pub use node_write::NodeWrites;
 /// What a network git operation is, as the extensions see it.
-pub use pdo_extension_api::{GitOperation, GitOperationKind};
+pub use pdo_extension_api::{GitOperation, GitOperationKind, GuardEnd, GuardOutcome, GuardRun};
 pub use port::ExtensionHost;
 pub use run_view::RunViews;
 pub use skills::ProvidedSkills;
@@ -375,6 +375,10 @@ impl ExtensionHost for Extensions {
 
     fn git_credentials(&self, operation: &GitOperation) -> GitCredentials {
         git::git_credentials(self, operation)
+    }
+
+    fn guard_ended(&self, end: &GuardEnd) {
+        git::guard_ended(self, end)
     }
 }
 

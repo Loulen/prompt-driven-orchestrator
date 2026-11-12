@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use crate::{
     Actor, ActorDisplay, Admission, Attributes, Authorization, CliInvocation, CliOutput, CliSpec,
-    EntityRef, ExtensionSkill, GitEnv, GitOperation, Host, Manifest, NeutralHost, NodeEnv,
-    NodeLaunch, Operation, ResourceKind, SessionLaunch, TriggerRef, UiContributions,
+    EntityRef, ExtensionSkill, GitEnv, GitOperation, GuardEnd, Host, Manifest, NeutralHost,
+    NodeEnv, NodeLaunch, Operation, ResourceKind, SessionLaunch, TriggerRef, UiContributions,
 };
 
 /// The head of an HTTP request, as `identify` sees it: method, URI, headers.
@@ -349,11 +349,29 @@ pub trait Extension: Send + Sync + 'static {
     /// operation fails naming the Actor and the [`GitEnv::label`], without
     /// trying the daemon's credentials.
     ///
+    /// The guard of a Trigger is asked the same way
+    /// ([`GitOperationKind::Guard`](crate::GitOperationKind::Guard)), for the
+    /// Trigger's last editor in the Trigger's Projet (on a dry-run, for who
+    /// asks it): the variables reach the guard's shell, alongside the core's
+    /// `PDO_TARGET_REPO`, which they never overwrite, and never its argv.
+    /// What is handed to one guard can be revoked when it ends
+    /// ([`Self::guard_ended`]).
+    ///
     /// Called on the daemon's request path (on a Trigger's fire, its tick),
     /// once per operation: keep it quick.
     fn git_env(&self, _operation: &GitOperation) -> GitEnv {
         GitEnv::default()
     }
+
+    /// A guard [`Self::git_env`] was asked about has ended: it passed, skipped,
+    /// failed or timed out ([`GuardEnd::outcome`]). Called once per guard,
+    /// whatever its end and whether or not this extension gave it anything,
+    /// with the [`GuardRun`](crate::GuardRun) its operation carried: revoke
+    /// here what was handed to it (a token). Nothing by default.
+    ///
+    /// Called on the Trigger's tick, after the guard and before the fire:
+    /// keep it quick. A panic is ignored.
+    fn guard_ended(&self, _end: &GuardEnd) {}
 }
 
 #[cfg(test)]
@@ -426,6 +444,13 @@ mod tests {
         assert_eq!(
             ext.trigger_suspension(&TriggerRef::new("t1", "Nightly", None)),
             None
+        );
+        ext.guard_ended(
+            &GuardEnd::of(
+                &GitOperation::guard(actor.clone(), "/repo", crate::GuardRun::new("g1", None)),
+                crate::GuardOutcome::Passed,
+            )
+            .unwrap(),
         );
         assert!(ext
             .git_env(&GitOperation::new(

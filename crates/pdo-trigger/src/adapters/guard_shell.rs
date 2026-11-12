@@ -2,7 +2,9 @@
 //! Its contract:
 //!
 //! - CWD = the target repo (so `gh issue list`, `git log` work without paths);
-//! - inherits the daemon environment plus an injected `PDO_TARGET_REPO`;
+//! - inherits the daemon environment, plus the variables the extensions give
+//!   it (never in its argv) and an injected `PDO_TARGET_REPO`, which they never
+//!   overwrite;
 //! - a hard timeout so a hung guard never freezes the scheduler;
 //! - exit 0 fires with stdout as the resolved input, non-zero skips, and a spawn
 //!   failure or timeout records a guard-error outcome.
@@ -10,6 +12,7 @@
 //! This is the side-effectful wrapper; the *decision* it feeds is the pure
 //! [`crate::domain::fire_decision`].
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -27,19 +30,32 @@ impl GuardRunner for ShellGuard {
         &'a self,
         command: &'a str,
         cwd: &'a Path,
+        env: &'a BTreeMap<String, String>,
         timeout: Duration,
     ) -> BoxFuture<'a, GuardResult> {
-        Box::pin(run_guard(command, cwd, timeout))
+        Box::pin(run_guard_with(command, cwd, env, timeout))
     }
 }
 
 /// Run a guard command and classify the outcome. Exceeding `timeout` yields
 /// [`GuardResult::Error`] rather than blocking.
 pub async fn run_guard(command: &str, target_repo: &Path, timeout: Duration) -> GuardResult {
+    run_guard_with(command, target_repo, &BTreeMap::new(), timeout).await
+}
+
+/// [`run_guard`], with `env` added to the guard's environment (its values in
+/// no argv); `PDO_TARGET_REPO` stays the core's.
+pub async fn run_guard_with(
+    command: &str,
+    target_repo: &Path,
+    env: &BTreeMap<String, String>,
+    timeout: Duration,
+) -> GuardResult {
     let mut cmd = tokio::process::Command::new("sh");
     cmd.arg("-c")
         .arg(command)
         .current_dir(target_repo)
+        .envs(env)
         .env(TARGET_REPO_ENV, target_repo)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -54,6 +70,7 @@ pub async fn run_guard(command: &str, target_repo: &Path, timeout: Duration) -> 
         Err(e) => {
             return GuardResult::Error {
                 detail: format!("failed to spawn guard: {e}"),
+                timed_out: false,
             };
         }
     };
@@ -106,6 +123,7 @@ pub async fn run_guard(command: &str, target_repo: &Path, timeout: Duration) -> 
         }
         Ok(Err(e)) => GuardResult::Error {
             detail: format!("guard process error: {e}"),
+            timed_out: false,
         },
         Err(_) => {
             // Timed out: explicitly kill and reap the still-running guard so it
@@ -114,6 +132,7 @@ pub async fn run_guard(command: &str, target_repo: &Path, timeout: Duration) -> 
             let _ = child.wait().await;
             GuardResult::Error {
                 detail: format!("guard timed out after {}ms", timeout.as_millis()),
+                timed_out: true,
             }
         }
     }
@@ -280,8 +299,8 @@ mod tests {
         let dir = std::env::temp_dir();
         let result = run_guard("sleep 30", &dir, Duration::from_millis(200)).await;
         match result {
-            GuardResult::Error { detail } => assert!(
-                detail.contains("timed out"),
+            GuardResult::Error { detail, timed_out } => assert!(
+                timed_out && detail.contains("timed out"),
                 "expected a timeout detail, got {detail:?}"
             ),
             other => panic!("expected Error, got {other:?}"),
@@ -320,5 +339,49 @@ mod tests {
                 stderr: String::new(),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn the_extensions_variables_reach_the_guard_but_never_its_target_repo() {
+        let repo = tempfile::tempdir().unwrap();
+        let env = BTreeMap::from([
+            ("X_TEST_TOKEN".to_string(), "s3cr3t".to_string()),
+            (TARGET_REPO_ENV.to_string(), "/elsewhere".to_string()),
+        ]);
+        let result = run_guard_with(
+            "printf '%s|%s' \"$X_TEST_TOKEN\" \"$PDO_TARGET_REPO\"",
+            repo.path(),
+            &env,
+            Duration::from_secs(5),
+        )
+        .await;
+        assert_eq!(
+            result,
+            GuardResult::Pass {
+                stdout: format!("s3cr3t|{}", repo.path().display()),
+                stderr: String::new(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "linux")]
+    async fn a_variable_s_value_never_sits_in_the_guard_s_command_line() {
+        let repo = tempfile::tempdir().unwrap();
+        let env = BTreeMap::from([("X_TEST_TOKEN".to_string(), "s3cr3t-value".to_string())]);
+        // The guard prints its own shell's command line, which reads the
+        // variable.
+        let result = run_guard_with(
+            "test -n \"$X_TEST_TOKEN\" && tr '\\0' ' ' < /proc/$$/cmdline",
+            repo.path(),
+            &env,
+            Duration::from_secs(5),
+        )
+        .await;
+        let GuardResult::Pass { stdout, .. } = result else {
+            panic!("the guard did not pass: {result:?}");
+        };
+        assert!(stdout.contains("sh -c"), "{stdout}");
+        assert!(!stdout.contains("s3cr3t-value"), "{stdout}");
     }
 }

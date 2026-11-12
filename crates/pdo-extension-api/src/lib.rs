@@ -9,6 +9,7 @@
 //! (`pdo ext <id> <args…>`), bring skills into the Banque de skills, contribute
 //! to the launch of every agent session (environment variables, a preamble)
 //! and to the network git operations the daemon runs for an Actor ([`GitEnv`]),
+//! and to a Trigger's guard, told when it ends ([`GuardEnd`]),
 //! observe who starts a session, takes control of its terminal and when it
 //! ends ([`SessionEvent`]), suspend a Trigger, see a Run as people do: who
 //! has it open ([`Presence`]) and what it cost ([`RunCost`]), and have the core
@@ -74,7 +75,7 @@ pub use display::ActorDisplay;
 pub use entity::{Attributes, EntityRef};
 pub use event::{OperationApplied, OPERATION_APPLIED};
 pub use extension::{Extension, ExtensionContext, RequestParts};
-pub use git_operation::{GitEnv, GitOperation, GitOperationKind};
+pub use git_operation::{GitEnv, GitOperation, GitOperationKind, GuardEnd, GuardOutcome, GuardRun};
 pub use host::{ExtensionEvent, Host, NeutralHost, EXTENSION_EVENT};
 pub use hosted::{
     EndReason, HostedConfig, HostedFolder, HostedGesture, HostedKind, HostedRefusal, HostedSession,

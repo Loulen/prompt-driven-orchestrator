@@ -48,7 +48,7 @@ impl From<GuardResult> for GuardTestResponse {
                 exit_code,
                 detail: None,
             },
-            GuardResult::Error { detail } => Self {
+            GuardResult::Error { detail, .. } => Self {
                 outcome: "error",
                 stdout: String::new(),
                 stderr: String::new(),

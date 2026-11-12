@@ -117,6 +117,11 @@ mod extension_node_launch;
 #[path = "extension_git_env.rs"]
 mod extension_git_env;
 
+// The environment of a Trigger's guard (its last editor's, off every argv) and
+// its end, told to the extensions whatever it is.
+#[path = "extension_guard_env.rs"]
+mod extension_guard_env;
+
 // CORE-61, API 0.13: the launch of every agent session with who starts it, one
 // library assistant per Actor, the session events.
 #[path = "extension_sessions.rs"]

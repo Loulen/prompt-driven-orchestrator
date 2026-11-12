@@ -7,7 +7,11 @@ import { testGuard, type TestGuardResponse } from "../api/guard";
  * App.tsx render site), so switching Triggers discards this state for free. The
  * fire-history refetch must NOT clear it.
  */
-export function useGuardDryRun(guardCommand: string | undefined, targetRepo: string | undefined) {
+export function useGuardDryRun(
+  guardCommand: string | undefined,
+  targetRepo: string | undefined,
+  projectId?: string,
+) {
   const [result, setResult] = useState<TestGuardResponse | null>(null);
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -21,7 +25,7 @@ export function useGuardDryRun(guardCommand: string | undefined, targetRepo: str
     setTesting(true);
     setError(null);
     try {
-      setResult(await testGuard(cmd, targetRepo));
+      setResult(await testGuard(cmd, targetRepo, projectId));
     } catch (e) {
       setResult(null);
       setError(e instanceof Error ? e.message : String(e));

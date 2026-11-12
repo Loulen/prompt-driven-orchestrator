@@ -12,7 +12,7 @@ vi.mock("../api/triggers", () => ({
   fetchTriggerFires: (id: string) => fetchTriggerFires(id),
 }));
 vi.mock("../api/guard", () => ({
-  testGuard: (cmd: string, repo?: string) => testGuard(cmd, repo),
+  testGuard: (cmd: string, repo?: string, project?: string) => testGuard(cmd, repo, project),
 }));
 vi.mock("../../settings/api/settings", () => ({
   fetchSettings: () => fetchSettings(),
@@ -318,7 +318,28 @@ describe("TriggerDetailPanel", () => {
     expect(await screen.findByTestId("guard-test-verdict")).toHaveTextContent("Would fire");
     expect(screen.getByTestId("guard-test-output")).toHaveTextContent("issue-123");
     // The #351 twist vs #350: the stored guard_command + target_repo, not live form values.
-    expect(testGuard).toHaveBeenCalledWith(GUARD, "/repos/foo");
+    expect(testGuard).toHaveBeenCalledWith(GUARD, "/repos/foo", undefined);
+  });
+
+  it("dry-runs the guard in the Trigger's Project", async () => {
+    testGuard.mockResolvedValue({
+      outcome: "pass",
+      stdout: "",
+      stderr: "",
+      exit_code: 0,
+      detail: null,
+    });
+    render(
+      <TriggerDetailPanel
+        trigger={trigger({ guard_command: GUARD, project_id: "p1" })}
+        onSelectRun={noop}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("guard-test-button"));
+
+    await screen.findByTestId("guard-test-verdict");
+    expect(testGuard).toHaveBeenCalledWith(GUARD, "/repos/foo", "p1");
   });
 
   it("shows 'Would skip' with the exit code and stderr for a non-zero guard", async () => {

@@ -380,14 +380,14 @@ export function useNewRunSubmit(
     setGuardTesting(true);
     setGuardTestError(null);
     try {
-      setGuardTest(await testGuard(guardCommand.trim(), targetRepo.trim() || undefined));
+      setGuardTest(await testGuard(guardCommand.trim(), targetRepo.trim() || undefined, projectId ?? undefined));
     } catch (e) {
       setGuardTest(null);
       setGuardTestError(e instanceof Error ? e.message : String(e));
     } finally {
       setGuardTesting(false);
     }
-  }, [guardCommand, targetRepo, setGuardTest, setGuardTestError, setGuardTesting]);
+  }, [guardCommand, targetRepo, projectId, setGuardTest, setGuardTestError, setGuardTesting]);
 
   return {
     promptOptional, hasRequiredPrompt, dockerUnavailable, sandboxReason, sandboxProfiles,

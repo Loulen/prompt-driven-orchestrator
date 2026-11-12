@@ -87,8 +87,10 @@
 //!   0.8, `launch.rs`): the variables, the preamble and the suspensions the
 //!   test sets ([`Control::launch`]).
 //! - **`git_env`** (`launch.rs`): the variables the test gives an Actor's
-//!   network git operations (`PUT /ext/test/git-env`), each operation
-//!   recorded.
+//!   network git operations and a Trigger's guard (`PUT /ext/test/git-env`),
+//!   each operation recorded.
+//! - **`guard_ended`** (`launch.rs`): each guard end recorded (`GET
+//!   /ext/test/git-env`, `guard_ends`).
 //! - **`session_env`** / **`session_preamble`** (API 0.13, `launch.rs`): for a
 //!   Node, its `node_env` / `node_preamble`; for the Pipeline Manager and the
 //!   library assistant, the same variables plus `TEST_STARTED_BY` (the id of
@@ -168,9 +170,10 @@ use std::time::Duration;
 
 use pdo::extension_api::{
     Actor, ActorDisplay, Admission, Attributes, Authorization, CliInvocation, CliOutput, CliSpec,
-    EntityRef, Extension, ExtensionContext, ExtensionSkill, GitEnv, GitOperation, Manifest,
-    NodeEnv, NodeLaunch, Operation, RequestParts, ResourceDeclaration, ResourceKind, SessionLaunch,
-    Slot, TriggerRef, UiCommand, UiContribution, UiContributions, UiLocation, UiSlot, Verb, When,
+    EntityRef, Extension, ExtensionContext, ExtensionSkill, GitEnv, GitOperation, GuardEnd,
+    Manifest, NodeEnv, NodeLaunch, Operation, RequestParts, ResourceDeclaration, ResourceKind,
+    SessionLaunch, Slot, TriggerRef, UiCommand, UiContribution, UiContributions, UiLocation,
+    UiSlot, Verb, When,
 };
 use serde_json::Value;
 
@@ -683,6 +686,10 @@ impl Extension for TestExtension {
 
     fn git_env(&self, operation: &GitOperation) -> GitEnv {
         self.control.launch.git_env(operation)
+    }
+
+    fn guard_ended(&self, end: &GuardEnd) {
+        self.control.launch.guard_ended(end)
     }
 
     fn on_create(&self, actor: &Actor, _entity: &EntityRef) -> Attributes {

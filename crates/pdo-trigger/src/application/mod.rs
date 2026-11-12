@@ -8,6 +8,7 @@
 pub mod create_trigger;
 pub mod delete_trigger;
 pub mod fire;
+mod guard_for;
 pub mod pause_triggers;
 pub mod ports;
 pub mod read;

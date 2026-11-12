@@ -16,6 +16,13 @@ pub enum GitOperationKind {
     Skills,
     /// The fetch before a Trigger fires, for its last editor.
     TriggerFetch,
+    /// The guard of a Trigger, the shell command run before it fires (and its
+    /// dry-run): `url` is the path of its target repository (the
+    /// `PDO_TARGET_REPO` of the guard), the operation's `guard` names the
+    /// execution. The variables reach the guard's shell, never its argv;
+    /// [`Extension::guard_ended`](crate::Extension::guard_ended) says when it
+    /// is over.
+    Guard,
 }
 
 /// A network git operation the daemon runs for an Actor, as
@@ -29,9 +36,13 @@ pub struct GitOperation {
     pub actor: Actor,
     /// The Projet the operation is in, if any.
     pub project: Option<String>,
-    /// The remote's URL, as git is given it.
+    /// The remote's URL, as git is given it; for a
+    /// [`GitOperationKind::Guard`], the path of the target repository.
     pub url: String,
     pub kind: GitOperationKind,
+    /// The guard's execution, for a [`GitOperationKind::Guard`] only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guard: Option<GuardRun>,
 }
 
 impl GitOperation {
@@ -42,6 +53,15 @@ impl GitOperation {
             project: None,
             url: url.into(),
             kind,
+            guard: None,
+        }
+    }
+
+    /// The guard `guard`, run in `target_repo` for `actor`, in no Projet.
+    pub fn guard(actor: Actor, target_repo: impl Into<String>, guard: GuardRun) -> Self {
+        Self {
+            guard: Some(guard),
+            ..Self::new(actor, target_repo, GitOperationKind::Guard)
         }
     }
 
@@ -49,6 +69,67 @@ impl GitOperation {
     pub fn in_project(mut self, project: impl Into<String>) -> Self {
         self.project = Some(project.into());
         self
+    }
+}
+
+/// One execution of a guard: its id, unique to it, which
+/// [`GuardEnd`] repeats, and the Trigger it guards (`None` for the dry-run of
+/// a guard not saved yet).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[non_exhaustive]
+pub struct GuardRun {
+    pub id: String,
+    pub trigger_id: Option<String>,
+}
+
+impl GuardRun {
+    /// The execution `id` of the guard of the Trigger `trigger_id`, if any.
+    pub fn new(id: impl Into<String>, trigger_id: Option<String>) -> Self {
+        Self {
+            id: id.into(),
+            trigger_id,
+        }
+    }
+}
+
+/// How a guard ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum GuardOutcome {
+    /// It exited 0: the Trigger fires.
+    Passed,
+    /// It exited non-zero (or a signal killed it): the Trigger skips.
+    Skipped,
+    /// It could not run (its shell did not start, its process failed).
+    Failed,
+    /// It ran past its timeout and was killed.
+    TimedOut,
+}
+
+/// The end of a guard, as
+/// [`Extension::guard_ended`](crate::Extension::guard_ended) sees it: the
+/// execution, who and where it ran for (as [`GitOperation`] gave them), how it
+/// ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct GuardEnd {
+    pub guard: GuardRun,
+    pub actor: Actor,
+    pub project: Option<String>,
+    pub outcome: GuardOutcome,
+}
+
+impl GuardEnd {
+    /// The end of the guard `operation` describes, with `outcome`; `None`
+    /// when `operation` is no guard.
+    pub fn of(operation: &GitOperation, outcome: GuardOutcome) -> Option<Self> {
+        Some(Self {
+            guard: operation.guard.clone()?,
+            actor: operation.actor.clone(),
+            project: operation.project.clone(),
+            outcome,
+        })
     }
 }
 
@@ -102,6 +183,35 @@ mod tests {
                 "url": "https://git.example.com/acme/app.git", "kind": "trigger_fetch",
             })
         );
+    }
+
+    #[test]
+    fn a_guard_names_its_execution_and_its_end_repeats_it() {
+        let op = GitOperation::guard(
+            Actor::LocalOperator,
+            "/repos/app",
+            GuardRun::new("g1", Some("t1".into())),
+        )
+        .in_project("p1");
+        assert_eq!(
+            serde_json::to_value(&op).unwrap(),
+            serde_json::json!({
+                "actor": { "kind": "local_operator" }, "project": "p1",
+                "url": "/repos/app", "kind": "guard",
+                "guard": { "id": "g1", "trigger_id": "t1" },
+            })
+        );
+        let end = GuardEnd::of(&op, GuardOutcome::TimedOut).unwrap();
+        assert_eq!(
+            serde_json::to_value(&end).unwrap(),
+            serde_json::json!({
+                "guard": { "id": "g1", "trigger_id": "t1" },
+                "actor": { "kind": "local_operator" }, "project": "p1",
+                "outcome": "timed_out",
+            })
+        );
+        let clone = GitOperation::new(Actor::LocalOperator, "u", GitOperationKind::Clone);
+        assert_eq!(GuardEnd::of(&clone, GuardOutcome::Passed), None);
     }
 
     #[test]

@@ -1,12 +1,14 @@
 //! The credentials of a network git operation the daemon runs for an Actor:
-//! what the extensions provide for it, or the daemon's own.
+//! what the extensions provide for it, or the daemon's own. A Trigger's guard
+//! takes its environment by the same rules, and its end is told to every
+//! extension.
 
 use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use pdo_extension_api::GitOperation;
+use pdo_extension_api::{GitOperation, GuardEnd};
 
 use super::launch::is_env_name;
 use super::Extensions;
@@ -165,11 +167,25 @@ pub(super) fn git_credentials(extensions: &Extensions, operation: &GitOperation)
     GitCredentials::provided(env, actor, label)
 }
 
+/// Tell every extension, in registration order, that a guard has ended. A
+/// panicking extension is passed over.
+pub(super) fn guard_ended(extensions: &Extensions, end: &GuardEnd) {
+    for r in &extensions.registry.registered {
+        if catch_unwind(AssertUnwindSafe(|| r.extension.guard_ended(end))).is_err() {
+            tracing::warn!("extension `{}` panicked in guard_ended", r.manifest.id);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::extension_host::{ExtensionHost, NoExtensions};
-    use pdo_extension_api::{ActorDisplay, Extension, GitEnv, GitOperationKind, Manifest, NodeEnv};
+    use pdo_extension_api::{
+        ActorDisplay, Extension, GitEnv, GitOperationKind, GuardOutcome, GuardRun, Manifest,
+        NodeEnv,
+    };
+    use std::sync::{Arc, Mutex};
 
     /// Gives `vars` (labelled `label`) to every operation of `alice`; panics
     /// when `panics`.
@@ -178,7 +194,12 @@ mod tests {
         vars: &'static [(&'static str, &'static str)],
         label: Option<&'static str>,
         panics: bool,
+        /// Where it records the guards it is told ended.
+        ends: Option<HeardEnds>,
     }
+
+    /// The guard ends each extension heard, by its id.
+    type HeardEnds = Arc<Mutex<Vec<(&'static str, GuardEnd)>>>;
 
     impl Gives {
         fn new(id: &'static str, vars: &'static [(&'static str, &'static str)]) -> Self {
@@ -187,6 +208,7 @@ mod tests {
                 vars,
                 label: None,
                 panics: false,
+                ends: None,
             }
         }
     }
@@ -199,6 +221,15 @@ mod tests {
         fn display_name(&self, actor: &Actor) -> Option<ActorDisplay> {
             matches!(actor, Actor::Identified { id, .. } if id == "alice")
                 .then(|| ActorDisplay::new("Alice"))
+        }
+
+        fn guard_ended(&self, end: &GuardEnd) {
+            if self.panics {
+                panic!("boom");
+            }
+            if let Some(ends) = &self.ends {
+                ends.lock().unwrap().push((self.id, end.clone()));
+            }
         }
 
         fn git_env(&self, operation: &GitOperation) -> GitEnv {
@@ -292,6 +323,43 @@ mod tests {
         let got = host(vec![Box::new(Gives::new("a", &[("LC_ALL", "fr_FR")]))])
             .git_credentials(&clone_for(alice()));
         assert_eq!(got, GitCredentials::daemon());
+    }
+
+    #[test]
+    fn a_guard_takes_its_environment_by_the_same_rules() {
+        let guard = GitOperation::guard(alice(), "/repos/app", GuardRun::new("g1", None));
+        let got = host(vec![Box::new(Gives::new(
+            "a",
+            &[("X_TEST_TOKEN", "t"), ("GIT_TERMINAL_PROMPT", "1")],
+        ))])
+        .git_credentials(&guard);
+        assert_eq!(
+            got.env,
+            BTreeMap::from([("X_TEST_TOKEN".to_string(), "t".to_string())])
+        );
+    }
+
+    #[test]
+    fn every_extension_hears_a_guard_end_even_after_a_panic() {
+        let ends = Arc::new(Mutex::new(Vec::new()));
+        let mut first = Gives::new("a", &[]);
+        first.ends = Some(ends.clone());
+        let mut panics = Gives::new("b", &[]);
+        panics.panics = true;
+        let mut last = Gives::new("c", &[]);
+        last.ends = Some(ends.clone());
+        let end = GuardEnd::of(
+            &GitOperation::guard(alice(), "/r", GuardRun::new("g1", Some("t1".into())))
+                .in_project("p1"),
+            GuardOutcome::Skipped,
+        )
+        .unwrap();
+        host(vec![Box::new(first), Box::new(panics), Box::new(last)]).guard_ended(&end);
+        assert_eq!(
+            *ends.lock().unwrap(),
+            vec![("a", end.clone()), ("c", end.clone())]
+        );
+        NoExtensions.guard_ended(&end);
     }
 
     #[test]

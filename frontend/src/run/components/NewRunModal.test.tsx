@@ -2253,7 +2253,7 @@ describe("NewRunModal — Test guard dry-run (#350)", () => {
 
     expect(await screen.findByTestId("guard-test-verdict")).toHaveTextContent("Would fire");
     expect(screen.getByTestId("guard-test-output")).toHaveTextContent("issue-123");
-    expect(testGuard).toHaveBeenCalledWith("gh issue list", "/home/user/project");
+    expect(testGuard).toHaveBeenCalledWith("gh issue list", "/home/user/project", undefined);
   });
 
   it("shows 'Would skip' with the exit code and stderr for a non-zero guard", async () => {

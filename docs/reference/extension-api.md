@@ -38,7 +38,8 @@ default, and with no extension the daemon behaves as if none existed.
 | `session_env(launch)` (0.13) | at every launch of a session that makes an agent act or runs a script Node: a Node (the core asks this hook, never `node_env` directly), the Pipeline Manager, the library assistant; the first registered wins a name | `node_env` for a Node, none otherwise |
 | `session_preamble(launch)` (0.13) | at every launch of an agent session; texts follow in registration order | `node_preamble` for a Node, none otherwise |
 | `trigger_suspension(trigger)` (0.8) | at every read of a Trigger and every due tick; the first `Some` wins, a panic suspends nothing | not suspended |
-| `git_env(operation)` | at every network git operation the daemon runs for an Actor: the clone of a repository added by its URL, the fetch of New Run, the clone of a Source de skills, the fetch before a Trigger fires; the first registered wins a name | none: the daemon's credentials |
+| `git_env(operation)` | at every network git operation the daemon runs for an Actor: the clone of a repository added by its URL, the fetch of New Run, the clone of a Source de skills, the fetch before a Trigger fires; and before a Trigger's guard runs (its dry-run included); the first registered wins a name | none: the daemon's credentials, a guard as before |
+| `guard_ended(end)` | once a guard `git_env` was asked about has ended, whatever its end (passed, skipped, failed, timed out); in registration order, a panic is ignored | nothing |
 
 ## The Manifest
 
@@ -859,6 +860,28 @@ it). The clone captures its Actor's environment with the request: it runs in the
 
 With no extension answering, git runs with the daemon's credentials as before. The update of PDO
 and the `docker pull` of the sandbox image never ask: they are the instance's.
+
+### The guard of a Trigger
+
+A Trigger's guard acts for whoever answers for the Trigger. Before it runs, `git_env` is asked
+with the `kind` `guard`: its Actor is the Trigger's last editor (else the Trigger itself), its
+`project` the Trigger's Projet, its `url` the path of the target repository (the guard's
+`PDO_TARGET_REPO`), and its `guard` names the execution (`GuardRun`: an `id` unique to it, the
+`trigger_id`). The dry-run (`POST /triggers/guard/test`) asks the same for who runs it, in the
+`project_id` it carries (`trigger` × `test_guard` is then judged in that Projet), with no
+`trigger_id`.
+
+The variables reach the guard's shell (`sh -c`) and what it starts, never its argv; the rules
+above hold, and `PDO_TARGET_REPO` stays the core's. A token handed to a guard, `PDO_TOKEN` for
+`pdo` to act as its Actor in its Projet for instance, lives as long as the guard: when the guard
+ends, `guard_ended` receives a `GuardEnd` (the same `GuardRun`, the Actor, the Projet and the
+`outcome`: `passed`, `skipped`, `failed`, `timed_out`) and revokes it. It is called once per
+guard, whatever its end, whether or not the extension gave anything, on the Trigger's tick: keep
+it quick. A request dropped while its guard runs (a "Run now", a dry-run) kills the guard and ends
+it `failed`.
+
+Without an extension answering, the guard runs exactly as before: the daemon's environment and
+`PDO_TARGET_REPO`.
 
 ## Events
 

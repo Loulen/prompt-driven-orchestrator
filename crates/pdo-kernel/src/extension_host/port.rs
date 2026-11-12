@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use pdo_extension_api::{
     ActorDisplay, Admission, Attributes, Authorization, EntityRef, ExtensionData, GitOperation,
-    RequestParts, Resource, ResourceKind, SessionLaunch, TriggerRef,
+    GuardEnd, RequestParts, Resource, ResourceKind, SessionLaunch, TriggerRef,
 };
 use serde_json::Value;
 
@@ -124,6 +124,10 @@ pub trait ExtensionHost: Send + Sync {
     fn git_credentials(&self, _operation: &GitOperation) -> GitCredentials {
         GitCredentials::daemon()
     }
+
+    /// Tell every extension a guard has ended, so each revokes what it handed
+    /// to it ([`GuardEnd`]). Nothing by default.
+    fn guard_ended(&self, _end: &GuardEnd) {}
 
     /// Whether no extension can refuse anything: the reads then skip the
     /// question altogether (CORE-5), so a daemon without extension serves its

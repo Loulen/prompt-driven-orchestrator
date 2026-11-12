@@ -8,6 +8,7 @@ mod delete;
 mod fakes;
 mod fire;
 mod guard;
+mod guard_env;
 mod pause;
 mod projets;
 mod read;

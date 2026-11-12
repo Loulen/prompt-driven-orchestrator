@@ -1,6 +1,7 @@
 //! The ports of the trigger context: what its use cases need from the outside
 //! world, as traits the composition root plugs adapters into.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -57,12 +58,14 @@ pub trait TriggerRepository: Send + Sync {
     fn fires<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Stored<Vec<TriggerFire>>>;
 }
 
-/// Runs a guard command: `sh -c`, in `cwd`, bounded by `timeout`.
+/// Runs a guard command: `sh -c`, in `cwd`, with `env` added to its
+/// environment (never to its argv), bounded by `timeout`.
 pub trait GuardRunner: Send + Sync {
     fn run<'a>(
         &'a self,
         command: &'a str,
         cwd: &'a Path,
+        env: &'a BTreeMap<String, String>,
         timeout: Duration,
     ) -> BoxFuture<'a, GuardResult>;
 }

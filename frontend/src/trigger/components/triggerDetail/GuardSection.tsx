@@ -21,7 +21,11 @@ export default function GuardSection({
   /** CORE-205: why the caller may not dry-run a guard; Test stays, greyed. */
   testRefused?: string;
 }) {
-  const dryRun = useGuardDryRun(trigger.guard_command, trigger.target_repo ?? undefined);
+  const dryRun = useGuardDryRun(
+    trigger.guard_command,
+    trigger.target_repo ?? undefined,
+    trigger.project_id ?? undefined,
+  );
   const result = dryRun.result;
 
   return (

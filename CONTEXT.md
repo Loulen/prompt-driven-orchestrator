@@ -642,6 +642,7 @@ Un Trigger porte un **heartbeat cron** (obligatoire) et un **guard script option
 
 - **Sans guard** : à chaque tick cron, le Trigger fire.
 - **Avec guard** : le script tourne d'abord (cheap, avant tout spawn). Contrat : **exit 0 ⇒ fire ; non-zéro ⇒ skip**. **Le stdout du guard devient l'input du Run.** Exécuté avec CWD = repo cible, timeout dur configurable, hors du thread de tick (un guard qui hang ne gèle jamais le scheduler).
+- **Le guard agit pour qui répond du Trigger** : il reçoit, en plus de `PDO_TARGET_REPO`, l'environnement que les extensions donnent à son **dernier éditeur** dans le **Projet du Trigger** (hors argv), et les extensions apprennent sa fin (passé, sauté, échoué, timeout) pour révoquer ce qu'elles lui ont remis. Le dry-run agit pour qui le lance. Sans extension, rien ne change.
 
 **Un firing = un Run.** PDO ne fan-out jamais un Run par work-item : si le guard ramène N issues, c'est *un* Run dont l'input les liste ; la multiplicité est gérée *dans le pipeline* par une boucle `collection`.
 

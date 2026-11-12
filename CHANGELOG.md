@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.77.0
 
 - New seam, the environment and the end of a Trigger's guard: before a guard runs, `git_env` is
   asked with the new kind `guard`, for the Trigger's last editor in its Project (the dry-run: for

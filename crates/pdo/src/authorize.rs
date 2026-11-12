@@ -10,7 +10,10 @@
 //! core places its own: one on a Run or a node, in the Projet of the Run; one
 //! on a Projet, in that Projet; one on a Trigger, in the Projet of the Trigger;
 //! a page mount asked from a node session, in the Projet of its Run, and an
-//! unmount, in the Projet of the mount's Run.
+//! unmount, in the Projet of the mount's Run. A concealed refusal of an
+//! Operation the core placed is answered as the same Operation unplaced, the
+//! answer an id nobody knows gets: the question tells no more than the read
+//! whether the entity exists.
 //!
 //! Nothing is recorded nor announced, nothing is logged: a question is not a
 //! gesture. Without extension, everything is allowed.
@@ -91,8 +94,13 @@ async fn ask(
         let decision = if asked.host.allows_everything() {
             Authorization::Allow
         } else {
-            let operation = placed(&asked, &actor, operation).await;
-            asked.host.authorize(&actor, &operation)
+            let placed_operation = placed(&asked, &actor, operation.clone()).await;
+            match asked.host.authorize(&actor, &placed_operation) {
+                Authorization::Deny {
+                    concealed: true, ..
+                } if placed_operation != operation => asked.host.authorize(&actor, &operation),
+                decision => decision,
+            }
         };
         decisions.push(decision);
     }

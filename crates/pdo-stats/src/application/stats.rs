@@ -70,6 +70,7 @@ impl Stats {
                 ports.events.clone(),
                 ports.triggers,
                 ports.absorptions.clone(),
+                ports.extensions.clone(),
             ),
             read_cost: ReadCost::new(
                 ports.events.clone(),
@@ -77,12 +78,14 @@ impl Stats {
                 ports.projects,
                 ports.run_files.clone(),
                 options.repo_root,
+                ports.extensions.clone(),
             ),
             read_performance: ReadPerformance::new(
                 ports.events.clone(),
                 ports.absorptions.clone(),
                 ports.run_files,
                 ports.transcripts,
+                ports.extensions.clone(),
             ),
             list_absorptions: ListAbsorptions::new(ports.absorptions.clone()),
             combine: CombineAbsorption::new(

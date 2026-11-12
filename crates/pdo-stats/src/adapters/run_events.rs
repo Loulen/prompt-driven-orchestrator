@@ -5,7 +5,9 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use pdo_run::application::ports::{EventStore, EventWindow, EventWindows, NodeStart, RunStart};
+use pdo_run::application::ports::{
+    EventStore, EventWindow, EventWindows, NodeStart, RunProject, RunStart,
+};
 use pdo_run::domain::event::Event;
 
 use crate::application::ports::{BoxFuture, RunEvents};
@@ -69,5 +71,9 @@ impl RunEvents for RunContextEvents {
 
     fn child_run_starts(&self) -> BoxFuture<'_, anyhow::Result<Vec<RunStart>>> {
         self.windows.child_run_starts()
+    }
+
+    fn run_projects(&self) -> BoxFuture<'_, anyhow::Result<Vec<RunProject>>> {
+        self.windows.run_projects()
     }
 }

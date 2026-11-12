@@ -923,6 +923,41 @@ fn zooms_of(messages: &[Value], id: &str) -> Vec<u64> {
         .collect()
 }
 
+/// A concealed refusal of `session` × `read` answers each read of the
+/// session exactly as for a name no session has.
+#[tokio::test]
+async fn a_concealed_session_answers_like_an_unknown_one() {
+    let envs = tempfile::tempdir().unwrap();
+    let (daemon, control) = daemon(envs.path()).await;
+    let url = daemon.url();
+    let home = tempfile::tempdir().unwrap();
+    let mut body = in_path("hidden", "shell", home.path());
+    body["project"] = json!("p1");
+    let (status, shell) = open_as(&url, "alice", body).await;
+    assert_eq!(status, 201, "{shell}");
+    let id = shell["id"].as_str().unwrap().to_string();
+    let unknown = "pdo-hosted-nobody-knows";
+    control.set(Refusal::parse("session:read@p1~bob?").unwrap());
+
+    for path in [
+        "/sessions/{}/hosted",
+        "/sessions/{}/events",
+        "/sessions/{}/live",
+        "/sessions/{}/terminal-zoom",
+    ] {
+        let (status, seen) = get_as(&url, &path.replace("{}", &id), "bob").await;
+        let seen = serde_json::from_str::<Value>(&seen.to_string().replace(&id, unknown)).unwrap();
+        let never = get_as(&url, &path.replace("{}", unknown), "bob").await;
+        assert_eq!((status, seen), never, "{path}");
+    }
+    let (status, _) = get_as(&url, &format!("/sessions/{id}/hosted"), "alice").await;
+    assert_eq!(status, 200);
+
+    control.set(Refusal::parse("session:read@p1~bob").unwrap());
+    let (status, _) = get_as(&url, &format!("/sessions/{id}/hosted"), "bob").await;
+    assert_eq!(status, 403, "without the mark, the refusal stays readable");
+}
+
 /// CORE-124: the Zoom du terminal of a Session hébergée is set by the API
 /// (any Poste) and by the Host, an Operation `session` × `zoom` in its
 /// Projet, out of range refused; its change, and every Operation on the

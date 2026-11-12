@@ -62,6 +62,7 @@ const edgeTypes = { orthogonal: OrthogonalEdge };
 
 interface EditCanvasProps {
   libraryEntries: LibraryEntry[];
+  libraryRefused?: string | null;
   /** @deprecated Instance pipelines no longer have a library scope. */
   libraryPipelines?: LibraryPipelineEntry[];
   onLibraryDelete: (name: string) => void;
@@ -82,7 +83,7 @@ interface EditCanvasProps {
   rightPaneCollapsed?: boolean;
 }
 
-function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleInfo, onCloseInfo, assistantActive, onOpenAssistant, runState, onSelectRun, rightPaneCollapsed = false }: EditCanvasProps) {
+function EditCanvasInner({ libraryEntries, libraryRefused = null, onLibraryDelete, infoOpen, onToggleInfo, onCloseInfo, assistantActive, onOpenAssistant, runState, onSelectRun, rightPaneCollapsed = false }: EditCanvasProps) {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setSelection = useEditStore((s) => s.setSelection);
@@ -237,6 +238,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           onAddNote={handleAddNote}
           onAddNodeFromYaml={() => setAddFromYamlOpen(true)}
           libraryEntries={libraryEntries}
+          libraryRefused={libraryRefused}
           onLibraryDelete={onLibraryDelete}
           getDropPosition={computeDropPosition}
           infoOpen={infoOpen}

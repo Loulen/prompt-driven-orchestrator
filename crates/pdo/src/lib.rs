@@ -27,6 +27,7 @@ mod extensions;
 mod identify;
 mod ports;
 mod serve;
+mod shared_reads;
 mod spa;
 
 pub use brand::Brand;

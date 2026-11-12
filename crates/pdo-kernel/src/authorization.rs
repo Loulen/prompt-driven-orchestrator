@@ -55,6 +55,33 @@ pub fn authorize_read(
         })
 }
 
+/// What a read of one entity shows its caller ([`authorize_entity_read`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntityRead {
+    /// The entity, as stored.
+    Shown,
+    /// Nothing: a concealed refusal ([`Denied::is_concealed`]). The read
+    /// answers exactly as for an entity the core does not know, the same
+    /// status and the same body.
+    AsUnknown,
+}
+
+/// Whether `actor` may read the one entity `operation` names (a Run, a
+/// Trigger, a session…), as [`authorize_read`]; a concealed refusal is not
+/// an error but [`EntityRead::AsUnknown`]: the caller must not learn that
+/// the entity exists.
+pub fn authorize_entity_read(
+    host: &dyn ExtensionHost,
+    actor: &Actor,
+    operation: &Operation,
+) -> Result<EntityRead, Denied> {
+    match authorize_read(host, actor, operation) {
+        Ok(()) => Ok(EntityRead::Shown),
+        Err(denied) if denied.is_concealed() => Ok(EntityRead::AsUnknown),
+        Err(denied) => Err(denied),
+    }
+}
+
 /// The verdict of `authorization` as a result, the refusal logged.
 pub(crate) fn decide(
     authorization: Authorization,
@@ -138,6 +165,42 @@ mod tests {
         });
         assert_eq!(result, Ok(()));
         assert!(record.is_empty(), "a read is never applied: {record:?}");
+    }
+
+    #[test]
+    fn a_concealed_refusal_reads_as_an_unknown_entity() {
+        struct Conceals;
+        impl ExtensionHost for Conceals {
+            fn identify(&self, _: &pdo_extension_api::RequestParts) -> Actor {
+                Actor::LocalOperator
+            }
+            fn authorize(&self, _: &Actor, operation: &Operation) -> Authorization {
+                match operation.target.as_deref() {
+                    Some("hidden") => Authorization::deny("not a member").concealed(),
+                    Some("refused") => Authorization::deny("no reading"),
+                    _ => Authorization::Allow,
+                }
+            }
+            fn publish(&self, _: &serde_json::Value) {}
+        }
+        let read = |id: &str| Operation::new(ResourceKind::Trigger, Verb::Read).on(id);
+        let actor = Actor::LocalOperator;
+        assert_eq!(
+            authorize_entity_read(&Conceals, &actor, &read("shown")),
+            Ok(EntityRead::Shown)
+        );
+        assert_eq!(
+            authorize_entity_read(&Conceals, &actor, &read("hidden")),
+            Ok(EntityRead::AsUnknown)
+        );
+        assert_eq!(
+            authorize_entity_read(&Conceals, &actor, &read("refused")),
+            Err(Denied::new("no reading"))
+        );
+        assert_eq!(
+            authorize_entity_read(&NoExtensions, &actor, &read("hidden")),
+            Ok(EntityRead::Shown)
+        );
     }
 
     /// Drive `future` on a fresh current-thread runtime.

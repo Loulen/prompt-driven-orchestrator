@@ -45,6 +45,8 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
   const [pipelineRenameValue, setPipelineRenameValue] = useState("");
 
   const allPipelines = useEditStore((s) => s.pipelines);
+  // CORE-248: the caller may not read the pipelines: the list says why, with no New.
+  const refused = useEditStore((s) => s.pipelinesRefused);
   // ADR-0081 (#31) — the `pipelines/filter` of the extensions: the list keeps
   // the pipelines carrying every attribute asked for.
   const [attributeFilter, setAttributeFilter] = useState<Attributes>({});
@@ -196,20 +198,24 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
           buttonClassName="d-icon"
           iconSize={14}
         />
-        <IconButton
-          icon={FileUp}
-          label="Import a workflow"
-          disabledReason={createRefused}
-          onClick={() => setShowImportModal(true)}
-          data-testid="import-workflow-button"
-        />
-        <IconButton
-          icon={Plus}
-          label="New pipeline"
-          disabledReason={createRefused}
-          onClick={() => setShowNewModal(true)}
-          data-testid="new-pipeline-button"
-        />
+        {refused === null && (
+          <>
+            <IconButton
+              icon={FileUp}
+              label="Import a workflow"
+              disabledReason={createRefused}
+              onClick={() => setShowImportModal(true)}
+              data-testid="import-workflow-button"
+            />
+            <IconButton
+              icon={Plus}
+              label="New pipeline"
+              disabledReason={createRefused}
+              onClick={() => setShowNewModal(true)}
+              data-testid="new-pipeline-button"
+            />
+          </>
+        )}
       </LeftPaneBar>
 
       <ExtensionListFilters
@@ -235,7 +241,9 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
           }
         >
           {pipelines.length === 0 &&
-            (allPipelines.length > 0 ? (
+            (refused !== null ? (
+              <ListEmpty icon={Workflow} title={refused} testId="pipelines-refused" />
+            ) : allPipelines.length > 0 ? (
               <ListEmpty
                 icon={Funnel}
                 title="No match"

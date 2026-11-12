@@ -7,7 +7,9 @@ use std::collections::BTreeSet;
 use anyhow::Result;
 
 use super::sqlite_event_store::SqliteEventStore;
-use crate::application::ports::{BoxFuture, EventWindow, EventWindows, NodeStart, RunStart};
+use crate::application::ports::{
+    BoxFuture, EventWindow, EventWindows, NodeStart, RunProject, RunStart,
+};
 
 /// The SQL fragment that narrows a Run-keyed query to the « completed runs
 /// only » cohort (#810), or nothing at all. Written once so every read of a
@@ -24,6 +26,24 @@ fn completed_only_sql(completed_only: bool, run_alias: &str) -> String {
     }
 }
 
+/// The SQL fragment that narrows a Run-keyed query to the Runs of the window
+/// (the ones a caller may read), or nothing at all; the set is bound as one
+/// JSON array ([`runs_of`]), after every other parameter.
+fn runs_sql(window: &EventWindow<'_>, run_alias: &str) -> String {
+    if window.runs.is_some() {
+        format!(" AND {run_alias}.run_id IN (SELECT value FROM json_each(?))")
+    } else {
+        String::new()
+    }
+}
+
+/// The Runs of the window as the JSON array [`runs_sql`] binds.
+fn runs_of(window: &EventWindow<'_>) -> Option<String> {
+    window
+        .runs
+        .map(|runs| serde_json::Value::from(runs.iter().cloned().collect::<Vec<_>>()).to_string())
+}
+
 /// A stored payload, `Null` when absent or unreadable.
 fn payload_of(text: Option<&str>) -> serde_json::Value {
     text.and_then(|payload| serde_json::from_str(payload).ok())
@@ -36,18 +56,22 @@ async fn count_by_period(
     fmt: &str,
     window: EventWindow<'_>,
 ) -> Result<Vec<(String, i64)>> {
-    Ok(sqlx::query_as::<_, (String, i64)>(&format!(
+    let sql = format!(
         "SELECT strftime(?, e.ts) AS bucket, COUNT(*) AS count \
-         FROM events e WHERE e.kind = ? AND e.ts >= ? AND e.ts < ?{} \
+         FROM events e WHERE e.kind = ? AND e.ts >= ? AND e.ts < ?{}{} \
          GROUP BY bucket ORDER BY bucket",
-        completed_only_sql(window.completed_only, "e")
-    ))
-    .bind(fmt)
-    .bind(kind)
-    .bind(window.from)
-    .bind(window.to)
-    .fetch_all(db)
-    .await?)
+        completed_only_sql(window.completed_only, "e"),
+        runs_sql(&window, "e"),
+    );
+    let mut query = sqlx::query_as::<_, (String, i64)>(&sql)
+        .bind(fmt)
+        .bind(kind)
+        .bind(window.from)
+        .bind(window.to);
+    if let Some(runs) = runs_of(&window) {
+        query = query.bind(runs);
+    }
+    Ok(query.fetch_all(db).await?)
 }
 
 async fn run_starts(
@@ -56,31 +80,26 @@ async fn run_starts(
     window: EventWindow<'_>,
 ) -> Result<Vec<RunStart>> {
     let completed = completed_only_sql(window.completed_only, "e");
-    let rows = match fmt {
-        Some(fmt) => {
-            sqlx::query_as::<_, (String, String, Option<String>, Option<String>)>(&format!(
-                "SELECT e.run_id, e.ts, strftime(?, e.ts) AS bucket, e.payload \
-                 FROM events e WHERE e.kind = 'run_started' AND e.ts >= ? AND e.ts < ?{completed} \
-                 ORDER BY e.ts"
-            ))
-            .bind(fmt)
-            .bind(window.from)
-            .bind(window.to)
-            .fetch_all(db)
-            .await?
-        }
-        None => {
-            sqlx::query_as::<_, (String, String, Option<String>, Option<String>)>(&format!(
-                "SELECT e.run_id, e.ts, NULL AS bucket, e.payload \
-                 FROM events e WHERE e.kind = 'run_started' AND e.ts >= ? AND e.ts < ?{completed} \
-                 ORDER BY e.ts"
-            ))
-            .bind(window.from)
-            .bind(window.to)
-            .fetch_all(db)
-            .await?
-        }
+    let runs = runs_sql(&window, "e");
+    let bucket = if fmt.is_some() {
+        "strftime(?, e.ts)"
+    } else {
+        "NULL"
     };
+    let sql = format!(
+        "SELECT e.run_id, e.ts, {bucket} AS bucket, e.payload \
+         FROM events e WHERE e.kind = 'run_started' AND e.ts >= ? AND e.ts < ?{completed}{runs} \
+         ORDER BY e.ts"
+    );
+    let mut query = sqlx::query_as::<_, (String, String, Option<String>, Option<String>)>(&sql);
+    if let Some(fmt) = fmt {
+        query = query.bind(fmt);
+    }
+    query = query.bind(window.from).bind(window.to);
+    if let Some(runs) = runs_of(&window) {
+        query = query.bind(runs);
+    }
+    let rows = query.fetch_all(db).await?;
     Ok(rows
         .into_iter()
         .map(|(run_id, ts, bucket, payload)| RunStart {
@@ -107,20 +126,24 @@ async fn node_starts(
         Option<i64>,
         Option<String>,
     );
-    let rows = sqlx::query_as::<_, Row>(&format!(
+    let sql = format!(
         "SELECT strftime(?, cohort.ts), cohort.ts, cohort.run_id, cohort.payload, event.id, \
                 event.node_id, event.iter, event.payload \
          FROM events cohort \
          JOIN events event ON event.run_id = cohort.run_id AND event.kind = 'node_started' \
-         WHERE cohort.kind = 'run_started' AND cohort.ts >= ? AND cohort.ts < ?{} \
+         WHERE cohort.kind = 'run_started' AND cohort.ts >= ? AND cohort.ts < ?{}{} \
          ORDER BY cohort.ts, event.id",
-        completed_only_sql(window.completed_only, "cohort")
-    ))
-    .bind(fmt)
-    .bind(window.from)
-    .bind(window.to)
-    .fetch_all(db)
-    .await?;
+        completed_only_sql(window.completed_only, "cohort"),
+        runs_sql(&window, "cohort"),
+    );
+    let mut query = sqlx::query_as::<_, Row>(&sql)
+        .bind(fmt)
+        .bind(window.from)
+        .bind(window.to);
+    if let Some(runs) = runs_of(&window) {
+        query = query.bind(runs);
+    }
+    let rows = query.fetch_all(db).await?;
     Ok(rows
         .into_iter()
         .map(
@@ -199,6 +222,22 @@ async fn child_run_starts(db: &sqlx::SqlitePool) -> Result<Vec<RunStart>> {
         .collect())
 }
 
+async fn run_projects(db: &sqlx::SqlitePool) -> Result<Vec<RunProject>> {
+    let rows = sqlx::query_as::<_, (String, Option<String>)>(
+        "SELECT e.run_id, json_extract(e.payload, '$.project_id') FROM events e \
+         WHERE e.kind = 'run_started' ORDER BY e.ts, e.id",
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(run_id, project_id)| RunProject {
+            run_id,
+            project_id: project_id.filter(|id| !id.is_empty()),
+        })
+        .collect())
+}
+
 impl EventWindows for SqliteEventStore {
     fn count_by_period<'a>(
         &'a self,
@@ -244,6 +283,10 @@ impl EventWindows for SqliteEventStore {
     fn child_run_starts(&self) -> BoxFuture<'_, Result<Vec<RunStart>>> {
         Box::pin(child_run_starts(self.pool()))
     }
+
+    fn run_projects(&self) -> BoxFuture<'_, Result<Vec<RunProject>>> {
+        Box::pin(run_projects(self.pool()))
+    }
 }
 
 #[cfg(test)]
@@ -288,6 +331,7 @@ mod tests {
             from: "2026-07-15T00:00:00Z",
             to: "2026-07-17T00:00:00Z",
             completed_only,
+            runs: None,
         }
     }
 
@@ -414,6 +458,90 @@ mod tests {
             [("r1", Some("a")), ("r2", Some("b"))]
         );
         assert_eq!(nodes[1].run_payload["pipeline_name"], "Named");
+    }
+
+    #[tokio::test]
+    async fn a_window_narrows_to_the_runs_it_names() {
+        let store = seeded().await;
+        let only_r2: BTreeSet<String> = ["r2".to_string()].into();
+        let narrowed = EventWindow {
+            runs: Some(&only_r2),
+            ..window(false)
+        };
+        assert_eq!(
+            store
+                .count_by_period("run_started", "%Y-%m-%d", narrowed)
+                .await
+                .unwrap(),
+            vec![("2026-07-16".to_string(), 1)]
+        );
+        let starts = store.run_starts(Some("%Y-%m"), narrowed).await.unwrap();
+        assert_eq!(
+            starts.iter().map(|s| s.run_id.as_str()).collect::<Vec<_>>(),
+            ["r2"]
+        );
+        let bare = store.run_starts(None, narrowed).await.unwrap();
+        assert_eq!(bare.len(), 1);
+        let nodes = store.node_starts("%Y-%m-%d", narrowed).await.unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].run_id, "r2");
+
+        let none = BTreeSet::new();
+        let empty = EventWindow {
+            runs: Some(&none),
+            ..window(false)
+        };
+        assert!(store
+            .count_by_period("run_failed", "%Y-%m-%d", empty)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(store.run_starts(None, empty).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn every_run_is_listed_with_the_project_of_its_launch() {
+        let store = store().await;
+        insert(
+            &store,
+            "r1",
+            "2026-07-15T09:00:00Z",
+            "run_started",
+            None,
+            serde_json::json!({ "project_id": "p1" }),
+        )
+        .await;
+        insert(
+            &store,
+            "r2",
+            "2026-07-16T09:00:00Z",
+            "run_started",
+            None,
+            serde_json::json!({ "project_id": null }),
+        )
+        .await;
+        insert(
+            &store,
+            "r1",
+            "2026-07-16T10:00:00Z",
+            "run_completed",
+            None,
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(
+            store.run_projects().await.unwrap(),
+            vec![
+                RunProject {
+                    run_id: "r1".into(),
+                    project_id: Some("p1".into())
+                },
+                RunProject {
+                    run_id: "r2".into(),
+                    project_id: None
+                },
+            ]
+        );
     }
 
     #[tokio::test]

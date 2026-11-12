@@ -2,7 +2,7 @@
 //! and forget an ended one (ADR-0092).
 
 use pdo_extension_api::{HostedRefusal, HostedSession, HostedSessionForgotten, HostedState};
-use pdo_kernel::authorization::{authorize, authorize_read, Denied};
+use pdo_kernel::authorization::{authorize, authorize_entity_read, Denied, EntityRead};
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use tracing::info;
 
@@ -139,8 +139,9 @@ impl Hosted {
     }
 
     /// The Zoom du terminal of the session named `id`, for `actor`: `None`
-    /// for a name no Session hébergée has (its terminal is at 100 %), the
-    /// refusal when `actor` may not run `session` × `read` on it.
+    /// for a name no Session hébergée has (its terminal is at 100 %) or that
+    /// a concealed refusal hides, the refusal when `actor` may not run
+    /// `session` × `read` on it.
     pub fn zoom_of(&self, actor: &Actor, id: &str) -> Result<Option<u16>, Denied> {
         let Some(record) = self.registry.by_id(id) else {
             return Ok(None);
@@ -148,8 +149,10 @@ impl Hosted {
         let read = Operation::new(ResourceKind::Session, Verb::Read)
             .on(record.id())
             .in_projects(record.projects());
-        authorize_read(self.host.as_ref(), actor, &read)?;
-        Ok(Some(record.session.terminal_zoom))
+        match authorize_entity_read(self.host.as_ref(), actor, &read)? {
+            EntityRead::Shown => Ok(Some(record.session.terminal_zoom)),
+            EntityRead::AsUnknown => Ok(None),
+        }
     }
 
     /// Forget the ended session `key` of `extension` on behalf of `actor`:

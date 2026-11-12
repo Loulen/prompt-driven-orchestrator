@@ -10,7 +10,7 @@ use pdo_extension_api::{Authorization, RequestParts};
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation};
 use pdo_platform::domain::audit::NewAuditEntry;
-use pdo_run::application::ports::{EventWindow, NodeStart, RunStart};
+use pdo_run::application::ports::{EventWindow, NodeStart, RunProject, RunStart};
 use pdo_run::domain::event::Event;
 use pdo_run::domain::prices::{Price, PriceTable};
 use pdo_run::domain::run_cost::CostContribution;
@@ -21,10 +21,12 @@ use pdo_stats::domain::overview::TriggersCreatedRuns;
 use pdo_stats::{Stats, StatsOptions, StatsPorts};
 use pdo_workspace::domain::project::Project;
 
-/// An extension host that refuses everything, or allows everything, and
-/// remembers what it was asked.
+/// An extension host that refuses every mutation, or allows everything, and
+/// remembers what it was asked. A read is refused only outside the Projet of
+/// `reads_only_in`, when given.
 pub struct Host {
     pub refuse: bool,
+    pub reads_only_in: Option<String>,
     pub asked: Mutex<Vec<Operation>>,
 }
 
@@ -32,6 +34,7 @@ impl Host {
     pub fn allowing() -> Arc<Self> {
         Arc::new(Self {
             refuse: false,
+            reads_only_in: None,
             asked: Mutex::new(Vec::new()),
         })
     }
@@ -39,6 +42,17 @@ impl Host {
     pub fn refusing() -> Arc<Self> {
         Arc::new(Self {
             refuse: true,
+            reads_only_in: None,
+            asked: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// A host that lets read only what is in the Projet `project` (`""`:
+    /// nothing at all).
+    pub fn reading_only_in(project: &str) -> Arc<Self> {
+        Arc::new(Self {
+            refuse: false,
+            reads_only_in: Some(project.to_string()),
             asked: Mutex::new(Vec::new()),
         })
     }
@@ -51,6 +65,14 @@ impl ExtensionHost for Host {
 
     fn authorize(&self, _actor: &Actor, operation: &Operation) -> Authorization {
         self.asked.lock().unwrap().push(operation.clone());
+        if operation.is_read() {
+            return match &self.reads_only_in {
+                Some(project) if !operation.projects.contains(project) => {
+                    Authorization::deny("not a reader here")
+                }
+                _ => Authorization::Allow,
+            };
+        }
         if self.refuse {
             Authorization::deny("admins only")
         } else {
@@ -62,7 +84,8 @@ impl ExtensionHost for Host {
 }
 
 /// The event log, as fixed answers: the counts, the cohort, the Node starts,
-/// each Run's events, and each Pipeline's history.
+/// each Run's events, and each Pipeline's history. A window narrowed to some
+/// Runs keeps only theirs, and no count at all when it names none.
 #[derive(Default)]
 pub struct Events {
     pub counts: BTreeMap<String, Vec<(String, i64)>>,
@@ -81,26 +104,37 @@ impl RunEvents for Events {
         &'a self,
         kind: &'a str,
         _bucket_format: &'a str,
-        _window: EventWindow<'a>,
+        window: EventWindow<'a>,
     ) -> BoxFuture<'a, anyhow::Result<Vec<(String, i64)>>> {
-        let rows = self.counts.get(kind).cloned().unwrap_or_default();
+        let rows = match window.runs {
+            Some(runs) if runs.is_empty() => Vec::new(),
+            _ => self.counts.get(kind).cloned().unwrap_or_default(),
+        };
         Box::pin(async move { Ok(rows) })
     }
 
     fn run_starts<'a>(
         &'a self,
         _bucket_format: Option<&'a str>,
-        _window: EventWindow<'a>,
+        window: EventWindow<'a>,
     ) -> BoxFuture<'a, anyhow::Result<Vec<RunStart>>> {
-        Box::pin(async move { Ok(self.run_starts.clone()) })
+        let mut starts = self.run_starts.clone();
+        if let Some(runs) = window.runs {
+            starts.retain(|start| runs.contains(&start.run_id));
+        }
+        Box::pin(async move { Ok(starts) })
     }
 
     fn node_starts<'a>(
         &'a self,
         _bucket_format: &'a str,
-        _window: EventWindow<'a>,
+        window: EventWindow<'a>,
     ) -> BoxFuture<'a, anyhow::Result<Vec<NodeStart>>> {
-        Box::pin(async move { Ok(self.node_starts.clone()) })
+        let mut starts = self.node_starts.clone();
+        if let Some(runs) = window.runs {
+            starts.retain(|start| runs.contains(&start.run_id));
+        }
+        Box::pin(async move { Ok(starts) })
     }
 
     fn nodes_started_under<'a>(
@@ -125,31 +159,69 @@ impl RunEvents for Events {
     fn child_run_starts(&self) -> BoxFuture<'_, anyhow::Result<Vec<RunStart>>> {
         Box::pin(async move { Ok(self.child_run_starts.clone()) })
     }
+
+    /// Every Run of the cohort, the children and the Node starts, with the
+    /// `project_id` of its payload.
+    fn run_projects(&self) -> BoxFuture<'_, anyhow::Result<Vec<RunProject>>> {
+        let mut seen = BTreeSet::new();
+        let mut runs = Vec::new();
+        let starts = self.run_starts.iter().chain(&self.child_run_starts);
+        let all = starts
+            .map(|start| (&start.run_id, &start.payload))
+            .chain(self.node_starts.iter().map(|n| (&n.run_id, &n.run_payload)));
+        for (run_id, payload) in all {
+            if seen.insert(run_id.clone()) {
+                runs.push(RunProject {
+                    run_id: run_id.clone(),
+                    project_id: payload["project_id"].as_str().map(str::to_string),
+                });
+            }
+        }
+        Box::pin(async move { Ok(runs) })
+    }
 }
 
+/// The fires of one Trigger, `t1`, launching its Runs in the Projet `p1`.
 pub struct NoFires;
+
+/// Whether the narrowing `triggers` keeps the one Trigger of [`NoFires`].
+fn keeps_t1(triggers: Option<&BTreeSet<String>>) -> bool {
+    triggers.is_none_or(|ids| ids.contains("t1"))
+}
 
 impl TriggerFires for NoFires {
     fn by_pipeline<'a>(
         &'a self,
         _from: &'a str,
         _to: &'a str,
+        triggers: Option<&'a BTreeSet<String>>,
     ) -> BoxFuture<'a, anyhow::Result<Vec<(String, i64)>>> {
-        Box::pin(async { Ok(vec![("old".to_string(), 2), ("new".to_string(), 1)]) })
+        let rows = if keeps_t1(triggers) {
+            vec![("old".to_string(), 2), ("new".to_string(), 1)]
+        } else {
+            Vec::new()
+        };
+        Box::pin(async move { Ok(rows) })
     }
 
     fn created_runs<'a>(
         &'a self,
         _from: &'a str,
         _to: &'a str,
+        triggers: Option<&'a BTreeSet<String>>,
     ) -> BoxFuture<'a, anyhow::Result<TriggersCreatedRuns>> {
-        Box::pin(async {
+        let kept = i64::from(keeps_t1(triggers));
+        Box::pin(async move {
             Ok(TriggersCreatedRuns {
-                fired: 3,
-                distinct_triggers: 1,
-                enabled_triggers: 1,
+                fired: 3 * kept,
+                distinct_triggers: kept,
+                enabled_triggers: kept,
             })
         })
+    }
+
+    fn trigger_projects(&self) -> BoxFuture<'_, anyhow::Result<Vec<TriggerProject>>> {
+        Box::pin(async { Ok(vec![("t1".to_string(), Some("p1".to_string()))]) })
     }
 }
 

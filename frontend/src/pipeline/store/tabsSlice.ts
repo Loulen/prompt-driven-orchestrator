@@ -8,6 +8,7 @@ import { fetchRunPipeline } from "../../run/api/runPipeline";
 import { fetchPipeline, fetchPipelines } from "../api/pipelines";
 import { fetchPipelineVersion } from "../api/versions";
 import { loadTabsDisabled, saveTabsDisabled } from "../../lib/uiPrefs";
+import { refusalSentence } from "../../shared/authorization/refusal";
 import type { EditState } from "./editState";
 import { hasUnsavedWork, versionTabId } from "./editState";
 import type { OpenPipeline, Selection } from "./editState";
@@ -21,6 +22,7 @@ export function tabsSlice(set: Set, get: Get): Partial<EditState> {
   void get;
   return {
   pipelines: [],
+  pipelinesRefused: null,
   openTabs: [],
   activeTabId: null,
   selection: { kind: "none", id: null },
@@ -35,9 +37,11 @@ export function tabsSlice(set: Set, get: Get): Partial<EditState> {
   loadPipelines: async () => {
     try {
       const pipelines = await fetchPipelines();
-      set({ pipelines });
-    } catch {
-      // ignore
+      set({ pipelines, pipelinesRefused: null });
+    } catch (error) {
+      // A refused read empties the list and says why (CORE-248); anything else keeps it.
+      const refused = refusalSentence(error);
+      if (refused !== null) set({ pipelines: [], pipelinesRefused: refused });
     }
   },
 

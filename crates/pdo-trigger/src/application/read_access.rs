@@ -4,14 +4,15 @@
 //!
 //! - A gesture on one Trigger: [`Triggers::on_trigger`] places its Operation;
 //!   [`Triggers::scoped`] places a probe of it the same way.
-//! - One Trigger, its fires: [`Triggers::authorize_read`], `403` on a refusal.
+//! - One Trigger, its fires: [`Triggers::authorize_read`], `403` on a refusal,
+//!   the answer about an unknown Trigger on a concealed one.
 //! - The list: [`Triggers::readable`] keeps only the Triggers the actor may
 //!   read, asking once per Trigger.
 //!
 //! Without extension nothing is asked (`allows_everything`): the reads are
 //! served exactly as before.
 
-use pdo_kernel::authorization::authorize_read;
+use pdo_kernel::authorization::{authorize_entity_read, authorize_read, EntityRead};
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 
 use super::{operation, TriggerError};
@@ -67,14 +68,18 @@ impl Triggers {
     }
 
     /// Whether `actor` may read the Trigger `id`: its detail, its fires, what
-    /// `/ws` says of it.
-    pub async fn authorize_read(&self, actor: &Actor, id: &str) -> Result<(), TriggerError> {
+    /// `/ws` says of it. [`EntityRead::AsUnknown`] on a concealed refusal:
+    /// the read answers as for a Trigger that does not exist.
+    pub async fn authorize_read(
+        &self,
+        actor: &Actor,
+        id: &str,
+    ) -> Result<EntityRead, TriggerError> {
         if self.extensions().allows_everything() {
-            return Ok(());
+            return Ok(EntityRead::Shown);
         }
         let read = self.on_trigger(Verb::Read, id).await;
-        authorize_read(self.extensions(), actor, &read)?;
-        Ok(())
+        Ok(authorize_entity_read(self.extensions(), actor, &read)?)
     }
 
     /// What `actor` may read of a list of Triggers.

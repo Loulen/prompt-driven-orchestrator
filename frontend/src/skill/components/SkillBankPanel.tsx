@@ -11,10 +11,14 @@ import BankDetailPane from "./BankDetailPane";
 import TreeRowActions from "./TreeRowActions";
 import TreeRowCheck from "./TreeRowCheck";
 import ExportSelectionBar from "./ExportSelectionBar";
+import { Library } from "lucide-react";
+import ListEmpty from "../../shared/ui/leftList/ListEmpty";
 
 interface Props {
   bank: SkillBank;
   loaded: boolean;
+  /** CORE-248: why the caller may not read the skills: the bank says it instead. */
+  refused?: string | null;
   /** Host `$HOME`, to shorten the disk path in the footer. `null` shows it as is. */
   home: string | null;
   /** Called after every successful write; the parent refetches and fires the bus. */
@@ -32,7 +36,18 @@ interface Props {
  * undoable by toast (6 s); create and delete are not (delete goes through the
  * referents confirmation, the pattern of agent profiles).
  */
-export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props) {
+export default function SkillBankPanel({ refused = null, ...props }: Props) {
+  if (refused !== null) {
+    return (
+      <div className="flex min-h-0 flex-1" data-testid="skill-bank-panel">
+        <ListEmpty icon={Library} title={refused} testId="skill-bank-refused" />
+      </div>
+    );
+  }
+  return <ReadableSkillBank {...props} />;
+}
+
+function ReadableSkillBank({ bank, loaded, home, onChanged }: Omit<Props, "refused">) {
   const { skills, folders } = bank;
   const panel = useSkillBankPanel(bank, home, onChanged);
   const { selectedFolder, selectedSkill, filter } = panel;

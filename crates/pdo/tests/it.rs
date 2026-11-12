@@ -169,6 +169,9 @@ mod extension_catalogue;
 #[path = "extension_reads.rs"]
 mod extension_reads;
 
+#[path = "extension_concealed_reads.rs"]
+mod extension_concealed_reads;
+
 // API 0.11: the name of a Projet for an extension, the signal of the
 // Triggers, the Triggers read in the Projets of their repository.
 #[path = "extension_projets_triggers.rs"]

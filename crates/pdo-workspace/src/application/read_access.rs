@@ -32,9 +32,25 @@ pub fn read_run_in(run_id: &str, projects: Vec<String>) -> Operation {
         .in_projects(projects)
 }
 
-/// Browsing the disk for a repository: in no Projet.
+/// Browsing the disk for a repository: in no Projet. It also stands for
+/// whatever reaches a folder of the disk the caller names (a path in no
+/// Projet, a folder to clone into), and for every clone of the daemon.
 pub fn browse_disk() -> Operation {
     Operation::new(ResourceKind::Repository, Verb::Read)
+}
+
+/// Reading the repository `path` in the Projet `id`, one of its Projets:
+/// what bringing it into another Projet asks.
+pub fn read_repository_in(path: &str, id: &str) -> Operation {
+    Operation::new(ResourceKind::Repository, Verb::Read)
+        .on(path)
+        .in_projects([id])
+}
+
+/// Creating a repository for the Projet `id` (cloning one by its URL, a new
+/// empty one): in that Projet.
+pub fn create_repository_in(id: &str) -> Operation {
+    Operation::new(ResourceKind::Repository, Verb::Create).in_projects([id])
 }
 
 impl Workspace {

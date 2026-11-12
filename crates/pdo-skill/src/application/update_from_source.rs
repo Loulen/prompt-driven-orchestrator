@@ -37,7 +37,7 @@ impl Skills {
             .await?
             .ok_or(SkillError::FolderNotFound)?;
         let source = source_of_folder(&folder)?;
-        let (root, commit) = self.resolve_scan(scan_id, &source).await?;
+        let (root, commit) = self.resolve_scan(actor, scan_id, &source).await?;
         let candidates = self.scanner.candidates(&root, &source.path);
         let skills = self.skills.list().await?;
         // Only this folder's skills are ever written to: a sibling folder

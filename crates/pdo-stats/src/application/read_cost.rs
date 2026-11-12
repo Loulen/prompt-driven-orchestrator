@@ -2,10 +2,12 @@
 //! each Run's memoized harness-specific contributions, folded into the
 //! hierarchies. Fetched by the client only when the Cost tab is shown.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use pdo_kernel::extension_host::ExtensionHost;
+use pdo_kernel::Actor;
 use pdo_run::application::ports::RunStart;
 use pdo_run::domain::prices::PriceTable;
 use pdo_workspace::domain::project::Project;
@@ -13,6 +15,7 @@ use pdo_workspace::domain::project::Project;
 use super::absorptions::load_resolver;
 use super::ports::{AbsorptionStore, Projects, RunEvents, RunFiles};
 use super::read_overview::{ReadError, StatsRead};
+use super::readable::readable_runs;
 use crate::domain::absorption::resolver::AbsorptionResolver;
 use crate::domain::bucket::strftime_fmt;
 use crate::domain::cost::fold::{
@@ -28,6 +31,7 @@ pub struct ReadCost {
     files: Arc<dyn RunFiles>,
     /// The daemon's repo root: the Projet of a Run that names no repository.
     repo_root: PathBuf,
+    extensions: Arc<dyn ExtensionHost>,
 }
 
 impl ReadCost {
@@ -37,6 +41,7 @@ impl ReadCost {
         projects: Arc<dyn Projects>,
         files: Arc<dyn RunFiles>,
         repo_root: PathBuf,
+        extensions: Arc<dyn ExtensionHost>,
     ) -> Self {
         Self {
             events,
@@ -44,21 +49,31 @@ impl ReadCost {
             projects,
             files,
             repo_root,
+            extensions,
         }
     }
 
-    pub async fn execute(&self, read: &StatsRead) -> Result<StatsCost, ReadError> {
-        Ok(self.fold(read).await?.cost)
+    /// The cost of the Runs `actor` may read.
+    pub async fn execute(&self, actor: &Actor, read: &StatsRead) -> Result<StatsCost, ReadError> {
+        Ok(self.fold(actor, read).await?.cost)
     }
 
     /// « Roll up child runs » (ADR-0101 §2): the cohort is
     /// recomposed by **root** — every root Run of the window (« completed runs
     /// only » judging the root) brings its whole tree, archived descendants
     /// included, each member in its root's period and Project. « By model »
-    /// stays the fold of the unchanged cohort.
-    pub async fn execute_rolled_up(&self, read: &StatsRead) -> Result<StatsCost, ReadError> {
-        let folded = self.fold(read).await?;
-        let links = self.events.child_run_starts().await.map_err(failed)?;
+    /// stays the fold of the unchanged cohort. A descendant `actor` may not
+    /// read is left out of its tree.
+    pub async fn execute_rolled_up(
+        &self,
+        actor: &Actor,
+        read: &StatsRead,
+    ) -> Result<StatsCost, ReadError> {
+        let folded = self.fold(actor, read).await?;
+        let mut links = self.events.child_run_starts().await.map_err(failed)?;
+        if let Some(readable) = &folded.readable {
+            links.retain(|start| readable.contains(&start.run_id));
+        }
         let cohort = RollUpCohort::new(links.iter().filter_map(|start| {
             let parent = start.payload.get("parent_run_id")?.as_str()?;
             Some((start.run_id.as_str(), parent))
@@ -93,8 +108,9 @@ impl ReadCost {
         ))
     }
 
-    /// The window's cohort, each Run costed, and its fold.
-    async fn fold(&self, read: &StatsRead) -> Result<Folded, ReadError> {
+    /// The window's cohort of the Runs `actor` may read, each Run costed,
+    /// and its fold.
+    async fn fold(&self, actor: &Actor, read: &StatsRead) -> Result<Folded, ReadError> {
         let Some(fmt) = strftime_fmt(&read.bucket) else {
             return Err(ReadError::InvalidBucket(read.bucket.clone()));
         };
@@ -104,9 +120,12 @@ impl ReadCost {
         let resolver = load_resolver(self.absorptions.as_ref(), read.uncombined)
             .await
             .map_err(failed)?;
+        let readable = readable_runs(self.extensions.as_ref(), self.events.as_ref(), actor)
+            .await
+            .map_err(failed)?;
         let starts = self
             .events
-            .run_starts(Some(fmt), read.window())
+            .run_starts(Some(fmt), read.window(readable.as_ref()))
             .await
             .map_err(failed)?;
         // #427: the three price tiers, resolved ONCE for the whole fold — never
@@ -131,6 +150,7 @@ impl ReadCost {
             rows,
             cost,
             context,
+            readable,
         })
     }
 
@@ -181,4 +201,6 @@ struct Folded {
     rows: Vec<CostRunRow>,
     cost: StatsCost,
     context: FoldContext,
+    /// The Runs the reader may read; `None`: every Run.
+    readable: Option<BTreeSet<String>>,
 }

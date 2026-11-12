@@ -89,6 +89,13 @@ pub(super) fn bounded_loop_still_iterating(
     {
         return false;
     }
+    // Force-routed, the region or this member: the route replaces the lap's
+    // `when:` edges, so no later lap fires the exit either.
+    if run_state.forced_routes.contains_key(region.id.as_str())
+        || run_state.forced_routes.contains_key(src)
+    {
+        return false;
+    }
     // Exhausted: `handle_region_reentry` owns the exit at this lap (route or park
     // "exhausted — unrouted"); no future lap will re-fire the edge.
     let max_iter = effective_region_max_iter(run_state, region, vars);

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
-import { BookOpen, Plus, Search, Trash2, FilePlus } from "lucide-react";
+import { BookOpen, Library, Plus, Search, Trash2, FilePlus } from "lucide-react";
 import { EmptyState, IconButton } from "../../shared/ui/kit";
+import ListEmpty from "../../shared/ui/leftList/ListEmpty";
 import type { LibraryEntry } from "../model/library";
 import { instantiateFromLibrary } from "../api/library";
 import { libraryPortToPortDef } from "../model/library";
@@ -14,11 +15,14 @@ import type { EditorNodeDef } from "../model/pipeline";
 
 export default function LibraryDropdown({
   entries,
+  refused = null,
   onDelete,
   getDropPosition,
   onAddNodeFromYaml,
 }: {
   entries: LibraryEntry[];
+  /** CORE-248: why the caller may not read the library: the list says it instead. */
+  refused?: string | null;
   onDelete: (name: string) => void;
   getDropPosition?: () => { x: number; y: number };
   // #345 (Slice 3): open the "Add node from YAML…" modal from the library too,
@@ -99,23 +103,26 @@ export default function LibraryDropdown({
         >
           <div className="flex h-8 items-center justify-between border-b border-line px-2">
             <span className="d-caps">Library</span>
-            <span className="d-chip font-mono text-2xs">{entries.length}</span>
+            {refused === null && <span className="d-chip font-mono text-2xs">{entries.length}</span>}
           </div>
 
-          <div className="border-b border-line px-2 py-1">
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search nodes"
-              aria-label="Search nodes"
-              className="d-input w-full"
-              autoFocus
-            />
-          </div>
+          {refused === null && (
+            <div className="border-b border-line px-2 py-1">
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search nodes"
+                aria-label="Search nodes"
+                className="d-input w-full"
+                autoFocus
+              />
+            </div>
+          )}
 
           {/* #345 (Slice 3): create a node from a YAML definition, alongside the
               saved library entries — the issue's "+ or the library" affordance. */}
-          {onAddNodeFromYaml && (
+          {/* CORE-248: a refused library shows its sentence alone, no gesture. */}
+          {onAddNodeFromYaml && refused === null && (
             <button
               data-testid="library-add-node-from-yaml"
               onClick={() => {
@@ -130,7 +137,8 @@ export default function LibraryDropdown({
           )}
 
           <div className="flex-1 overflow-y-auto">
-            {filtered.length === 0 && entries.length === 0 && (
+            {refused !== null && <ListEmpty icon={Library} title={refused} testId="library-refused" />}
+            {refused === null && filtered.length === 0 && entries.length === 0 && (
               <EmptyState icon={BookOpen} layout="row">
                 No saved node
               </EmptyState>

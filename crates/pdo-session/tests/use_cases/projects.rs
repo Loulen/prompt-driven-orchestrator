@@ -76,7 +76,7 @@ async fn attaching_a_window_or_a_terminal_and_taking_control_are_in_the_runs_pro
     .with_projects(Arc::new(InP1));
     let session = manager_session_name(RUN);
     assert!(terminals
-        .authorize_attach(&Actor::LocalOperator, &session)
+        .admit(&Actor::LocalOperator, &session)
         .await
         .is_err());
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -90,7 +90,8 @@ async fn attaching_a_window_or_a_terminal_and_taking_control_are_in_the_runs_pro
     );
 
     let projects: Vec<Vec<String>> = host.asked().into_iter().map(|op| op.projects).collect();
-    assert_eq!(projects, vec![p1(), p1(), vec![], p1(), p1()]);
+    // The attach, then the read it falls back on, then the take-over.
+    assert_eq!(projects, vec![p1(), p1(), vec![], p1(), p1(), p1()]);
 }
 
 #[tokio::test]

@@ -1,20 +1,30 @@
 //! Piloting a terminal: what the PTY bridge asks of the context for each
-//! browser connection — may it attach, how, who pilots, and what its keystrokes
-//! do to a declared wait.
+//! browser connection — may it attach or only watch, how, who pilots, and what
+//! its keystrokes do to a declared wait.
 
 use std::sync::Arc;
 
-use pdo_kernel::authorization::{authorize, Denied};
+use pdo_kernel::authorization::{authorize, authorize_read, Denied};
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use tokio::sync::watch;
 use tracing::warn;
 
 use crate::application::declared_wait::LiftWait;
+use crate::application::ignore_size::follow_ignore_size;
 use crate::application::ports::{projects_of_session, NoRunProjects, RunProjects, Tmux};
 use crate::application::session_ledger::SessionLedger;
-use crate::application::shared_terminal::{follow_ignore_size, SharedTerminalRegistry};
+use crate::application::shared_terminal::SharedTerminalRegistry;
 use crate::domain::shared_terminal::ConnId;
+
+/// How a connection is let into a terminal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Admission {
+    /// It may drive the terminal: type into it, take control of it.
+    Drives,
+    /// It may only watch; the sentence says why it cannot type.
+    ReadOnly(String),
+}
 
 pub struct Terminals {
     registry: Arc<SharedTerminalRegistry>,
@@ -58,10 +68,20 @@ impl Terminals {
         self
     }
 
-    /// Whether `actor` may open a terminal on `session`.
-    pub async fn authorize_attach(&self, actor: &Actor, session: &str) -> Result<(), Denied> {
-        let operation = self.operation(session, "attach").await;
-        authorize(self.host.as_ref(), actor, &operation)
+    /// How `actor` may open a terminal on `session`: to drive it with
+    /// `session` × `attach`; else read-only with `session` × `read`, the
+    /// sentence of the attach's refusal saying why; else not at all, with the
+    /// read's refusal.
+    pub async fn admit(&self, actor: &Actor, session: &str) -> Result<Admission, Denied> {
+        let attach = self.operation(session, "attach").await;
+        let Err(refused) = authorize(self.host.as_ref(), actor, &attach) else {
+            return Ok(Admission::Drives);
+        };
+        let read = Operation::new(ResourceKind::Session, Verb::Read)
+            .on(session)
+            .in_projects(attach.projects);
+        authorize_read(self.host.as_ref(), actor, &read)?;
+        Ok(Admission::ReadOnly(refused.sentence().to_string()))
     }
 
     /// Who is connected to which session, and who pilots.

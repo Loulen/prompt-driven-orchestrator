@@ -18,6 +18,13 @@
 //! the `ignore-size` of both postes' clients live. A take-over from the pilot or
 //! from a solo terminal changes nothing.
 //!
+//! A connection whose Actor may read the session but not attach to it
+//! (`session` × `read` without `session` × `attach`) is **read-only**: it never
+//! drives, never pilots, never takes control, and its frames carry the
+//! sentence of that refusal (`read_only`). Alone, or among read-only postes
+//! only, the first arrived of them sizes the terminal (`solo`, read-only); the
+//! others watch its grid.
+//!
 //! Every change is pushed to each connection as a `role` text frame. A frame is
 //! only sent when it differs from the last one that connection received, so a
 //! spectator hears about a pilot resize and nothing else.
@@ -52,7 +59,12 @@ pub const INITIAL_SIZE: TermSize = TermSize { cols: 80, rows: 24 };
 #[ts(export, rename = "SharedTerminalRole")]
 #[serde(tag = "role", rename_all = "lowercase")]
 pub enum RoleMsg {
-    Solo,
+    Solo {
+        /// See [`RoleMsg::read_only`].
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        read_only: Option<String>,
+    },
     Pilot {
         /// Other postes watching this terminal.
         spectators: usize,
@@ -60,15 +72,34 @@ pub enum RoleMsg {
     Spectator {
         /// The pilot's grid: the spectator renders exactly this many cells.
         pilot: TermSize,
+        /// See [`RoleMsg::read_only`].
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        read_only: Option<String>,
     },
 }
 
 impl RoleMsg {
+    /// A solo terminal whose connection may drive it.
+    pub const SOLO: RoleMsg = RoleMsg::Solo { read_only: None };
+
     pub fn role(&self) -> Role {
         match self {
-            RoleMsg::Solo => Role::Solo,
+            RoleMsg::Solo { .. } => Role::Solo,
             RoleMsg::Pilot { .. } => Role::Pilot,
             RoleMsg::Spectator { .. } => Role::Spectator,
+        }
+    }
+
+    /// The sentence of the refusal that keeps this connection from ever
+    /// taking the hand (no `session` × `attach`): it watches, read-only,
+    /// whatever happens to the others. `None` for a connection that may drive.
+    pub fn read_only(&self) -> Option<&str> {
+        match self {
+            RoleMsg::Solo { read_only } | RoleMsg::Spectator { read_only, .. } => {
+                read_only.as_deref()
+            }
+            RoleMsg::Pilot { .. } => None,
         }
     }
 
@@ -102,10 +133,11 @@ mod tests {
 
     #[test]
     fn role_frames_are_tagged_json() {
-        assert_eq!(RoleMsg::Solo.to_frame(), r#"{"role":"solo","type":"role"}"#);
+        assert_eq!(RoleMsg::SOLO.to_frame(), r#"{"role":"solo","type":"role"}"#);
         let v: serde_json::Value = serde_json::from_str(
             &RoleMsg::Spectator {
                 pilot: size(200, 50),
+                read_only: None,
             }
             .to_frame(),
         )
@@ -114,6 +146,26 @@ mod tests {
         assert_eq!(v["role"], "spectator");
         assert_eq!(v["pilot"]["cols"], 200);
         assert_eq!(v["pilot"]["rows"], 50);
+        assert!(v.get("read_only").is_none(), "{v}");
+    }
+
+    #[test]
+    fn a_read_only_frame_carries_the_refusal_sentence() {
+        let why = "You can't attach this session here. Ask an administrator of the test extension.";
+        let solo = RoleMsg::Solo {
+            read_only: Some(why.into()),
+        };
+        assert_eq!(solo.read_only(), Some(why));
+        let v: serde_json::Value = serde_json::from_str(&solo.to_frame()).unwrap();
+        assert_eq!(v["role"], "solo");
+        assert_eq!(v["read_only"], why);
+        let spectator = RoleMsg::Spectator {
+            pilot: size(80, 24),
+            read_only: Some(why.into()),
+        };
+        let v: serde_json::Value = serde_json::from_str(&spectator.to_frame()).unwrap();
+        assert_eq!(v["read_only"], why);
+        assert_eq!(RoleMsg::Pilot { spectators: 1 }.read_only(), None);
     }
 
     #[test]

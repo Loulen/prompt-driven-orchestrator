@@ -7,6 +7,7 @@ pub mod assistant;
 pub mod attach;
 pub mod declared_wait;
 pub mod hosted;
+pub mod ignore_size;
 pub mod launch;
 pub mod messages;
 pub mod open_shell;

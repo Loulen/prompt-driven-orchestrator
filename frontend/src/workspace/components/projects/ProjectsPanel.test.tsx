@@ -224,18 +224,19 @@ describe("ProjectsPanel", () => {
     await waitFor(() => expect(api.addProjectMember).toHaveBeenCalledWith("p1", "/home/me/code/picked"));
   });
 
-  it("creates a new empty repository, then adds it", async () => {
+  it("creates a new empty repository for the Projet, which joins it", async () => {
     api.createRepo.mockResolvedValue({ path: "/home/me/code/widgets", created: true });
-    renderPanel({ entry: { projectId: "p1" } });
+    const { onChanged } = renderPanel({ entry: { projectId: "p1" } });
 
     await addRepository(/New empty repository…/);
     expect(screen.getByTestId("project-new-repo-path")).toHaveValue("~/");
     fireEvent.change(screen.getByTestId("project-new-repo-path"), { target: { value: "~/code/widgets" } });
     fireEvent.click(screen.getByTestId("project-new-repo-create"));
 
-    await waitFor(() => expect(api.createRepo).toHaveBeenCalledWith("/home/me/code", "widgets"));
-    await waitFor(() => expect(api.addProjectMember).toHaveBeenCalledWith("p1", "/home/me/code/widgets"));
+    await waitFor(() => expect(api.createRepo).toHaveBeenCalledWith("/home/me/code", "widgets", [], "p1"));
     await waitFor(() => expect(screen.queryByTestId("project-new-repo")).not.toBeInTheDocument());
+    expect(onChanged).toHaveBeenCalled();
+    expect(api.addProjectMember).not.toHaveBeenCalled();
   });
 
   it("clones a URL into the clones folder for the Projet, shows its progress, then reads the Projets again", async () => {
@@ -277,7 +278,11 @@ describe("ProjectsPanel", () => {
     fireEvent.change(screen.getByTestId("project-clone-url"), {
       target: { value: "git@github.com:acme/shop-web.git" },
     });
-    expect(await screen.findByTestId("project-clone-reused")).toBeInTheDocument();
+    // The reuse waits for the remote to accept the adder's credentials: the chip promises no more.
+    expect(await screen.findByTestId("project-clone-reused")).toHaveAttribute(
+      "title",
+      expect.stringContaining("once the remote accepts your git credentials"),
+    );
     expect(screen.getByTestId("project-clone-start")).toHaveTextContent("Add");
     fireEvent.click(screen.getByTestId("project-clone-change"));
     fireEvent.change(screen.getByTestId("project-clone-path"), { target: { value: "~/src/shop-web" } });
@@ -306,7 +311,7 @@ describe("ProjectsPanel", () => {
     await waitFor(() => expect(api.cancelClone).toHaveBeenCalledWith("c1"));
 
     api.fetchClones.mockResolvedValue([
-      cloneJob({ state: "failed", error: "The daemon's git credentials were refused for https://github.com/acme/analytics.git" }),
+      cloneJob({ state: "failed", error: "The daemon's git credentials were refused for github.com" }),
     ]);
     await waitFor(
       () =>
@@ -387,8 +392,8 @@ describe("ProjectsPanel", () => {
   });
 
   it("reads a Projet the caller may not update as read-only, its gestures greyed with why (CORE-205)", async () => {
-    // create, browse, create a repository, then p1 update/delete (denied), p2 allowed.
-    api.askAuthorization.mockResolvedValue([deny, allow, allow, deny, deny, allow, allow]);
+    // create, browse, then p1 update/delete (denied) and its repositories, p2 allowed.
+    api.askAuthorization.mockResolvedValue([deny, allow, deny, deny, allow, allow, allow, allow, allow, allow]);
     renderPanel({ projects: [CHECKOUT, PLATFORM], entry: { projectId: "p1" } });
 
     expect(await screen.findByTestId("project-read-only")).toHaveAttribute("title", deny.sentence);
@@ -410,6 +415,99 @@ describe("ProjectsPanel", () => {
 
     fireEvent.click(screen.getAllByTestId("projects-list-item")[1]);
     expect(screen.getByTestId("project-rename")).not.toHaveAttribute("aria-disabled");
+  });
+
+  describe("for who may only write in the Projet (no disk)", () => {
+    const QUOTES: Project = { id: "p3", name: "Quotes", members: ["/home/me/code/quotes-web", "/home/me/code/shop-api"] };
+    const RISK: Project = { id: "p4", name: "Risk", members: ["/home/me/code/risk-models"] };
+    const noDisk = {
+      decision: "deny" as const,
+      reason: "no",
+      sentence: "Adding a local folder needs disk access. Ask an administrator.",
+    };
+    type Question = { resource: string; verb: string; projects?: string[] };
+    const writerInCheckout = (questions: Question[]) =>
+      questions.map((q) =>
+        q.resource === "repository" && q.verb === "read" && !q.projects
+          ? noDisk
+          : q.resource === "repository" && q.projects?.includes("p4")
+            ? deny
+            : allow,
+      );
+
+    beforeEach(() => {
+      api.askAuthorization.mockImplementation(async (questions: Question[]) => writerInCheckout(questions));
+    });
+
+    async function openMenu() {
+      renderPanel({ projects: [CHECKOUT, PLATFORM, QUOTES, RISK], entry: { projectId: "p1" } });
+      await waitFor(() => expect(api.askAuthorization).toHaveBeenCalled());
+      fireEvent.click(screen.getByTestId("project-add-repo"));
+      const menu = await screen.findByRole("menu", { name: "Add repository" });
+      await within(menu).findByRole("menuitem", { name: /Local folder…/ });
+      await waitFor(() =>
+        expect(within(menu).getByRole("menuitem", { name: /Local folder…/ })).toHaveAttribute("aria-disabled", "true"),
+      );
+      return menu;
+    }
+
+    it("offers the Projet's gestures first, its other Projets' repositories, and a greyed local folder", async () => {
+      const menu = await openMenu();
+      expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+        "Clone from a URL…",
+        "New empty repository…git init",
+        "~/code/quotes-webQuotes",
+        "Local folder…",
+      ]);
+      expect(within(menu).getByText("From my Projects")).toBeInTheDocument();
+      expect(within(menu).queryByText("Recent")).not.toBeInTheDocument();
+      // Why it is greyed: in its tooltip, not at the menu's foot.
+      expect(screen.queryByTestId("menu-disabled-reason")).not.toBeInTheDocument();
+      expect(within(menu).getByRole("menuitem", { name: /Local folder…/ })).toHaveAttribute("aria-describedby");
+
+      fireEvent.click(within(menu).getByRole("menuitem", { name: /quotes-web/ }));
+      await waitFor(() => expect(api.addProjectMember).toHaveBeenCalledWith("p1", "/home/me/code/quotes-web"));
+    });
+
+    it("greys the clone and the new repository the Projet refuses", async () => {
+      api.askAuthorization.mockImplementation(async (questions: Question[]) =>
+        writerInCheckout(questions).map((decision, i) =>
+          questions[i].resource === "repository" && questions[i].verb === "create" ? deny : decision,
+        ),
+      );
+      const menu = await openMenu();
+      for (const name of ["Clone from a URL…", /New empty repository…/])
+        expect(within(menu).getByRole("menuitem", { name })).toHaveAttribute("aria-disabled", "true");
+      expect(api.askAuthorization).toHaveBeenCalledWith(
+        expect.arrayContaining([{ resource: "repository", verb: "create", projects: ["p1"] }]),
+      );
+    });
+
+    it("names a new empty repository only: the daemon makes it in its clones folder", async () => {
+      api.createRepo.mockResolvedValue({ path: "/home/me/pdo/repos/ledger", created: true });
+      const menu = await openMenu();
+      fireEvent.click(within(menu).getByRole("menuitem", { name: /New empty repository…/ }));
+      const field = screen.getByTestId("project-new-repo-path");
+      expect(field).toHaveValue("");
+      expect(screen.queryByTestId("project-new-repo-browse")).not.toBeInTheDocument();
+      fireEvent.change(field, { target: { value: "ledger" } });
+      expect(screen.getByTestId("project-new-repo")).toHaveTextContent("Intothe clones folder·ledger");
+      fireEvent.click(screen.getByTestId("project-new-repo-create"));
+      await waitFor(() => expect(api.createRepo).toHaveBeenCalledWith(null, "ledger", [], "p1"));
+    });
+
+    it("asks where a clone goes in the Projet, and greys a folder of its own", async () => {
+      const menu = await openMenu();
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Clone from a URL…" }));
+      fireEvent.change(screen.getByTestId("project-clone-url"), {
+        target: { value: "https://github.com/acme/analytics.git" },
+      });
+      await waitFor(() =>
+        expect(api.fetchCloneTarget).toHaveBeenCalledWith("https://github.com/acme/analytics.git", "p1"),
+      );
+      expect(await screen.findByTestId("project-clone-change")).toBeDisabled();
+      expect(screen.getByTestId("project-clone-change")).toHaveAttribute("title", noDisk.sentence);
+    });
   });
 
   it("follows the Projets changed elsewhere", () => {

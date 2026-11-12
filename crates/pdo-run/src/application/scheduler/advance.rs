@@ -23,6 +23,7 @@ use crate::application::events::load_events;
 use crate::application::node::spawn::{spawn_node, SpawnContext, SpawnDeps};
 use crate::application::paths::effective_repo_root;
 use crate::application::paths::resolve_run_pipeline_path;
+use crate::application::scheduler::frontmatter::resolve_completed_frontmatter;
 use crate::application::scheduler::frontmatter::resolve_run_variables;
 use crate::application::scheduler::interpreter::{self as scheduler_interpreter, SpawnDedup};
 use crate::domain::scheduler;
@@ -73,7 +74,25 @@ pub async fn advance_run(state: &Runs, run_id: &str) {
     let pipeline = parse_result.pipeline;
 
     let resolved_vars = resolve_run_variables(&pipeline, &events);
+    let worktree_dir = worktree_dir_for_run(&repo_root, run_id);
+    let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
+    // A guarded exit of a bounded loop reads decided only off its producer's
+    // frontmatter: the projection alone misses a FAIL lap not yet followed by
+    // its next one (ADR-0082).
     let ready = scheduler_dispatcher::compute_ready_to_spawn(&pipeline, &run_state);
+    let ready = if ready.is_empty() {
+        ready
+    } else {
+        let frontmatter_by_node =
+            resolve_completed_frontmatter(&pipeline, &run_state, &artifacts_dir);
+        scheduler_dispatcher::hold_pending_loop_exits(
+            &pipeline,
+            &run_state,
+            ready,
+            &frontmatter_by_node,
+            &resolved_vars,
+        )
+    };
     let loop_seed_actions = scheduler::seed_pending_loops(&pipeline, &run_state, &resolved_vars);
 
     if ready.is_empty() && loop_seed_actions.is_empty() {
@@ -92,9 +111,6 @@ pub async fn advance_run(state: &Runs, run_id: &str) {
         maybe_complete_run(state, run_id, &pipeline_node_ids, &run_state, false).await;
         return;
     }
-
-    let worktree_dir = worktree_dir_for_run(&repo_root, run_id);
-    let artifacts_dir = worktree_dir.join(".pdo").join("artifacts");
 
     let spawn_ctx = SpawnContext {
         pipeline: &pipeline,

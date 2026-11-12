@@ -3,10 +3,15 @@
  * under it.
  */
 import * as React from "react";
-import { Check, ChevronRight, Lock } from "lucide-react";
+import { Check, ChevronRight } from "lucide-react";
 import { AnchoredPanel, FOCUSABLE, Floating } from "./layer";
+import { TooltipLayer } from "./tip";
+import { MenuReasons, type MenuReasonsAt } from "./menuReasons";
+import { isItem, menuReasons } from "./menuEntries";
 import { cx } from "./util";
 import type { Icon } from "./tones";
+
+export { MenuReasons, type MenuReasonsAt };
 
 // ================================================================== popover
 
@@ -80,7 +85,8 @@ export interface MenuItem {
   /**
    * Why the caller may not pick it: the entry stays, greyed, and the menu
    * says this sentence once, on a line at its foot (with a lock), rather
-   * than a tooltip per entry. Implies `disabled`.
+   * than a tooltip per entry; with the menu's `reasons="tooltip"`, in a
+   * tooltip of the entry instead. Implies `disabled`.
    */
   disabledReason?: string;
   onSelect?: () => void;
@@ -89,40 +95,8 @@ export interface MenuItem {
 
 export type MenuEntry = MenuItem | { kind: "separator" } | { kind: "label"; label: string };
 
-const isItem = (e: MenuEntry): e is MenuItem => !e.kind || e.kind === "item";
 const isOff = (it: MenuItem) => !!it.disabled || !!it.disabledReason;
 
-/** The reasons of the greyed entries of `entries`, each once, in order. */
-function menuReasons(entries: readonly MenuEntry[]): string[] {
-  const reasons: string[] = [];
-  for (const e of entries) {
-    if (isItem(e) && e.disabledReason && !reasons.includes(e.disabledReason)) reasons.push(e.disabledReason);
-  }
-  return reasons;
-}
-
-/**
- * The foot of a menu: why its greyed entries are greyed, a line per reason.
- * Inside an element of role `menu`, give it `id` and point the menu's
- * `aria-describedby` at it: it is then `presentation`, read as the menu's
- * description.
- */
-export function MenuReasons({ reasons, id }: { reasons: readonly string[]; id?: string }) {
-  if (reasons.length === 0) return null;
-  const lines = reasons.map((reason) => (
-    <div key={reason} className="d-pop__why" role={id ? undefined : "note"} data-testid="menu-disabled-reason">
-      <Lock size={12} strokeWidth={1.5} aria-hidden />
-      <span>{reason}</span>
-    </div>
-  ));
-  return id ? (
-    <div id={id} role="presentation">
-      {lines}
-    </div>
-  ) : (
-    <>{lines}</>
-  );
-}
 const roleOf = (it: MenuItem) => (it.radio ? "menuitemradio" : it.checked !== undefined ? "menuitemcheckbox" : "menuitem");
 
 /** The rows of a menu: a check column, the icon, the label, the shortcut. */
@@ -132,13 +106,16 @@ function MenuList({
   onPick,
   openSub,
   onSubOpen,
+  reasons = "foot",
 }: {
   entries: MenuEntry[];
   label: string;
   onPick: (item: MenuItem) => void;
   openSub: number | null;
   onSubOpen: (index: number | null, row: HTMLElement | null) => void;
+  reasons?: MenuReasonsAt;
 }) {
+  const id = React.useId();
   return (
     <>
     <div role="menu" aria-label={label} style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
@@ -153,13 +130,16 @@ function MenuList({
         const it = e as MenuItem;
         const Ic = it.icon;
         const subOpen = openSub === i;
-        return (
+        const why = reasons === "tooltip" && it.disabledReason ? `${id}-why-${i}` : undefined;
+        const row = (
           <button
             key={i}
             type="button"
             role={roleOf(it)}
             tabIndex={-1}
             data-menuitem=""
+            data-why={why ? "" : undefined}
+            aria-describedby={why}
             aria-checked={it.checked !== undefined ? it.checked : undefined}
             aria-disabled={isOff(it) || undefined}
             aria-haspopup={it.submenu ? "menu" : undefined}
@@ -183,15 +163,23 @@ function MenuList({
             {it.submenu && <ChevronRight className="d-pop__sub" size={12} strokeWidth={1.5} aria-hidden />}
           </button>
         );
+        return why ? (
+          <TooltipLayer key={i} side="right" describedBy={why} content={it.disabledReason}>
+            {row}
+          </TooltipLayer>
+        ) : (
+          row
+        );
       })}
     </div>
-    <MenuReasons reasons={menuReasons(entries)} />
+    {reasons === "foot" && <MenuReasons reasons={menuReasons(entries)} />}
     </>
   );
 }
 
+/** The rows the arrows stop on: those that may be picked, and the greyed ones that say why in a tooltip. */
 const menuRows = (root: Element | null) => [
-  ...(root?.querySelectorAll<HTMLElement>("[data-menuitem]:not([aria-disabled])") ?? []),
+  ...(root?.querySelectorAll<HTMLElement>("[data-menuitem]:not([aria-disabled]), [data-menuitem][data-why]") ?? []),
 ];
 
 function moveFocus(root: Element | null, dir: 1 | -1 | "first" | "last" | string) {
@@ -316,6 +304,8 @@ export interface MenuProps {
   /** Accessible name of the menu. */
   label: string;
   align?: "start" | "end";
+  /** Where it says why its greyed entries are greyed: at its foot (default), or in their tooltips. */
+  reasons?: MenuReasonsAt;
 }
 
 /**
@@ -324,7 +314,7 @@ export interface MenuProps {
  * opens a submenu, ArrowLeft closes it; Escape closes and returns to the
  * trigger.
  */
-export function Menu({ trigger, entries, label, align = "start" }: MenuProps) {
+export function Menu({ trigger, entries, label, align = "start", reasons = "foot" }: MenuProps) {
   const [open, setOpen] = React.useState(false);
   const [sub, setSub] = React.useState<{ i: number; row: HTMLElement } | null>(null);
   const anchor = React.useRef<HTMLSpanElement>(null);
@@ -377,6 +367,7 @@ export function Menu({ trigger, entries, label, align = "start" }: MenuProps) {
             onPick={pick}
             openSub={sub?.i ?? null}
             onSubOpen={(i, r) => setSub(i != null && r ? { i, row: r } : null)}
+            reasons={reasons}
           />
         </div>
       </AnchoredPanel>

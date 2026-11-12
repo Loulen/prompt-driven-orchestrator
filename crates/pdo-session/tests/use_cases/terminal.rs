@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use pdo_kernel::{Actor, Verb};
 use pdo_session::application::declared_wait::{LiftWait, TypedInput};
-use pdo_session::application::terminal::Terminals;
+use pdo_session::application::terminal::{Admission, Terminals};
 use tokio::sync::mpsc;
 
 use crate::fakes::{FakeTmux, Host, Waits};
@@ -22,17 +22,32 @@ fn terminals(host: Arc<Host>) -> Terminals {
 async fn attaching_a_terminal_is_an_operation_on_the_session() {
     let host = Host::allowing();
     let t = terminals(host.clone());
-    assert!(t
-        .authorize_attach(&Actor::LocalOperator, "pdo-mgr-r1")
-        .await
-        .is_ok());
+    assert_eq!(
+        t.admit(&Actor::LocalOperator, "pdo-mgr-r1").await,
+        Ok(Admission::Drives)
+    );
     let asked = host.asked();
+    assert_eq!(asked.len(), 1, "attach allowed: nothing more is asked");
     assert_eq!(asked[0].verb, Verb::Action("attach".into()));
     assert_eq!(asked[0].target.as_deref(), Some("pdo-mgr-r1"));
     assert!(terminals(Host::refusing())
-        .authorize_attach(&Actor::LocalOperator, "pdo-mgr-r1")
+        .admit(&Actor::LocalOperator, "pdo-mgr-r1")
         .await
         .is_err());
+}
+
+#[tokio::test]
+async fn reading_a_session_without_attaching_watches_it_read_only() {
+    let host = Host::refusing_all_but_reads();
+    let t = terminals(host.clone());
+    let admission = t.admit(&Actor::LocalOperator, "pdo-mgr-r1").await;
+    let Ok(Admission::ReadOnly(why)) = admission else {
+        panic!("{admission:?}");
+    };
+    assert!(!why.is_empty());
+    let asked = host.asked();
+    assert_eq!(asked[1].verb, Verb::Read);
+    assert_eq!(asked[1].target.as_deref(), Some("pdo-mgr-r1"));
 }
 
 #[tokio::test]

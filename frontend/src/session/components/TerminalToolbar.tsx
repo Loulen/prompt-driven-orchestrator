@@ -15,6 +15,10 @@ interface Props {
   connected: boolean;
   /** #870: this browser watches another poste's terminal. */
   spectating: boolean;
+  /** Set when this browser may never take control (it may read the session, not
+   *  attach to it): the sentence of that refusal. « Take control » stays,
+   *  greyed, and says it. */
+  takeControlRefusal?: string;
   takenOver: boolean;
   /** #867: other postes watching this browser's terminal. */
   watchers: number;
@@ -55,7 +59,17 @@ function modeOf(connected: boolean, spectating: boolean, statusLabel: string): {
  * pilot » and how many watch; a spectator reads « Watching » and takes control
  * from the chip itself (#867, #870).
  */
-function RoleChip({ role, watchers, onTakeControl }: { role: "pilot" | "spectator"; watchers: number; onTakeControl: () => void }) {
+function RoleChip({
+  role,
+  watchers,
+  onTakeControl,
+  takeControlRefusal,
+}: {
+  role: "pilot" | "spectator";
+  watchers: number;
+  onTakeControl: () => void;
+  takeControlRefusal?: string;
+}) {
   if (role === "pilot") {
     return (
       <span className="ri-term-bar__role" data-role="pilot" data-testid="term-mode">
@@ -83,11 +97,27 @@ function RoleChip({ role, watchers, onTakeControl }: { role: "pilot" | "spectato
         Watching
       </span>
       <span className="ri-term-bar__role-sep" aria-hidden />
-      {/* #870: a spectator takes control in one click. */}
-      <button type="button" className="ri-term-bar__role-action" data-testid="term-take-control" onClick={onTakeControl}>
-        <Hand size={11} strokeWidth={1.5} aria-hidden />
-        {TAKE_CONTROL_LABEL}
-      </button>
+      {/* #870: a spectator takes control in one click. Refused, the gesture
+          stays visible, greyed, and its tooltip says why. */}
+      {takeControlRefusal ? (
+        <Tooltip label={TAKE_CONTROL_LABEL} description={takeControlRefusal}>
+          <button
+            type="button"
+            className="ri-term-bar__role-action"
+            data-testid="term-take-control"
+            aria-disabled
+            onClick={(e) => e.preventDefault()}
+          >
+            <Hand size={11} strokeWidth={1.5} aria-hidden />
+            {TAKE_CONTROL_LABEL}
+          </button>
+        </Tooltip>
+      ) : (
+        <button type="button" className="ri-term-bar__role-action" data-testid="term-take-control" onClick={onTakeControl}>
+          <Hand size={11} strokeWidth={1.5} aria-hidden />
+          {TAKE_CONTROL_LABEL}
+        </button>
+      )}
     </span>
   );
 }
@@ -102,6 +132,7 @@ export default function TerminalToolbar({
   statusLabel,
   connected,
   spectating,
+  takeControlRefusal,
   takenOver,
   watchers,
   hasSelection,
@@ -133,7 +164,12 @@ export default function TerminalToolbar({
         {session}
       </span>
       {mode.role ? (
-        <RoleChip role={mode.role} watchers={watchers} onTakeControl={onTakeControl} />
+        <RoleChip
+          role={mode.role}
+          watchers={watchers}
+          onTakeControl={onTakeControl}
+          takeControlRefusal={takeControlRefusal}
+        />
       ) : (
         <span className="ri-term-bar__tag" data-testid="term-mode">
           {statusLabel}

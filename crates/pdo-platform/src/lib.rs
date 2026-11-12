@@ -26,6 +26,7 @@ use application::get_update_status::GetUpdateStatus;
 use application::list_audit::ListAudit;
 use application::mount_page::MountPage;
 use application::page_journal::PageMountLock;
+use application::place_older_pages::PlaceOlderPages;
 use application::place_page_mount::PlacePageMount;
 use application::ports::{
     AuditLog, Installation, PageFiles, PageMountRepository, PublicUrlSetting, ReleaseSource, Runs,
@@ -73,6 +74,7 @@ pub struct Platform {
     pub(crate) apply_update: ApplyUpdate,
     pub(crate) read_attempt_log: ReadAttemptLog,
     place_page_mount: Arc<PlacePageMount>,
+    place_older_pages: PlaceOlderPages,
     page_mounts: Arc<dyn PageMountRepository>,
     audit: Arc<dyn AuditLog>,
     public_url: Arc<dyn PublicUrlSetting>,
@@ -123,6 +125,7 @@ impl Platform {
                 lock.clone(),
                 place_page_mount.clone(),
             ),
+            place_older_pages: PlaceOlderPages::new(page_mounts.clone(), runs.clone()),
             unmount_page: UnmountPage::new(
                 page_mounts.clone(),
                 runs,
@@ -132,7 +135,7 @@ impl Platform {
                 place_page_mount.clone(),
             ),
             place_page_mount,
-            read_pages: ReadPages::new(page_mounts.clone(), page_files),
+            read_pages: ReadPages::new(page_mounts.clone(), page_files, extensions.clone()),
             release_run_pages: ReleaseRunPages::new(page_mounts.clone(), lock),
             record_audit,
             list_audit: ListAudit::new(audit.clone(), extensions.clone()),
@@ -148,10 +151,20 @@ impl Platform {
         })
     }
 
-    /// Create the context's storage if it does not exist yet.
+    /// Create the context's storage if it does not exist yet, and place the
+    /// mounts older than their owner and their Projet (best-effort).
     pub async fn init(&self) -> Result<(), StorageError> {
         self.audit.init().await?;
-        self.page_mounts.init().await
+        self.page_mounts.init().await?;
+        // Best-effort: a mount left unplaced is tried again at the next start.
+        match self.place_older_pages.execute().await {
+            Ok(0) => {}
+            Ok(placed) => {
+                tracing::info!("{placed} page mount(s) placed in the Projet of their Run")
+            }
+            Err(e) => tracing::warn!("older page mounts could not be placed: {e}"),
+        }
+        Ok(())
     }
 
     /// Journal an out-of-Run configuration mutation, best-effort (ADR-0044).

@@ -5,8 +5,8 @@
 //! still reaches the connection, without the `run_id` of a Run it may not
 //! read. A message guarded by a read ([`READ_GUARD`]: what a Trigger
 //! announces, in its Projets; an extension's event its extension guarded)
-//! and an `operation_applied` on a Trigger, a session or an extension's
-//! Ressource reach a connection only if its Actor may run that read (the read
+//! and an `operation_applied` on a Trigger, a session, a page mount or an
+//! extension's Ressource reach a connection only if its Actor may run that read (the read
 //! of the entity, in the Operation's Projets); the guard never leaves the
 //! daemon.
 
@@ -147,22 +147,39 @@ fn run_of_message(message: &Value) -> Option<(&str, bool)> {
     }
 }
 
-/// The read guarding an `operation_applied` on a Trigger, a session or an
-/// extension's Ressource: the read of the entity it is about (its target, or
-/// the entity it created), on the same Ressource, in the Projets of its
-/// Operation. A session's Operation without a target (the opening of a
+/// The read guarding an `operation_applied` on a Trigger, a session, a page
+/// mount or an extension's Ressource: the read of the entity it is about (its
+/// target, or the entity it created), on the same Ressource, in the Projets
+/// of its Operation. A session's Operation without a target (the opening of a
 /// Session hébergée) is guarded by the read of the sessions of its Projets,
-/// as its `hosted_session_changed` is reached by those who may read it.
+/// as its `hosted_session_changed` is reached by those who may read it; a
+/// page mounted, by the read of the pages of its Projet.
 /// `None` for the other messages, and for a creation whose entity nobody
-/// knows.
+/// knows. One on the shared configuration (a pipeline, the library, an
+/// agentic profile, a skill, the instance settings) is guarded by the read of
+/// that configuration, untargeted, in no Projet, as its `GET` is.
 fn entity_read_of(message: &Value) -> Option<Value> {
     if message["type"] != "operation_applied" {
         return None;
     }
     let operation: Operation = serde_json::from_value(message["operation"].clone()).ok()?;
+    if matches!(
+        operation.resource,
+        ResourceKind::Pipeline
+            | ResourceKind::LibraryEntry
+            | ResourceKind::AgentProfile
+            | ResourceKind::Skill
+            | ResourceKind::SkillFolder
+            | ResourceKind::InstanceSettings
+    ) {
+        return serde_json::to_value(Operation::new(operation.resource, Verb::Read)).ok();
+    }
     if !matches!(
         operation.resource,
-        ResourceKind::Trigger | ResourceKind::Session | ResourceKind::Extension { .. }
+        ResourceKind::Trigger
+            | ResourceKind::Session
+            | ResourceKind::PageMount
+            | ResourceKind::Extension { .. }
     ) {
         return None;
     }
@@ -172,7 +189,13 @@ fn entity_read_of(message: &Value) -> Option<Value> {
     let read = Operation::new(operation.resource.clone(), Verb::Read);
     let read = match target {
         Some(target) => read.on(target),
-        None if operation.resource == ResourceKind::Session => read,
+        None if matches!(
+            operation.resource,
+            ResourceKind::Session | ResourceKind::PageMount
+        ) =>
+        {
+            read
+        }
         None => return None,
     };
     serde_json::to_value(read.in_projects(operation.projects)).ok()
@@ -191,6 +214,30 @@ fn run_mentioned_by(message: &Value) -> Option<&str> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn an_operation_on_a_page_mount_is_guarded_by_the_read_of_pages_in_its_projet() {
+        let applied = |verb: &str, target: Value| {
+            json!({
+                "type": "operation_applied",
+                "operation": {
+                    "resource": "page_mount", "verb": verb, "target": target, "projects": ["p1"],
+                },
+            })
+        };
+        assert_eq!(
+            entity_read_of(&applied("delete", json!("demo"))),
+            Some(
+                json!({ "resource": "page_mount", "verb": "read", "target": "demo", "projects": ["p1"] })
+            )
+        );
+        assert_eq!(
+            entity_read_of(&applied("create", Value::Null)),
+            Some(
+                json!({ "resource": "page_mount", "verb": "read", "target": null, "projects": ["p1"] })
+            )
+        );
+    }
 
     #[test]
     fn a_message_names_the_run_it_is_about() {
@@ -306,6 +353,30 @@ mod tests {
             entity_read_of(&json!({ "type": "trigger_updated", "trigger_id": "t1" })),
             None
         );
+    }
+
+    #[test]
+    fn an_operation_on_the_shared_configuration_is_guarded_by_its_read() {
+        for resource in [
+            "pipeline",
+            "library_entry",
+            "agent_profile",
+            "skill",
+            "skill_folder",
+            "instance_settings",
+        ] {
+            let applied = json!({
+                "type": "operation_applied",
+                "operation": { "resource": resource, "verb": "update", "target": "x1" },
+            });
+            assert_eq!(
+                entity_read_of(&applied),
+                Some(
+                    json!({ "resource": resource, "verb": "read", "target": null, "projects": [] })
+                ),
+                "{resource}"
+            );
+        }
     }
 
     #[test]

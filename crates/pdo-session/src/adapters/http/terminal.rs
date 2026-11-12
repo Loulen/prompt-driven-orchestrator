@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use super::origin::check_origin;
 use super::ws_log;
-use crate::adapters::pty::handle_pty_ws;
+use crate::adapters::pty::{handle_pty_ws, Connecting};
 use crate::domain::shared_terminal::sanitize_poste;
 use crate::Session;
 use axum::extract::ws::WebSocketUpgrade;
@@ -42,23 +42,27 @@ pub(super) async fn pty(
         ws_log::refused(&path, StatusCode::FORBIDDEN, "Origin not allowed", &headers);
         return (StatusCode::FORBIDDEN, "Origin not allowed").into_response();
     }
-    if let Err(denied) = session
-        .terminals()
-        .authorize_attach(&actor, &session_id)
-        .await
-    {
-        let refusal = denied.into_response();
-        ws_log::refused(&path, refusal.status(), "attach not authorized", &headers);
-        return refusal;
-    }
+    // `session` × `attach` drives the terminal; `session` × `read` alone
+    // watches it, read-only.
+    let admission = match session.terminals().admit(&actor, &session_id).await {
+        Ok(admission) => admission,
+        Err(denied) => {
+            let refusal = denied.into_response();
+            ws_log::refused(&path, refusal.status(), "read not authorized", &headers);
+            return refusal;
+        }
+    };
 
     let poste = sanitize_poste(query.poste.as_deref());
     ws.on_upgrade(move |socket| {
         handle_pty_ws(
             socket,
-            session_id,
-            poste,
-            actor,
+            Connecting {
+                session_id,
+                poste,
+                actor,
+                admission,
+            },
             session,
             requested.elapsed(),
         )

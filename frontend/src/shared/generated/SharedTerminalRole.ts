@@ -4,7 +4,11 @@ import type { SharedTerminalSize } from "./SharedTerminalSize";
 /**
  * The server → client `role` frame on the terminal socket's Text channel.
  */
-export type SharedTerminalRole = { "role": "solo" } | { "role": "pilot", 
+export type SharedTerminalRole = { "role": "solo", 
+/**
+ * See [`RoleMsg::read_only`].
+ */
+read_only?: string, } | { "role": "pilot", 
 /**
  * Other postes watching this terminal.
  */
@@ -12,4 +16,8 @@ spectators: number, } | { "role": "spectator",
 /**
  * The pilot's grid: the spectator renders exactly this many cells.
  */
-pilot: SharedTerminalSize, };
+pilot: SharedTerminalSize, 
+/**
+ * See [`RoleMsg::read_only`].
+ */
+read_only?: string, };

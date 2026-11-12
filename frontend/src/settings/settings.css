@@ -321,6 +321,21 @@
     gap: var(--g-2);
     min-width: 0;
   }
+  /* CORE-248: the instance form, read only. The fieldset that greys the controls draws
+     nothing of its own, and takes the pointer, so its tooltip opens over a disabled
+     control (which receives no pointer event). */
+  fieldset.set-row__ctl {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-inline-size: 0;
+  }
+  .set-row__ctl--locked {
+    cursor: not-allowed;
+  }
+  .set-row__ctl--locked * {
+    pointer-events: none;
+  }
   .set-row--wide > .set-row__ctl {
     justify-content: flex-start;
     padding: 3px 0;

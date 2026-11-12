@@ -115,6 +115,11 @@ mod extension_trigger_fire;
 #[path = "extension_node_launch.rs"]
 mod extension_node_launch;
 
+// The environment of a network git operation of the daemon: what an extension
+// provides for its Actor, off every argv, and the refusal it names.
+#[path = "extension_git_env.rs"]
+mod extension_git_env;
+
 // CORE-61, API 0.13: the launch of every agent session with who starts it, one
 // library assistant per Actor, the session events.
 #[path = "extension_sessions.rs"]
@@ -167,10 +172,17 @@ mod extension_catalogue;
 #[path = "extension_reads.rs"]
 mod extension_reads;
 
+#[path = "extension_concealed_reads.rs"]
+mod extension_concealed_reads;
+
 // API 0.11: the name of a Projet for an extension, the signal of the
 // Triggers, the Triggers read in the Projets of their repository.
 #[path = "extension_projets_triggers.rs"]
 mod extension_projets_triggers;
+
+// Adding a repository to a Projet, judged in that Projet.
+#[path = "extension_repository_projects.rs"]
+mod extension_repository_projects;
 
 // API 0.11: an extension's event guarded by a read on `/ws`, and the
 // `operation_applied` on an extension's Ressource guarded by its entity's.

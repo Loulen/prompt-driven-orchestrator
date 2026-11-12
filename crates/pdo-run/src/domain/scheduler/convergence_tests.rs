@@ -55,7 +55,7 @@ loops:
   - { id: topics_fanout, kind: collection, over: topics, members: [itemizer] }
 "#;
 
-fn pipeline() -> PipelineDef {
+pub(super) fn pipeline() -> PipelineDef {
     pdo_pipeline::domain::pipeline::parse_pipeline(HP02_DATAFLOW)
         .expect("fixture parses")
         .pipeline
@@ -104,7 +104,11 @@ const RUNNING: NodeStatus = NodeStatus::Running;
 
 /// The Run once planner routed `go`: `fallback` pruned, the collection's two
 /// laps done (its barrier not fired yet), the review loop at `lap`.
-fn state(lap: i64, coder: &[(i64, NodeStatus)], reviewer: &[(i64, NodeStatus)]) -> RunState {
+pub(super) fn state(
+    lap: i64,
+    coder: &[(i64, NodeStatus)],
+    reviewer: &[(i64, NodeStatus)],
+) -> RunState {
     let mut s = RunState::new("run-1".into(), "hp02-dataflow".into());
     s.nodes
         .insert("planner".into(), node("planner", &[(1, DONE)]));

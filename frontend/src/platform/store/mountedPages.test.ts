@@ -8,6 +8,8 @@ const mount = (name: string): PageMount => ({
   run_id: null,
   node_id: null,
   created_at: "now",
+  owner: null,
+  project_id: null,
   guide: null,
 });
 

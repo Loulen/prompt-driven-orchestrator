@@ -175,7 +175,8 @@ where
             RunAction::Read(read) => exit_code(run_run_read(read)),
             create @ RunAction::Create { .. } => exit(run_run_create(create)),
         },
-        Commands::Page { action } => exit(run_page(action)),
+        // `page unmount` shares the `4` of `run status`: no such page.
+        Commands::Page { action } => exit_code(run_page(action)),
         Commands::Review { action } => exit_code(run_review(action)),
         // `ext` owns its exit code: the extension's, relayed as is.
         Commands::Ext { args } => run_ext(args),

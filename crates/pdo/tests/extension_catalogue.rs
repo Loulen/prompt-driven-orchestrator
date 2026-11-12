@@ -132,7 +132,31 @@ async fn without_extension_the_catalogue_is_the_cores() {
     let catalogue = daemon.get_json("/resources").await;
 
     assert_eq!(catalogue, serde_json::to_value(core_resources()).unwrap());
-    assert_eq!(catalogue.as_array().unwrap().len(), 19);
+    assert_eq!(catalogue.as_array().unwrap().len(), 20);
+    // The reads of the shared configuration are declared.
+    for resource in [
+        "pipeline",
+        "library_entry",
+        "agent_profile",
+        "skill",
+        "skill_folder",
+        "instance_settings",
+        "audit",
+    ] {
+        let declared = catalogue
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["resource"] == resource)
+            .unwrap_or_else(|| panic!("{resource} is in the catalogue"));
+        assert!(
+            declared["verbs"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("read")),
+            "{declared}"
+        );
+    }
 }
 
 #[tokio::test]

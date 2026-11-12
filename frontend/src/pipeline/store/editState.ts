@@ -219,6 +219,11 @@ export interface TabHistory {
 
 export interface EditState {
   pipelines: PipelineListEntry[];
+  /**
+   * CORE-248: the sentence when the caller may not read the pipelines (`GET /pipelines`
+   * refused); `null` when the list was read (or not yet asked).
+   */
+  pipelinesRefused: string | null;
   openTabs: OpenPipeline[];
   activeTabId: string | null;
   selection: Selection;

@@ -49,9 +49,39 @@ export function runCount(count: number): string {
   return `${count} ${count === 1 ? "run" : "runs"}`;
 }
 
-/** The recent repositories `project` does not hold yet, in their order. */
-export function recentToAdd(recent: string[], project: Project): string[] {
-  return recent.filter((path) => !project.members.includes(path));
+/** The recent repositories `project` does not hold yet, in their order, but those in `besides`. */
+export function recentToAdd(recent: string[], project: Project, besides: readonly string[] = []): string[] {
+  return recent.filter((path) => !project.members.includes(path) && !besides.includes(path));
+}
+
+/** A repository of another Projet, which « From my Projects » offers. */
+export interface ProjectRepository {
+  path: string;
+  /** The name of the first Projet (by name) it is in, of those whose repositories may be read. */
+  projectName: string;
+}
+
+/**
+ * The repositories of the Projets other than `project` whose repositories the
+ * caller may read (`readable`, by id), that `project` does not hold yet: each
+ * once, in the order of the Projets' names then of their members.
+ */
+export function repositoriesFromMyProjects(
+  projects: Project[],
+  project: Project,
+  readable: ReadonlySet<string>,
+): ProjectRepository[] {
+  const seen = new Set(project.members);
+  const found: ProjectRepository[] = [];
+  for (const other of sortedProjects(projects)) {
+    if (other.id === project.id || !readable.has(other.id)) continue;
+    for (const path of other.members) {
+      if (seen.has(path)) continue;
+      seen.add(path);
+      found.push({ path, projectName: other.name });
+    }
+  }
+  return found;
 }
 
 /**
@@ -74,6 +104,16 @@ export function newRepositoryTarget(
   const name = path.slice(cut + 1);
   if (!name || name === "." || name === "..") return null;
   return { parent: cut === 0 ? "/" : path.slice(0, cut), name };
+}
+
+/**
+ * The name typed for a new empty repository made in the clones folder (who
+ * may not read the disk names no folder): `null` while it is no folder name.
+ */
+export function clonesFolderTarget(typed: string): { parent: null; name: string } | null {
+  const name = typed.trim();
+  if (!name || name === "." || name === ".." || /[/\\]/.test(name)) return null;
+  return { parent: null, name };
 }
 
 /**

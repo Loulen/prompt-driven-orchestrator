@@ -3,6 +3,7 @@
 //! Trigger, in the Projets of its target repository (`read_access.rs`).
 
 use pdo_kernel::attributes::{self, AttributeFilter, AttributedList};
+use pdo_kernel::authorization::EntityRead;
 use pdo_kernel::{Actor, ResourceKind};
 use serde::Serialize;
 use tracing::error;
@@ -38,6 +39,11 @@ pub struct Health {
 
 /// How many times `health` asks the store again for the pause after an error.
 const PAUSED_READ_RETRIES: usize = 2;
+
+/// The answer about a Trigger that does not exist.
+fn not_found() -> TriggerError {
+    TriggerError::NotFound("trigger not found".to_string())
+}
 
 impl Triggers {
     /// Every Trigger `actor` may read carrying the attributes `filter` asks
@@ -85,7 +91,7 @@ impl Triggers {
     pub async fn get(&self, id: &str) -> Result<Trigger, TriggerError> {
         match self.store.get(id).await {
             Ok(Some(trigger)) => Ok(trigger),
-            Ok(None) => Err(TriggerError::NotFound("trigger not found".to_string())),
+            Ok(None) => Err(not_found()),
             Err(e) => {
                 error!("failed to fetch trigger: {e}");
                 Err(TriggerError::Storage("failed to fetch trigger".to_string()))
@@ -95,16 +101,21 @@ impl Triggers {
 
     /// One Trigger `actor` may read, with its attributes.
     pub async fn attributed(&self, actor: &Actor, id: &str) -> Result<Trigger, TriggerError> {
-        self.authorize_read(actor, id).await?;
+        if self.authorize_read(actor, id).await? == EntityRead::AsUnknown {
+            return Err(not_found());
+        }
         let mut trigger = self.get(id).await?;
         trigger.attributes =
             attributes::of_entity(self.extensions(), ResourceKind::Trigger, id).await;
         Ok(self.with_suspension(trigger))
     }
 
-    /// The recent fires of a Trigger `actor` may read.
+    /// The recent fires of a Trigger `actor` may read; none, as for an
+    /// unknown Trigger, on a concealed refusal.
     pub async fn fires(&self, actor: &Actor, id: &str) -> Result<Vec<TriggerFire>, TriggerError> {
-        self.authorize_read(actor, id).await?;
+        if self.authorize_read(actor, id).await? == EntityRead::AsUnknown {
+            return Ok(Vec::new());
+        }
         self.store.fires(id).await.map_err(|e| {
             error!("failed to list trigger fires: {e}");
             TriggerError::Storage("failed to list trigger fires".to_string())

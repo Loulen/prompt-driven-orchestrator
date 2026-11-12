@@ -3,6 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use pdo_kernel::extension_host::GitCredentials;
+
 use crate::application::ports::*;
 use crate::domain::branches::{BranchEntry, BranchKind, BranchList, FetchError};
 use crate::domain::browse::BrowseRootError;
@@ -14,7 +16,7 @@ use crate::domain::scaffold::{ScaffoldFile, ScaffoldOutcome};
 
 use super::ready;
 
-/// A git with one repository, `/repo`, holding a local `main` one commit
+/// A git with one repository, `/repo` (and its clone `/clones/repo`), holding a local `main` one commit
 /// behind `origin/main` and an `up-to-date` branch level with its upstream.
 #[derive(Default)]
 pub struct FakeGit {
@@ -23,6 +25,12 @@ pub struct FakeGit {
     moved: Mutex<Vec<String>>,
     created: Mutex<Vec<PathBuf>>,
     cloned: Mutex<Vec<PathBuf>>,
+    /// The repositories already there: a creation reuses them.
+    existing: Mutex<Vec<PathBuf>>,
+    /// The URLs checked by `reach`.
+    reached: Mutex<Vec<String>>,
+    /// The credentials of each network operation, in order.
+    credentials: Mutex<Vec<GitCredentials>>,
     /// The clones wait for their cancel instead of ending.
     hold: std::sync::atomic::AtomicBool,
 }
@@ -42,6 +50,17 @@ impl FakeGit {
     }
     pub fn cloned(&self) -> Vec<PathBuf> {
         self.cloned.lock().unwrap().clone()
+    }
+    /// `path` already is a repository: creating it reuses it.
+    pub fn reuse(&self, path: &str) {
+        self.existing.lock().unwrap().push(PathBuf::from(path));
+    }
+    pub fn reached(&self) -> Vec<String> {
+        self.reached.lock().unwrap().clone()
+    }
+    /// The credentials each fetch, clone and check ran with, in order.
+    pub fn credentials(&self) -> Vec<GitCredentials> {
+        self.credentials.lock().unwrap().clone()
     }
     pub fn hold_clones(&self) {
         self.hold.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -72,7 +91,12 @@ impl Git for FakeGit {
             fetch_error: None,
         })
     }
-    fn fetch<'a>(&'a self, repo: &'a Path) -> BoxFuture<'a, Option<FetchError>> {
+    fn fetch<'a>(
+        &'a self,
+        repo: &'a Path,
+        credentials: &'a GitCredentials,
+    ) -> BoxFuture<'a, Option<FetchError>> {
+        self.credentials.lock().unwrap().push(credentials.clone());
         self.fetched
             .lock()
             .unwrap()
@@ -104,8 +128,14 @@ impl Git for FakeGit {
             moved_checkout: None,
         })
     }
+    /// `/repo` is a clone of example.com/acme/repo, `/denied` of
+    /// example.com/acme/denied (whose remote refuses every credential).
     fn remote_url(&self, repo: &Path) -> Option<String> {
-        (repo == Path::new("/repo")).then(|| "https://me:token@example.com/acme/repo.git".into())
+        if repo == Path::new("/denied") {
+            return Some("https://example.com/acme/denied.git".into());
+        }
+        (repo == Path::new("/repo") || repo == Path::new("/clones/repo"))
+            .then(|| "https://me:token@example.com/acme/repo.git".into())
     }
     fn create_repository(
         &self,
@@ -117,6 +147,12 @@ impl Git for FakeGit {
             return Err(format!("parent must be an absolute path: {parent}"));
         }
         let path = Path::new(parent).join(name);
+        if self.existing.lock().unwrap().contains(&path) {
+            return Ok(ScaffoldOutcome {
+                path,
+                created: false,
+            });
+        }
         self.created.lock().unwrap().push(path.clone());
         Ok(ScaffoldOutcome {
             path,
@@ -129,9 +165,11 @@ impl Git for FakeGit {
         &'a self,
         url: &'a str,
         dest: &'a Path,
+        credentials: &'a GitCredentials,
         on_progress: Box<dyn Fn(&str) + Send + Sync + 'a>,
         cancel: tokio::sync::oneshot::Receiver<()>,
     ) -> BoxFuture<'a, Result<(), CloneFailure>> {
+        self.credentials.lock().unwrap().push(credentials.clone());
         Box::pin(async move {
             if self.hold.load(std::sync::atomic::Ordering::SeqCst) {
                 let _ = cancel.await;
@@ -144,6 +182,22 @@ impl Git for FakeGit {
             }
             on_progress("Receiving objects: 100% (3/3), 1.00 KiB | 1.00 KiB/s, done.");
             self.cloned.lock().unwrap().push(dest.to_path_buf());
+            Ok(())
+        })
+    }
+    /// Answers, unless the URL names `denied` (its credentials refused).
+    fn reach<'a>(
+        &'a self,
+        url: &'a str,
+        credentials: &'a GitCredentials,
+    ) -> BoxFuture<'a, Result<(), CloneFailure>> {
+        self.credentials.lock().unwrap().push(credentials.clone());
+        self.reached.lock().unwrap().push(url.to_string());
+        ready(if url.contains("denied") {
+            Err(CloneFailure::Failed(
+                "fatal: Authentication failed for the URL".into(),
+            ))
+        } else {
             Ok(())
         })
     }

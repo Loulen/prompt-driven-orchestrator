@@ -2,16 +2,18 @@
 //! in the one recorded at its launch: every Operation on it names it, and so
 //! does every read. A Trigger launching in no Projet is in none.
 //!
-//! - A gesture on one Trigger: [`Triggers::on_trigger`] places its Operation.
-//! - One Trigger, its fires: [`Triggers::authorize_read`], `403` on a refusal.
+//! - A gesture on one Trigger: [`Triggers::on_trigger`] places its Operation;
+//!   [`Triggers::scoped`] places a probe of it the same way.
+//! - One Trigger, its fires: [`Triggers::authorize_read`], `403` on a refusal,
+//!   the answer about an unknown Trigger on a concealed one.
 //! - The list: [`Triggers::readable`] keeps only the Triggers the actor may
 //!   read, asking once per Trigger.
 //!
 //! Without extension nothing is asked (`allows_everything`): the reads are
 //! served exactly as before.
 
-use pdo_kernel::authorization::authorize_read;
-use pdo_kernel::{Actor, Operation, Verb};
+use pdo_kernel::authorization::{authorize_entity_read, authorize_read, EntityRead};
+use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 
 use super::{operation, TriggerError};
 use crate::domain::trigger::Trigger;
@@ -32,28 +34,52 @@ pub(crate) fn projects_of(project: Option<&str>) -> Vec<String> {
 
 impl Triggers {
     /// `verb` on the Trigger `id`, in the Projets of the Trigger as stored.
-    /// An unknown Trigger (or one the store cannot read) is in none: the
-    /// gesture says why later, once allowed.
     pub(crate) async fn on_trigger(&self, verb: Verb, id: &str) -> Operation {
         if self.extensions().allows_everything() {
             return operation(verb, Some(id));
         }
+        operation(verb, Some(id)).in_projects(self.projects_of_trigger(id).await)
+    }
+
+    /// `operation`, placed in the Projets of the Trigger it targets when it
+    /// names none, as the gesture itself would be: so the question of
+    /// authorization (`POST /authorize`) judges a probe like the gesture.
+    /// Any other Operation, or one naming its Projets, is left as asked.
+    pub async fn scoped(&self, operation: Operation) -> Operation {
+        if operation.resource != ResourceKind::Trigger || !operation.is_outside_projects() {
+            return operation;
+        }
+        let Some(id) = operation.target.clone() else {
+            return operation;
+        };
+        let projects = self.projects_of_trigger(&id).await;
+        operation.in_projects(projects)
+    }
+
+    /// The Projets of the Trigger `id` as stored. An unknown Trigger (or one
+    /// the store cannot read) is in none: the gesture says why later, once
+    /// allowed.
+    async fn projects_of_trigger(&self, id: &str) -> Vec<String> {
         let project = match self.store.get(id).await {
             Ok(Some(trigger)) => trigger.project_id,
             _ => None,
         };
-        operation(verb, Some(id)).in_projects(projects_of(project.as_deref()))
+        projects_of(project.as_deref())
     }
 
     /// Whether `actor` may read the Trigger `id`: its detail, its fires, what
-    /// `/ws` says of it.
-    pub async fn authorize_read(&self, actor: &Actor, id: &str) -> Result<(), TriggerError> {
+    /// `/ws` says of it. [`EntityRead::AsUnknown`] on a concealed refusal:
+    /// the read answers as for a Trigger that does not exist.
+    pub async fn authorize_read(
+        &self,
+        actor: &Actor,
+        id: &str,
+    ) -> Result<EntityRead, TriggerError> {
         if self.extensions().allows_everything() {
-            return Ok(());
+            return Ok(EntityRead::Shown);
         }
         let read = self.on_trigger(Verb::Read, id).await;
-        authorize_read(self.extensions(), actor, &read)?;
-        Ok(())
+        Ok(authorize_entity_read(self.extensions(), actor, &read)?)
     }
 
     /// What `actor` may read of a list of Triggers.

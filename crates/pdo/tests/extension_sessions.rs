@@ -438,6 +438,98 @@ async fn taking_control_of_a_terminal_is_announced_and_watching_is_not() {
     assert_eq!(taken["session"]["node_id"], "worker");
 }
 
+/// What a PTY socket receives for `wait`: the terminal's output, as text, and
+/// its `role` frames.
+async fn drain(ws: &mut Ws, wait: Duration) -> (String, Vec<Value>) {
+    let deadline = Instant::now() + wait;
+    let (mut output, mut roles) = (String::new(), Vec::new());
+    while Instant::now() < deadline {
+        let Ok(Some(Ok(message))) =
+            tokio::time::timeout(Duration::from_millis(100), ws.next()).await
+        else {
+            continue;
+        };
+        match message {
+            Message::Binary(bytes) => output.push_str(&String::from_utf8_lossy(&bytes)),
+            Message::Text(text) => {
+                let frame: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+                if frame["type"] == "role" {
+                    roles.push(frame);
+                }
+            }
+            _ => {}
+        }
+    }
+    (output, roles)
+}
+
+/// FP 3: a reader of the Run (`session` × `read`, not `attach`) opens the
+/// terminal of its Node all the same and watches it: the output reaches it,
+/// its keystrokes never reach the pane, the hand never comes to it, even
+/// alone, and every role frame says why. Without the read, the upgrade is
+/// refused.
+#[tokio::test]
+async fn a_reader_watches_a_terminal_and_never_drives_it() {
+    let envs = tempfile::tempdir().unwrap();
+    let (daemon, control) = daemon(envs.path()).await;
+    let run_id = run_of_alice(&daemon).await;
+    let worker = format!("pdo-{run_id}-worker-iter-1");
+    env_of(envs.path(), &worker).await;
+    control
+        .set(Refusal::parse("session:attach~rita,session:read~olga,session:attach~olga").unwrap());
+    let why = "You can't attach this session here. Ask an administrator of the test extension.";
+
+    let mut olga = format!("ws://{}/sessions/{worker}/pty?poste=O", daemon.addr)
+        .into_client_request()
+        .unwrap();
+    olga.headers_mut()
+        .insert(ACTOR_HEADER, "olga".parse().unwrap());
+    assert!(
+        tokio_tungstenite::connect_async(olga).await.is_err(),
+        "no read, no terminal"
+    );
+
+    // Alone, Rita sizes the terminal but types nothing into it.
+    let mut rita = pty_as(&daemon, &worker, "R", "rita").await;
+    let (_, roles) = drain(&mut rita, Duration::from_millis(800)).await;
+    let first = roles.first().expect("a role frame");
+    assert_eq!(first["role"], "solo", "{roles:?}");
+    assert_eq!(first["read_only"], why);
+    rita.send(Message::Binary(b"zzqrita".to_vec().into()))
+        .await
+        .unwrap();
+    rita.send(Message::Text(r#"{"type":"take_control"}"#.into()))
+        .await
+        .unwrap();
+    let (output, _) = drain(&mut rita, Duration::from_millis(800)).await;
+    assert!(!output.contains("zzqrita"), "her keys reached the pane");
+
+    // Alice arrives and drives; Rita watches what she types.
+    let mut alice = pty_as(&daemon, &worker, "A", "alice").await;
+    role_until(&mut alice, "pilot").await;
+    alice
+        .send(Message::Binary(b"yyqalice".to_vec().into()))
+        .await
+        .unwrap();
+    rita.send(Message::Text(r#"{"type":"take_control"}"#.into()))
+        .await
+        .unwrap();
+    let (output, roles) = drain(&mut rita, Duration::from_secs(2)).await;
+    assert!(
+        output.contains("yyqalice"),
+        "the flow reaches her: {output:?}"
+    );
+    assert!(roles.iter().all(|r| r["role"] != "pilot"), "{roles:?}");
+    assert!(roles
+        .iter()
+        .any(|r| r["role"] == "spectator" && r["read_only"] == why));
+    let (_, alices) = drain(&mut alice, Duration::from_millis(500)).await;
+    assert!(
+        alices.iter().all(|r| r["role"] != "spectator"),
+        "Alice keeps the hand: {alices:?}"
+    );
+}
+
 /// `actor` declares the template its interface edits.
 async fn focus(daemon: &TestDaemon, actor: &str, pipeline: &str) {
     let (status, body) = call_as(

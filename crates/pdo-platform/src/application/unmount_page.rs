@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use pdo_kernel::authorization::{authorize, Denied};
+use pdo_kernel::authorization::{authorize, granted, Denied};
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 
@@ -52,8 +52,9 @@ impl UnmountPage {
         }
     }
 
-    /// Unmount `name` for `actor`, judged in the Projet of the Run the mount
-    /// belongs to (none for a mount made outside any Run).
+    /// Unmount `name` for `actor`: its owner may; anyone else is judged
+    /// `page_mount` × `delete` in the Projet of the mount (none for a mount
+    /// outside any Projet).
     pub async fn execute(
         &self,
         actor: &Actor,
@@ -65,7 +66,11 @@ impl UnmountPage {
         let _guard = self.lock.lock().await;
         let operation = Operation::new(ResourceKind::PageMount, Verb::Delete).on(name);
         let operation = self.place.execute(actor, operation).await;
-        authorize(self.host.as_ref(), actor, &operation).map_err(UnmountPageError::Refused)?;
+        if self.place.owned_by(actor, &operation).await {
+            granted(actor, &operation);
+        } else {
+            authorize(self.host.as_ref(), actor, &operation).map_err(UnmountPageError::Refused)?;
+        }
         let session = SessionClaim::of(actor);
         if let Some(claim) = &session {
             self.runs

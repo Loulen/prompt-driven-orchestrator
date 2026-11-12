@@ -5,13 +5,14 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use pdo_platform::application::mount_page::{MountPage, MountPageCommand, MountPageError};
 use pdo_platform::application::page_journal::PageMountLock;
+use pdo_platform::application::place_older_pages::PlaceOlderPages;
 use pdo_platform::application::place_page_mount::PlacePageMount;
-use pdo_platform::application::read_pages::ReadPages;
+use pdo_platform::application::read_pages::{ReadPageError, ReadPages};
 use pdo_platform::application::record_audit::RecordAudit;
 use pdo_platform::application::release_run_pages::ReleaseRunPages;
 use pdo_platform::application::unmount_page::{UnmountPage, UnmountPageError};
 use pdo_platform::domain::audit::ActorHint;
-use pdo_platform::domain::page_mount::MountError;
+use pdo_platform::domain::page_mount::{MountError, PageMount};
 
 use crate::fakes::{Audit, FakeRuns, Files, Host, Pages};
 
@@ -76,6 +77,7 @@ fn command(name: &str, directory: &str) -> MountPageCommand {
         directory: PathBuf::from(directory),
         guide: None,
         hint: ActorHint::Cli,
+        project_id: None,
     }
 }
 
@@ -368,19 +370,15 @@ async fn unmount_removes_audits_and_restores_on_journal_failure() {
     assert_eq!(rows[1].action, "page_mount.unmounted");
     assert_eq!(rows[1].actor_hint, "ui");
     assert!(rows[1].after.is_none());
+    assert!(
+        !w.host.asked().iter().any(|o| o.verb == Verb::Delete),
+        "its owner unmounts it without asking"
+    );
     assert_eq!(
         w.unmount().execute(&op, "demo", ActorHint::Ui).await,
         Err(UnmountPageError::NotFound("demo".into()))
     );
-    let delete = w
-        .host
-        .asked
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|o| o.verb == Verb::Delete)
-        .cloned()
-        .unwrap();
+    let delete = asked(&w, Verb::Delete);
     assert_eq!(delete.target.as_deref(), Some("demo"));
 
     let runs = FakeRuns {
@@ -437,14 +435,226 @@ async fn files_are_read_beneath_their_mount_only() {
             .into_iter()
             .collect(),
     );
-    let read = ReadPages::new(w.pages.clone(), Arc::new(files));
+    let read = ReadPages::new(w.pages.clone(), Arc::new(files), w.host.clone());
+    let op = Actor::LocalOperator;
     assert_eq!(
-        read.file("demo", "a.html").await.unwrap().unwrap().contents,
+        read.file(&op, "demo", "a.html")
+            .await
+            .unwrap()
+            .unwrap()
+            .contents,
         b"a"
     );
-    assert!(read.file("demo", "../demo/a.html").await.unwrap().is_none());
-    assert!(read.file("nope", "a.html").await.unwrap().is_none());
-    assert_eq!(read.list().await.unwrap().len(), 1);
+    assert!(read
+        .file(&op, "demo", "../demo/a.html")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(read.file(&op, "nope", "a.html").await.unwrap().is_none());
+    assert_eq!(read.list(&op).await.unwrap().len(), 1);
+}
+
+fn named(id: &str) -> Actor {
+    Actor::Identified {
+        namespace: "test".into(),
+        id: id.into(),
+    }
+}
+
+/// A world where Run `r1`, created by alice, is in Projet `p1`, and the
+/// extension refuses `refused` to anyone but alice.
+fn world_of_alice(refused: Verb) -> World {
+    let runs = FakeRuns {
+        live_sessions: vec![("r1".into(), "n1".into())],
+        projects: [("r1".to_string(), vec!["p1".to_string()])]
+            .into_iter()
+            .collect(),
+        creators: [("r1".to_string(), named("alice"))].into_iter().collect(),
+        ..FakeRuns::default()
+    };
+    let host = Host::refusing_when(move |actor, operation| {
+        operation.resource == ResourceKind::PageMount
+            && operation.verb == refused
+            && *actor != named("alice")
+    });
+    World::new(runs, host)
+}
+
+#[tokio::test]
+async fn an_agent_mount_is_owned_by_who_created_its_run_in_its_projet() {
+    let w = world_of_alice(Verb::Delete);
+    let mount = w
+        .mount()
+        .execute(&agent(), command("demo", "/srv/demo"))
+        .await
+        .unwrap();
+    assert_eq!(mount.owner, Some(named("alice")));
+    assert_eq!(mount.project_id.as_deref(), Some("p1"));
+    assert_eq!(w.pages.0.lock().unwrap()["demo"], mount);
+    // A node names no other Projet than its Run's.
+    let elsewhere = MountPageCommand {
+        project_id: Some("p2".into()),
+        ..command("other", "/srv/demo")
+    };
+    assert!(matches!(
+        w.mount().execute(&agent(), elsewhere).await,
+        Err(MountPageError::Invalid(MountError::Invalid(m))) if m.contains("Projet of its Run")
+    ));
+    let same = MountPageCommand {
+        project_id: Some("p1".into()),
+        ..command("same", "/srv/demo")
+    };
+    assert!(w.mount().execute(&agent(), same).await.is_ok());
+}
+
+#[tokio::test]
+async fn a_person_mounts_in_the_projet_they_name_and_owns_the_page() {
+    let w = world_in_p1();
+    let bob = named("bob");
+    let in_p2 = MountPageCommand {
+        project_id: Some("p2".into()),
+        ..command("demo", "/srv/demo")
+    };
+    let mount = w.mount().execute(&bob, in_p2).await.unwrap();
+    assert_eq!(mount.owner, Some(bob.clone()));
+    assert_eq!(mount.project_id.as_deref(), Some("p2"));
+    assert_eq!(asked(&w, Verb::Create).projects, ["p2"]);
+    let alone = w
+        .mount()
+        .execute(&bob, command("alone", "/srv/demo"))
+        .await
+        .unwrap();
+    assert_eq!(alone.project_id, None);
+}
+
+#[tokio::test]
+async fn a_page_is_read_in_its_projet_and_listed_only_to_who_may_read_it() {
+    let w = world_of_alice(Verb::Read);
+    w.mount()
+        .execute(&agent(), command("demo", "/srv/demo"))
+        .await
+        .unwrap();
+    let files = Files(
+        [("/srv/demo/index.html".to_string(), b"i".to_vec())]
+            .into_iter()
+            .collect(),
+    );
+    let read = ReadPages::new(w.pages.clone(), Arc::new(files), w.host.clone());
+
+    let alice = named("alice");
+    assert_eq!(read.list(&alice).await.unwrap().len(), 1);
+    assert!(read.get(&alice, "demo").await.unwrap().is_some());
+    assert!(read
+        .file(&alice, "demo", "index.html")
+        .await
+        .unwrap()
+        .is_some());
+    let question = w
+        .host
+        .asked()
+        .into_iter()
+        .rfind(|o| o.verb == Verb::Read)
+        .unwrap();
+    assert_eq!(question.target.as_deref(), Some("demo"));
+    assert_eq!(question.projects, ["p1"]);
+
+    let olga = named("olga");
+    assert!(read.list(&olga).await.unwrap().is_empty());
+    assert!(matches!(
+        read.get(&olga, "demo").await,
+        Err(ReadPageError::Refused(denied)) if denied.sentence() == "You can't."
+    ));
+    assert!(matches!(
+        read.file(&olga, "demo", "index.html").await,
+        Err(ReadPageError::Refused(_))
+    ));
+    assert_eq!(
+        read.get(&olga, "ghost").await,
+        Ok(None),
+        "unknown: no question"
+    );
+}
+
+#[tokio::test]
+async fn its_owner_unmounts_a_page_and_anyone_else_is_judged_in_its_projet() {
+    let w = world_of_alice(Verb::Delete);
+    for name in ["mine", "yours"] {
+        w.mount()
+            .execute(&agent(), command(name, "/srv/demo"))
+            .await
+            .unwrap();
+    }
+    // Bob may not delete pages in p1: refused, the page stays.
+    let refused = w
+        .unmount()
+        .execute(&named("bob"), "mine", ActorHint::Ui)
+        .await;
+    assert!(matches!(refused, Err(UnmountPageError::Refused(_))));
+    assert!(w.pages.0.lock().unwrap().contains_key("mine"));
+    assert_eq!(asked(&w, Verb::Delete).projects, ["p1"]);
+    // Alice owns it: she unmounts it without being asked.
+    let asked_before = w.host.asked().len();
+    w.unmount()
+        .execute(&named("alice"), "mine", ActorHint::Ui)
+        .await
+        .unwrap();
+    assert_eq!(w.host.asked().len(), asked_before, "the owner is not asked");
+    let delete = Operation::new(ResourceKind::PageMount, Verb::Delete).on("yours");
+    assert!(w.place().owned_by(&named("alice"), &delete).await);
+    assert!(!w.place().owned_by(&named("bob"), &delete).await);
+    // An agent of its Run is no owner: it is asked, in the page's Projet,
+    // and refused like anyone but alice.
+    let refused = w.unmount().execute(&agent(), "yours", ActorHint::Cli).await;
+    assert!(matches!(refused, Err(UnmountPageError::Refused(_))));
+    assert_eq!(w.host.asked().len(), asked_before + 1);
+    assert_eq!(w.host.asked().last().unwrap().projects, ["p1"]);
+    let left: Vec<String> = w.pages.0.lock().unwrap().keys().cloned().collect();
+    assert_eq!(left, ["yours"]);
+}
+
+#[tokio::test]
+async fn older_pages_take_the_projet_and_the_creator_of_their_run() {
+    let w = world_of_alice(Verb::Delete);
+    let older = |name: &str, run_id: Option<&str>| PageMount {
+        name: name.into(),
+        directory: "/srv/demo".into(),
+        run_id: run_id.map(str::to_string),
+        node_id: None,
+        created_at: "then".into(),
+        guide: None,
+        owner: None,
+        project_id: None,
+    };
+    {
+        let mut pages = w.pages.0.lock().unwrap();
+        for mount in [
+            older("of-r1", Some("r1")),
+            older("of-a-gone-run", Some("r9")),
+            older("alone", None),
+        ] {
+            pages.insert(mount.name.clone(), mount);
+        }
+        let mut placed = older("placed", Some("r1"));
+        placed.project_id = Some("p7".into());
+        pages.insert("placed".into(), placed);
+    }
+    let place = PlaceOlderPages::new(w.pages.clone(), w.runs.clone());
+    assert_eq!(place.execute().await.unwrap(), 1);
+    let pages = w.pages.0.lock().unwrap().clone();
+    assert_eq!(pages["of-r1"].owner, Some(named("alice")));
+    assert_eq!(pages["of-r1"].project_id.as_deref(), Some("p1"));
+    for unplaced in ["of-a-gone-run", "alone"] {
+        assert_eq!(pages[unplaced].owner, None, "{unplaced}");
+        assert_eq!(pages[unplaced].project_id, None, "{unplaced}");
+    }
+    assert_eq!(
+        pages["placed"].project_id.as_deref(),
+        Some("p7"),
+        "left alone"
+    );
+    assert_eq!(pages["placed"].owner, None);
+    drop(pages);
+    assert_eq!(place.execute().await.unwrap(), 0, "once");
 }
 
 #[tokio::test]

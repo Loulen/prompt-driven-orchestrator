@@ -39,6 +39,8 @@ interface Props {
   // #345: open the "Add node from YAML…" modal (paste/upload a node definition).
   onAddNodeFromYaml: () => void;
   libraryEntries: LibraryEntry[];
+  /** CORE-248: why the caller may not read the library, `null` when it may. */
+  libraryRefused?: string | null;
   onLibraryDelete: (name: string) => void;
   getDropPosition?: () => { x: number; y: number };
   // Lights `(i)` (and its `aria-pressed`). #938: on a template canvas the host
@@ -93,7 +95,7 @@ interface Props {
   view?: { fit: () => void; zoomIn: () => void; zoomOut: () => void };
 }
 
-export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, assistantAvailable = false, assistantActive = false, onOpenAssistant, reviewHref, reviewPending = 0, reviewTone = "pending", reviewTitle = "Review", readOnly = false, finishedRun = false, onReopen, onRetryAll, reopenRefused, retryAllRefused, onOpenShell, run = null, runEdit, view }: Props) {
+export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, libraryRefused = null, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, assistantAvailable = false, assistantActive = false, onOpenAssistant, reviewHref, reviewPending = 0, reviewTone = "pending", reviewTitle = "Review", readOnly = false, finishedRun = false, onReopen, onRetryAll, reopenRefused, retryAllRefused, onOpenShell, run = null, runEdit, view }: Props) {
   // Read undo/redo straight from the store (ADR-0014 / #226): they have no
   // component-local dependency, unlike the prop-drilled add callbacks, so
   // the point-of-use selector idiom is the right fit. `canUndo`/`canRedo` are
@@ -156,7 +158,7 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <LibraryDropdown entries={libraryEntries} onDelete={onLibraryDelete} getDropPosition={getDropPosition} onAddNodeFromYaml={onAddNodeFromYaml} />
+          <LibraryDropdown entries={libraryEntries} refused={libraryRefused} onDelete={onLibraryDelete} getDropPosition={getDropPosition} onAddNodeFromYaml={onAddNodeFromYaml} />
 
           {/* No ForEach add-button: a fan-out is a `collection` loop region
               (#151), created by fanning a selection out over a list field. No

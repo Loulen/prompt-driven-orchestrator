@@ -103,7 +103,8 @@ pub fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<String> 
         // conditional edge whose producer has not decided yet — not run, still
         // at work, or a member of a bounded loop that can still start a lap (its
         // guarded exit may fire on a later lap) — holds the node: the producer's
-        // routing spawns it once it decides. A pruned producer has decided. A
+        // routing spawns it once it decides (the frontmatter-aware half of this
+        // read is `dispatcher::hold_pending_loop_exits`). A pruned producer has decided. A
         // feedback edge (its producer downstream of the node: a loop's back-edge,
         // a self-edge) is no precondition of the node's first run.
         let conditional_undecided = incoming
@@ -142,9 +143,12 @@ pub fn ready_nodes(pipeline: &PipelineDef, run_state: &RunState) -> Vec<String> 
 }
 
 /// Has the producer of a conditional edge not decided whether it fires yet?
-/// Read off the projection alone (the sweep holds no frontmatter): it has not
-/// settled, or it is a member of a bounded region still in flight
-/// ([`crate::domain::loop_region::bounded_region_in_flight`]).
+/// Read off the projection alone: it has not settled, or it is a member of a
+/// bounded region still in flight
+/// ([`crate::domain::loop_region::bounded_region_in_flight`]). A FAIL lap whose
+/// next lap is not in the log yet looks idle here; the sweep completes this
+/// read with the producers' frontmatter
+/// ([`crate::domain::scheduler::dispatcher::hold_pending_loop_exits`]).
 fn conditional_source_undecided(pipeline: &PipelineDef, run_state: &RunState, src: &str) -> bool {
     if run_state.is_pruned(src) {
         return false;

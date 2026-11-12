@@ -3,6 +3,7 @@ import { fetchSettings, updateSettings } from "../api/settings";
 import type { InstanceSettings } from "../model/settings";
 import type { UpdateSettingsRequest } from "../../shared/generated/UpdateSettingsRequest";
 import { useHarnessCatalogueChanged } from "../../harness/store/useHarnessCatalog";
+import { refusalSentence } from "../../shared/authorization/refusal";
 
 /**
  * Window bus fired after every write that changes what `GET /settings` serves — the
@@ -52,6 +53,8 @@ export function useSettings(open: boolean) {
   // it before landing on a requested section: the sections above the target mount on that
   // read, and a scroll made before they exist ends up pointing at the wrong place.
   const [settled, setSettled] = useState(false);
+  // CORE-248: the sentence when the caller may not read the instance settings.
+  const [refused, setRefused] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -69,9 +72,14 @@ export function useSettings(open: boolean) {
     let cancelled = false;
     fetchSettings()
       .then((data) => {
-        if (!cancelled) setSettings(data);
+        if (!cancelled) {
+          setSettings(data);
+          setRefused(null);
+        }
       })
-      .catch(() => {})
+      .catch((error: unknown) => {
+        if (!cancelled) setRefused(refusalSentence(error));
+      })
       .finally(() => {
         if (!cancelled) setSettled(true);
       });
@@ -102,5 +110,5 @@ export function useSettings(open: boolean) {
     return updated;
   }, []);
 
-  return { settings, loading, settled, refresh, save };
+  return { settings, loading, settled, refused, refresh, save };
 }

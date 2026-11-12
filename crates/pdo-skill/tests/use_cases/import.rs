@@ -5,7 +5,9 @@ use pdo_skill::domain::error::SkillError;
 use pdo_skill::domain::import::{CandidateStatus, ImportAction, ImportFolder, ImportItem};
 use pdo_skill::domain::import_error::ImportError;
 
-use crate::fakes::{denying, fixture, folder_of, op, skill_md};
+use pdo_kernel::extension_host::{GitCredentials, GitOperationKind};
+
+use crate::fakes::{alice, denying, fixture, folder_of, op, skill_md};
 
 const SOURCE: &str = "https://github.com/anthropics/skills/tree/main/skills";
 
@@ -15,6 +17,49 @@ fn item(path: &str, action: ImportAction, name: Option<&str>) -> ImportItem {
         action,
         name: name.map(str::to_string),
     }
+}
+
+#[tokio::test]
+async fn a_scan_and_its_import_clone_with_the_credentials_provided_for_the_actor() {
+    let f = fixture();
+    f.scanner.holds("skills/pdf", folder_of("pdf", &[]));
+    f.skills
+        .scan_source(&alice(), "scan-1", SOURCE, None)
+        .await
+        .unwrap();
+    let asked = f.host.git_asked();
+    assert_eq!(
+        (&asked[0].actor, asked[0].kind, asked[0].url.as_str()),
+        (
+            &alice(),
+            GitOperationKind::Skills,
+            "https://github.com/anthropics/skills"
+        )
+    );
+    assert_eq!(
+        f.scanner.credentials.lock().unwrap()[0]
+            .env
+            .get("TEST_GIT_TOKEN")
+            .map(String::as_str),
+        Some("t")
+    );
+    // Another Actor's import never takes the scan cloned with Alice's
+    // credentials: it scans again, for its own Actor.
+    f.skills
+        .import_skills(
+            &op(),
+            "scan-1",
+            SOURCE,
+            None,
+            ImportFolder::default(),
+            vec![item("skills/pdf", ImportAction::Import, None)],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        f.scanner.credentials.lock().unwrap()[1],
+        GitCredentials::daemon()
+    );
 }
 
 #[tokio::test]

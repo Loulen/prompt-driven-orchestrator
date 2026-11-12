@@ -21,9 +21,47 @@ pub fn shown_remote(url: &str) -> String {
     }
 }
 
+/// The host `url` reaches, as a failure message names it: `git.example.com`
+/// (with its port when the URL gives one) for `https://user:token@git.example.com:8443/acme/app.git`
+/// or `git@git.example.com:acme/app.git`; the URL itself, shown, for a local
+/// one (`file://`, a path).
+pub fn remote_host(url: &str) -> String {
+    let url = url.trim();
+    if let Some((scheme, rest)) = url.split_once("://") {
+        let authority = rest.split('/').next().unwrap_or("");
+        let host = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host)| host);
+        if scheme.eq_ignore_ascii_case("file") || host.is_empty() {
+            return shown_remote(url);
+        }
+        return host.to_string();
+    }
+    // scp-like: `user@host:path`.
+    match url.split_once(':') {
+        Some((authority, _)) if authority.contains('@') && !authority.contains('/') => authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host)| host)
+            .to_string(),
+        _ => url.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::shown_remote;
+    use super::{remote_host, shown_remote};
+
+    #[test]
+    fn the_host_is_read_from_every_shape() {
+        assert_eq!(
+            remote_host("https://me:tok@git.example.com:8443/acme/app.git"),
+            "git.example.com:8443"
+        );
+        assert_eq!(remote_host("ssh://git@host/acme/app.git"), "host");
+        assert_eq!(remote_host("git@github.com:acme/app.git"), "github.com");
+        assert_eq!(remote_host("file:///srv/app.git"), "file:///srv/app.git");
+        assert_eq!(remote_host("/srv/app.git"), "/srv/app.git");
+    }
 
     #[test]
     fn credentials_in_the_authority_are_dropped() {

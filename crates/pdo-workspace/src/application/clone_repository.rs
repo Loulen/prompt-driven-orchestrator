@@ -2,16 +2,22 @@
 //! clones folder, in the background, and the Projets it was asked for receive
 //! it once it is there. A URL already cloned reuses its clone; a clone of the
 //! same folder already running is joined, never started twice.
+//!
+//! The clone runs with the credentials the extensions provide for the Actor
+//! who asks, captured with the request, else the daemon's. With extensions, a
+//! clone is reused only once the remote answers to those credentials: nobody
+//! adds a repository by reusing a clone they could not have made.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use pdo_kernel::authorization::authorize_read;
+use pdo_kernel::extension_host::{GitCredentials, GitOperation, GitOperationKind};
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use serde::Serialize;
 use ts_rs::TS;
 
-use super::clone_jobs::{CloneJob, CloneJobs, CloneState};
+use super::clone_jobs::{CloneJob, CloneJobs, CloneState, Join};
 use crate::domain::clone::{
     clone_failure, expand_home, is_remote_url, parse_progress, repository_name, same_remote,
     CloneFailure,
@@ -160,9 +166,17 @@ impl Workspace {
         };
         let path = dest.to_string_lossy().into_owned();
         let project_ids: Vec<String> = project_id.iter().cloned().collect();
+        let mut operation = GitOperation::new(actor.clone(), &url, GitOperationKind::Clone);
+        if let Some(id) = &project_id {
+            operation = operation.in_project(id);
+        }
+        let credentials = self.host().git_credentials(&operation);
+        let fingerprint = credentials.fingerprint();
 
-        if let Some(job) = self.clones.join(&path, project_id.as_deref()) {
-            return Ok(job);
+        match self.clones.join(&path, &project_ids, fingerprint) {
+            Join::Free => {}
+            Join::Joined(job) => return Ok(job),
+            Join::Busy(running) => return Err(busy(&running)),
         }
         let mut job = CloneJob {
             id: uuid::Uuid::new_v4().to_string(),
@@ -175,14 +189,16 @@ impl Workspace {
             error: None,
         };
 
-        if self.is_clone_of(&dest, &url) {
+        let reuse = self.is_clone_of(&dest, &url);
+        job.reused = reuse;
+        if reuse && self.host().allows_everything() {
+            // No extension: the daemon's one identity made the clone.
             job.state = CloneState::Done;
-            job.reused = true;
             joined(&*self.projects, &*self.events, &job.project_ids, &path).await;
-            self.clones.push(job.clone(), None);
+            self.clones.push(job.clone());
             return Ok(job);
         }
-        if dest.exists() && !is_empty_dir(&dest) {
+        if !reuse && dest.exists() && !is_empty_dir(&dest) {
             return Err(WorkspaceError::Invalid(format!(
                 "{path} already exists and is not a clone of {}",
                 job.url
@@ -190,18 +206,25 @@ impl Workspace {
         }
 
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
-        if let Some(running) = self.clones.start(job.clone(), cancel_tx) {
-            // Asked at the same moment as another clone of this folder.
-            return Ok(running);
+        // Asked at the same moment as another clone of this folder.
+        match self.clones.start(job.clone(), fingerprint, cancel_tx) {
+            Join::Free => {}
+            Join::Joined(running) => return Ok(running),
+            Join::Busy(running) => return Err(busy(&running)),
         }
         let run = Running {
             git: self.git.clone(),
             projects: self.projects.clone(),
             events: self.events.clone(),
             clones: self.clones.clone(),
+            credentials,
         };
         let id = job.id.clone();
-        tokio::spawn(async move { run.clone_into(id, url, dest, cancel_rx).await });
+        if reuse {
+            tokio::spawn(async move { run.reuse(id, url, dest, cancel_rx).await });
+        } else {
+            tokio::spawn(async move { run.clone_into(id, url, dest, cancel_rx).await });
+        }
         Ok(job)
     }
 
@@ -236,15 +259,53 @@ impl Workspace {
     }
 }
 
-/// What the background clone needs of the workspace.
+/// What the background clone needs of the workspace, and the credentials of
+/// the Actor who asked for it.
 struct Running {
     git: Arc<dyn Git>,
     projects: Arc<dyn ProjectRepository>,
     events: Arc<dyn ProjectEvents>,
     clones: Arc<CloneJobs>,
+    credentials: GitCredentials,
 }
 
 impl Running {
+    /// Reuse the clone at `dest` once `url` answers to the credentials.
+    async fn reuse(
+        self,
+        id: String,
+        url: String,
+        dest: PathBuf,
+        cancel: tokio::sync::oneshot::Receiver<()>,
+    ) {
+        let outcome = tokio::select! {
+            biased;
+            Ok(()) = cancel => Err(CloneFailure::Cancelled),
+            reached = self.git.reach(&url, &self.credentials) => reached,
+        };
+        let path = dest.to_string_lossy().into_owned();
+        match outcome {
+            Ok(()) => {
+                let projects = self.clones.finish(&id, CloneState::Done, None);
+                joined(&*self.projects, &*self.events, &projects, &path).await;
+            }
+            Err(failure) => self.failed(&id, &url, failure),
+        }
+    }
+
+    fn failed(&self, id: &str, url: &str, failure: CloneFailure) {
+        match failure {
+            CloneFailure::Cancelled => {
+                self.clones.finish(id, CloneState::Cancelled, None);
+            }
+            CloneFailure::Failed(stderr) => {
+                let error = clone_failure(url, &stderr, &self.credentials);
+                tracing::warn!("{error}");
+                self.clones.finish(id, CloneState::Failed, Some(error));
+            }
+        }
+    }
+
     async fn clone_into(
         self,
         id: String,
@@ -261,7 +322,7 @@ impl Running {
         });
         let outcome = self
             .git
-            .clone_repository(&url, &dest, on_progress, cancel)
+            .clone_repository(&url, &dest, &self.credentials, on_progress, cancel)
             .await;
         let path = dest.to_string_lossy().into_owned();
         match outcome {
@@ -269,14 +330,7 @@ impl Running {
                 let projects = self.clones.finish(&id, CloneState::Done, None);
                 joined(&*self.projects, &*self.events, &projects, &path).await;
             }
-            Err(CloneFailure::Cancelled) => {
-                self.clones.finish(&id, CloneState::Cancelled, None);
-            }
-            Err(CloneFailure::Failed(stderr)) => {
-                let error = clone_failure(&url, &stderr);
-                tracing::warn!("{error}");
-                self.clones.finish(&id, CloneState::Failed, Some(error));
-            }
+            Err(failure) => self.failed(&id, &url, failure),
         }
     }
 }
@@ -304,6 +358,16 @@ async fn joined(
     }
 }
 
+/// The refusal of a clone into a folder another one fills with other
+/// credentials: asked again once it ends, it reuses that clone if the remote
+/// answers to the asker.
+fn busy(running: &CloneJob) -> WorkspaceError {
+    WorkspaceError::Invalid(format!(
+        "{} is being cloned into {} for someone else: try again once that clone ends",
+        running.url, running.path
+    ))
+}
+
 /// `path` without `.` or `..` segments or a trailing `/`, so two spellings of
 /// one folder are one clone.
 fn normalized(path: &Path) -> PathBuf {
@@ -327,7 +391,7 @@ fn is_empty_dir(dir: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::testing::{denying, fixture};
+    use crate::application::testing::{alice, denying, fixture, ALICE_GIT_ENV};
     use crate::domain::project::Project;
 
     fn request(url: &str) -> CloneRequest {
@@ -397,10 +461,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_url_already_cloned_is_reused_without_a_second_clone() {
+    async fn a_url_already_cloned_is_reused_once_it_answers_the_actor() {
         let f = fixture();
         f.projects.seed(Project::named("p", "Checkout"));
         // FakeGit: `/repo` is a clone of example.com/acme/repo.
+        let job = f
+            .workspace
+            .clone_repository(
+                &alice(),
+                CloneRequest {
+                    path: Some("/repo".into()),
+                    project_id: Some("p".into()),
+                    ..request("https://example.com/acme/repo")
+                },
+            )
+            .await
+            .unwrap();
+        assert!(job.reused);
+        let done = settled(&f, &job.id).await;
+        assert_eq!((done.state, done.reused), (CloneState::Done, true));
+        assert!(f.git.cloned().is_empty());
+        assert_eq!(f.git.reached(), vec!["https://example.com/acme/repo"]);
+        assert_eq!(
+            f.git.credentials()[0]
+                .env
+                .get(ALICE_GIT_ENV.0)
+                .map(String::as_str),
+            Some(ALICE_GIT_ENV.1),
+            "checked with the credentials provided for the Actor"
+        );
+        assert_eq!(f.projects.all()[0].members, vec!["/repo".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn without_extension_a_clone_is_reused_at_once() {
+        let f = crate::application::testing::without_extension();
+        f.projects.seed(Project::named("p", "Checkout"));
         let job = f
             .workspace
             .clone_repository(
@@ -414,8 +510,87 @@ mod tests {
             .await
             .unwrap();
         assert_eq!((job.state, job.reused), (CloneState::Done, true));
-        assert!(f.git.cloned().is_empty());
+        assert!(f.git.reached().is_empty() && f.git.cloned().is_empty());
         assert_eq!(f.projects.all()[0].members, vec!["/repo".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn a_clone_runs_with_the_credentials_provided_for_the_actor() {
+        let f = fixture();
+        f.projects.seed(Project::named("p", "Checkout"));
+        let job = f
+            .workspace
+            .clone_repository(
+                &alice(),
+                CloneRequest {
+                    project_id: Some("p".into()),
+                    ..request("https://git.example.com/acme/app.git")
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(settled(&f, &job.id).await.state, CloneState::Done);
+        let asked = f.host.git_asked();
+        assert_eq!(
+            (
+                &asked[0].actor,
+                asked[0].kind,
+                asked[0].project.as_deref(),
+                asked[0].url.as_str()
+            ),
+            (
+                &alice(),
+                GitOperationKind::Clone,
+                Some("p"),
+                "https://git.example.com/acme/app.git"
+            )
+        );
+        assert_eq!(
+            f.git.credentials()[0]
+                .env
+                .get(ALICE_GIT_ENV.0)
+                .map(String::as_str),
+            Some(ALICE_GIT_ENV.1)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refusal_names_whose_credentials() {
+        let f = fixture();
+        let job = f
+            .workspace
+            .clone_repository(&alice(), request("https://h/acme/denied.git"))
+            .await
+            .unwrap();
+        let failed = settled(&f, &job.id).await;
+        assert!(failed
+            .error
+            .unwrap()
+            .starts_with("The credentials provided for Alice were refused for h: "));
+
+        // A reuse the remote refuses to the Actor adds nothing.
+        let f = fixture();
+        f.projects.seed(Project::named("p", "Checkout"));
+        let job = f
+            .workspace
+            .clone_repository(
+                &Actor::LocalOperator,
+                CloneRequest {
+                    path: Some("/denied".into()),
+                    project_id: Some("p".into()),
+                    ..request("https://example.com/acme/denied")
+                },
+            )
+            .await
+            .unwrap();
+        let failed = settled(&f, &job.id).await;
+        assert_eq!(failed.state, CloneState::Failed);
+        assert!(failed
+            .error
+            .unwrap()
+            .starts_with("The daemon's git credentials were refused for example.com: "));
+        assert!(f.git.cloned().is_empty());
+        assert!(f.projects.all()[0].members.is_empty());
     }
 
     #[tokio::test]
@@ -446,6 +621,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_running_clone_is_joined_only_with_the_same_credentials() {
+        let f = fixture();
+        f.projects.seed(Project::named("p", "Checkout"));
+        f.projects.seed(Project::named("q", "Other"));
+        f.git.hold_clones();
+        let first = f
+            .workspace
+            .clone_repository(
+                &alice(),
+                CloneRequest {
+                    project_id: Some("p".into()),
+                    ..request("https://h/acme/app.git")
+                },
+            )
+            .await
+            .unwrap();
+        let err = f
+            .workspace
+            .clone_repository(
+                &Actor::LocalOperator,
+                CloneRequest {
+                    project_id: Some("q".into()),
+                    ..request("https://h/acme/app.git")
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, WorkspaceError::Invalid(m) if m.contains("for someone else")),
+            "{err:?}"
+        );
+        let job = f.workspace.clone_job(&alice(), &first.id).unwrap();
+        assert_eq!(job.project_ids, vec!["p".to_string()], "q never joined");
+        let again = f
+            .workspace
+            .clone_repository(&alice(), request("https://h/acme/app.git"))
+            .await
+            .unwrap();
+        assert_eq!(again.id, first.id, "the same credentials join");
+    }
+
+    #[tokio::test]
     async fn a_failure_is_named() {
         let f = fixture();
         let job = f
@@ -458,7 +675,7 @@ mod tests {
         assert!(failed
             .error
             .unwrap()
-            .starts_with("The daemon's git credentials were refused"),);
+            .starts_with("The daemon's git credentials were refused for h: "));
     }
 
     #[tokio::test]

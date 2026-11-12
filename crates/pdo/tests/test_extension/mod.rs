@@ -54,8 +54,9 @@
 //!   not archived, and that menu also offers [`FAIL`], a command that throws.
 //!   Since #31, one element at each other location: a tab (`EntityTab`), a
 //!   section (`EntitySection`, which records its host's Save in `/sections`), a
-//!   decoration (`EntityBadge`; plus one that throws, `Exploding`, on the status
-//!   bar) and a list filter (`StartedByFilter`) wherever the catalogue accepts
+//!   decoration (`EntityBadge`, in a button that counts its clicks on a
+//!   Trigger's row, `TriggerMark`; plus one that throws, `Exploding`, on the
+//!   status bar) and a list filter (`StartedByFilter`) wherever the catalogue accepts
 //!   one.
 //! - **`cli`** / **`run_cli`**: `pdo ext test echo|cat|exit|panic` (see
 //!   [`TestExtension::run_cli`]); each call is recorded ([`Control::cli_calls`]).
@@ -85,6 +86,9 @@
 //! - **`node_env`** / **`node_preamble`** / **`trigger_suspension`** (API
 //!   0.8, `launch.rs`): the variables, the preamble and the suspensions the
 //!   test sets ([`Control::launch`]).
+//! - **`git_env`** (`launch.rs`): the variables the test gives an Actor's
+//!   network git operations (`PUT /ext/test/git-env`), each operation
+//!   recorded.
 //! - **`session_env`** / **`session_preamble`** (API 0.13, `launch.rs`): for a
 //!   Node, its `node_env` / `node_preamble`; for the Pipeline Manager and the
 //!   library assistant, the same variables plus `TEST_STARTED_BY` (the id of
@@ -164,9 +168,9 @@ use std::time::Duration;
 
 use pdo::extension_api::{
     Actor, ActorDisplay, Admission, Attributes, Authorization, CliInvocation, CliOutput, CliSpec,
-    EntityRef, Extension, ExtensionContext, ExtensionSkill, Manifest, NodeEnv, NodeLaunch,
-    Operation, RequestParts, ResourceDeclaration, ResourceKind, SessionLaunch, Slot, TriggerRef,
-    UiCommand, UiContribution, UiContributions, UiLocation, UiSlot, Verb, When,
+    EntityRef, Extension, ExtensionContext, ExtensionSkill, GitEnv, GitOperation, Manifest,
+    NodeEnv, NodeLaunch, Operation, RequestParts, ResourceDeclaration, ResourceKind, SessionLaunch,
+    Slot, TriggerRef, UiCommand, UiContribution, UiContributions, UiLocation, UiSlot, Verb, When,
 };
 use serde_json::Value;
 
@@ -677,6 +681,10 @@ impl Extension for TestExtension {
         self.control.launch.trigger_suspension(trigger)
     }
 
+    fn git_env(&self, operation: &GitOperation) -> GitEnv {
+        self.control.launch.git_env(operation)
+    }
+
     fn on_create(&self, actor: &Actor, _entity: &EntityRef) -> Attributes {
         let started_by = match actor {
             Actor::Identified { id, .. } => id.clone(),
@@ -849,11 +857,13 @@ impl Extension for TestExtension {
                 "Test",
                 "EntityBadge",
             ))
+            // A button around the badge: a gesture on the row, which its
+            // hover bar never covers.
             .contribute(UiContribution::decoration(
                 UiLocation::TriggerItem,
                 "trigger-badge",
                 "Test",
-                "EntityBadge",
+                "TriggerMark",
             ))
             .contribute(UiContribution::decoration(
                 UiLocation::PipelineItem,

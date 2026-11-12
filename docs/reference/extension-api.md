@@ -38,6 +38,7 @@ default, and with no extension the daemon behaves as if none existed.
 | `session_env(launch)` (0.13) | at every launch of a session that makes an agent act or runs a script Node: a Node (the core asks this hook, never `node_env` directly), the Pipeline Manager, the library assistant; the first registered wins a name | `node_env` for a Node, none otherwise |
 | `session_preamble(launch)` (0.13) | at every launch of an agent session; texts follow in registration order | `node_preamble` for a Node, none otherwise |
 | `trigger_suspension(trigger)` (0.8) | at every read of a Trigger and every due tick; the first `Some` wins, a panic suspends nothing | not suspended |
+| `git_env(operation)` | at every network git operation the daemon runs for an Actor: the clone of a repository added by its URL, the fetch of New Run, the clone of a Source de skills, the fetch before a Trigger fires; the first registered wins a name | none: the daemon's credentials |
 
 ## The Manifest
 
@@ -200,7 +201,8 @@ POST /authorize
 
 Whether the caller may run each Operation, in order, **without running any**: nothing changes,
 nothing is announced. An Operation that names no Projet is placed where the core places its own: a
-targeted `run` or `node` in the Projet of its Run, a targeted `project` in itself, a `page_mount`
+targeted `run` or `node` in the Projet of its Run, a targeted `project` in itself, a targeted
+`trigger` (any verb: `update`, `delete`, `fire`…) in the Projet of the Trigger (0.26), a `page_mount`
 creation asked from a node session in the Projet of its Run and a targeted `page_mount` deletion in
 the Projet of the mount's Run. At most 500
 Operations per question; an unreadable one answers `400` `invalid_question`. Without extension,
@@ -774,9 +776,12 @@ Without extension every tab is the local operator's: one Presence at most per Ru
 
 ## A suspended Trigger (0.8)
 
-`trigger_suspension` receives a `TriggerRef` (`id`, `name`, `last_editor`) and answers the
-reason, or `None`. The answer is never stored: the suspension lifts as soon as the extension
-stops giving one, and the Trigger fires again at its next slot. While suspended:
+`trigger_suspension` receives a `TriggerRef` (`id`, `name`, `last_editor`, and since 0.26
+`project`, the Projet the Trigger launches its Runs in, `None` for one in no Projet) and answers
+the reason, or `None`. It is asked from the Trigger's creation on, before any fire, so an extension
+judges a Trigger in its Projet as it judges every Operation on it. The answer is never stored: the
+suspension lifts as soon as the extension stops giving one, and the Trigger fires again at its next
+slot. While suspended:
 
 - a due tick spends the slot without firing and records a fire `skipped-suspended` with the
   reason;
@@ -789,6 +794,43 @@ The suspension is asked again at each read. When its cause changes outside any m
 Trigger, call `Host::triggers_changed()` (0.11): an interface open on the Triggers then shows the
 pill appear or go without reloading.
 
+## The credentials of a git operation of the daemon
+
+The daemon reaches a remote itself for four gestures, each for an Actor. `git_env` receives a
+`GitOperation` and answers a `GitEnv`, the variables added to git's environment for that
+operation and a short `label` naming what they provide:
+
+| `kind` | The operation | Its Actor |
+| --- | --- | --- |
+| `clone` | the full clone of a repository added by its URL; with an extension installed, also the check (`git ls-remote`) that the remote answers before a clone already on disk is reused | who adds it |
+| `fetch` | the fetch of every remote of a repository (New Run, its synchronisation) | who opens or syncs |
+| `skills` | the shallow clone of a Source de skills, to scan or import it | who scans or imports |
+| `trigger_fetch` | the fetch before a Trigger fires | the Trigger's last editor, else the Trigger itself |
+
+`GitOperation` also carries `project` (the Projet of the operation: the target of a clone, the
+one Projet holding the fetched repository, the Trigger's) and `url` (the remote as git is given
+it). The clone captures its Actor's environment with the request: it runs in the background.
+
+- **Off every argv.** The variables reach git's environment only, never a command line. Hand a
+  secret through a credential helper: `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>` and
+  `GIT_CONFIG_VALUE_<n>` (the helper), and the secret under a name of its own that the helper
+  reads. Never write it inside the helper's command, which git hands to a shell.
+- **Scope the helper to its host.** A fetch reaches every remote of the repository (`git fetch
+  --all`) with the environment given for `url`, its `origin`. Key the helper by URL
+  (`credential.https://git.example.com.helper`), or have it answer only for the `host=` it is
+  asked about, so a secret never reaches another remote.
+- **The core keeps its own.** `GIT_TERMINAL_PROMPT=0`, `GIT_ASKPASS`, `SSH_ASKPASS_REQUIRE=never`,
+  the operator's `GIT_SSH_COMMAND` in batch mode and `LC_ALL=C` are never overwritten: such a
+  name is dropped with a warning, as is a name that is no shell identifier. The first registered
+  extension wins a name; a panic adds nothing. Called on the request path: keep it quick.
+- **A refusal is named, never retried.** With variables given, a remote that refuses them fails
+  the operation with « The credentials provided for <Actor> (<label>) were refused for <host> »,
+  git's words after it; the daemon's own credentials are not tried. Without any, it reads « The
+  daemon's git credentials were refused for <host> ». The Actor is its display name.
+
+With no extension answering, git runs with the daemon's credentials as before. The update of PDO
+and the `docker pull` of the sandbox image never ask: they are the instance's.
+
 ## Events
 
 `on_event` and `/ws` carry the same JSON. After every authorized and successful mutation, an
@@ -799,6 +841,10 @@ pill appear or go without reloading.
   "operation": { "resource": "project", "verb": "update", "target": "p1", "projects": ["p1"] },
   "entity": { "kind": "project", "id": "p1" } }
 ```
+
+The Operation names its Projets: a Trigger's creation and each of its edits name the Projet the
+Trigger launches its Runs in (an edit moving it names the one it leaves, then the one it joins), so
+an extension learns of a Trigger in its Projet without asking.
 
 An extension's own events arrive as `{"type": "extension_event", "extension", "name", "payload"}`.
 Who opens and leaves a Run arrives as `presence_arrived` and `presence_left` (0.12,

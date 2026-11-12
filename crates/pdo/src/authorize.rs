@@ -8,11 +8,12 @@
 //! `{"decisions": [{"decision": "allow"} | {"decision": "deny", "reason"}, …]}`,
 //! in the same order. An Operation that names no Projet is placed where the
 //! core places its own: one on a Run or a node, in the Projet of the Run; one
-//! on a Projet, in that Projet; a page mount asked from a node session, in the
-//! Projet of its Run, and an unmount, in the Projet of the mount's Run. A
-//! concealed refusal of an Operation the core placed is answered as the same
-//! Operation unplaced, the answer an id nobody knows gets: the question tells
-//! no more than the read whether the entity exists.
+//! on a Projet, in that Projet; one on a Trigger, in the Projet of the Trigger;
+//! a page mount asked from a node session, in the Projet of its Run, and an
+//! unmount, in the Projet of the mount's Run. A concealed refusal of an
+//! Operation the core placed is answered as the same Operation unplaced, the
+//! answer an id nobody knows gets: the question tells no more than the read
+//! whether the entity exists.
 //!
 //! Nothing is recorded nor announced, nothing is logged: a question is not a
 //! gesture. Without extension, everything is allowed.
@@ -30,6 +31,7 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation, ResourceKind};
 use pdo_platform::Platform;
 use pdo_run::Runs;
+use pdo_trigger::Triggers;
 use serde::{Deserialize, Serialize};
 
 /// How many Operations one question may hold.
@@ -39,6 +41,7 @@ pub const MAX_OPERATIONS: usize = 500;
 struct Asked {
     host: Arc<dyn ExtensionHost>,
     runs: Arc<Runs>,
+    triggers: Arc<Triggers>,
     platform: Arc<Platform>,
 }
 
@@ -53,13 +56,20 @@ struct Answer {
 }
 
 /// `POST /authorize`, over the extension host `host`; the Projets of a Run
-/// come from `runs`, those of a page mount from `platform`.
-pub fn router(host: Arc<dyn ExtensionHost>, runs: Arc<Runs>, platform: Arc<Platform>) -> Router {
+/// come from `runs`, those of a Trigger from `triggers`, those of a page
+/// mount from `platform`.
+pub fn router(
+    host: Arc<dyn ExtensionHost>,
+    runs: Arc<Runs>,
+    triggers: Arc<Triggers>,
+    platform: Arc<Platform>,
+) -> Router {
     Router::new()
         .route("/authorize", post(ask))
         .with_state(Asked {
             host,
             runs,
+            triggers,
             platform,
         })
 }
@@ -106,6 +116,7 @@ async fn placed(asked: &Asked, actor: &Actor, operation: Operation) -> Operation
     match (&operation.resource, operation.target.clone()) {
         (ResourceKind::Project, Some(id)) => operation.in_projects([id]),
         (ResourceKind::Run | ResourceKind::Node, Some(_)) => asked.runs.scoped(operation).await,
+        (ResourceKind::Trigger, Some(_)) => asked.triggers.scoped(operation).await,
         (ResourceKind::PageMount, _) => {
             asked
                 .platform

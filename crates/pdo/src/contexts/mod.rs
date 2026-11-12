@@ -202,6 +202,7 @@ pub(crate) fn wire_over(
         .merge(crate::authorize::router(
             host.clone(),
             run.clone(),
+            triggers.clone(),
             platform.clone(),
         ));
     // CORE-5: every read of one Run, whichever context serves it, asks first.

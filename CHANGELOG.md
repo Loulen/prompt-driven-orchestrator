@@ -20,6 +20,20 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - New seam, concealed refusal: an extension marks a refusal `concealed` (`Authorization::concealed`, `Denied::is_concealed`, `"concealed": true` in `POST /authorize`). On the read of one Run (and everything under `/runs/{id}`), Trigger or hosted session, the daemon then answers exactly as for an unknown id, HTTP and CLI alike. Without the mark, the readable `403` stays. **Breaking** for extensions: `Authorization::Deny` and `Denied` gain the field `concealed`; a pattern listing every field needs `..`, a literal `Denied { … }` becomes `Denied::new(…).saying(…)`.
 - New seam, reads of the shared configuration: the pipelines (YAML, versions, document, shared draft), the library, the agentic profiles, the skills and their folders, the instance settings and the new Resource `audit` are each read through their Operation `read`, in no Project, declared in the catalogue. Refused, the read answers `403` with the sentence, and the view shows the sentence in its empty list, without its "New …" button.
 - Settings: without the right to change the instance settings, every field of the instance categories is greyed, the refusal's sentence in its tooltip, and the Save bar never shows. Your account and This device stay editable.
+- New seam `git_env` of the extension API: an extension gives the environment of the network git
+  operations the daemon runs for an Actor (the clone of a repository added by its URL, the fetch
+  of New Run, the clone of a skills source, and the fetch before a Trigger fires, for its last
+  editor), a credential helper through `GIT_CONFIG_*` for instance. The values reach git's
+  environment, never an argv; the core's own git variables are never overwritten.
+- A refused clone, fetch or skills source says whose credentials were refused: "The credentials
+  provided for <Actor> were refused for <host>" or "The daemon's git credentials were refused for
+  <host>", which now names the host rather than the URL.
+- With an extension installed, adding a URL already cloned reuses the clone only once the remote
+  answers to the credentials of whoever adds it, and a clone running into the same folder is joined
+  only with the same credentials (otherwise the add is refused until that clone ends).
+- A Trigger's row keeps its first line clear on hover: on a two-line row, the hover bar (Run now, Edit, Delete, ⋯) sits on the second line, over the last and next fire, so a button an extension puts at the end of the first line (`trigger/item`) stays visible and clickable. A row the Appearance reduces to one line keeps the bar centred. "Delete trigger" still asks for confirmation.
+- Extension API: `TriggerRef` carries `project`, the Projet the Trigger launches its Runs in (`TriggerRef::in_project`); `trigger_suspension` receives it from the Trigger's creation on, before any fire. The `operation_applied` of a Trigger's creation and edits names that Projet.
+- `POST /authorize` places a targeted `trigger` Operation (`update`, `delete`, `fire`…) in the Projet of the Trigger, as the gesture itself is: a probe of the interface and the real gesture are judged alike.
 
 ## 2.76.1
 

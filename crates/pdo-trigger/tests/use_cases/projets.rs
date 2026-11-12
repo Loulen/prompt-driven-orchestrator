@@ -243,3 +243,65 @@ async fn what_a_trigger_announces_is_guarded_by_its_read_in_its_projets() {
         assert_eq!(message[READ_GUARD], read, "{message}");
     }
 }
+
+#[tokio::test]
+async fn the_extension_is_asked_about_a_suspension_with_the_projet_of_the_trigger() {
+    let w = world();
+    projets(&w);
+    let t1 = trigger_in(&w, REPO, "p1").await;
+    let none = w.create(request(json!({}))).await;
+    w.host.suspension_asks.lock().unwrap().clear();
+
+    w.triggers
+        .list(&Actor::LocalOperator, Default::default())
+        .await
+        .unwrap();
+
+    let asked = w.host.suspension_asks.lock().unwrap().clone();
+    let project_of = |id: &str| asked.iter().find(|t| t.id == id).map(|t| t.project.clone());
+    assert_eq!(project_of(&t1), Some(Some("p1".into())));
+    assert_eq!(project_of(&none), Some(None), "a Trigger in no Projet");
+}
+
+#[tokio::test]
+async fn a_probed_operation_on_a_trigger_is_placed_in_its_projet() {
+    let w = world();
+    projets(&w);
+    let t1 = trigger_in(&w, REPO, "p1").await;
+    let none = w.create(request(json!({}))).await;
+    let on = |verb: Verb, id: &str| pdo_kernel::Operation::new(ResourceKind::Trigger, verb).on(id);
+
+    let placed = w.triggers.scoped(on(Verb::Update, &t1)).await;
+    assert_eq!(placed.projects, vec!["p1".to_string()]);
+    let placed = w
+        .triggers
+        .scoped(on(Verb::Action("fire".into()), &t1))
+        .await;
+    assert_eq!(
+        placed.projects,
+        vec!["p1".to_string()],
+        "a named action too"
+    );
+
+    // One naming its Projets, one on no Trigger or on an unknown one, one on
+    // a Trigger in no Projet: left as asked.
+    let named = on(Verb::Delete, &t1).in_projects(["p2"]);
+    assert_eq!(w.triggers.scoped(named.clone()).await, named);
+    let create = pdo_kernel::Operation::new(ResourceKind::Trigger, Verb::Create);
+    assert_eq!(w.triggers.scoped(create.clone()).await, create);
+    assert!(w
+        .triggers
+        .scoped(on(Verb::Update, "nope"))
+        .await
+        .projects
+        .is_empty());
+    assert!(w
+        .triggers
+        .scoped(on(Verb::Update, &none))
+        .await
+        .projects
+        .is_empty());
+    // Not a Trigger's.
+    let run = pdo_kernel::Operation::new(ResourceKind::Run, Verb::Update).on(&t1);
+    assert_eq!(w.triggers.scoped(run.clone()).await, run);
+}

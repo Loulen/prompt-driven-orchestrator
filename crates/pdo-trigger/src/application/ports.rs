@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::time::Duration;
 
+use pdo_kernel::Actor;
 use pdo_platform::domain::audit::NewAuditEntry;
 use pdo_skill::domain::selection::SkillRef;
 use pdo_workspace::domain::branches::FetchError;
@@ -98,8 +99,15 @@ pub trait Repositories: Send + Sync {
     /// validated path, or the message saying why it is refused.
     fn required(&self, field: Option<&str>) -> Result<PathBuf, String>;
     /// Fetch every remote of `targets` (primary first) before a fire cuts
-    /// from them (#804): the primary's failure, `None` when it worked.
-    fn refresh<'a>(&'a self, targets: &'a [String]) -> BoxFuture<'a, Option<FetchError>>;
+    /// from them (#804), with the credentials the extensions provide for
+    /// `editor` in `project`, else the daemon's: the primary's failure, `None`
+    /// when it worked.
+    fn refresh<'a>(
+        &'a self,
+        targets: &'a [String],
+        editor: &'a Actor,
+        project: Option<&'a str>,
+    ) -> BoxFuture<'a, Option<FetchError>>;
 }
 
 /// The Projets a Trigger launches its Runs in (ADR-0087), checked as a Run's

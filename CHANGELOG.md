@@ -20,6 +20,17 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - A clone is followed by who asked for it: `GET /repos/clones`, `/repos/clones/{id}` and its cancel answer the clones the caller started or joined, every clone to who may read the disk; another one is not found. A clone started by a member of a Project no longer stops on "Starting the clone…". `GET /repos/clone-target` takes a `project_id`; `POST /repos/create` takes a `project_id`, its `parent` then optional.
 - Settings › Projects › "Add repository": "From my Projects" lists the repositories of the caller's other Projects it may read (the Project's name aside); without disk access the menu opens on Clone from a URL… and New empty repository… (a name only), and "Local folder…" stays greyed, its reason in a tooltip. The kit's `Menu` takes `reasons="tooltip"` to say why an entry is greyed in its tooltip rather than at its foot.
 - A node fed by the guarded exit of a bounded loop no longer starts on a failed lap: when another branch completed just as the loop's next lap was being set up, the readiness sweep read the loop as idle, started the convergence early and could end the Run before the loop passed.
+- New seam `git_env` of the extension API: an extension gives the environment of the network git
+  operations the daemon runs for an Actor (the clone of a repository added by its URL, the fetch
+  of New Run, the clone of a skills source, and the fetch before a Trigger fires, for its last
+  editor), a credential helper through `GIT_CONFIG_*` for instance. The values reach git's
+  environment, never an argv; the core's own git variables are never overwritten.
+- A refused clone, fetch or skills source says whose credentials were refused: "The credentials
+  provided for <Actor> were refused for <host>" or "The daemon's git credentials were refused for
+  <host>", which now names the host rather than the URL.
+- With an extension installed, adding a URL already cloned reuses the clone only once the remote
+  answers to the credentials of whoever adds it, and a clone running into the same folder is joined
+  only with the same credentials (otherwise the add is refused until that clone ends).
 - A Trigger's row keeps its first line clear on hover: on a two-line row, the hover bar (Run now, Edit, Delete, ⋯) sits on the second line, over the last and next fire, so a button an extension puts at the end of the first line (`trigger/item`) stays visible and clickable. A row the Appearance reduces to one line keeps the bar centred. "Delete trigger" still asks for confirmation.
 - Extension API: `TriggerRef` carries `project`, the Projet the Trigger launches its Runs in (`TriggerRef::in_project`); `trigger_suspension` receives it from the Trigger's creation on, before any fire. The `operation_applied` of a Trigger's creation and edits names that Projet.
 - `POST /authorize` places a targeted `trigger` Operation (`update`, `delete`, `fire`…) in the Projet of the Trigger, as the gesture itself is: a probe of the interface and the real gesture are judged alike.

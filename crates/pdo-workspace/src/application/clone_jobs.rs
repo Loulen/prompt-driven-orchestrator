@@ -49,6 +49,21 @@ struct Entry {
     requested_by: Vec<Actor>,
     /// Fires the cancel of a running clone.
     cancel: Option<tokio::sync::oneshot::Sender<()>>,
+    /// The fingerprint of the credentials it runs with
+    /// (`GitCredentials::fingerprint`).
+    credentials: u64,
+}
+
+/// What a clone into a folder finds there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Join {
+    /// No clone runs into that folder.
+    Free,
+    /// The running clone, now also for the Projets asked.
+    Joined(CloneJob),
+    /// A clone runs into that folder with other credentials: joining it would
+    /// add what they reach to Projets of an Actor who may not reach it.
+    Busy(CloneJob),
 }
 
 /// A clone, and who asked for it (never on the wire: a clone shows to who
@@ -104,50 +119,38 @@ impl CloneJobs {
     }
 
     /// The running clone into `path`, now also asked by `actor` for
-    /// `project_id`.
+    /// `project_ids` when it runs with the same `credentials`.
     pub(super) fn join(
         &self,
         path: &str,
         actor: &Actor,
-        project_id: Option<&str>,
-    ) -> Option<CloneJob> {
-        let mut entries = self.lock();
-        let entry = entries
-            .iter_mut()
-            .find(|e| e.job.state == CloneState::Running && e.job.path == path)?;
-        entry.asked_by(actor, project_id.map(str::to_string));
-        Some(entry.job.clone())
+        project_ids: &[String],
+        credentials: u64,
+    ) -> Join {
+        joined(&mut self.lock(), path, actor, project_ids, credentials)
     }
 
     /// Records a running clone asked by `actor`, unless one into the same
-    /// folder runs already: that one, then also asked by `actor` for the
-    /// Projets of `job`, is returned. One lock for both, so two asks at once
-    /// never start two clones of one folder.
+    /// folder runs already (see [`Self::join`]). One lock for both, so two
+    /// asks at once never start two clones of one folder.
     pub(super) fn start(
         &self,
         job: CloneJob,
         actor: &Actor,
+        credentials: u64,
         cancel: tokio::sync::oneshot::Sender<()>,
-    ) -> Option<CloneJob> {
+    ) -> Join {
         let mut entries = self.lock();
-        if let Some(entry) = entries
-            .iter_mut()
-            .find(|e| e.job.state == CloneState::Running && e.job.path == job.path)
-        {
-            entry.asked_by(actor, job.project_ids);
-            return Some(entry.job.clone());
+        let found = joined(&mut entries, &job.path, actor, &job.project_ids, credentials);
+        if found == Join::Free {
+            push(&mut entries, job, actor, Some(cancel), credentials);
         }
-        push(&mut entries, job, actor, Some(cancel));
-        None
+        found
     }
 
-    pub(super) fn push(
-        &self,
-        job: CloneJob,
-        actor: &Actor,
-        cancel: Option<tokio::sync::oneshot::Sender<()>>,
-    ) {
-        push(&mut self.lock(), job, actor, cancel);
+    /// Records a finished clone asked by `actor`.
+    pub(super) fn push(&self, job: CloneJob, actor: &Actor) {
+        push(&mut self.lock(), job, actor, None, 0);
     }
 
     pub(super) fn update(&self, id: &str, change: impl FnOnce(&mut CloneJob)) {
@@ -184,6 +187,28 @@ impl CloneJobs {
     }
 }
 
+/// What a clone into `path` with `credentials`, asked by `actor`, finds in
+/// `entries`.
+fn joined(
+    entries: &mut [Entry],
+    path: &str,
+    actor: &Actor,
+    project_ids: &[String],
+    credentials: u64,
+) -> Join {
+    let Some(entry) = entries
+        .iter_mut()
+        .find(|e| e.job.state == CloneState::Running && e.job.path == path)
+    else {
+        return Join::Free;
+    };
+    if entry.credentials != credentials {
+        return Join::Busy(entry.job.clone());
+    }
+    entry.asked_by(actor, project_ids.iter().cloned());
+    Join::Joined(entry.job.clone())
+}
+
 /// Adds `job` asked by `actor`, dropping the oldest finished clones beyond
 /// [`FINISHED_KEPT`].
 fn push(
@@ -191,11 +216,13 @@ fn push(
     job: CloneJob,
     actor: &Actor,
     cancel: Option<tokio::sync::oneshot::Sender<()>>,
+    credentials: u64,
 ) {
     entries.push(Entry {
         job,
         requested_by: vec![actor.clone()],
         cancel,
+        credentials,
     });
     let finished = entries
         .iter()
@@ -243,9 +270,11 @@ mod tests {
         let jobs = CloneJobs::default();
         let (alice, bob) = (person("alice"), person("bob"));
         let (tx, _rx) = tokio::sync::oneshot::channel();
-        assert_eq!(jobs.start(job("a", "p1"), &alice, tx), None);
+        assert_eq!(jobs.start(job("a", "p1"), &alice, 7, tx), Join::Free);
         let (tx, _rx) = tokio::sync::oneshot::channel();
-        let running = jobs.start(job("b", "p2"), &bob, tx).unwrap();
+        let Join::Joined(running) = jobs.start(job("b", "p2"), &bob, 7, tx) else {
+            panic!("joined");
+        };
         assert_eq!(running.id, "a");
         assert_eq!(
             running.project_ids,
@@ -255,10 +284,28 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].requested_by, vec![alice.clone(), bob.clone()]);
         // Joined again by who asked already: named once.
-        jobs.join("/clones/app", &alice, Some("p3")).unwrap();
+        let again = jobs.join("/clones/app", &alice, &["p3".to_string()], 7);
+        assert!(matches!(again, Join::Joined(_)));
         let tracked = jobs.get("a").unwrap();
         assert_eq!(tracked.requested_by, vec![alice, bob]);
         assert_eq!(tracked.job.project_ids, ["p1", "p2", "p3"]);
+    }
+
+    #[test]
+    fn a_clone_with_other_credentials_is_never_joined() {
+        let jobs = CloneJobs::default();
+        let (alice, bob) = (person("alice"), person("bob"));
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        assert_eq!(jobs.start(job("a", "p1"), &alice, 7, tx), Join::Free);
+        let Join::Busy(running) = jobs.join("/clones/app", &bob, &["p2".to_string()], 8) else {
+            panic!("busy");
+        };
+        assert_eq!(running.project_ids, vec!["p1".to_string()], "p2 not added");
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        assert!(matches!(jobs.start(job("b", "p2"), &bob, 8, tx), Join::Busy(_)));
+        let listed = jobs.list();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].requested_by, vec![alice], "bob did not join it");
     }
 
     #[test]
@@ -267,11 +314,11 @@ mod tests {
         let mut failed = job("a", "p");
         failed.state = CloneState::Failed;
         let actor = Actor::LocalOperator;
-        jobs.push(failed, &actor, None);
+        jobs.push(failed, &actor);
         let (tx, mut rx) = tokio::sync::oneshot::channel();
         let mut running = job("b", "p");
         running.path = "/clones/other".into();
-        assert_eq!(jobs.start(running, &actor, tx), None);
+        assert_eq!(jobs.start(running, &actor, 0, tx), Join::Free);
 
         assert_eq!(jobs.cancel("a").unwrap().state, CloneState::Failed);
         assert_eq!(jobs.get("a"), None);
@@ -287,7 +334,7 @@ mod tests {
         for i in 0..FINISHED_KEPT + 5 {
             let mut done = job(&i.to_string(), "p");
             done.state = CloneState::Done;
-            jobs.push(done, &Actor::LocalOperator, None);
+            jobs.push(done, &Actor::LocalOperator);
         }
         let listed = jobs.list();
         assert_eq!(listed.len(), FINISHED_KEPT);

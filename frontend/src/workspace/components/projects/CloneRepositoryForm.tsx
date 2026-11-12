@@ -210,7 +210,7 @@ export default function CloneRepositoryForm({
                 </button>
               )}
               {!job && shownTarget?.cloned && editingPath === null && (
-                <span className="d-chip" title="Already cloned there" data-testid="project-clone-reused">
+                <span className="d-chip" title="Already cloned there: reused once the remote accepts your git credentials" data-testid="project-clone-reused">
                   reused
                 </span>
               )}
@@ -219,7 +219,7 @@ export default function CloneRepositoryForm({
             <span className="ln-faint">https://, ssh:// or git@host:path</span>
           )}
           <span className="ln-grow" />
-          <span className="ln-faint" title="With the daemon's git credentials">
+          <span className="ln-faint" title="With the git credentials an extension provides for you, otherwise the daemon's">
             full clone
           </span>
         </div>

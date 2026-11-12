@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use pdo_extension_api::{Authorization, RequestParts};
-use pdo_kernel::extension_host::ExtensionHost;
+use pdo_kernel::extension_host::{ExtensionHost, GitCredentials, GitOperation};
 use pdo_kernel::{Actor, Operation};
 use sha2::{Digest, Sha256};
 
@@ -31,11 +31,24 @@ fn ready<'a, T: Send + 'a>(value: T) -> BoxFuture<'a, T> {
 pub struct Host {
     pub refusal: Option<String>,
     pub asked: Mutex<Vec<Operation>>,
+    pub git_asked: Mutex<Vec<GitOperation>>,
 }
 
 impl Host {
     pub fn asked(&self) -> Vec<Operation> {
         self.asked.lock().unwrap().clone()
+    }
+    /// Every git operation it was asked credentials for, in order.
+    pub fn git_asked(&self) -> Vec<GitOperation> {
+        self.git_asked.lock().unwrap().clone()
+    }
+}
+
+/// The Actor the fake host provides git credentials for: `TEST_GIT_TOKEN`.
+pub fn alice() -> Actor {
+    Actor::Identified {
+        namespace: "test".into(),
+        id: "alice".into(),
     }
 }
 
@@ -51,6 +64,17 @@ impl ExtensionHost for Host {
         }
     }
     fn publish(&self, _event: &serde_json::Value) {}
+    fn git_credentials(&self, operation: &GitOperation) -> GitCredentials {
+        self.git_asked.lock().unwrap().push(operation.clone());
+        if operation.actor != alice() {
+            return GitCredentials::daemon();
+        }
+        GitCredentials::provided(
+            [("TEST_GIT_TOKEN".to_string(), "t".to_string())].into(),
+            "Alice",
+            None,
+        )
+    }
 }
 
 #[derive(Default)]
@@ -370,6 +394,8 @@ pub struct Scanner {
     pub scans: Mutex<usize>,
     pub failure: Mutex<Option<ImportError>>,
     pub cancelled: Mutex<Vec<String>>,
+    /// The credentials of each scan, in order.
+    pub credentials: Mutex<Vec<GitCredentials>>,
 }
 
 impl Default for Scanner {
@@ -382,6 +408,7 @@ impl Default for Scanner {
             scans: Mutex::new(0),
             failure: Mutex::new(None),
             cancelled: Mutex::default(),
+            credentials: Mutex::default(),
         }
     }
 }
@@ -430,8 +457,10 @@ impl SourceScanner for Scanner {
         &'a self,
         scan_id: &'a str,
         source: &'a ParsedSource,
+        credentials: &'a GitCredentials,
     ) -> BoxFuture<'a, Result<ScanOutcome, ImportError>> {
         *self.scans.lock().unwrap() += 1;
+        self.credentials.lock().unwrap().push(credentials.clone());
         if let Some(failure) = self.failure.lock().unwrap().clone() {
             return ready(Err(failure));
         }
@@ -442,6 +471,7 @@ impl SourceScanner for Scanner {
                 root: self.root.clone(),
                 source: source.clone(),
                 commit: commit.clone(),
+                credentials: credentials.fingerprint(),
             },
         );
         let candidates = self.candidates(&self.root, &source.path);
@@ -592,7 +622,7 @@ fn build(refusal: Option<String>) -> Fixture {
     let referring = Arc::new(Referring::default());
     let host = Arc::new(Host {
         refusal,
-        asked: Mutex::default(),
+        ..Host::default()
     });
     let skills = pdo_skill::Skills::new(
         pdo_skill::SkillsPorts {

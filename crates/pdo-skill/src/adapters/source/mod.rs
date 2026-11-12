@@ -1,6 +1,7 @@
 //! The [`SourceScanner`] port: a Source is cloned **shallow** with the
-//! credentials of the user running the daemon (through the workspace's git
-//! adapter), or opened in place when it is a local folder, then walked.
+//! credentials it is given (those an extension provides for the Actor, else
+//! the daemon's, through the workspace's git adapter), or opened in place when
+//! it is a local folder, then walked.
 //!
 //! The clone lives in a temp directory kept for a while, keyed by the
 //! client-chosen `scan_id`, so the import that follows copies from it without
@@ -15,8 +16,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use pdo_kernel::extension_host::GitCredentials;
 use pdo_workspace::adapters::git::clone::{clone_shallow, CloneError};
 use pdo_workspace::adapters::git::repository::resolve_commit;
+use pdo_workspace::domain::clone::credential_refusal;
 
 use crate::adapters::fs::hash_tree;
 use crate::application::ports::{BoxFuture, KeptScan, SourceScanner};
@@ -102,8 +105,14 @@ impl GitSourceScanner {
         }
     }
 
-    /// Shallow-clone `source` into a temp dir named after `scan_id`.
-    async fn clone(&self, scan_id: &str, source: &ParsedSource) -> Result<PathBuf, ImportError> {
+    /// Shallow-clone `source` into a temp dir named after `scan_id`, with
+    /// `credentials`.
+    async fn clone(
+        &self,
+        scan_id: &str,
+        source: &ParsedSource,
+        credentials: &GitCredentials,
+    ) -> Result<PathBuf, ImportError> {
         let dir = scan_temp_dir(scan_id);
         let _ = std::fs::remove_dir_all(&dir);
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
@@ -112,13 +121,19 @@ impl GitSourceScanner {
             &source.url,
             source.git_ref.as_deref(),
             &dir,
+            &credentials.env,
             rx,
             CLONE_TIMEOUT,
         )
         .await
         .map(|()| dir.clone())
         .map_err(|error| match error {
-            CloneError::Failed(stderr) => ImportError::CloneFailed(stderr),
+            CloneError::Failed(stderr) => ImportError::CloneFailed(
+                match credential_refusal(&source.url, &stderr, credentials) {
+                    Some(refused) => format!("{refused}: {}", stderr.trim()),
+                    None => stderr,
+                },
+            ),
             CloneError::Timeout => ImportError::CloneTimeout,
             CloneError::Cancelled => ImportError::Cancelled,
             CloneError::Io(message) => ImportError::Io(message),
@@ -134,6 +149,7 @@ impl GitSourceScanner {
         &self,
         scan_id: &str,
         source: &ParsedSource,
+        credentials: &GitCredentials,
     ) -> Result<ScanOutcome, ImportError> {
         self.expire_scans();
         // Drop any previous clone under the same id.
@@ -141,7 +157,7 @@ impl GitSourceScanner {
             cleanup_entry(&previous);
         }
         let (root, owned) = match source.kind {
-            SourceKind::Git => (self.clone(scan_id, source).await?, true),
+            SourceKind::Git => (self.clone(scan_id, source, credentials).await?, true),
             SourceKind::Local => {
                 let path = PathBuf::from(&source.url);
                 if !path.is_dir() {
@@ -169,6 +185,7 @@ impl GitSourceScanner {
                     root,
                     source: source.clone(),
                     commit: commit.clone(),
+                    credentials: credentials.fingerprint(),
                 },
                 owned,
                 created: Instant::now(),
@@ -189,8 +206,9 @@ impl SourceScanner for GitSourceScanner {
         &'a self,
         scan_id: &'a str,
         source: &'a ParsedSource,
+        credentials: &'a GitCredentials,
     ) -> BoxFuture<'a, Result<ScanOutcome, ImportError>> {
-        Box::pin(self.scan_now(scan_id, source))
+        Box::pin(self.scan_now(scan_id, source, credentials))
     }
 
     fn cancel(&self, scan_id: &str) -> bool {

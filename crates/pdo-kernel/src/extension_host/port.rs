@@ -3,13 +3,13 @@
 use std::sync::Arc;
 
 use pdo_extension_api::{
-    ActorDisplay, Admission, Attributes, Authorization, EntityRef, ExtensionData, RequestParts,
-    Resource, ResourceKind, SessionLaunch, TriggerRef,
+    ActorDisplay, Admission, Attributes, Authorization, EntityRef, ExtensionData, GitOperation,
+    RequestParts, Resource, ResourceKind, SessionLaunch, TriggerRef,
 };
 use serde_json::Value;
 
 use super::creation::{self, CreationRefusal};
-use super::{Identification, NodeContribution, ProvidedSkills, TriggerSuspension};
+use super::{GitCredentials, Identification, NodeContribution, ProvidedSkills, TriggerSuspension};
 use crate::attributes::{AttributeStore, NoAttributes};
 use crate::{Actor, Operation};
 
@@ -116,6 +116,13 @@ pub trait ExtensionHost: Send + Sync {
     /// default.
     fn trigger_suspension(&self, _trigger: &TriggerRef) -> Option<TriggerSuspension> {
         None
+    }
+
+    /// The credentials of a network git operation the daemon runs for an
+    /// Actor: the variables the extensions provide for it, or the daemon's
+    /// own ([`GitCredentials::daemon`], the default).
+    fn git_credentials(&self, _operation: &GitOperation) -> GitCredentials {
+        GitCredentials::daemon()
     }
 
     /// Whether no extension can refuse anything: the reads then skip the

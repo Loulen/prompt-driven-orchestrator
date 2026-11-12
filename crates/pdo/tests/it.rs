@@ -112,6 +112,11 @@ mod extension_trigger_fire;
 #[path = "extension_node_launch.rs"]
 mod extension_node_launch;
 
+// The environment of a network git operation of the daemon: what an extension
+// provides for its Actor, off every argv, and the refusal it names.
+#[path = "extension_git_env.rs"]
+mod extension_git_env;
+
 // CORE-61, API 0.13: the launch of every agent session with who starts it, one
 // library assistant per Actor, the session events.
 #[path = "extension_sessions.rs"]

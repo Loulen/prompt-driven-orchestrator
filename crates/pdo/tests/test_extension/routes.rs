@@ -172,7 +172,9 @@ pub(super) fn router(control: Control) -> Router {
 /// `/trigger-asks` lists every Trigger it was asked about, with its Projet
 /// (0.26).
 fn launch_routes(launch: super::launch::Launch, creation: super::creation::Creation) -> Router {
-    let (read, configure, list, suspend, lift, asks) = (
+    let (read, configure, list, suspend, lift, git_read, git_set, asks) = (
+        launch.clone(),
+        launch.clone(),
         launch.clone(),
         launch.clone(),
         launch.clone(),
@@ -191,6 +193,18 @@ fn launch_routes(launch: super::launch::Launch, creation: super::creation::Creat
             .put(move |Json(body): Json<Value>| {
                 configure.configure(&body);
                 let state = configure.state();
+                async move { Json(state) }
+            }),
+        )
+        .route(
+            "/git-env",
+            get(move || {
+                let state = git_read.git_state();
+                async move { Json(state) }
+            })
+            .put(move |Json(body): Json<Value>| {
+                git_set.configure_git(&body);
+                let state = git_set.git_state();
                 async move { Json(state) }
             }),
         )

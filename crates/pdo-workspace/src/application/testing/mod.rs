@@ -7,7 +7,7 @@ mod stores;
 use std::sync::{Arc, Mutex};
 
 use pdo_extension_api::{Authorization, RequestParts};
-use pdo_kernel::extension_host::ExtensionHost;
+use pdo_kernel::extension_host::{ExtensionHost, GitCredentials, GitOperation};
 use pdo_kernel::{Actor, Operation};
 use serde_json::Value;
 
@@ -34,11 +34,29 @@ pub struct RecordingHost {
     /// Refuse what this says, with « refused ».
     refuses: Option<Refuses>,
     asked: Mutex<Vec<Operation>>,
+    git_asked: Mutex<Vec<GitOperation>>,
+    /// Stands for a daemon without extension (`allows_everything`).
+    no_extension: bool,
+}
+
+/// The variables [`RecordingHost`] provides for `alice`'s git operations.
+pub const ALICE_GIT_ENV: (&str, &str) = ("TEST_GIT_TOKEN", "alice-token");
+
+/// The Actor [`RecordingHost`] provides git credentials for.
+pub fn alice() -> Actor {
+    Actor::Identified {
+        namespace: "test".into(),
+        id: "alice".into(),
+    }
 }
 
 impl RecordingHost {
     pub fn asked(&self) -> Vec<Operation> {
         self.asked.lock().unwrap().clone()
+    }
+    /// Every git operation it was asked credentials for, in order.
+    pub fn git_asked(&self) -> Vec<GitOperation> {
+        self.git_asked.lock().unwrap().clone()
     }
 }
 
@@ -65,6 +83,22 @@ impl ExtensionHost for RecordingHost {
         }
     }
     fn publish(&self, _event: &Value) {}
+    fn allows_everything(&self) -> bool {
+        self.no_extension
+    }
+    /// [`ALICE_GIT_ENV`] for [`alice`], the daemon's credentials otherwise.
+    fn git_credentials(&self, operation: &GitOperation) -> GitCredentials {
+        self.git_asked.lock().unwrap().push(operation.clone());
+        if operation.actor != alice() {
+            return GitCredentials::daemon();
+        }
+        let (name, value) = ALICE_GIT_ENV;
+        GitCredentials::provided(
+            [(name.to_string(), value.to_string())].into(),
+            "Alice",
+            None,
+        )
+    }
 }
 
 pub struct Fixture {
@@ -78,6 +112,15 @@ pub struct Fixture {
     pub source_tree: Arc<RecordingSourceTree>,
     pub skills: Arc<ScriptedSkills>,
     pub host: Arc<RecordingHost>,
+}
+
+/// A workspace as a daemon without extension has it: nothing refused, the
+/// host says it allows everything.
+pub fn without_extension() -> Fixture {
+    build_with(RecordingHost {
+        no_extension: true,
+        ..RecordingHost::default()
+    })
 }
 
 fn build(refusal: Option<String>) -> Fixture {

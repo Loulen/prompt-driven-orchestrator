@@ -47,7 +47,7 @@ async fn fetch_all_remotes_makes_a_new_origin_commit_visible() {
     assert_eq!(before.behind, Some(0), "stale refs still look level");
 
     assert_eq!(
-        fetch_all_remotes(work.path()).await,
+        fetch_all_remotes(work.path(), &Default::default()).await,
         None,
         "fetch succeeded"
     );
@@ -66,7 +66,10 @@ async fn fetch_all_remotes_prunes_a_branch_that_vanished_upstream() {
     let (origin, work) = init_repo_with_remote();
     run_git(origin.path(), &["branch", "-D", "feature-remote-only"]);
 
-    assert_eq!(fetch_all_remotes(work.path()).await, None);
+    assert_eq!(
+        fetch_all_remotes(work.path(), &Default::default()).await,
+        None
+    );
 
     let branches = list_branches(work.path()).unwrap();
     assert!(
@@ -81,7 +84,9 @@ async fn fetch_all_remotes_prunes_a_branch_that_vanished_upstream() {
 async fn fetch_all_remotes_names_a_repo_with_no_remote() {
     let tmp = tempfile::tempdir().unwrap();
     init_test_repo(tmp.path());
-    let error = fetch_all_remotes(tmp.path()).await.expect("a named reason");
+    let error = fetch_all_remotes(tmp.path(), &Default::default())
+        .await
+        .expect("a named reason");
     assert_eq!(
         error.kind,
         FetchErrorKind::NoRemote,
@@ -100,7 +105,9 @@ async fn a_failed_fetch_leaves_the_list_and_the_previous_date_intact() {
         work.path(),
         &["remote", "set-url", "origin", "/nonexistent/repo.git"],
     );
-    let error = fetch_all_remotes(work.path()).await.expect("a failure");
+    let error = fetch_all_remotes(work.path(), &Default::default())
+        .await
+        .expect("a failure");
     assert!(
         !error.message.is_empty(),
         "git's own words reach the popover"
@@ -127,7 +134,7 @@ async fn concurrent_fetches_of_one_repo_share_a_single_flight() {
     let path = work.path().to_path_buf();
     let outcomes = futures_util::future::join_all((0..4).map(|_| {
         let path = path.clone();
-        async move { fetch_all_remotes(&path).await }
+        async move { fetch_all_remotes(&path, &Default::default()).await }
     }))
     .await;
     assert!(
@@ -138,7 +145,8 @@ async fn concurrent_fetches_of_one_repo_share_a_single_flight() {
         !fetch_in_flight()
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .contains_key(&path),
+            .keys()
+            .any(|(repo, _)| repo == &path),
         "the flight is released, so the next ask fetches for real"
     );
 }

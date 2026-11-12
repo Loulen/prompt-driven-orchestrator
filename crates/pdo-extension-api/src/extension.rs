@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use crate::{
     Actor, ActorDisplay, Admission, Attributes, Authorization, CliInvocation, CliOutput, CliSpec,
-    EntityRef, ExtensionSkill, Host, Manifest, NeutralHost, NodeEnv, NodeLaunch, Operation,
-    ResourceKind, SessionLaunch, TriggerRef, UiContributions,
+    EntityRef, ExtensionSkill, GitEnv, GitOperation, Host, Manifest, NeutralHost, NodeEnv,
+    NodeLaunch, Operation, ResourceKind, SessionLaunch, TriggerRef, UiContributions,
 };
 
 /// The head of an HTTP request, as `identify` sees it: method, URI, headers.
@@ -327,6 +327,33 @@ pub trait Extension: Send + Sync + 'static {
     fn trigger_suspension(&self, _trigger: &TriggerRef) -> Option<String> {
         None
     }
+
+    /// The environment of a network git operation the daemon runs for an
+    /// Actor: the clone of a repository added by its URL, the fetch of New
+    /// Run, the shallow clone of a Source de skills, the fetch before a
+    /// Trigger fires (for its last editor). None by default: git runs with
+    /// the daemon's own credentials, as without extension.
+    ///
+    /// The variables reach git's environment, never the argv of a process:
+    /// hand a secret through a variable a credential helper reads
+    /// (`GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`
+    /// naming a helper, and the secret under a name of its own), never inside
+    /// the helper's command, which git passes to a shell. A fetch reaches
+    /// every remote of the repository with the environment given for its
+    /// `origin`: scope the helper to that host
+    /// (`credential.https://<host>.helper`). The rules of [`Self::node_env`]
+    /// hold: the core never overwrites one of its own
+    /// variables (`GIT_TERMINAL_PROMPT`, `GIT_ASKPASS`, `SSH_ASKPASS_REQUIRE`,
+    /// `GIT_SSH_COMMAND`, `LC_ALL`), the first extension registered wins a
+    /// name, a panic adds nothing. When the remote refuses what was given, the
+    /// operation fails naming the Actor and the [`GitEnv::label`], without
+    /// trying the daemon's credentials.
+    ///
+    /// Called on the daemon's request path (on a Trigger's fire, its tick),
+    /// once per operation: keep it quick.
+    fn git_env(&self, _operation: &GitOperation) -> GitEnv {
+        GitEnv::default()
+    }
 }
 
 #[cfg(test)]
@@ -400,6 +427,13 @@ mod tests {
             ext.trigger_suspension(&TriggerRef::new("t1", "Nightly", None)),
             None
         );
+        assert!(ext
+            .git_env(&GitOperation::new(
+                actor.clone(),
+                "https://h/a.git",
+                crate::GitOperationKind::Clone
+            ))
+            .is_empty());
         assert_eq!(ext.manifest().id, "bare");
     }
 

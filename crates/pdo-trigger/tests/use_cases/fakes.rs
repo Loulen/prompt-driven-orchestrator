@@ -326,6 +326,8 @@ impl TriggerPipelines for Pipelines {
 #[derive(Default)]
 pub struct Repos {
     pub fetched: Mutex<Vec<Vec<String>>>,
+    /// For whom each fetch ran, and in which Projet.
+    pub fetched_for: Mutex<Vec<(Actor, Option<String>)>>,
     pub fetch_error: Mutex<Option<FetchError>>,
 }
 
@@ -340,8 +342,17 @@ impl Repositories for Repos {
         }
     }
 
-    fn refresh<'a>(&'a self, targets: &'a [String]) -> BoxFuture<'a, Option<FetchError>> {
+    fn refresh<'a>(
+        &'a self,
+        targets: &'a [String],
+        editor: &'a Actor,
+        project: Option<&'a str>,
+    ) -> BoxFuture<'a, Option<FetchError>> {
         self.fetched.lock().unwrap().push(targets.to_vec());
+        self.fetched_for
+            .lock()
+            .unwrap()
+            .push((editor.clone(), project.map(str::to_string)));
         ready(self.fetch_error.lock().unwrap().clone())
     }
 }

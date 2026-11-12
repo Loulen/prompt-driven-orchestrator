@@ -94,16 +94,17 @@ async fn running_run_in(daemon: &TestDaemon, project: &str) -> String {
     run_id
 }
 
-/// The last page-mount Operation the extension was asked about with `verb`.
+/// The last page-mount Operation the extension was asked about with `verb`,
+/// the reads included.
 fn last_asked(control: &Control, verb: Verb) -> (Actor, Operation) {
     control
-        .seen()
+        .asked()
         .into_iter()
         .rev()
         .find(|(_, operation)| {
             operation.resource == ResourceKind::PageMount && operation.verb == verb
         })
-        .unwrap_or_else(|| panic!("no page mount {verb:?} asked: {:#?}", control.seen()))
+        .unwrap_or_else(|| panic!("no page mount {verb:?} asked: {:#?}", control.asked()))
 }
 
 async fn served(daemon: &TestDaemon, name: &str) -> u16 {

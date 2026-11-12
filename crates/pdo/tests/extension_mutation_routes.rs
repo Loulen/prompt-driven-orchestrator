@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 
 use crate::common::flow::git_init;
 use crate::common::TestDaemon;
-use crate::test_extension::{Refusal, TestExtension};
+use crate::test_extension::{Refusal, TestExtension, ACTOR_HEADER};
 use tidy::routes::{context_routes, Route};
 
 const MUTATIONS: [&str; 4] = ["POST", "PUT", "PATCH", "DELETE"];
@@ -716,8 +716,11 @@ async fn seed(daemon: &TestDaemon, scratch: &Path) -> Fixtures {
     let site = scratch.join("site");
     std::fs::create_dir_all(&site).unwrap();
     std::fs::write(site.join("index.html"), "<p>hi</p>").unwrap();
+    // Mounted by another Actor: its owner unmounts it without the extension
+    // being asked, so the local operator's unmount below is judged.
     let mount = client
         .post(format!("{url}/pages"))
+        .header(ACTOR_HEADER, "olga")
         .json(&json!({ "name": "site", "directory": site }))
         .send()
         .await
@@ -855,8 +858,6 @@ async fn an_extension_refusing_everything_refuses_every_mutation_route() {
         .get_json(&format!("/projects/{}", fixtures.project))
         .await;
     assert_eq!(project["name"], "fixture");
-    let pages = daemon.get_json("/pages").await;
-    assert_eq!(pages.as_array().map(Vec::len), Some(1), "{pages}");
     let focus = daemon.get_json("/sessions/libassist/focus").await;
     assert_eq!(focus["pipeline_id"], "review", "{focus}");
     let absorptions = daemon.get_json("/stats/absorptions").await;
@@ -915,6 +916,9 @@ async fn an_extension_refusing_everything_refuses_every_mutation_route() {
         "{library}"
     );
     control.set(Refusal::Nothing);
+    // Read once nothing is refused: a refused read hides the page.
+    let pages = daemon.get_json("/pages").await;
+    assert_eq!(pages.as_array().map(Vec::len), Some(1), "{pages}");
     let unstarred = reqwest::Client::new()
         .delete(format!(
             "{}/library/{}",

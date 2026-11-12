@@ -38,15 +38,15 @@ pub enum PageAction {
         /// relative path).
         #[arg(long, value_name = "FILE")]
         guide: Option<PathBuf>,
-        /// The Projet the page goes in (its id): its Members read it. Without
-        /// it, the page is in no Projet. A node's page is always in the
-        /// Projet of its Run.
+        /// The Project the page goes in (its id): its Members read it. Without
+        /// it, the page is in no Project. A node's page is always in the
+        /// Project of its Run.
         #[arg(long, value_name = "PROJECT_ID")]
         project: Option<String>,
     },
     /// List the page mounts you may read.
     List,
-    /// Remove a page mount: yours, or one you may unmount in its Projet.
+    /// Remove a page mount: yours, or one you may unmount in its Project.
     Unmount { name: String },
 }
 

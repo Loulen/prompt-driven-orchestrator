@@ -2,25 +2,32 @@
 //! clones folder, in the background, and the Projets it was asked for receive
 //! it once it is there. A URL already cloned reuses its clone; a clone of the
 //! same folder already running is joined, never started twice.
+//!
+//! A clone for a Projet is judged in that Projet: creating a repository there
+//! and updating it. A folder of the caller's choosing reaches the disk: it
+//! asks the disk's read ([`browse_disk`]). Who asked for a clone follows it
+//! (reads and cancels it); every clone shows to who may read the disk.
+//!
+//! The clone runs with the credentials the extensions provide for the Actor
+//! who asks, captured with the request, else the daemon's. With extensions, a
+//! clone is reused only once the remote answers to those credentials: nobody
+//! adds a repository by reusing a clone they could not have made.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use pdo_kernel::authorization::authorize_read;
+use pdo_kernel::extension_host::{GitOperation, GitOperationKind};
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use serde::Serialize;
 use ts_rs::TS;
 
-use super::clone_jobs::{CloneJob, CloneJobs, CloneState};
-use crate::domain::clone::{
-    clone_failure, expand_home, is_remote_url, parse_progress, repository_name, same_remote,
-    CloneFailure,
-};
+use super::clone_jobs::{CloneJob, CloneState, Join, Tracked};
+use super::clone_run::{joined, Running};
+use crate::domain::clone::{expand_home, is_remote_url, repository_name, same_remote};
 use crate::domain::remote::shown_remote;
 
 use super::error::{WorkspaceError, WorkspaceResult};
-use super::ports::{Git, ProjectEvents, ProjectRepository};
-use super::read_access::read_project;
+use super::read_access::{browse_disk, create_repository_in, read_project};
 use super::workspace::Workspace;
 
 /// Where the clone of a URL goes (`GET /repos/clone-target`).
@@ -47,9 +54,26 @@ pub struct CloneRequest {
 }
 
 impl Workspace {
-    /// Where the clone of `url` goes, and whether it is already there.
-    pub async fn clone_target(&self, actor: &Actor, url: &str) -> WorkspaceResult<CloneTarget> {
-        self.authorize(actor, Operation::new(ResourceKind::Repository, Verb::Read))?;
+    /// Where the clone of `url` goes, and whether it is already there: asked
+    /// for the Projet `project_id`, by who may create a repository there;
+    /// otherwise by who may read the disk.
+    pub async fn clone_target(
+        &self,
+        actor: &Actor,
+        url: &str,
+        project_id: Option<&str>,
+    ) -> WorkspaceResult<CloneTarget> {
+        match blank_to_none(project_id) {
+            Some(id) => {
+                if self.projects.get(id).await?.is_none() {
+                    return Err(WorkspaceError::NotFound);
+                }
+                authorize_read(self.host(), actor, &create_repository_in(id))?;
+                let update = Operation::new(ResourceKind::Project, Verb::Update).on(id);
+                authorize_read(self.host(), actor, &update.in_projects([id]))?;
+            }
+            None => authorize_read(self.host(), actor, &browse_disk())?,
+        }
         let (name, path) = self.default_destination(url).await?;
         let cloned = self.is_clone_of(&path, url);
         Ok(CloneTarget {
@@ -59,49 +83,56 @@ impl Workspace {
         })
     }
 
-    /// The clones `actor` may see, newest first: a clone for Projets shows
-    /// to who may read one of them (naming those only), as the Projets do
-    /// (CORE-5).
+    /// The clones `actor` follows, newest first: those it asked for, or every
+    /// one when it may read the disk. Each names only the Projets `actor` may
+    /// read (CORE-5).
     pub fn clone_jobs(&self, actor: &Actor) -> WorkspaceResult<Vec<CloneJob>> {
-        self.authorize(actor, Operation::new(ResourceKind::Repository, Verb::Read))?;
+        let everyone = self.authorize_browse(actor).is_ok();
         Ok(self
             .clones
             .list()
             .into_iter()
-            .filter_map(|job| self.seen_by(actor, job))
+            .filter_map(|tracked| self.seen_by(actor, everyone, tracked))
             .collect())
     }
 
+    /// One clone `actor` follows; another is not found, as an unknown one.
     pub fn clone_job(&self, actor: &Actor, id: &str) -> WorkspaceResult<CloneJob> {
-        self.authorize(actor, Operation::new(ResourceKind::Repository, Verb::Read))?;
+        let everyone = self.authorize_browse(actor).is_ok();
         self.clones
             .get(id)
-            .and_then(|job| self.seen_by(actor, job))
+            .and_then(|tracked| self.seen_by(actor, everyone, tracked))
             .ok_or(WorkspaceError::NotFound)
     }
 
-    /// `job` as `actor` sees it: without the Projets it may not read; `None`
-    /// when it was for Projets only and it may read none of them.
-    fn seen_by(&self, actor: &Actor, mut job: CloneJob) -> Option<CloneJob> {
-        if job.project_ids.is_empty() {
-            return Some(job);
+    /// `tracked` as `actor` sees it: `None` when it did not ask for it and
+    /// may not see `everyone`'s; without the Projets it may not read.
+    fn seen_by(&self, actor: &Actor, everyone: bool, tracked: Tracked) -> Option<CloneJob> {
+        if !everyone && !tracked.requested_by.contains(actor) {
+            return None;
         }
+        let mut job = tracked.job;
         job.project_ids
             .retain(|id| authorize_read(self.host(), actor, &read_project(id)).is_ok());
-        (!job.project_ids.is_empty()).then_some(job)
+        Some(job)
     }
 
-    /// Stop a running clone; what it wrote is removed. A finished one leaves
-    /// the list: its failure, once read, is dismissed.
+    /// Stop a running clone `actor` follows; what it wrote is removed. A
+    /// finished one leaves the list: its failure, once read, is dismissed.
+    /// Another's clone, seen from the disk, also asks to create a repository
+    /// in no Projet.
     pub fn cancel_clone(&self, actor: &Actor, id: &str) -> WorkspaceResult<CloneJob> {
-        self.authorize(
-            actor,
-            Operation::new(ResourceKind::Repository, Verb::Create),
-        )?;
-        self.clones
+        let asked = self
+            .clones
             .get(id)
-            .and_then(|job| self.seen_by(actor, job))
-            .ok_or(WorkspaceError::NotFound)?;
+            .is_some_and(|tracked| tracked.requested_by.contains(actor));
+        if !asked && self.authorize_browse(actor).is_ok() {
+            self.authorize(
+                actor,
+                Operation::new(ResourceKind::Repository, Verb::Create),
+            )?;
+        }
+        self.clone_job(actor, id)?;
         self.clones.cancel(id).ok_or(WorkspaceError::NotFound)
     }
 
@@ -120,24 +151,22 @@ impl Workspace {
                 "not a repository URL: {url}"
             )));
         }
-        self.authorize(
-            actor,
-            Operation::new(ResourceKind::Repository, Verb::Create),
-        )?;
-        let project_id = request
-            .project_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|id| !id.is_empty())
-            .map(str::to_string);
-        if let Some(id) = &project_id {
-            if self.projects.get(id).await?.is_none() {
-                return Err(WorkspaceError::NotFound);
+        let project_id = blank_to_none(request.project_id.as_deref()).map(str::to_string);
+        match &project_id {
+            Some(id) => {
+                if self.projects.get(id).await?.is_none() {
+                    return Err(WorkspaceError::NotFound);
+                }
+                self.authorize(actor, create_repository_in(id))?;
+                self.authorize(
+                    actor,
+                    Operation::new(ResourceKind::Project, Verb::Update).on(id),
+                )?;
             }
-            self.authorize(
+            None => self.authorize(
                 actor,
-                Operation::new(ResourceKind::Project, Verb::Update).on(id),
-            )?;
+                Operation::new(ResourceKind::Repository, Verb::Create),
+            )?,
         }
 
         let dest = match request
@@ -154,15 +183,29 @@ impl Workspace {
                             "the folder to clone into must be an absolute path: {typed}"
                         ))
                     })?;
-                normalized(&path)
+                let path = normalized(&path);
+                // A folder of the caller's choosing reaches the disk.
+                let default = self.default_destination(&url).await.ok().map(|(_, p)| p);
+                if default.as_ref() != Some(&path) {
+                    self.authorize_browse(actor)?;
+                }
+                path
             }
             None => self.default_destination(&url).await?.1,
         };
         let path = dest.to_string_lossy().into_owned();
         let project_ids: Vec<String> = project_id.iter().cloned().collect();
+        let mut operation = GitOperation::new(actor.clone(), &url, GitOperationKind::Clone);
+        if let Some(id) = &project_id {
+            operation = operation.in_project(id);
+        }
+        let credentials = self.host().git_credentials(&operation);
+        let fingerprint = credentials.fingerprint();
 
-        if let Some(job) = self.clones.join(&path, project_id.as_deref()) {
-            return Ok(job);
+        match self.clones.join(&path, actor, &project_ids, fingerprint) {
+            Join::Free => {}
+            Join::Joined(job) => return Ok(job),
+            Join::Busy(running) => return Err(busy(&running)),
         }
         let mut job = CloneJob {
             id: uuid::Uuid::new_v4().to_string(),
@@ -175,14 +218,21 @@ impl Workspace {
             error: None,
         };
 
-        if self.is_clone_of(&dest, &url) {
+        // A folder of another Projet (its clone, reused, or an empty member)
+        // joins only who may read it there.
+        if let Some(id) = &project_id {
+            self.authorize_taking(actor, &path, id).await?;
+        }
+        let reuse = self.is_clone_of(&dest, &url);
+        job.reused = reuse;
+        if reuse && self.host().allows_everything() {
+            // No extension: the daemon's one identity made the clone.
             job.state = CloneState::Done;
-            job.reused = true;
             joined(&*self.projects, &*self.events, &job.project_ids, &path).await;
-            self.clones.push(job.clone(), None);
+            self.clones.push(job.clone(), actor);
             return Ok(job);
         }
-        if dest.exists() && !is_empty_dir(&dest) {
+        if !reuse && dest.exists() && !is_empty_dir(&dest) {
             return Err(WorkspaceError::Invalid(format!(
                 "{path} already exists and is not a clone of {}",
                 job.url
@@ -190,18 +240,28 @@ impl Workspace {
         }
 
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
-        if let Some(running) = self.clones.start(job.clone(), cancel_tx) {
-            // Asked at the same moment as another clone of this folder.
-            return Ok(running);
+        // Asked at the same moment as another clone of this folder.
+        match self
+            .clones
+            .start(job.clone(), actor, fingerprint, cancel_tx)
+        {
+            Join::Free => {}
+            Join::Joined(running) => return Ok(running),
+            Join::Busy(running) => return Err(busy(&running)),
         }
         let run = Running {
             git: self.git.clone(),
             projects: self.projects.clone(),
             events: self.events.clone(),
             clones: self.clones.clone(),
+            credentials,
         };
         let id = job.id.clone();
-        tokio::spawn(async move { run.clone_into(id, url, dest, cancel_rx).await });
+        if reuse {
+            tokio::spawn(async move { run.reuse(id, url, dest, cancel_rx).await });
+        } else {
+            tokio::spawn(async move { run.clone_into(id, url, dest, cancel_rx).await });
+        }
         Ok(job)
     }
 
@@ -236,72 +296,19 @@ impl Workspace {
     }
 }
 
-/// What the background clone needs of the workspace.
-struct Running {
-    git: Arc<dyn Git>,
-    projects: Arc<dyn ProjectRepository>,
-    events: Arc<dyn ProjectEvents>,
-    clones: Arc<CloneJobs>,
+/// `id` trimmed, `None` when absent or blank.
+fn blank_to_none(id: Option<&str>) -> Option<&str> {
+    id.map(str::trim).filter(|id| !id.is_empty())
 }
 
-impl Running {
-    async fn clone_into(
-        self,
-        id: String,
-        url: String,
-        dest: PathBuf,
-        cancel: tokio::sync::oneshot::Receiver<()>,
-    ) {
-        let clones = self.clones.clone();
-        let progress_id = id.clone();
-        let on_progress = Box::new(move |line: &str| {
-            if let Some(progress) = parse_progress(line) {
-                clones.update(&progress_id, |job| job.progress = Some(progress));
-            }
-        });
-        let outcome = self
-            .git
-            .clone_repository(&url, &dest, on_progress, cancel)
-            .await;
-        let path = dest.to_string_lossy().into_owned();
-        match outcome {
-            Ok(()) => {
-                let projects = self.clones.finish(&id, CloneState::Done, None);
-                joined(&*self.projects, &*self.events, &projects, &path).await;
-            }
-            Err(CloneFailure::Cancelled) => {
-                self.clones.finish(&id, CloneState::Cancelled, None);
-            }
-            Err(CloneFailure::Failed(stderr)) => {
-                let error = clone_failure(&url, &stderr);
-                tracing::warn!("{error}");
-                self.clones.finish(&id, CloneState::Failed, Some(error));
-            }
-        }
-    }
-}
-
-/// `path` joins each of `projects` it is not yet in (the actor was asked when
-/// the clone was).
-async fn joined(
-    projects: &dyn ProjectRepository,
-    events: &dyn ProjectEvents,
-    ids: &[String],
-    path: &str,
-) {
-    for id in ids {
-        match projects.get(id).await {
-            Ok(Some(project)) if !project.has_member(path) => {
-                if let Err(e) = projects.add_member(id, path).await {
-                    tracing::warn!("the clone {path} could not join project {id}: {e}");
-                    continue;
-                }
-                events.project_changed(id).await;
-            }
-            Ok(_) => {}
-            Err(e) => tracing::warn!("project {id} cannot be read: {e}"),
-        }
-    }
+/// The refusal of a clone into a folder another one fills with other
+/// credentials: asked again once it ends, it reuses that clone if the remote
+/// answers to the asker.
+fn busy(running: &CloneJob) -> WorkspaceError {
+    WorkspaceError::Invalid(format!(
+        "{} is being cloned into {} for someone else: try again once that clone ends",
+        running.url, running.path
+    ))
 }
 
 /// `path` without `.` or `..` segments or a trailing `/`, so two spellings of
@@ -327,7 +334,9 @@ fn is_empty_dir(dir: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::testing::{denying, fixture};
+    use crate::application::testing::{
+        alice, denying, fixture, outside_of, person, refusing, ALICE_GIT_ENV,
+    };
     use crate::domain::project::Project;
 
     fn request(url: &str) -> CloneRequest {
@@ -338,8 +347,16 @@ mod tests {
     }
 
     async fn settled(f: &crate::application::testing::Fixture, id: &str) -> CloneJob {
+        settled_for(f, &Actor::LocalOperator, id).await
+    }
+
+    async fn settled_for(
+        f: &crate::application::testing::Fixture,
+        actor: &Actor,
+        id: &str,
+    ) -> CloneJob {
         for _ in 0..200 {
-            let job = f.workspace.clone_job(&Actor::LocalOperator, id).unwrap();
+            let job = f.workspace.clone_job(actor, id).unwrap();
             if job.state != CloneState::Running {
                 return job;
             }
@@ -356,6 +373,7 @@ mod tests {
             .clone_target(
                 &Actor::LocalOperator,
                 "https://github.com/acme/analytics.git",
+                None,
             )
             .await
             .unwrap();
@@ -364,7 +382,7 @@ mod tests {
         assert!(!target.cloned);
         let err = f
             .workspace
-            .clone_target(&Actor::LocalOperator, "/a/path")
+            .clone_target(&Actor::LocalOperator, "/a/path", None)
             .await
             .unwrap_err();
         assert!(matches!(err, WorkspaceError::Invalid(_)));
@@ -397,10 +415,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_url_already_cloned_is_reused_without_a_second_clone() {
+    async fn a_url_already_cloned_is_reused_once_it_answers_the_actor() {
         let f = fixture();
         f.projects.seed(Project::named("p", "Checkout"));
         // FakeGit: `/repo` is a clone of example.com/acme/repo.
+        let job = f
+            .workspace
+            .clone_repository(
+                &alice(),
+                CloneRequest {
+                    path: Some("/repo".into()),
+                    project_id: Some("p".into()),
+                    ..request("https://example.com/acme/repo")
+                },
+            )
+            .await
+            .unwrap();
+        assert!(job.reused);
+        let done = settled(&f, &job.id).await;
+        assert_eq!((done.state, done.reused), (CloneState::Done, true));
+        assert!(f.git.cloned().is_empty());
+        assert_eq!(f.git.reached(), vec!["https://example.com/acme/repo"]);
+        assert_eq!(
+            f.git.credentials()[0]
+                .env
+                .get(ALICE_GIT_ENV.0)
+                .map(String::as_str),
+            Some(ALICE_GIT_ENV.1),
+            "checked with the credentials provided for the Actor"
+        );
+        assert_eq!(f.projects.all()[0].members, vec!["/repo".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn without_extension_a_clone_is_reused_at_once() {
+        let f = crate::application::testing::without_extension();
+        f.projects.seed(Project::named("p", "Checkout"));
         let job = f
             .workspace
             .clone_repository(
@@ -414,8 +464,87 @@ mod tests {
             .await
             .unwrap();
         assert_eq!((job.state, job.reused), (CloneState::Done, true));
-        assert!(f.git.cloned().is_empty());
+        assert!(f.git.reached().is_empty() && f.git.cloned().is_empty());
         assert_eq!(f.projects.all()[0].members, vec!["/repo".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn a_clone_runs_with_the_credentials_provided_for_the_actor() {
+        let f = fixture();
+        f.projects.seed(Project::named("p", "Checkout"));
+        let job = f
+            .workspace
+            .clone_repository(
+                &alice(),
+                CloneRequest {
+                    project_id: Some("p".into()),
+                    ..request("https://git.example.com/acme/app.git")
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(settled(&f, &job.id).await.state, CloneState::Done);
+        let asked = f.host.git_asked();
+        assert_eq!(
+            (
+                &asked[0].actor,
+                asked[0].kind,
+                asked[0].project.as_deref(),
+                asked[0].url.as_str()
+            ),
+            (
+                &alice(),
+                GitOperationKind::Clone,
+                Some("p"),
+                "https://git.example.com/acme/app.git"
+            )
+        );
+        assert_eq!(
+            f.git.credentials()[0]
+                .env
+                .get(ALICE_GIT_ENV.0)
+                .map(String::as_str),
+            Some(ALICE_GIT_ENV.1)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refusal_names_whose_credentials() {
+        let f = fixture();
+        let job = f
+            .workspace
+            .clone_repository(&alice(), request("https://h/acme/denied.git"))
+            .await
+            .unwrap();
+        let failed = settled(&f, &job.id).await;
+        assert!(failed
+            .error
+            .unwrap()
+            .starts_with("The credentials provided for Alice were refused for h: "));
+
+        // A reuse the remote refuses to the Actor adds nothing.
+        let f = fixture();
+        f.projects.seed(Project::named("p", "Checkout"));
+        let job = f
+            .workspace
+            .clone_repository(
+                &Actor::LocalOperator,
+                CloneRequest {
+                    path: Some("/denied".into()),
+                    project_id: Some("p".into()),
+                    ..request("https://example.com/acme/denied")
+                },
+            )
+            .await
+            .unwrap();
+        let failed = settled(&f, &job.id).await;
+        assert_eq!(failed.state, CloneState::Failed);
+        assert!(failed
+            .error
+            .unwrap()
+            .starts_with("The daemon's git credentials were refused for example.com: "));
+        assert!(f.git.cloned().is_empty());
+        assert!(f.projects.all()[0].members.is_empty());
     }
 
     #[tokio::test]
@@ -446,6 +575,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_running_clone_is_joined_only_with_the_same_credentials() {
+        let f = fixture();
+        f.projects.seed(Project::named("p", "Checkout"));
+        f.projects.seed(Project::named("q", "Other"));
+        f.git.hold_clones();
+        let first = f
+            .workspace
+            .clone_repository(
+                &alice(),
+                CloneRequest {
+                    project_id: Some("p".into()),
+                    ..request("https://h/acme/app.git")
+                },
+            )
+            .await
+            .unwrap();
+        let err = f
+            .workspace
+            .clone_repository(
+                &Actor::LocalOperator,
+                CloneRequest {
+                    project_id: Some("q".into()),
+                    ..request("https://h/acme/app.git")
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, WorkspaceError::Invalid(m) if m.contains("for someone else")),
+            "{err:?}"
+        );
+        let job = f.workspace.clone_job(&alice(), &first.id).unwrap();
+        assert_eq!(job.project_ids, vec!["p".to_string()], "q never joined");
+        let again = f
+            .workspace
+            .clone_repository(&alice(), request("https://h/acme/app.git"))
+            .await
+            .unwrap();
+        assert_eq!(again.id, first.id, "the same credentials join");
+    }
+
+    #[tokio::test]
     async fn a_failure_is_named() {
         let f = fixture();
         let job = f
@@ -458,7 +629,7 @@ mod tests {
         assert!(failed
             .error
             .unwrap()
-            .starts_with("The daemon's git credentials were refused"),);
+            .starts_with("The daemon's git credentials were refused for h: "));
     }
 
     #[tokio::test]
@@ -506,59 +677,204 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_clone_for_projets_shows_to_who_may_read_one() {
+    async fn a_clone_names_only_the_projets_its_follower_may_read() {
         let f = crate::application::testing::denying_reads_in(&["secret"]);
         f.projects.seed(Project::named("secret", "Secret"));
         f.projects.seed(Project::named("open", "Open"));
         f.git.hold_clones();
         let actor = Actor::LocalOperator;
-        let secret = f
-            .workspace
-            .clone_repository(
-                &actor,
-                CloneRequest {
-                    project_id: Some("secret".into()),
-                    ..request("https://h/acme/hidden")
-                },
-            )
-            .await;
-        // Only the reads are refused in « secret »: the clone starts.
-        let secret = secret.unwrap();
-        let both = f
-            .workspace
-            .clone_repository(
-                &actor,
-                CloneRequest {
-                    project_id: Some("open".into()),
-                    ..request("https://h/acme/shared")
-                },
-            )
-            .await
-            .unwrap();
-        f.workspace
-            .clone_repository(
-                &actor,
-                CloneRequest {
-                    project_id: Some("secret".into()),
-                    ..request("https://h/acme/shared")
-                },
-            )
-            .await
-            .unwrap();
+        for project in ["open", "secret"] {
+            f.workspace
+                .clone_repository(
+                    &actor,
+                    CloneRequest {
+                        project_id: Some(project.into()),
+                        ..request("https://h/acme/shared")
+                    },
+                )
+                .await
+                .unwrap();
+        }
         let seen = f.workspace.clone_jobs(&actor).unwrap();
         assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].project_ids, ["open"]);
+    }
+
+    /// The persons may only write in `p` (no disk, no other Projet); the
+    /// local operator may do anything.
+    fn writer_in_p() -> crate::application::testing::Fixture {
+        let f = refusing(|actor, operation| {
+            *actor != Actor::LocalOperator && outside_of("p", operation)
+        });
+        f.projects.seed(Project::named("p", "Payments"));
+        f.projects.seed(Project::named("q", "Quotes"));
+        f
+    }
+
+    #[tokio::test]
+    async fn a_clone_for_a_projet_is_judged_in_that_projet() {
+        let f = writer_in_p();
+        let mia = person("mia");
+        let target = f
+            .workspace
+            .clone_target(&mia, "https://h/acme/app.git", Some("p"))
+            .await
+            .unwrap();
+        assert_eq!(target.path, "/clones/app");
+        let job = f
+            .workspace
+            .clone_repository(
+                &mia,
+                CloneRequest {
+                    project_id: Some("p".into()),
+                    ..request("https://h/acme/app.git")
+                },
+            )
+            .await
+            .unwrap();
+        let asked = f.host.asked();
+        assert!(asked.contains(&create_repository_in("p")), "{asked:?}");
+        assert_eq!(settled_for(&f, &mia, &job.id).await.state, CloneState::Done);
+        let p = f.projects.all().into_iter().find(|p| p.id == "p").unwrap();
+        assert_eq!(p.members, ["/clones/app"]);
+
+        // Neither in another Projet, nor in none, nor into a folder of hers.
+        for (project, path) in [
+            (Some("q"), None),
+            (None, None),
+            (Some("p"), Some("/elsewhere/app")),
+        ] {
+            let err = f
+                .workspace
+                .clone_repository(
+                    &mia,
+                    CloneRequest {
+                        project_id: project.map(str::to_string),
+                        path: path.map(str::to_string),
+                        ..request("https://h/acme/other.git")
+                    },
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, WorkspaceError::Denied(_)),
+                "{project:?} {path:?}: {err:?}"
+            );
+        }
+        // Her folder, spelled as the clones folder's own, is no folder of hers.
+        let other = f
+            .workspace
+            .clone_repository(
+                &mia,
+                CloneRequest {
+                    project_id: Some("p".into()),
+                    path: Some("/clones/./other".into()),
+                    ..request("https://h/acme/other.git")
+                },
+            )
+            .await
+            .unwrap();
+        settled_for(&f, &mia, &other.id).await;
         assert_eq!(
-            (seen[0].id.as_str(), seen[0].project_ids.as_slice()),
-            (both.id.as_str(), &["open".to_string()][..])
+            f.git.cloned(),
+            [PathBuf::from("/clones/app"), PathBuf::from("/clones/other")]
         );
+        for project in [Some("q"), None] {
+            let err = f
+                .workspace
+                .clone_target(&mia, "https://h/acme/app.git", project)
+                .await
+                .unwrap_err();
+            assert!(matches!(err, WorkspaceError::Denied(_)), "{project:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_folder_of_another_projet_is_taken_only_by_who_reads_it_there() {
+        let f = writer_in_p();
+        // FakeGit: `/clones/repo` is a clone of example.com/acme/repo; `s` holds it.
+        let mut s = Project::named("s", "Secret");
+        s.members = vec!["/clones/repo".into()];
+        f.projects.seed(s);
+        let mia = person("mia");
+        let err = f
+            .workspace
+            .clone_repository(
+                &mia,
+                CloneRequest {
+                    project_id: Some("p".into()),
+                    ..request("https://example.com/acme/repo")
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, WorkspaceError::Denied(_)), "{err:?}");
+        let operator = Actor::LocalOperator;
+        let reused = f
+            .workspace
+            .clone_repository(
+                &operator,
+                CloneRequest {
+                    project_id: Some("p".into()),
+                    ..request("https://example.com/acme/repo")
+                },
+            )
+            .await
+            .unwrap();
+        assert!(reused.reused);
+        let asked = f.host.asked();
+        let read_in_s = crate::application::read_access::read_repository_in("/clones/repo", "s");
+        assert!(asked.contains(&read_in_s), "{asked:?}");
+    }
+
+    #[tokio::test]
+    async fn a_clone_is_followed_by_who_asked_for_it_and_by_who_reads_the_disk() {
+        // Mia and Ivan may only write in `p`; the operator reads the disk.
+        let f = writer_in_p();
+        f.git.hold_clones();
+        let (mia, ivan) = (person("mia"), person("ivan"));
+        let in_p = |url: &str| CloneRequest {
+            project_id: Some("p".into()),
+            ..request(url)
+        };
+        let hers = f
+            .workspace
+            .clone_repository(&mia, in_p("https://h/acme/app.git"))
+            .await
+            .unwrap();
+        assert_eq!(f.workspace.clone_job(&mia, &hers.id).unwrap().id, hers.id);
+        assert_eq!(f.workspace.clone_jobs(&mia).unwrap().len(), 1);
+
+        // Another person: as an unknown clone.
         assert_eq!(
-            f.workspace.clone_job(&actor, &secret.id).unwrap_err(),
+            f.workspace.clone_job(&ivan, &hers.id).unwrap_err(),
             WorkspaceError::NotFound
         );
         assert_eq!(
-            f.workspace.cancel_clone(&actor, &secret.id).unwrap_err(),
+            f.workspace.cancel_clone(&ivan, &hers.id).unwrap_err(),
             WorkspaceError::NotFound
         );
+        assert!(f.workspace.clone_jobs(&ivan).unwrap().is_empty());
+
+        // Who joins a running clone follows it too.
+        let joined = f
+            .workspace
+            .clone_repository(&ivan, in_p("https://h/acme/app"))
+            .await
+            .unwrap();
+        assert_eq!(joined.id, hers.id);
+        assert_eq!(f.workspace.clone_jobs(&ivan).unwrap().len(), 1);
+
+        let operator = Actor::LocalOperator;
+        f.workspace
+            .clone_repository(&operator, request("https://h/acme/tool.git"))
+            .await
+            .unwrap();
+        assert_eq!(f.workspace.clone_jobs(&operator).unwrap().len(), 2);
+        assert_eq!(f.workspace.clone_jobs(&mia).unwrap().len(), 1);
+
+        let cancelled = f.workspace.cancel_clone(&mia, &hers.id).unwrap();
+        assert_eq!(cancelled.id, hers.id);
     }
 
     #[test]

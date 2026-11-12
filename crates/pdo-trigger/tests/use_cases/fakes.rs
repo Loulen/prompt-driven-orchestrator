@@ -1,13 +1,16 @@
 //! In-memory adapters of every port of the trigger context, and the context
 //! assembled over them.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pdo_extension_api::{Authorization, RequestParts, TriggerRef};
 use pdo_kernel::event_bus::{BroadcastEventBus, EventBus};
-use pdo_kernel::extension_host::{ExtensionHost, TriggerSuspension};
+use pdo_kernel::extension_host::{
+    ExtensionHost, GitCredentials, GitOperation, GitOperationKind, GuardEnd, TriggerSuspension,
+};
 use pdo_kernel::{Actor, Operation};
 use pdo_platform::domain::audit::{ActorHint, NewAuditEntry};
 use pdo_skill::domain::selection::SkillRef;
@@ -228,6 +231,10 @@ impl TriggerRepository for InMemoryTriggers {
 pub struct ScriptedGuard {
     pub answer: Mutex<GuardResult>,
     pub ran: Mutex<Vec<(String, PathBuf, Duration)>>,
+    /// The environment each run was given, in order.
+    pub envs: Mutex<Vec<BTreeMap<String, String>>>,
+    /// Never answers, as a guard still running when its request is dropped.
+    pub hangs: Mutex<bool>,
 }
 
 impl Default for ScriptedGuard {
@@ -238,6 +245,8 @@ impl Default for ScriptedGuard {
                 stderr: String::new(),
             }),
             ran: Mutex::new(Vec::new()),
+            envs: Mutex::new(Vec::new()),
+            hangs: Mutex::new(false),
         }
     }
 }
@@ -247,12 +256,17 @@ impl GuardRunner for ScriptedGuard {
         &'a self,
         command: &'a str,
         cwd: &'a Path,
+        env: &'a BTreeMap<String, String>,
         timeout: Duration,
     ) -> BoxFuture<'a, GuardResult> {
+        self.envs.lock().unwrap().push(env.clone());
         self.ran
             .lock()
             .unwrap()
             .push((command.to_string(), cwd.to_path_buf(), timeout));
+        if *self.hangs.lock().unwrap() {
+            return Box::pin(std::future::pending());
+        }
         ready(self.answer.lock().unwrap().clone())
     }
 }
@@ -326,6 +340,8 @@ impl TriggerPipelines for Pipelines {
 #[derive(Default)]
 pub struct Repos {
     pub fetched: Mutex<Vec<Vec<String>>>,
+    /// For whom each fetch ran, and in which Projet.
+    pub fetched_for: Mutex<Vec<(Actor, Option<String>)>>,
     pub fetch_error: Mutex<Option<FetchError>>,
 }
 
@@ -340,8 +356,17 @@ impl Repositories for Repos {
         }
     }
 
-    fn refresh<'a>(&'a self, targets: &'a [String]) -> BoxFuture<'a, Option<FetchError>> {
+    fn refresh<'a>(
+        &'a self,
+        targets: &'a [String],
+        editor: &'a Actor,
+        project: Option<&'a str>,
+    ) -> BoxFuture<'a, Option<FetchError>> {
         self.fetched.lock().unwrap().push(targets.to_vec());
+        self.fetched_for
+            .lock()
+            .unwrap()
+            .push((editor.clone(), project.map(str::to_string)));
         ready(self.fetch_error.lock().unwrap().clone())
     }
 }
@@ -455,9 +480,30 @@ pub struct Host {
     pub asked: Mutex<Vec<(Actor, Operation)>>,
     pub suspended: Mutex<std::collections::BTreeMap<String, String>>,
     pub suspension_asks: Mutex<Vec<TriggerRef>>,
+    /// The variables it gives the guards of `alice` (the `X_TEST_TOKEN` of an
+    /// extension that hands a guard a token).
+    pub guard_env: Mutex<BTreeMap<String, String>>,
+    /// Every git operation it was asked the environment of, in order.
+    pub git_asks: Mutex<Vec<GitOperation>>,
+    /// Every guard end it was told, in order.
+    pub guard_ends: Mutex<Vec<GuardEnd>>,
 }
 
 impl ExtensionHost for Host {
+    fn git_credentials(&self, operation: &GitOperation) -> GitCredentials {
+        self.git_asks.lock().unwrap().push(operation.clone());
+        let env = self.guard_env.lock().unwrap().clone();
+        let alice = matches!(&operation.actor, Actor::Identified { id, .. } if id == "alice");
+        if operation.kind != GitOperationKind::Guard || !alice || env.is_empty() {
+            return GitCredentials::daemon();
+        }
+        GitCredentials::provided(env, "alice", None)
+    }
+
+    fn guard_ended(&self, end: &GuardEnd) {
+        self.guard_ends.lock().unwrap().push(end.clone());
+    }
+
     fn identify(&self, _request: &RequestParts) -> Actor {
         Actor::LocalOperator
     }

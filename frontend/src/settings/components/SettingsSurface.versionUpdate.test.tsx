@@ -557,11 +557,20 @@ describe("Settings › General › Version & update (#697)", () => {
     fetchSettingsMock.mockReset().mockRejectedValue(new Error("boom"));
     const scrolled = vi.fn();
     Element.prototype.scrollIntoView = scrolled;
+    // The pulse lasts 2.2 s and the failed read lands at once: record it from before the render.
+    const landed: Element[] = [];
+    const observer = new MutationObserver((mutations) =>
+      mutations.forEach(({ target }) => {
+        if (target instanceof Element && target.getAttribute("data-landed") === "true") landed.push(target);
+      }),
+    );
+    observer.observe(document.body, { attributes: true, subtree: true, attributeFilter: ["data-landed"] });
 
     renderVersionSection();
     const body = await screen.findByTestId("settings-section-body-version-update");
     await waitFor(() => expect(scrolled).toHaveBeenCalled());
     expect(scrolled.mock.instances[0]).toBe(body);
-    expect(body).toHaveAttribute("data-landed", "true");
+    await waitFor(() => expect(landed).toContain(body));
+    observer.disconnect();
   });
 });

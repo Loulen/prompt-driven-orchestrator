@@ -3,6 +3,8 @@
 //!
 //! Upgrade: `WS /sessions/{id}/pty?poste=<id>`. The optional `poste` names the
 //! browser (#867, ADR-0075); a socket without one counts as a poste of its own.
+//! An Actor with `session` × `read` but not `session` × `attach` connects
+//! read-only: it watches, never drives, and its frames say why.
 //!
 //! Protocol (WS → daemon):
 //! - Binary frames → stdin of the PTY (user keystrokes), dropped while the
@@ -38,6 +40,7 @@ use tracing::{error, warn};
 
 use crate::adapters::http::ws_log::{self, Closing, NO_STATUS};
 
+use crate::application::terminal::Admission;
 use crate::domain::pty_protocol::{decode_resize, is_take_control, HEARTBEAT_FRAME};
 use crate::domain::shared_terminal::{TermSize, INITIAL_SIZE};
 use crate::Session;
@@ -54,20 +57,26 @@ fn write_input(
         .write_all(data)
 }
 
-/// Bridge an upgraded socket to `session_id` until either side closes, with
+/// Who connects to which terminal, and how they were let in.
+pub(crate) struct Connecting {
+    pub session_id: String,
+    pub poste: Option<String>,
+    pub actor: Actor,
+    pub admission: Admission,
+}
+
+/// Bridge an upgraded socket to its session until either side closes, with
 /// its lines in the journal; `to_upgrade` is the time the upgrade took.
 pub(crate) async fn handle_pty_ws(
     socket: WebSocket,
-    session_id: String,
-    poste: Option<String>,
-    actor: Actor,
+    connecting: Connecting,
     session: Arc<Session>,
     to_upgrade: Duration,
 ) {
-    let path = format!("/sessions/{session_id}/pty");
+    let path = format!("/sessions/{}/pty", connecting.session_id);
     ws_log::opened(&path, to_upgrade);
     let opened = Instant::now();
-    let closing = bridge(socket, session_id, poste, actor, session).await;
+    let closing = bridge(socket, connecting, session).await;
     ws_log::closed(&path, closing, opened.elapsed());
 }
 
@@ -78,13 +87,13 @@ async fn give_up(mut socket: WebSocket) -> Closing {
     Closing::ByDaemon
 }
 
-async fn bridge(
-    socket: WebSocket,
-    session_id: String,
-    poste: Option<String>,
-    actor: Actor,
-    session: Arc<Session>,
-) -> Closing {
+async fn bridge(socket: WebSocket, connecting: Connecting, session: Arc<Session>) -> Closing {
+    let Connecting {
+        session_id,
+        poste,
+        actor,
+        admission,
+    } = connecting;
     let terminals = session.terminals();
 
     let pty_system = native_pty_system();
@@ -107,9 +116,17 @@ async fn bridge(
     // spectator's client is born with `ignore-size` and never weighs on the
     // window, not even for the instant before a `refresh-client` would land.
     let (role_tx, mut role_rx) = mpsc::unbounded_channel::<String>();
-    let mut membership = terminals
-        .registry()
-        .join(&session_id, poste, actor.clone(), role_tx);
+    let read_only = matches!(admission, Admission::ReadOnly(_));
+    let mut membership = match admission {
+        Admission::Drives => terminals
+            .registry()
+            .join(&session_id, poste, actor.clone(), role_tx),
+        Admission::ReadOnly(why) => {
+            terminals
+                .registry()
+                .join_read_only(&session_id, poste, actor.clone(), role_tx, why)
+        }
+    };
     let conn_id = membership.id;
     let attach_ignoring_size = *membership.ignore_size.borrow_and_update();
 
@@ -287,7 +304,11 @@ async fn bridge(
                     } else if is_take_control(&text) {
                         // #870 / ADR-0075: only a spectator's request does
                         // anything; the registry flips the roles, the `ignore-size`
-                        // of both postes' clients and the read-only filter.
+                        // of both postes' clients and the read-only filter. A
+                        // read-only connection never takes the hand: not even asked.
+                        if read_only {
+                            continue;
+                        }
                         terminals
                             .take_control(&actor, &input_session, conn_id)
                             .await;

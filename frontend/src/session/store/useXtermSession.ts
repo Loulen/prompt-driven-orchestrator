@@ -9,6 +9,8 @@ import {
   isTakenOver,
   parseRoleFrame,
   SOLO,
+  isWatching,
+  readOnlyOf,
   TAKE_CONTROL_FRAME,
   TAKE_CONTROL_REQUESTED,
   TAKEN_OVER_NOTICE_MS,
@@ -123,9 +125,10 @@ export function useXtermSession(
     window.setTimeout(() => setCopyFeedback(null), 1500);
   }, []);
 
-  // #870: a spectator takes control. No confirmation, and no optimistic change:
-  // the daemon answers with the new role, which is what flips the toolbar.
+  // #870: a spectator takes control, with no confirmation nor optimistic change (the daemon's
+  // new role flips the toolbar). A read-only connection never asks: it would not get the hand.
   const takeControl = useCallback(() => {
+    if (readOnlyOf(roleRef.current) !== undefined) return;
     wsRef.current?.send(TAKE_CONTROL_FRAME);
   }, []);
 
@@ -335,9 +338,9 @@ export function useXtermSession(
     if (!isFrozen) attach();
     reattachRef.current = isFrozen ? null : attach;
 
-    // ADR-0075 §3: a spectator is read-only. The daemon drops its input anyway;
-    // not sending it keeps the pane's own echo from lying about what happened.
-    const canType = () => roleRef.current.role !== "spectator";
+    // ADR-0075 §3: a spectator, or a connection that may only read the session, is read-only.
+    // The daemon drops its input anyway; not sending it keeps the pane's echo honest.
+    const canType = () => !isWatching(roleRef.current);
 
     const inputDisposable = term.onData((data) => {
       if (ws && ws.state === "ouvert" && canType()) {

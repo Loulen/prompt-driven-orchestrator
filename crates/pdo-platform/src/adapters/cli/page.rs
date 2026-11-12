@@ -1,48 +1,21 @@
-//! `pdo page` — mount, list and unmount pages through the running daemon.
+//! `pdo page` — mount, list and unmount pages through the running daemon. A
+//! refusal prints the daemon's sentence, as every command does.
 
 use anyhow::{Context, Result};
-use pdo_kernel::actor::{SESSION_NODE_HEADER, SESSION_RUN_HEADER};
 use pdo_kernel::public_url::{guided_page_url, page_url};
 
+use super::daemon::{segment, Daemon};
 use super::PageAction;
 use crate::domain::page_mount::PageMount;
-use crate::domain::service_unit::DEFAULT_DAEMON_URL;
-
-/// The node session this CLI runs in, when it does: both `PDO_RUN_ID` and
-/// `PDO_NODE_ID`, non-blank.
-fn session_env_claim() -> Option<(String, String)> {
-    let clean = |v: Result<String, std::env::VarError>| {
-        v.ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-    };
-    let run_id = clean(std::env::var("PDO_RUN_ID"))?;
-    let node_id = clean(std::env::var("PDO_NODE_ID"))?;
-    Some((run_id, node_id))
-}
 
 pub fn run_page(action: PageAction) -> Result<()> {
-    let url = std::env::var("PDO_DAEMON_URL").unwrap_or_else(|_| DEFAULT_DAEMON_URL.to_string());
-    let client = reqwest::blocking::Client::builder()
-        .default_headers(pdo_kernel::env::cli_headers())
-        .build()
-        .unwrap_or_default();
-    let session = session_env_claim();
-    let with_identity = |request: reqwest::blocking::RequestBuilder| {
-        let mut request = request.header("X-PDO-Actor", "cli");
-        if let Some((run_id, node_id)) = &session {
-            request = request
-                .header(SESSION_RUN_HEADER, run_id)
-                .header(SESSION_NODE_HEADER, node_id);
-        }
-        request
-    };
-
+    let daemon = Daemon::from_env();
     match action {
         PageAction::Mount {
             name,
             directory,
             guide,
+            project,
         } => {
             let directory = directory
                 .canonicalize()
@@ -53,35 +26,53 @@ pub fn run_page(action: PageAction) -> Result<()> {
                         .with_context(|| format!("cannot read the guide {}", path.display()))
                 })
                 .transpose()?;
-            let response = with_identity(client.post(format!("{url}/pages")))
-                .json(&serde_json::json!({ "name": name, "directory": directory, "guide": guide }))
-                .send()
-                .context("failed to reach daemon")?;
-            let mounted: MountedPage = daemon_response(response, "mount page")?;
-            print!("{}", mounted_text(&mounted, &url));
+            let body = serde_json::json!({
+                "name": name,
+                "directory": directory,
+                "guide": guide,
+                "project_id": project,
+            });
+            let answer = daemon.post("/pages", Some(&body))?.ok()?;
+            let mounted: MountedPage =
+                serde_json::from_slice(&answer.bytes).with_context(|| {
+                    format!("unreadable success body from daemon: {}", answer.text())
+                })?;
+            print!("{}", mounted_text(&mounted, daemon.url()));
         }
         PageAction::List => {
-            let response = with_identity(client.get(format!("{url}/pages")))
-                .send()
-                .context("failed to reach daemon")?;
-            let mounts: Vec<PageMount> = daemon_response(response, "list pages")?;
-            for mount in mounts {
-                let run = mount.run_id.as_deref().unwrap_or("-");
-                println!(
-                    "{}\t{}\t{}\t{}",
-                    mount.name, mount.directory, run, mount.created_at
-                );
-            }
+            let answer = daemon.get("/pages")?.ok()?;
+            let mounts: Vec<PageMount> =
+                serde_json::from_slice(&answer.bytes).with_context(|| {
+                    format!("unreadable success body from daemon: {}", answer.text())
+                })?;
+            print!("{}", list_text(&mounts));
         }
         PageAction::Unmount { name } => {
-            let response = with_identity(client.delete(format!("{url}/pages/{name}")))
-                .send()
-                .context("failed to reach daemon")?;
-            let _: PageMount = daemon_response(response, "unmount page")?;
+            daemon
+                .delete(&format!("/pages/{}", segment(&name)), None)?
+                .ok()?;
             println!("Unmounted {name}.");
         }
     }
     Ok(())
+}
+
+/// The lines `pdo page list` prints: name, directory, Run, creation, Projet
+/// (`-` for none), tab-separated.
+fn list_text(mounts: &[PageMount]) -> String {
+    mounts
+        .iter()
+        .map(|mount| {
+            format!(
+                "{}\t{}\t{}\t{}\t{}\n",
+                mount.name,
+                mount.directory,
+                mount.run_id.as_deref().unwrap_or("-"),
+                mount.created_at,
+                mount.project_id.as_deref().unwrap_or("-"),
+            )
+        })
+        .collect()
 }
 
 /// What `POST /pages` answers: the mount, and the Public URL to print its
@@ -115,26 +106,6 @@ fn mounted_text(mounted: &MountedPage, daemon_url: &str) -> String {
     }
 }
 
-/// The body of a success, or the daemon's own `error` sentence.
-fn daemon_response<T: serde::de::DeserializeOwned>(
-    response: reqwest::blocking::Response,
-    operation: &str,
-) -> Result<T> {
-    let status = response.status();
-    let raw = response.text().unwrap_or_default();
-    if !status.is_success() {
-        let parsed: serde_json::Value =
-            serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
-        let detail = parsed
-            .get("error")
-            .and_then(|value| value.as_str())
-            .unwrap_or(raw.as_str());
-        anyhow::bail!("daemon refused to {operation} ({status}): {detail}");
-    }
-    serde_json::from_str(&raw)
-        .with_context(|| format!("unreadable success body from daemon: {raw}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,6 +126,8 @@ mod tests {
                         link: "#a".into(),
                     }]
                 }),
+                owner: None,
+                project_id: None,
             },
             public_url: public_url.map(str::to_string),
         }
@@ -178,6 +151,18 @@ mod tests {
         assert_eq!(
             mounted_text(&mounted(false, None), "http://localhost:5172"),
             "Mounted demo at http://localhost:5172/pages/demo/ from /srv/demo.\n"
+        );
+    }
+
+    #[test]
+    fn the_list_names_the_projet_of_each_page() {
+        let mut in_p = mounted(false, None).mount;
+        in_p.project_id = Some("p1".into());
+        in_p.run_id = Some("r1".into());
+        let alone = mounted(false, None).mount;
+        assert_eq!(
+            list_text(&[in_p, alone]),
+            "demo\t/srv/demo\tr1\tnow\tp1\ndemo\t/srv/demo\t-\tnow\t-\n"
         );
     }
 }

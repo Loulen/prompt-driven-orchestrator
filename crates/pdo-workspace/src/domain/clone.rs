@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use ts_rs::TS;
 
-use super::remote::shown_remote;
+use pdo_kernel::extension_host::GitCredentials;
+
+use super::remote::{remote_host, shown_remote};
 
 /// The clones folder when none is stored: under the daemon's home.
 pub const DEFAULT_CLONES_FOLDER: &str = "~/pdo/repos";
@@ -166,10 +168,35 @@ pub fn parse_progress(line: &str) -> Option<CloneProgress> {
     })
 }
 
+/// Whether git's `stderr` says the remote refused the credentials it was
+/// given (or that it had none to give: nothing prompts).
+pub fn is_credential_refusal(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    [
+        "authentication failed",
+        "could not read username",
+        "could not read password",
+        "permission denied",
+        "terminal prompts disabled",
+        "invalid username or password",
+        "access denied",
+        "host key verification failed",
+        "publickey",
+    ]
+    .iter()
+    .any(|m| lower.contains(m))
+}
+
+/// The sentence naming whose credentials `url`'s host refused, when git's
+/// `stderr` says it refused them; `None` for any other failure.
+pub fn credential_refusal(url: &str, stderr: &str, credentials: &GitCredentials) -> Option<String> {
+    is_credential_refusal(stderr).then(|| credentials.refused_by(&remote_host(url)))
+}
+
 /// Why a clone failed, as a sentence a user can act on: the refused
-/// credentials and the URL that leads nowhere are named, git's own words
-/// follow.
-pub fn clone_failure(url: &str, stderr: &str) -> String {
+/// credentials (the ones provided for an Actor, or the daemon's) and the URL
+/// that leads nowhere are named, git's own words follow.
+pub fn clone_failure(url: &str, stderr: &str, credentials: &GitCredentials) -> String {
     let shown = shown_remote(url);
     let detail = stderr
         .lines()
@@ -180,19 +207,8 @@ pub fn clone_failure(url: &str, stderr: &str) -> String {
         // git may quote the URL it was given, credentials included.
         .replace(url.trim(), &shown);
     let lower = detail.to_ascii_lowercase();
-    let reason = if [
-        "authentication failed",
-        "could not read username",
-        "could not read password",
-        "permission denied",
-        "terminal prompts disabled",
-        "invalid username or password",
-        "host key verification failed",
-    ]
-    .iter()
-    .any(|m| lower.contains(m))
-    {
-        format!("The daemon's git credentials were refused for {shown}")
+    let reason = if let Some(refused) = credential_refusal(url, &detail, credentials) {
+        refused
     } else if [
         "not found",
         "does not appear to be a git repository",
@@ -355,33 +371,63 @@ mod tests {
 
     #[test]
     fn a_failure_names_the_credentials_or_the_url() {
+        let daemon = GitCredentials::daemon();
         let auth = clone_failure(
             "https://me:tok@host/acme/app.git",
             "Cloning into 'app'...\nfatal: Authentication failed for 'https://host/acme/app.git/'",
+            &daemon,
         );
         assert!(
-            auth.starts_with(
-                "The daemon's git credentials were refused for https://host/acme/app.git"
-            ),
+            auth.starts_with("The daemon's git credentials were refused for host: fatal"),
             "{auth}"
+        );
+        let provided = GitCredentials::provided(Default::default(), "Alice", None);
+        let refused = clone_failure(
+            "https://host/acme/app.git",
+            "fatal: Authentication failed for 'https://host/acme/app.git/'",
+            &provided,
+        );
+        assert!(
+            refused.starts_with("The credentials provided for Alice were refused for host: "),
+            "{refused}"
         );
         assert!(!auth.contains("tok"), "{auth}");
         let quoted = clone_failure(
             "https://me:tok@host/acme/app.git",
             "fatal: unable to access 'https://me:tok@host/acme/app.git/': Could not resolve host",
+            &daemon,
         );
         assert!(!quoted.contains("tok"), "{quoted}");
         let missing = clone_failure(
             "file:///nowhere",
             "fatal: '/nowhere' does not appear to be a git repository",
+            &daemon,
         );
         assert!(
             missing.starts_with("No repository answers at file:///nowhere"),
             "{missing}"
         );
         assert_eq!(
-            clone_failure("https://h/a", ""),
+            clone_failure("https://h/a", "", &daemon),
             "The clone of https://h/a failed."
+        );
+    }
+
+    #[test]
+    fn a_refusal_is_told_from_another_failure() {
+        let daemon = GitCredentials::daemon();
+        assert_eq!(
+            credential_refusal(
+                "git@github.com:acme/app.git",
+                "git@github.com: Permission denied (publickey).",
+                &daemon
+            )
+            .as_deref(),
+            Some("The daemon's git credentials were refused for github.com")
+        );
+        assert_eq!(
+            credential_refusal("https://h/a", "fatal: repository not found", &daemon),
+            None
         );
     }
 }

@@ -7,7 +7,9 @@
 //!   /ext/test/launch {"preamble": "Ligne de fixture"}`);
 //! - **`trigger_suspension`**: the reason [`Launch::suspend`] gave for a
 //!   Trigger (`PUT /ext/test/suspensions {"trigger_id", "reason"}`, `DELETE
-//!   /ext/test/suspensions/<id>` lifts it).
+//!   /ext/test/suspensions/<id>` lifts it). Every Trigger it is asked about
+//!   is recorded with its Projet (0.26, [`Launch::trigger_asks`], `GET
+//!   /ext/test/trigger-asks`).
 //!
 //! - **`session_env`** / **`session_preamble`** (API 0.13), for a session
 //!   that is no Node (the Pipeline Manager, the library assistant): the same
@@ -16,13 +18,27 @@
 //!   Session hébergée also gets the `PDO_TOKEN` of who started it
 //!   (`sessions.rs`).
 //!
+//! - **`git_env`**: for a network git operation of the daemon, the variables
+//!   and label [`Launch::set_git_env`] gave its Actor (`PUT
+//!   /ext/test/git-env {"actor": "alice", "env": {…}, "label": …}`, the id
+//!   of an identified Actor, else its kind: `local_operator`, `trigger`; an
+//!   empty `env` removes them). Every operation asked about is recorded (`GET
+//!   /ext/test/git-env`, with the names of each Actor's variables, never
+//!   their values). A Trigger's guard is one of them (its kind `guard`): it
+//!   reads the same variables, `X_TEST_TOKEN` for instance.
+//! - **`guard_ended`**: every guard end it is told is recorded
+//!   ([`Launch::guard_ends`], `"guard_ends"` in `GET /ext/test/git-env`).
+//!
 //! Every launch it is asked about is recorded ([`Launch::launches`], `GET
 //! /ext/test/launch`), with whether it asked for the preamble.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use pdo::extension_api::{Actor, NodeEnv, NodeLaunch, SessionKind, SessionLaunch, TriggerRef};
+use pdo::extension_api::{
+    Actor, GitEnv, GitOperation, GuardEnd, NodeEnv, NodeLaunch, SessionKind, SessionLaunch,
+    TriggerRef,
+};
 use serde_json::{json, Value};
 
 /// The launch side of the test extension's control.
@@ -33,6 +49,18 @@ pub struct Launch {
     suspensions: Arc<Mutex<BTreeMap<String, String>>>,
     launches: Arc<Mutex<Vec<Value>>>,
     trigger_asks: Arc<Mutex<Vec<TriggerRef>>>,
+    git_envs: Arc<Mutex<BTreeMap<String, GitEnv>>>,
+    git_asks: Arc<Mutex<Vec<GitOperation>>>,
+    guard_ends: Arc<Mutex<Vec<GuardEnd>>>,
+}
+
+/// How the test extension keys an Actor's git credentials: the id of an
+/// identified Actor, else its kind.
+fn actor_key(actor: &Actor) -> String {
+    match actor {
+        Actor::Identified { id, .. } => id.clone(),
+        other => other.kind().to_string(),
+    }
 }
 
 impl Launch {
@@ -62,6 +90,75 @@ impl Launch {
             .unwrap()
             .remove(trigger_id)
             .is_some()
+    }
+
+    /// Give the network git operations of `actor` (an id, or a kind of
+    /// Actor) these variables, named `label` in a failure; an empty `env`
+    /// removes them.
+    pub fn set_git_env(&self, actor: &str, env: NodeEnv, label: Option<String>) {
+        let mut envs = self.git_envs.lock().unwrap();
+        if env.is_empty() {
+            envs.remove(actor);
+            return;
+        }
+        let given = GitEnv::new(env);
+        envs.insert(
+            actor.to_string(),
+            match label {
+                Some(label) => given.labelled(label),
+                None => given,
+            },
+        );
+    }
+
+    /// Every git operation `git_env` was asked about, in order.
+    pub fn git_asks(&self) -> Vec<GitOperation> {
+        self.git_asks.lock().unwrap().clone()
+    }
+
+    /// Every guard end it was told, in order.
+    pub fn guard_ends(&self) -> Vec<GuardEnd> {
+        self.guard_ends.lock().unwrap().clone()
+    }
+
+    pub(super) fn guard_ended(&self, end: &GuardEnd) {
+        self.guard_ends.lock().unwrap().push(end.clone());
+    }
+
+    pub(super) fn git_env(&self, operation: &GitOperation) -> GitEnv {
+        self.git_asks.lock().unwrap().push(operation.clone());
+        self.git_envs
+            .lock()
+            .unwrap()
+            .get(&actor_key(&operation.actor))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// `GET /ext/test/git-env`: the names of each Actor's variables, its
+    /// label, the operations asked about and the guard ends told.
+    pub(super) fn git_state(&self) -> Value {
+        let envs: BTreeMap<String, Value> = self
+            .git_envs
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(actor, given)| {
+                (
+                    actor.clone(),
+                    json!({ "names": given.env.keys().collect::<Vec<_>>(), "label": given.label }),
+                )
+            })
+            .collect();
+        json!({ "envs": envs, "operations": self.git_asks(), "guard_ends": self.guard_ends() })
+    }
+
+    /// `PUT /ext/test/git-env`: `{"actor", "env", "label"?}`.
+    pub(super) fn configure_git(&self, body: &Value) {
+        let actor = body["actor"].as_str().unwrap_or("local_operator");
+        let env: NodeEnv = serde_json::from_value(body["env"].clone()).unwrap_or_default();
+        let label = body["label"].as_str().map(str::to_string);
+        self.set_git_env(actor, env, label);
     }
 
     /// Every launch asked about, in order: `{"hook", "launch"}`.

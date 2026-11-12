@@ -41,7 +41,10 @@ pub(super) fn triggers(w: TriggerWiring<'_>) -> Arc<Triggers> {
             pipelines: Arc::new(LibraryPipelines {
                 repo_root: w.repo_root.clone(),
             }),
-            repositories: Arc::new(GitRepositories),
+            repositories: Arc::new(GitRepositories::new(
+                Arc::new(pdo_workspace::adapters::git::GitCli),
+                w.host.clone(),
+            )),
             projects: Arc::new(ProjectsOfRuns(w.run.clone())),
             sandbox_profiles: Arc::new(StagingProfiles(Arc::new(SqliteProfiles::new(w.db)))),
             skills: Arc::new(BankSkills(w.skills.clone())),

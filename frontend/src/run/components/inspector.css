@@ -225,6 +225,7 @@
   cursor: pointer;
 }
 .ri-term-bar__role-action:hover { text-decoration: underline; }
+.ri-term-bar__role-action[aria-disabled="true"] { color: var(--text-3); cursor: default; text-decoration: none; }
 .ri-term-bar__role-action:focus-visible { outline: 2px solid var(--primary-hi); outline-offset: 2px; border-radius: 2px; }
 .ri-term-bar__notice { flex: none; font-size: var(--fs-2xs); color: var(--color-st-await); white-space: nowrap; }
 .ri-term-bar__tools { display: inline-flex; align-items: center; gap: var(--g-1); flex: none; }

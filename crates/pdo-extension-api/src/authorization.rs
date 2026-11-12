@@ -14,7 +14,8 @@ pub const GENERIC_REFUSAL: &str = "You don't have the rights to do this.";
 /// On the wire (`POST /authorize`), `{"decision": "allow"}` or `{"decision":
 /// "deny", "reason", "sentence"}`: `reason` is the technical cause, for a
 /// caller that is not a person (a log, an agent's diagnosis); `sentence` is
-/// what a person reads, the extension's or [`GENERIC_REFUSAL`].
+/// what a person reads, the extension's or [`GENERIC_REFUSAL`]. A concealed
+/// refusal ([`Authorization::concealed`]) adds `"concealed": true`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
 pub enum Authorization {
@@ -24,9 +25,16 @@ pub enum Authorization {
     /// reads instead (« You can't change Runs in Project P. Ask an
     /// administrator of P. »): what they cannot do and who can grant it, never a Role's or
     /// a Right's name. Without it, a person reads [`GENERIC_REFUSAL`].
+    ///
+    /// `concealed`: the refusal must not reveal that the entity exists. On a
+    /// read of one entity (a Run and its nodes, a Trigger, a session…), the
+    /// core then answers exactly as for an id it does not know, the same
+    /// status and the same body. Elsewhere (a list, a mutation, a read of the
+    /// shared configuration), it is an ordinary refusal.
     Deny {
         reason: String,
         sentence: Option<String>,
+        concealed: bool,
     },
 }
 
@@ -36,6 +44,7 @@ impl Authorization {
         Authorization::Deny {
             reason: reason.into(),
             sentence: None,
+            concealed: false,
         }
     }
 
@@ -44,9 +53,28 @@ impl Authorization {
     pub fn saying(self, sentence: impl Into<String>) -> Self {
         match self {
             Authorization::Allow => Authorization::Allow,
-            Authorization::Deny { reason, .. } => Authorization::Deny {
+            Authorization::Deny {
+                reason, concealed, ..
+            } => Authorization::Deny {
                 reason,
                 sentence: Some(sentence.into()),
+                concealed,
+            },
+        }
+    }
+
+    /// This refusal, concealed: on a read of one entity, the core answers as
+    /// for an entity it does not know ([`Authorization::Deny`]). An allowance
+    /// stays one.
+    pub fn concealed(self) -> Self {
+        match self {
+            Authorization::Allow => Authorization::Allow,
+            Authorization::Deny {
+                reason, sentence, ..
+            } => Authorization::Deny {
+                reason,
+                sentence,
+                concealed: true,
             },
         }
     }
@@ -60,7 +88,15 @@ impl Authorization {
     pub fn into_result(self) -> Result<(), Denied> {
         match self {
             Authorization::Allow => Ok(()),
-            Authorization::Deny { reason, sentence } => Err(Denied { reason, sentence }),
+            Authorization::Deny {
+                reason,
+                sentence,
+                concealed,
+            } => Err(Denied {
+                reason,
+                sentence,
+                concealed,
+            }),
         }
     }
 }
@@ -70,6 +106,7 @@ impl From<Denied> for Authorization {
         Authorization::Deny {
             reason: denied.reason,
             sentence: denied.sentence,
+            concealed: denied.concealed,
         }
     }
 }
@@ -82,11 +119,18 @@ impl Serialize for Authorization {
                 map.serialize_entry("decision", "allow")?;
                 map.end()
             }
-            Authorization::Deny { reason, sentence } => {
-                let mut map = serializer.serialize_map(Some(3))?;
+            Authorization::Deny {
+                reason,
+                sentence,
+                concealed,
+            } => {
+                let mut map = serializer.serialize_map(Some(3 + usize::from(*concealed)))?;
                 map.serialize_entry("decision", "deny")?;
                 map.serialize_entry("reason", reason)?;
                 map.serialize_entry("sentence", sentence_or_generic(sentence.as_deref()))?;
+                if *concealed {
+                    map.serialize_entry("concealed", &true)?;
+                }
                 map.end()
             }
         }
@@ -111,11 +155,17 @@ pub const OPERATION_REFUSED: &str = "operation_refused";
 /// refused Operations with it, so a client reads them like the core's: a
 /// person reads `sentence` (the extension's, else [`GENERIC_REFUSAL`]), a
 /// program or an agent `reason`.
+///
+/// A concealed refusal ([`Denied::concealed`]) answers the same `403`: only
+/// the core, on a read of one entity, turns it into the answer of an unknown
+/// entity ([`Authorization::Deny`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Denied {
     pub reason: String,
     /// The sentence for a person, when the extension gave one.
     pub sentence: Option<String>,
+    /// Whether the refusal must not reveal that the entity exists.
+    pub concealed: bool,
 }
 
 impl fmt::Display for Denied {
@@ -132,6 +182,7 @@ impl Denied {
         Self {
             reason: reason.into(),
             sentence: None,
+            concealed: false,
         }
     }
 
@@ -139,6 +190,18 @@ impl Denied {
     pub fn saying(mut self, sentence: impl Into<String>) -> Self {
         self.sentence = Some(sentence.into());
         self
+    }
+
+    /// This refusal, concealed ([`Authorization::concealed`]).
+    pub fn concealed(mut self) -> Self {
+        self.concealed = true;
+        self
+    }
+
+    /// Whether the refusal must not reveal that the entity exists: on a read
+    /// of one entity, the core answers as for an id it does not know.
+    pub fn is_concealed(&self) -> bool {
+        self.concealed
     }
 
     /// What a person reads: the extension's sentence, else [`GENERIC_REFUSAL`].
@@ -171,6 +234,7 @@ impl Denied {
         Some(Self {
             reason: reason.to_string(),
             sentence: sentence.map(str::to_string),
+            concealed: false,
         })
     }
 
@@ -241,12 +305,47 @@ mod tests {
             Authorization::Deny {
                 reason: denied.reason.clone(),
                 sentence: denied.sentence.clone(),
+                concealed: false,
             }
         );
         assert_eq!(
             Authorization::Allow.saying("ignored"),
             Authorization::Allow,
             "an allowance has no sentence"
+        );
+    }
+
+    #[test]
+    fn a_refusal_may_be_concealed() {
+        let deny = Authorization::deny("not a member of the Run's Projects")
+            .saying("You can't see this Run.")
+            .concealed();
+        assert_eq!(
+            serde_json::to_value(&deny).unwrap(),
+            serde_json::json!({
+                "decision": "deny",
+                "reason": "not a member of the Run's Projects",
+                "sentence": "You can't see this Run.",
+                "concealed": true,
+            })
+        );
+        let denied = deny.clone().into_result().unwrap_err();
+        assert!(denied.is_concealed());
+        assert_eq!(Authorization::from(denied.clone()), deny);
+        assert_eq!(
+            Authorization::deny("x").concealed().saying("Ask Bob."),
+            Authorization::deny("x").saying("Ask Bob.").concealed(),
+            "the order of the builders does not matter"
+        );
+        assert_eq!(Authorization::Allow.concealed(), Authorization::Allow);
+        assert!(!Denied::new("x").is_concealed());
+        assert!(Denied::new("x").concealed().is_concealed());
+        assert_eq!(
+            denied.body(),
+            Denied::new("not a member of the Run's Projects")
+                .saying("You can't see this Run.")
+                .body(),
+            "as a 403, a concealed refusal reads like any other"
         );
     }
 

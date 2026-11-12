@@ -1,7 +1,7 @@
 //! What the run context needs from the outside world. The composition root
 //! plugs an adapter into each port; the use cases only ever see the traits.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
@@ -116,6 +116,17 @@ pub trait EventWindows: Send + Sync {
     /// the child Runs a tree walk reaches. A child whose parent was forgotten
     /// is not there — it went back to being a root.
     fn child_run_starts(&self) -> BoxFuture<'_, anyhow::Result<Vec<RunStart>>>;
+    /// Every Run of the whole log (archived included), each with the Projet
+    /// its `run_started` recorded (ADR-0087), oldest first: what a read
+    /// filter judges a Run by.
+    fn run_projects(&self) -> BoxFuture<'_, anyhow::Result<Vec<RunProject>>>;
+}
+
+/// A Run of the log and the Projet recorded at its launch, if any.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunProject {
+    pub run_id: String,
+    pub project_id: Option<String>,
 }
 
 /// A `[from, to)` window over the events' `ts`.
@@ -125,6 +136,9 @@ pub struct EventWindow<'a> {
     pub to: &'a str,
     /// Only the Runs that reached `RunCompleted` (#810).
     pub completed_only: bool,
+    /// Only the events of these Runs (the ones a caller may read); `None`:
+    /// every Run.
+    pub runs: Option<&'a BTreeSet<String>>,
 }
 
 /// One `run_started` of a window.
@@ -278,6 +292,10 @@ pub trait NodeSkills: Send + Sync {
 pub trait Projects: Send + Sync {
     /// The Projet `id`; `None` when there is none.
     fn project<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<Option<Project>, String>>;
+    /// The Projets holding the repository `path` (any of its spellings,
+    /// `/repo/` and `/repo/.` standing for `/repo`), in the order it joined
+    /// them; none when it is no member.
+    fn holding<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Result<Vec<Project>, String>>;
     /// The provisioning rules a Run launched in `project` freezes: the
     /// instance's, the Projet's, then `run`'s own (ADR-0063).
     fn provisioning_rules<'a>(

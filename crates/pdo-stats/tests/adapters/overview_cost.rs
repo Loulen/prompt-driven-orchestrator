@@ -648,13 +648,16 @@ use pdo_stats::domain::overview::{BucketCount, StatsOverview};
 async fn overview(h: &Harness, to: &str) -> StatsOverview {
     h.stats
         .read_overview()
-        .execute(&StatsRead {
-            from: FROM.to_string(),
-            to: to.to_string(),
-            bucket: "day".to_string(),
-            completed_only: false,
-            uncombined: false,
-        })
+        .execute(
+            &pdo_kernel::Actor::LocalOperator,
+            &StatsRead {
+                from: FROM.to_string(),
+                to: to.to_string(),
+                bucket: "day".to_string(),
+                completed_only: false,
+                uncombined: false,
+            },
+        )
         .await
         .unwrap()
 }

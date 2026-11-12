@@ -47,8 +47,9 @@ pub enum GuardResult {
         stderr: String,
         exit_code: Option<i32>,
     },
-    /// Guard could not be evaluated (spawn error or timeout).
-    Error { detail: String },
+    /// Guard could not be evaluated: a spawn or process error, or a timeout
+    /// (`timed_out`).
+    Error { detail: String, timed_out: bool },
 }
 
 /// Inputs to a firing decision — the trigger facts and the world at tick time.
@@ -136,7 +137,7 @@ pub fn decide(inputs: &FireInputs) -> FireDecision {
                 }),
             };
         }
-        Some(GuardResult::Error { detail }) => {
+        Some(GuardResult::Error { detail, .. }) => {
             return FireDecision::Skip {
                 reason: Some(SkipReason::GuardError {
                     detail: detail.clone(),
@@ -392,6 +393,7 @@ mod tests {
         let inputs = FireInputs {
             guard: Some(GuardResult::Error {
                 detail: "timeout".to_string(),
+                timed_out: true,
             }),
             ..base()
         };

@@ -11,8 +11,9 @@ use pdo_kernel::{Actor, Operation, ResourceKind};
 use super::clone_jobs::CloneJobs;
 use super::ports::{
     ClonesFolder, FileBrowser, Git, ProjectDeletions, ProjectEvents, ProjectRepository,
-    ProvisioningRulesRepository, RecentRepositories, SkillSelections, SourceTree,
+    ProvisioningRulesRepository, RecentRepositories, SkillSelections, SourceTree, StoreResult,
 };
+use crate::domain::project::Project;
 
 /// One adapter per port.
 pub struct WorkspacePorts {
@@ -86,18 +87,25 @@ impl Workspace {
     /// other spellings are tried when it is no member ([`member_spellings`]):
     /// `/repo/` and `/repo/.` are in the Projets of `/repo`.
     pub(crate) async fn projects_of_repository(&self, path: &str) -> Vec<String> {
-        for spelling in member_spellings(path) {
-            match self.projects.containing(&spelling).await {
-                Ok(projects) if !projects.is_empty() => {
-                    return projects.into_iter().map(|p| p.id).collect()
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::warn!("the Projets of {path} cannot be read: {e}");
-                    return Vec::new();
-                }
+        match self.projects_holding(path).await {
+            Ok(projects) => projects.into_iter().map(|p| p.id).collect(),
+            Err(e) => {
+                tracing::warn!("the Projets of {path} cannot be read: {e}");
+                Vec::new()
             }
         }
-        Vec::new()
+    }
+
+    /// The Projets holding the repository `path`, in the order it joined
+    /// them: those it is a member of under its first spelling that is one
+    /// ([`member_spellings`]), none when it is no member.
+    pub async fn projects_holding(&self, path: &str) -> StoreResult<Vec<Project>> {
+        for spelling in member_spellings(path) {
+            let projects = self.projects.containing(&spelling).await?;
+            if !projects.is_empty() {
+                return Ok(projects);
+            }
+        }
+        Ok(Vec::new())
     }
 }

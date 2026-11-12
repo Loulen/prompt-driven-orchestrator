@@ -30,8 +30,13 @@ pub(super) struct FastForwardBody {
 
 #[derive(Deserialize)]
 pub(super) struct CreateRepoRequest {
-    parent: String,
+    /// Required without a Projet; with one, absent → the clones folder.
+    #[serde(default)]
+    parent: Option<String>,
     name: String,
+    /// The Projet the repository is made for, and joins.
+    #[serde(default)]
+    project_id: Option<String>,
     #[serde(default)]
     files: Vec<ScaffoldFile>,
 }
@@ -39,6 +44,9 @@ pub(super) struct CreateRepoRequest {
 #[derive(Deserialize)]
 pub(super) struct CloneTargetQuery {
     url: String,
+    /// The Projet the clone is for.
+    #[serde(default)]
+    project_id: Option<String>,
 }
 
 /// Body of `POST /repos/clones`.
@@ -144,17 +152,34 @@ pub(super) async fn validate<S: ProjectSettings>(
 /// A generic verb with no tour vocabulary in it (ADR-0071 §3): the *First run*
 /// tour calls it with `/tmp` + `pdo-tutorial`, and that is the only thing tying
 /// the two together. Idempotent on an existing repository, refuses by name on an
-/// existing non-repository.
+/// existing non-repository. With a `project_id`, made for that Projet (in the
+/// clones folder unless a `parent` is named) and added to it.
 pub(super) async fn create<S: ProjectSettings>(
     State(http): State<Http<S>>,
     Extension(actor): Extension<Actor>,
     Json(req): Json<CreateRepoRequest>,
 ) -> Response {
-    match http
-        .workspace
-        .create_repository(&actor, &req.parent, &req.name, &req.files)
-        .await
-    {
+    let project_id = req
+        .project_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    let created = match (project_id, req.parent.as_deref()) {
+        (Some(id), parent) => {
+            http.workspace
+                .create_project_repository(&actor, id, parent, &req.name, &req.files)
+                .await
+        }
+        (None, Some(parent)) => {
+            http.workspace
+                .create_repository(&actor, parent, &req.name, &req.files)
+                .await
+        }
+        (None, None) => Err(WorkspaceError::Invalid(
+            "the parent folder is required without a project".into(),
+        )),
+    };
+    match created {
         Ok(outcome) => Json(serde_json::json!({
             "path": outcome.path.to_string_lossy(),
             "created": outcome.created,
@@ -164,14 +189,18 @@ pub(super) async fn create<S: ProjectSettings>(
     }
 }
 
-/// `GET /repos/clone-target?url=`: where the clone of `url` goes, and whether
-/// it is already there (CORE-97).
+/// `GET /repos/clone-target?url=[&project_id=]`: where the clone of `url`
+/// goes, and whether it is already there (CORE-97).
 pub(super) async fn clone_target<S: ProjectSettings>(
     State(http): State<Http<S>>,
     Extension(actor): Extension<Actor>,
     Query(q): Query<CloneTargetQuery>,
 ) -> Response {
-    match http.workspace.clone_target(&actor, &q.url).await {
+    match http
+        .workspace
+        .clone_target(&actor, &q.url, q.project_id.as_deref())
+        .await
+    {
         Ok(target) => Json(target).into_response(),
         Err(e) => failure(e),
     }

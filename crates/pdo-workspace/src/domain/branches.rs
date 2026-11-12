@@ -4,8 +4,11 @@
 
 use std::collections::HashSet;
 
+use pdo_kernel::extension_host::GitCredentials;
 use serde::Serialize;
 use ts_rs::TS;
+
+use super::remote::remote_host;
 
 /// A branch offered as a Run source: a local branch or a remote-tracking ref. `name`
 /// is the exact string the client posts back as `source_branch`, so a remote-tracking
@@ -92,6 +95,20 @@ pub enum FetchErrorKind {
 pub struct FetchError {
     pub kind: FetchErrorKind,
     pub message: String,
+}
+
+impl FetchError {
+    /// The same failure, its message led by whose credentials the host of
+    /// `url` refused, when it refused them (`kind` is
+    /// [`FetchErrorKind::Auth`]): the ones provided for an Actor, or the
+    /// daemon's.
+    pub fn naming_credentials(mut self, url: &str, credentials: &GitCredentials) -> Self {
+        if self.kind == FetchErrorKind::Auth {
+            let refused = credentials.refused_by(&remote_host(url));
+            self.message = format!("{refused}: {}", self.message);
+        }
+        self
+    }
 }
 
 /// Strip the `<remote>/` prefix off a remote-tracking short name, yielding the
@@ -279,6 +296,35 @@ mod tests {
         assert_eq!(parse_upstream_track("[gone]", true), (None, None));
         // No upstream at all — the empty column must NOT read as "level".
         assert_eq!(parse_upstream_track("", false), (None, None));
+    }
+
+    #[test]
+    fn a_refused_fetch_names_whose_credentials() {
+        let refused = FetchError {
+            kind: FetchErrorKind::Auth,
+            message: "fatal: Authentication failed".into(),
+        };
+        let provided =
+            GitCredentials::provided(Default::default(), "Alice", Some("a token".into()));
+        assert_eq!(
+            refused
+                .clone()
+                .naming_credentials("https://tok@git.example.com/a.git", &provided)
+                .message,
+            "The credentials provided for Alice (a token) were refused for git.example.com: fatal: Authentication failed"
+        );
+        assert!(refused
+            .naming_credentials("git@h:a.git", &GitCredentials::daemon())
+            .message
+            .starts_with("The daemon's git credentials were refused for h: "));
+        let offline = FetchError {
+            kind: FetchErrorKind::Network,
+            message: "offline".into(),
+        };
+        assert_eq!(
+            offline.clone().naming_credentials("https://h/a", &provided),
+            offline
+        );
     }
 
     #[test]

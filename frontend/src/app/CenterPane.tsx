@@ -25,6 +25,7 @@ export default function CenterPane({
   orchestratorReturn,
   onBackToOrchestrator: handleBackToOrchestrator,
   libraryEntries,
+  libraryRefused = null,
   refreshLibrary,
   infoPanelOpen,
   assistantActive,
@@ -42,6 +43,8 @@ export default function CenterPane({
   orchestratorReturn: ReturnType<typeof useRunNavigation>["orchestratorReturn"];
   onBackToOrchestrator: () => void;
   libraryEntries: LibraryEntry[];
+  /** CORE-248: why the caller may not read the library, `null` when it may. */
+  libraryRefused?: string | null;
   refreshLibrary: () => void;
   infoPanelOpen: boolean;
   assistantActive: boolean;
@@ -100,6 +103,7 @@ export default function CenterPane({
           )}
           <EditCanvas
             libraryEntries={libraryEntries}
+            libraryRefused={libraryRefused}
             onLibraryDelete={async (name) => {
               const { deleteFromLibrary: delLib } = await import("../pipeline/api/library");
               await delLib(name);

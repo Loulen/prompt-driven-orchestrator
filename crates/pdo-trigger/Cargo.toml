@@ -32,6 +32,8 @@ anyhow.workspace = true
 axum.workspace = true
 chrono.workspace = true
 clap.workspace = true
+# `killpg`: a guard's process group goes with it.
+libc = "0.2"
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true

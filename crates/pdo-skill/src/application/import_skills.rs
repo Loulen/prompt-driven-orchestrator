@@ -36,7 +36,7 @@ impl Skills {
             Operation::new(ResourceKind::Skill, Verb::Action("import".into())),
         )
         .map_err(|denied| ImportError::Skill(denied.into()))?;
-        let (root, commit) = self.resolve_scan(scan_id, &source).await?;
+        let (root, commit) = self.resolve_scan(actor, scan_id, &source).await?;
         let candidates = self.scanner.candidates(&root, &source.path);
         // Refuse before any write: every non-skip row must be resolvable.
         for item in &items {
@@ -157,18 +157,24 @@ impl Skills {
     }
 
     /// The checkout a write refers to: the kept clone, or a fresh scan of the
-    /// same source when it expired.
+    /// same source for `actor` when it expired or was cloned with other
+    /// credentials than `actor`'s.
     pub(crate) async fn resolve_scan(
         &self,
+        actor: &Actor,
         scan_id: &str,
         source: &ParsedSource,
     ) -> Result<(PathBuf, Option<String>), ImportError> {
+        let credentials = self.source_credentials(actor, source);
         if let Some(kept) = self.scanner.kept(scan_id) {
-            if kept.source.url == source.url && kept.source.git_ref == source.git_ref {
+            if kept.source.url == source.url
+                && kept.source.git_ref == source.git_ref
+                && kept.credentials == credentials.fingerprint()
+            {
                 return Ok((kept.root, kept.commit));
             }
         }
-        let outcome = self.scanner.scan(scan_id, source).await?;
+        let outcome = self.scanner.scan(scan_id, source, &credentials).await?;
         let kept = self.scanner.kept(scan_id).ok_or(ImportError::ScanExpired)?;
         Ok((kept.root, outcome.commit))
     }

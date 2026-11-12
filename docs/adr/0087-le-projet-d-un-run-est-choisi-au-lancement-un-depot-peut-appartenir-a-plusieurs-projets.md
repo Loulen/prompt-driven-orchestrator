@@ -2,6 +2,8 @@
 
 > Statut : accepted (grilling du 2026-10-18, CORE-77). Vocabulaire : CONTEXT.md § *Projet*.
 > Amende ADR-0081 (les Projets d'une Opération sur un Run).
+> Amendé par ADR-0106 : une création qui ne nomme pas de
+> Projet est lancée dans le Projet qui tient son dépôt ; hors Projet, elle lit le disque.
 
 ## Contexte
 

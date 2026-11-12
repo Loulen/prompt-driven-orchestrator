@@ -7,8 +7,9 @@
 //! launched in (ADR-0087). The tests prove:
 //!   1. the Projet a Run names resolves the node's harness (and is **frozen** on
 //!      `NodeStarted`), whatever the other Projets holding its repositories;
-//!   2. with no Projet named, resolution falls through to the `claude` floor,
-//!      even when the repository is a member of a Projet; and
+//!   2. with no Projet named, the Run follows the one Projet holding its
+//!      repository, and a repository of no Projet falls through to the
+//!      `claude` floor; and
 //!   3. a path may join a second Projet, each Run following the one it names.
 //!
 //! Nothing is seeded: every Projet here is materialised via `POST /projects`.
@@ -214,10 +215,10 @@ async fn the_projet_a_run_names_resolves_the_node_harness() {
 }
 
 #[tokio::test]
-async fn no_projet_falls_through_to_the_claude_floor() {
-    // Control: with no Projet named, an unpinned node resolves the `claude`
-    // floor — even on a repository a Projet carrying `opencode` holds
-    // (ADR-0087: the Projet is chosen at launch, never deduced).
+async fn a_run_naming_no_projet_follows_the_projet_of_its_repository() {
+    // With no Projet named, the Run is launched in the one Projet holding its
+    // repository, and its unpinned node resolves that Projet's harness; a
+    // repository of no Projet falls through to the `claude` floor.
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let product = create_project(&daemon, "Product").await;
     assert_eq!(
@@ -233,6 +234,19 @@ async fn no_projet_falls_through_to_the_claude_floor() {
             "pipeline": PIPELINE_NAME,
             "input": "go",
             "target_repo": daemon.target_repo(),
+        }),
+    )
+    .await;
+    assert_eq!(wait_for_started(&daemon, &run_id).await, "opencode");
+
+    let loose = tempfile::tempdir().unwrap();
+    make_secondary_repo(loose.path());
+    let run_id = create_run(
+        &daemon,
+        serde_json::json!({
+            "pipeline": PIPELINE_NAME,
+            "input": "go",
+            "target_repo": loose.path(),
         }),
     )
     .await;
@@ -296,7 +310,31 @@ async fn one_repository_in_two_projets_each_run_recorded_in_the_projet_it_names(
     };
     let in_p1 = create_run(&daemon, body(Some(&p1))).await;
     let in_p2 = create_run(&daemon, body(Some(&p2))).await;
-    let in_none = create_run(&daemon, body(None)).await;
+    // Naming none, a repository of two Projets is refused, naming them.
+    let ambiguous = reqwest::Client::new()
+        .post(format!("{}/runs", daemon.url()))
+        .json(&body(None))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ambiguous.status(), 400);
+    let refusal: serde_json::Value = ambiguous.json().await.unwrap();
+    assert_eq!(
+        refusal["error"], "This repository is in P1 and P2: pick its Project.",
+        "{refusal}"
+    );
+    // A repository of no Projet launches in none.
+    let loose = tempfile::tempdir().unwrap();
+    make_secondary_repo(loose.path());
+    let in_none = create_run(
+        &daemon,
+        serde_json::json!({
+            "pipeline": PIPELINE_NAME,
+            "input": "go",
+            "target_repo": loose.path(),
+        }),
+    )
+    .await;
 
     let list = runs_list(&daemon).await;
     let project_of = |run: &str| {

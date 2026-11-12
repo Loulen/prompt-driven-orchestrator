@@ -19,8 +19,8 @@ pub enum RunAction {
     /// session (the `PDO_RUN_ID` / `PDO_NODE_ID` env vars the session is
     /// wrapped with), the created Run is mechanically linked to that Run + node
     /// (`parent_run_id` / `parent_node_id`); run from a plain terminal, it is a
-    /// root Run. The child's project defaults to the parent's — `--target-repo`
-    /// overrides it explicitly. Daemon refusals (unknown pipeline, a refused
+    /// root Run. The child's repository defaults to the parent's — `--target-repo`
+    /// overrides it explicitly, within the parent's Project. Daemon refusals (unknown pipeline, a refused
     /// session claim, …) print the daemon's own `error` sentence and exit
     /// non-zero.
     Create {
@@ -64,11 +64,15 @@ pub enum RunAction {
         #[arg(long)]
         sandbox: Option<String>,
         /// Primary target repo (path or URL, like the UI's create modal).
-        /// Overrides the parent Run's project.
+        /// Overrides the parent Run's repository; from a node session it
+        /// must be one of the parent Run's Project (or of no Project when
+        /// the parent is in none).
         #[arg(long)]
         target_repo: Option<String>,
         /// The Project the Run is launched in; it must hold the
-        /// primary repo. From a node session, the Run stays in its parent's.
+        /// primary repo. Without it, the Run is launched in the Project
+        /// holding the primary repo, and refused when several do. From a
+        /// node session, the Run stays in its parent's.
         #[arg(long)]
         project: Option<String>,
         /// The Run's repositories as a JSON list of `{repo, base_branch?,

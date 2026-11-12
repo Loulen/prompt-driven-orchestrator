@@ -246,6 +246,7 @@ vi.mock("../../shared/ui/tooltip", () => ({
 }));
 
 import TmuxTerminal from "./TmuxTerminal";
+import { requestTakeControl } from "../model/terminalRole";
 import SessionTerminal from "./SessionTerminal";
 
 describe("TmuxTerminal", () => {
@@ -1472,6 +1473,72 @@ describe("TmuxTerminal", () => {
       fireEvent.click(hand);
       const frames = ws.sent.filter((s): s is string => typeof s === "string").map((s) => JSON.parse(s));
       expect(frames.at(-1)).toEqual({ type: "take_control" });
+    });
+
+    // A reader: `session` × `read` without `attach`.
+    const WHY = "You can't attach this session here. Ask an administrator of the test extension.";
+
+    it("a reader watches: Take control greyed with the sentence, no Import nor Detach, no keystroke sent", async () => {
+      render(
+        <TmuxTerminal session="pdo-run1-impl-iter-1" status="running" onImportFiles={() => {}} />,
+      );
+      await new Promise((r) => setTimeout(r, 10));
+      const ws = wsInstances[0];
+      const term = mockTerminalInstances[0];
+      expect(screen.getByTestId("term-import")).toBeInTheDocument();
+      expect(screen.getByTestId("term-detach")).toBeInTheDocument();
+
+      roleFrame(ws, { role: "spectator", pilot: { cols: 120, rows: 30 }, read_only: WHY });
+      const mode = screen.getByTestId("term-mode");
+      expect(mode).toHaveAttribute("data-role", "spectator");
+      expect(mode).toHaveTextContent("Watching");
+      expect(mode).not.toHaveTextContent(/disconnected/i);
+      expect(screen.queryByText(/You can't type in this terminal/)).toBeNull();
+      const hand = screen.getByTestId("term-take-control");
+      expect(hand).toHaveAttribute("aria-disabled", "true");
+      expect(hand).toHaveAccessibleName("Take control");
+      expect(screen.queryByTestId("term-import")).toBeNull();
+      expect(screen.queryByTestId("term-detach")).toBeNull();
+
+      const before = ws.sent.length;
+      fireEvent.click(hand);
+      requestTakeControl("pdo-run1-impl-iter-1");
+      const onData = term.onData.mock.calls[0][0] as (d: string) => void;
+      onData("x");
+      expect(ws.sent.length, "neither the hand asked nor a key sent").toBe(before);
+
+      // A press on the greyed gesture says why at once.
+      fireEvent.pointerDown(hand);
+      const tip = await screen.findByRole("tooltip");
+      expect(tip).toHaveTextContent("Take control");
+      expect(tip).toHaveTextContent(WHY);
+    });
+
+    it("a reader alone on the terminal fits its own area and still cannot type", async () => {
+      areaOf(1000, 500);
+      const { ws, term } = await mountLive();
+      roleFrame(ws, { role: "solo", read_only: WHY });
+      expect(screen.getByTestId("term-mode")).toHaveTextContent("Watching");
+      expect(screen.getByTestId("term-take-control")).toHaveAttribute("aria-disabled", "true");
+      expect(term.options.fontSize).toBe(11);
+      expect(sentResizes(ws).at(-1)).toEqual({
+        type: "resize",
+        cols: Math.floor(1000 / (11 * 0.6)),
+        rows: Math.floor(500 / (11 * 1.2)),
+      });
+      const onData = term.onData.mock.calls[0][0] as (d: string) => void;
+      const before = ws.sent.length;
+      onData("x");
+      expect(ws.sent.length).toBe(before);
+    });
+
+    it("a reader's screen says it is read-only, then why", async () => {
+      const { ws } = await mountLive();
+      roleFrame(ws, { role: "solo", read_only: WHY });
+      const container = screen.getByTestId("xterm-container");
+      expect(container.parentElement?.dataset.tooltip).toBe(
+        `Read-only — you can't type in this terminal. ${WHY}`,
+      );
     });
 
     it("the pilot and a solo terminal have no hand", async () => {

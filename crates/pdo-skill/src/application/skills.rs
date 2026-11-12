@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use pdo_kernel::authorization::{authorize, Denied};
-use pdo_kernel::extension_host::ExtensionHost;
+use pdo_kernel::extension_host::{ExtensionHost, GitCredentials, GitOperation, GitOperationKind};
 use pdo_kernel::{Actor, Operation};
 
 use crate::domain::error::SkillError;
@@ -55,6 +55,22 @@ impl Skills {
     /// The Autorisation d'opération: every mutation goes through here first.
     pub(crate) fn authorize(&self, actor: &Actor, operation: Operation) -> Result<(), Denied> {
         authorize(self.host.as_ref(), actor, &operation)
+    }
+
+    /// The credentials the clone of `source` runs with for `actor`: what the
+    /// extensions provide for it, else the daemon's. A local folder is no git
+    /// operation.
+    pub(crate) fn source_credentials(
+        &self,
+        actor: &Actor,
+        source: &crate::domain::source::ParsedSource,
+    ) -> GitCredentials {
+        match source.kind {
+            crate::domain::source::SourceKind::Git => self.host.git_credentials(
+                &GitOperation::new(actor.clone(), &source.url, GitOperationKind::Skills),
+            ),
+            crate::domain::source::SourceKind::Local => GitCredentials::daemon(),
+        }
     }
 
     /// The seed lock (#722, #33): refuse every write on a skill PDO seeds,

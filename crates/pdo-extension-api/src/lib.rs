@@ -7,7 +7,9 @@
 //! the data a creation carries for it ([`ExtensionData`]) and stamp
 //! [`Attributes`] on a new entity, observe events, contribute routes and UI, answer a command line
 //! (`pdo ext <id> <args…>`), bring skills into the Banque de skills, contribute
-//! to the launch of every agent session (environment variables, a preamble),
+//! to the launch of every agent session (environment variables, a preamble)
+//! and to the network git operations the daemon runs for an Actor ([`GitEnv`]),
+//! and to a Trigger's guard, told when it ends ([`GuardEnd`]),
 //! observe who starts a session, takes control of its terminal and when it
 //! ends ([`SessionEvent`]), suspend a Trigger, see a Run as people do: who
 //! has it open ([`Presence`]) and what it cost ([`RunCost`]), and have the core
@@ -50,6 +52,7 @@ mod display;
 mod entity;
 mod event;
 mod extension;
+mod git_operation;
 mod host;
 mod hosted;
 mod hosted_event;
@@ -72,6 +75,7 @@ pub use display::ActorDisplay;
 pub use entity::{Attributes, EntityRef};
 pub use event::{OperationApplied, OPERATION_APPLIED};
 pub use extension::{Extension, ExtensionContext, RequestParts};
+pub use git_operation::{GitEnv, GitOperation, GitOperationKind, GuardEnd, GuardOutcome, GuardRun};
 pub use host::{ExtensionEvent, Host, NeutralHost, EXTENSION_EVENT};
 pub use hosted::{
     EndReason, HostedConfig, HostedFolder, HostedGesture, HostedKind, HostedRefusal, HostedSession,

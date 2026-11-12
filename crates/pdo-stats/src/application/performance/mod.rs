@@ -151,12 +151,15 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
+use pdo_kernel::extension_host::ExtensionHost;
+use pdo_kernel::Actor;
 use pdo_run::application::ports::EventWindow;
 use pdo_run::domain::event::{Event, EventKind};
 use serde_json::Value;
 
 use super::absorptions::load_resolver;
 use super::ports::{AbsorptionStore, RunEvents, RunFiles, RunFilesRoots, SessionTranscripts};
+use super::readable::readable_runs;
 use crate::domain::performance::StatsPerformance;
 
 /// One read of the Performance section. No `bucket`: Performance has no
@@ -231,6 +234,7 @@ pub struct ReadPerformance {
     absorptions: Arc<dyn AbsorptionStore>,
     files: Arc<dyn RunFiles>,
     transcripts: Arc<dyn SessionTranscripts>,
+    extensions: Arc<dyn ExtensionHost>,
     memo: Mutex<PerformanceMemo>,
 }
 
@@ -240,28 +244,37 @@ impl ReadPerformance {
         absorptions: Arc<dyn AbsorptionStore>,
         files: Arc<dyn RunFiles>,
         transcripts: Arc<dyn SessionTranscripts>,
+        extensions: Arc<dyn ExtensionHost>,
     ) -> Self {
         Self {
             events,
             absorptions,
             files,
             transcripts,
+            extensions,
             memo: Mutex::new(PerformanceMemo::default()),
         }
     }
 
+    /// The performance of the Runs `actor` may read. The memo is keyed by
+    /// the Runs folded, so two readers of different Runs never share one.
     pub async fn execute(
         &self,
+        actor: &Actor,
         read: &PerformanceRead,
     ) -> Result<StatsPerformance, PerformanceError> {
         let db = |e: anyhow::Error| PerformanceError::Db(e.to_string());
         let resolver = load_resolver(self.absorptions.as_ref(), read.uncombined)
             .await
             .map_err(db)?;
+        let readable = readable_runs(self.extensions.as_ref(), self.events.as_ref(), actor)
+            .await
+            .map_err(db)?;
         let window = EventWindow {
             from: &read.from,
             to: &read.to,
             completed_only: false,
+            runs: readable.as_ref(),
         };
         let rows = self.events.run_starts(None, window).await.map_err(db)?;
 

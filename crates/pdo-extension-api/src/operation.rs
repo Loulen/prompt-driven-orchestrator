@@ -9,7 +9,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// Every mutation has one, and so do the guarded reads (CORE-5): listing and
 /// reading the Runs, listing and reading the Projets, browsing the disk. An Operation is never named after a need
 /// ("UpdateProfileAsAdmin"): the same fields describe every case, so the list
-/// of variants never describes the extensions the core expects.
+/// of variants never describes the extensions the core expects. The reads of
+/// the shared configuration (pipelines, library, agentic profiles, skills,
+/// instance settings, audit) are Operations too, in no Projet.
 ///
 /// It also says which Projets it is in ([`Operation::projects`]): the core
 /// fills them in its use cases, an extension for its own resources, so that no
@@ -121,6 +123,8 @@ pub enum ResourceKind {
     StatsAbsorption,
     /// The price table the costs are priced with (its sync).
     PriceTable,
+    /// The audit journal of the instance: the actions done on it.
+    Audit,
     /// A kind of entity an extension owns and mutates itself (a note of the
     /// extension `test`: `extension: "test"`, `kind: "note"`). Its Operations go
     /// through the same Autorisation d'opération as the core's, by the
@@ -155,6 +159,7 @@ impl ResourceKind {
         ResourceKind::Service,
         ResourceKind::StatsAbsorption,
         ResourceKind::PriceTable,
+        ResourceKind::Audit,
     ];
 
     /// The kind whose wire name is `name`: one of [`ResourceKind::CORE`], or
@@ -203,6 +208,7 @@ impl ResourceKind {
             ResourceKind::Service => "service",
             ResourceKind::StatsAbsorption => "stats_absorption",
             ResourceKind::PriceTable => "price_table",
+            ResourceKind::Audit => "audit",
             ResourceKind::Extension { extension, kind } => return format!("{extension}/{kind}"),
         };
         core.to_string()

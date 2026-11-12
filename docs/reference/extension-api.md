@@ -38,6 +38,8 @@ default, and with no extension the daemon behaves as if none existed.
 | `session_env(launch)` (0.13) | at every launch of a session that makes an agent act or runs a script Node: a Node (the core asks this hook, never `node_env` directly), the Pipeline Manager, the library assistant; the first registered wins a name | `node_env` for a Node, none otherwise |
 | `session_preamble(launch)` (0.13) | at every launch of an agent session; texts follow in registration order | `node_preamble` for a Node, none otherwise |
 | `trigger_suspension(trigger)` (0.8) | at every read of a Trigger and every due tick; the first `Some` wins, a panic suspends nothing | not suspended |
+| `git_env(operation)` | at every network git operation the daemon runs for an Actor: the clone of a repository added by its URL, the fetch of New Run, the clone of a Source de skills, the fetch before a Trigger fires; and before a Trigger's guard runs (its dry-run included); the first registered wins a name | none: the daemon's credentials, a guard as before |
+| `guard_ended(end)` | once a guard `git_env` was asked about has ended, whatever its end (passed, skipped, failed, timed out); in registration order, a panic is ignored | nothing |
 
 ## The Manifest
 
@@ -90,9 +92,19 @@ The core fills `projects` for its own Operations:
 | `review_comment` | the Projets of the Run in its target |
 | `project` (targeted) | that Projet |
 | `repository` (`fetch`, `fast_forward`) | every Projet the repository is a member of |
+| `repository` × `create` | a repository made for a Projet (`POST /repos/clones`, `POST /repos/create` with a `project_id`): that Projet; without one, none |
+| `repository` × `read`, targeted by the repository's path | a repository brought into a Projet (`POST /projects/{id}/members`, the members of `POST /projects`): one of the Projets it is a member of, asked in each until one allows; a path in no Projet is the disk's read (no target, in none) |
 | `trigger` (0.11) | the Projet the Trigger launches its Runs in (`project_id`); none without one. An edit moving it to another Projet is asked, and announced applied, in each |
-| `page_mount` | a mount asked from a node session: the Projet of that session's Run; an unmount (targeted by the page's name): the Projet of the Run the mount belongs to, whoever asks. A mount outside any Run, or its unmount, is in none |
+| `page_mount` | a mount asked from a node session: the Projet of that session's Run; any other mount: the Projet it names (`project_id`), else none. A read or an unmount (targeted by the page's name): the Projet the mount is in, whoever asks |
 | everything else | none |
+
+Adding a repository to a Projet is judged in that Projet, never on the disk: a clone or a new
+empty repository made for a Projet asks `repository` × `create` there and `project` × `update` on
+it. A folder of the caller's choosing (a clone's `path`, a `parent` other than the clones folder)
+asks the disk's read. A folder already a member of other Projets (a clone reused, an empty folder
+taken) is taken only by who may read it in one of them, and a repository already there that a new
+empty one would take as it is is judged as a repository brought in (above). Who asked for a clone
+follows it: reads and cancels it.
 
 A Run, its nodes, sessions and review comments are in one Projet at most: the one recorded at
 its launch, never recomputed when a Projet's members change. A repository may be a member of
@@ -118,14 +130,27 @@ The core asks `authorize` before it serves these reads (0.8, CORE-5), with the v
 | `GET /projects` | `project` × `read`, per Projet | the Projet is absent |
 | `GET /projects/{id}` | `project` × `read` | `403` |
 | `GET /fs/browse` (the loupe, the explorers) | `repository` × `read`, no target, in no Projet | `403` |
-| `GET /repos/clone-target`, `/repos/clones`, `/repos/clones/{id}` (a repository added by its URL) | `repository` × `read`, no target, in no Projet | `403` |
+| `GET /repos/clone-target` (a repository added by its URL) | with a `project_id`: `repository` × `create` in that Projet and `project` × `update` on it; without one: `repository` × `read`, no target, in no Projet | `403` |
+| `GET /repos/clones`, `/repos/clones/{id}`, `DELETE /repos/clones/{id}` | none for the clones the caller asked for (started or joined); the others: `repository` × `read`, no target, in no Projet (and, to cancel one, `repository` × `create` in no Projet) | the clone is absent, or `404` as an unknown one |
 | `GET /runs/presences` (0.12) | `run` × `read`, targeted, per Run listed | the Run is absent |
 | `/ws`, a Presence (0.12) | `run` × `read` on the Run a `presence_arrived` or `presence_left` is about, per connection (answer kept 5 s) | the message is not sent to that connection |
 | `GET /repos/recent` (the New Run prefill) | `run` × `read` on the last Run of each repository, in the repository's Projet | the repository is absent |
 | `GET /triggers` (0.11) | `trigger` × `read`, targeted, per Trigger listed, in the Projet it launches its Runs in | the Trigger is absent |
 | `GET /triggers/{id}`, `/triggers/{id}/fires` (0.11) | `trigger` × `read` on `{id}` | `403` `operation_refused` |
+| `GET /stats/overview`, `/stats/cost`, `/stats/performance` (0.26), and so `pdo stats` | `run` × `read` per Run of the log, in the Projet recorded at its launch (the filter of `GET /runs`); `trigger` × `read` per Trigger, in its Projet | the Run is not counted, nor the Projet's name it would bring; the Trigger's fires are not counted, nor the Trigger among the enabled ones |
+| `GET /pipelines`, `/pipelines/{id}…` (its YAML, versions, document, shared draft) (0.26) | `pipeline` × `read`, no target, in no Projet | `403` |
+| `GET /library` (0.26) | `library_entry` × `read`, no target, in no Projet | `403` |
+| `GET /settings/agent-profiles…` (0.26) | `agent_profile` × `read`, no target, in no Projet | `403` |
+| `GET /settings/skills…` (0.26) | `skill` × `read`, no target, in no Projet | `403` |
+| `GET /settings/skill-folders…` (0.26) | `skill_folder` × `read`, no target, in no Projet | `403` |
+| `GET /settings`, `/settings/provisioning` (0.26) | `instance_settings` × `read`, no target, in no Projet | `403` |
+| `GET /audit` (0.26) | `audit` × `read`, no target, in no Projet | `403` |
 | `/ws`, about a Trigger (0.11) | `trigger` × `read` on the Trigger a message is about (`trigger_created`, `trigger_updated`, `trigger_deleted`, `trigger_fired`, `operation_applied` on it), in its Projet, per connection (answer kept 5 s) | the message is not sent to that connection |
 | `/ws`, an extension's event guarded by a read (0.11) | the read the event carries (`ExtensionEvent::guarded_by`), per connection (answer kept 5 s) | the event is not sent to that connection |
+| `GET /pages` | `page_mount` × `read`, targeted, per page listed, in the Projet the page is in | the page is absent |
+| `GET /pages/{name}`, `/pages/{name}/…` (the page and its files) | `page_mount` × `read` on `{name}`, in its Projet | `403` `operation_refused` |
+| `/ws`, an `operation_applied` on a page mount | `page_mount` × `read` on the page (untargeted for a mount), in the Projets of its Operation, per connection (answer kept 5 s) | the message is not sent to that connection |
+| `WS /sessions/{id}/pty` (a terminal) | `session` × `attach` on `{id}`; refused, `session` × `read` on it | `attach` refused, `read` allowed: the terminal opens read-only (below); both refused: `403` |
 | `/ws`, an `operation_applied` on an extension's Ressource (0.11) | `<extension>/<kind>` × `read` on the entity it is about (its target, or the entity a creation made), in the Projets of its Operation, per connection (answer kept 5 s) | the message is not sent to that connection |
 
 A read is in the same Projets as the gestures on its entity: a Run's in the Projet of its primary
@@ -133,8 +158,57 @@ repository, a Trigger's in the Projet of its target repository, a Projet's in it
 upgrade request. A read is never announced as `operation_applied`, and a refusal is logged at
 `debug` only. Without extension nothing is asked: the lists are served as before.
 
+**A page has an owner and a Projet.** A page mounted from a node session is in the Projet of its
+Run and its owner is the Run's creator; any other is in the Projet `pdo page mount --project`
+names (none without it) and its owner is who mounted it. Its owner unmounts it without being
+asked, and `POST /authorize` answers `allow` to them; anyone else (an agent of its Run included) is asked `page_mount` × `delete` in its Projet.
+Pages mounted before take the Projet and the creator of their Run at the daemon's start, if it
+has them.
+
+**A terminal watched read-only.** An Actor allowed `session` × `read` but refused `session` ×
+`attach` connects to the terminal all the same, read-only: it receives the output, its
+keystrokes are dropped, it never drives the terminal and never takes control of it (its
+`take_control` is not even asked). Its `role` frames carry `read_only`, the refusal's
+`sentence`, which the interface shows. Its rights are read again at its next connection.
+
 **Refuse a read on its resource and verb.** An extension that refused every Operation whatever its
-verb now hides the Runs and the Projets too.
+verb now hides the Runs and the Projets too, and since 0.26 the shared configuration: the
+pipelines, the library, the agentic profiles, the skills, the instance settings and the audit
+journal.
+
+### A concealed refusal (0.26)
+
+A refused read of one entity says the entity exists: a `403` with a sentence about its Projet,
+where an id nobody knows answers `404`. A refusal marked **concealed** says nothing: on a read of
+one entity, the core answers exactly as for an id it does not know, the same status and the same
+body.
+
+```rust
+fn authorize(&self, actor: &Actor, operation: &Operation) -> Authorization {
+    Authorization::deny("not a member of the Projects of this Run")
+        .saying("You can't see this Run.")
+        .concealed()
+}
+```
+
+- It applies to the reads of one entity: a Run and everything under `GET /runs/{id}…` (its nodes,
+  their pane, its artifacts, its review comments…), `pdo run status|events`; a Trigger and its
+  fires; a Session hébergée (its detail, events, live artifacts, terminal zoom). Elsewhere (a list,
+  a mutation, a read of the shared configuration), a concealed refusal is an ordinary one: a list
+  leaves the entity out, a single read of something else answers `403` with the sentence.
+- An id the core does not know is asked in no Projet. An extension that conceals the entities of a
+  Projet from a caller should conceal its refusals in no Projet from that caller too, or the
+  difference between `403` and `404` says which ids exist.
+- Without the mark, nothing changes: the readable `403` stays. A caller who knows the Projet
+  (a Member missing one right) is better served by the sentence.
+- On the wire, a concealed decision of `POST /authorize` adds `"concealed": true`. `Denied` carries
+  `concealed` too (`Denied::concealed()`, `Denied::is_concealed()`); its `403` body is unchanged.
+- In the core, a read of one entity asks `authorize_entity_read`, which answers
+  `EntityRead::Shown` or `EntityRead::AsUnknown`.
+
+**Breaking (0.26).** `Authorization::Deny` and `Denied` gain the field `concealed: bool`: a pattern
+`Authorization::Deny { reason, sentence }` becomes `Authorization::Deny { reason, sentence, .. }`,
+a literal `Denied { reason, sentence }` becomes `Denied::new(reason).saying(sentence)`.
 
 ### The question of authorization
 
@@ -156,9 +230,10 @@ POST /authorize
 
 Whether the caller may run each Operation, in order, **without running any**: nothing changes,
 nothing is announced. An Operation that names no Projet is placed where the core places its own: a
-targeted `run` or `node` in the Projet of its Run, a targeted `project` in itself, a `page_mount`
-creation asked from a node session in the Projet of its Run and a targeted `page_mount` deletion in
-the Projet of the mount's Run. At most 500
+targeted `run` or `node` in the Projet of its Run, a targeted `project` in itself, a targeted
+`trigger` (any verb: `update`, `delete`, `fire`…) in the Projet of the Trigger (0.26), a `page_mount`
+creation asked from a node session in the Projet of its Run and a targeted `page_mount` read or
+deletion in the Projet of the mount. At most 500
 Operations per question; an unreadable one answers `400` `invalid_question`. Without extension,
 every decision is `allow`. The core's UI asks it to grey the gestures the caller may not make,
 their tooltip saying the refusal's `sentence`, and to leave out of the New Run form the Projets a
@@ -311,7 +386,7 @@ An `Actor` on the wire: `{"kind": "local_operator"}`, `{"kind": "agent", "run_id
 
 ## The catalogue of the Ressources
 
-The core's 19 Ressources, then each extension's declarations in registration order:
+The core's 20 Ressources, then each extension's declarations in registration order:
 
 ```http
 GET /resources
@@ -341,6 +416,12 @@ verbs maps this one too, or the Validate button is refused.
 
 `pipeline` × `open_assistant` (0.13) opens the caller's library assistant (`POST
 /sessions/libassist`), untargeted, in no Projet; see *The launch of every session*.
+
+Since 0.26, the shared configuration is read too: `pipeline`, `library_entry`, `agent_profile`,
+`skill`, `skill_folder` and `instance_settings` list `read`, and the Ressource `audit` (the audit
+journal of the instance) has the one verb `read`. Each read is untargeted, in no Projet (*The
+reads*). An extension of rights that maps no right to these reads refuses them, and its callers see
+empty views with the refusal's sentence.
 
 ## The launch of a Node (0.8)
 
@@ -541,7 +622,8 @@ let session = host
   and ends (`exited`) those whose process is gone. The live sessions of an extension the
   restarted daemon does not have are terminated (`terminated`), their record kept. The orphan
   sweep never kills a session recorded live, and kills any other name with its prefix. Attaching
-  its terminal is `session` × `attach` in the Projet of its record.
+  its terminal is `session` × `attach` in the Projet of its record; with `session` × `read`
+  alone, the terminal opens read-only (see *A terminal watched read-only*).
 - **Its declared wait**: `pdo wait-user [--message]` typed by its agent (it reads
   `PDO_SESSION_ID` when there is no `PDO_RUN_ID`) asks `session` × `wait_user` on it for the
   caller (the Actor its token names) and makes it `awaiting_user`, with its `wait_message`; a
@@ -724,9 +806,12 @@ Without extension every tab is the local operator's: one Presence at most per Ru
 
 ## A suspended Trigger (0.8)
 
-`trigger_suspension` receives a `TriggerRef` (`id`, `name`, `last_editor`) and answers the
-reason, or `None`. The answer is never stored: the suspension lifts as soon as the extension
-stops giving one, and the Trigger fires again at its next slot. While suspended:
+`trigger_suspension` receives a `TriggerRef` (`id`, `name`, `last_editor`, and since 0.26
+`project`, the Projet the Trigger launches its Runs in, `None` for one in no Projet) and answers
+the reason, or `None`. It is asked from the Trigger's creation on, before any fire, so an extension
+judges a Trigger in its Projet as it judges every Operation on it. The answer is never stored: the
+suspension lifts as soon as the extension stops giving one, and the Trigger fires again at its next
+slot. While suspended:
 
 - a due tick spends the slot without firing and records a fire `skipped-suspended` with the
   reason;
@@ -739,6 +824,70 @@ The suspension is asked again at each read. When its cause changes outside any m
 Trigger, call `Host::triggers_changed()` (0.11): an interface open on the Triggers then shows the
 pill appear or go without reloading.
 
+## The credentials of a git operation of the daemon
+
+The daemon reaches a remote itself for four gestures, each for an Actor. `git_env` receives a
+`GitOperation` and answers a `GitEnv`, the variables added to git's environment for that
+operation and a short `label` naming what they provide:
+
+| `kind` | The operation | Its Actor |
+| --- | --- | --- |
+| `clone` | the full clone of a repository added by its URL; with an extension installed, also the check (`git ls-remote`) that the remote answers before a clone already on disk is reused | who adds it |
+| `fetch` | the fetch of every remote of a repository (New Run, its synchronisation) | who opens or syncs |
+| `skills` | the shallow clone of a Source de skills, to scan or import it | who scans or imports |
+| `trigger_fetch` | the fetch before a Trigger fires | the Trigger's last editor, else the Trigger itself |
+
+`GitOperation` also carries `project` (the Projet of the operation: the target of a clone, the
+one Projet holding the fetched repository, the Trigger's) and `url` (the remote as git is given
+it). The clone captures its Actor's environment with the request: it runs in the background.
+
+- **Off every argv.** The variables reach git's environment only, never a command line. Hand a
+  secret through a credential helper: `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>` and
+  `GIT_CONFIG_VALUE_<n>` (the helper), and the secret under a name of its own that the helper
+  reads. Never write it inside the helper's command, which git hands to a shell.
+- **Scope the helper to its host.** A fetch reaches every remote of the repository (`git fetch
+  --all`) with the environment given for `url`, its `origin`. Key the helper by URL
+  (`credential.https://git.example.com.helper`), or have it answer only for the `host=` it is
+  asked about, so a secret never reaches another remote.
+- **The core keeps its own.** `GIT_TERMINAL_PROMPT=0`, `GIT_ASKPASS`, `SSH_ASKPASS_REQUIRE=never`,
+  the operator's `GIT_SSH_COMMAND` in batch mode and `LC_ALL=C` are never overwritten: such a
+  name is dropped with a warning, as is a name that is no shell identifier. The first registered
+  extension wins a name; a panic adds nothing. Called on the request path: keep it quick.
+- **A refusal is named, never retried.** With variables given, a remote that refuses them fails
+  the operation with « The credentials provided for <Actor> (<label>) were refused for <host> »,
+  git's words after it; the daemon's own credentials are not tried. Without any, it reads « The
+  daemon's git credentials were refused for <host> ». The Actor is its display name.
+
+With no extension answering, git runs with the daemon's credentials as before. The update of PDO
+and the `docker pull` of the sandbox image never ask: they are the instance's.
+
+### The guard of a Trigger
+
+A Trigger's guard acts for whoever answers for the Trigger. Before it runs, `git_env` is asked
+with the `kind` `guard`: its Actor is the Trigger's last editor (else the Trigger itself), its
+`project` the Trigger's Projet, its `url` the path of the target repository (the guard's
+`PDO_TARGET_REPO`), and its `guard` names the execution (`GuardRun`: an `id` unique to it, the
+`trigger_id`). The dry-run (`POST /triggers/guard/test`) asks the same for who runs it, in the
+`project_id` it carries (`trigger` × `test_guard` is then judged in that Projet), with no
+`trigger_id`.
+
+The variables reach the guard's shell (`sh -c`) and what it starts, never its argv; the rules
+above hold, and `PDO_TARGET_REPO` stays the core's. A token handed to a guard, `PDO_TOKEN` for
+`pdo` to act as its Actor in its Projet for instance, lives as long as the guard: when the guard
+ends, `guard_ended` receives a `GuardEnd` (the same `GuardRun`, the Actor, the Projet and the
+`outcome`: `passed`, `skipped`, `failed`, `timed_out`) and revokes it. It is called once per
+guard, whatever its end, whether or not the extension gave anything, on the Trigger's tick: keep
+it quick. A request dropped while its guard runs (a "Run now", a dry-run) kills the guard and ends
+it `failed`.
+
+The guard runs in its own process group, and the daemon kills that group whole as the guard ends:
+on a timeout, on a dropped request, and also when a guard exits on its own but leaves a process in
+the background. What the guard started dies with it, the token
+along. A process that leaves the group (`setsid`, a daemon that detaches) escapes this.
+
+Without an extension answering, the guard runs exactly as before: the daemon's environment and
+`PDO_TARGET_REPO`.
+
 ## Events
 
 `on_event` and `/ws` carry the same JSON. After every authorized and successful mutation, an
@@ -749,6 +898,10 @@ pill appear or go without reloading.
   "operation": { "resource": "project", "verb": "update", "target": "p1", "projects": ["p1"] },
   "entity": { "kind": "project", "id": "p1" } }
 ```
+
+The Operation names its Projets: a Trigger's creation and each of its edits name the Projet the
+Trigger launches its Runs in (an edit moving it names the one it leaves, then the one it joins), so
+an extension learns of a Trigger in its Projet without asking.
 
 An extension's own events arrive as `{"type": "extension_event", "extension", "name", "payload"}`.
 Who opens and leaves a Run arrives as `presence_arrived` and `presence_left` (0.12,

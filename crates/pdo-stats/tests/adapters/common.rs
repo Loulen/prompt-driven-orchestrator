@@ -4,6 +4,7 @@
 //! through its router, as the local operator. Every root lives in a temporary
 //! directory: nothing lands in the source tree.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -19,7 +20,7 @@ use pdo_stats::adapters::run_files::DiskRunFiles;
 use pdo_stats::adapters::sqlite_absorptions::SqliteAbsorptions;
 use pdo_stats::adapters::transcripts::HarnessTranscripts;
 use pdo_stats::application::ports::{
-    Announcements, AuditJournal, BoxFuture, Projects, TriggerFires,
+    Announcements, AuditJournal, BoxFuture, Projects, TriggerFires, TriggerProject,
 };
 use pdo_stats::domain::overview::TriggersCreatedRuns;
 use pdo_stats::{Stats, StatsOptions, StatsPorts};
@@ -43,6 +44,7 @@ impl TriggerFires for DbFires {
         &'a self,
         from: &'a str,
         to: &'a str,
+        _triggers: Option<&'a BTreeSet<String>>,
     ) -> BoxFuture<'a, anyhow::Result<Vec<(String, i64)>>> {
         Box::pin(async move {
             Ok(sqlx::query_as::<_, (String, i64)>(
@@ -61,6 +63,7 @@ impl TriggerFires for DbFires {
         &'a self,
         from: &'a str,
         to: &'a str,
+        _triggers: Option<&'a BTreeSet<String>>,
     ) -> BoxFuture<'a, anyhow::Result<TriggersCreatedRuns>> {
         Box::pin(async move {
             let (fired, distinct_triggers, enabled_triggers) =
@@ -82,6 +85,15 @@ impl TriggerFires for DbFires {
                 distinct_triggers,
                 enabled_triggers,
             })
+        })
+    }
+
+    fn trigger_projects(&self) -> BoxFuture<'_, anyhow::Result<Vec<TriggerProject>>> {
+        Box::pin(async move {
+            let ids: Vec<(String,)> = sqlx::query_as("SELECT id FROM triggers")
+                .fetch_all(&self.0)
+                .await?;
+            Ok(ids.into_iter().map(|(id,)| (id, None)).collect())
         })
     }
 }

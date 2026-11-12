@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { prefillOf, type OpenIntent } from "../../model/openIntent";
 import {
+  ambiguousRepository,
   initialProject,
   launchesInProject,
   offeredProjects,
   offersNoProject,
+  projectsHolding,
   projectSecondaries,
   readLastProject,
   writeLastProject,
 } from "../../model/launchProject";
-import { hiddenProjectsNote } from "../../model/runCreationRights";
+import { hiddenProjectsNote, searchesOnly } from "../../model/runCreationRights";
+import type { RepoChoiceGroup } from "../../../workspace/components/RepoCombobox";
 import { useRunCreationRightsStore } from "../runCreationRightsStore";
 import type { NewRunState } from "./useNewRunState";
 
@@ -19,15 +22,21 @@ import type { NewRunState } from "./useNewRunState";
  * last one chosen in this browser, else the first one offered), and what
  * choosing one does — its default primary repository is
  * preselected, and the secondaries of the Projet left are dropped.
+ *
+ * Search-only (the caller may not read the disk), the Projet follows the
+ * repository: the form opens on the Projet last chosen, else on none; a
+ * repository picked under a Projet sets it (« set from the repo »), and
+ * choosing a Projet keeps the repository only if it is one of its own.
  */
 export function useLaunchProject(open: boolean, openIntent: OpenIntent, s: NewRunState) {
   const rights = useRunCreationRightsStore((st) => st.rights);
   const rightsProjects = useRunCreationRightsStore((st) => st.projects);
   const {
     projects, projectId, setProjectId, projectChosen, setProjectChosen, targetRepo,
-    handleRepoChange, setSecondaryRepos,
+    handleRepoChange, setSecondaryRepos, setFromRepo, setSetFromRepo,
   } = s;
   const seeded = useRef(false);
+  const searchOnly = searchesOnly(rights);
 
   // The Projets of the form: those the daemon listed, as the Droits allow.
   const offered = useMemo(
@@ -45,20 +54,43 @@ export function useLaunchProject(open: boolean, openIntent: OpenIntent, s: NewRu
   const apply = useCallback(
     (next: string | null, keepPrimary = false) => {
       setProjectId(next);
+      setSetFromRepo(null);
       setSecondaryRepos((prev) => prev.filter((r) => !r.fromProject));
       const primary = next ? offered.find((p) => p.id === next)?.primary_repo : undefined;
       if (primary && !keepPrimary) handleRepoChange(primary);
     },
-    [offered, setProjectId, setSecondaryRepos, handleRepoChange],
+    [offered, setProjectId, setSetFromRepo, setSecondaryRepos, handleRepoChange],
   );
 
   const chooseProject = useCallback(
     (next: string | null) => {
       setProjectChosen(true);
       writeLastProject(next);
-      apply(next);
+      if (!searchOnly) {
+        apply(next);
+        return;
+      }
+      // Search-only: the repository stays if it is the Projet's, else is emptied.
+      const chosen = next ? (offered.find((p) => p.id === next) ?? null) : null;
+      apply(next, true);
+      if (!chosen || !launchesInProject(chosen, targetRepo)) handleRepoChange("");
     },
-    [apply, setProjectChosen],
+    [apply, setProjectChosen, searchOnly, offered, targetRepo, handleRepoChange],
+  );
+
+  // A repository picked under a Projet's group is picked in that Projet.
+  const pickRepo = useCallback(
+    (path: string, group: RepoChoiceGroup) => {
+      const next = group.projectId;
+      if (next && next !== projectId) {
+        setProjectChosen(true);
+        writeLastProject(next);
+        apply(next, true);
+        setSetFromRepo(next);
+      }
+      handleRepoChange(path);
+    },
+    [apply, projectId, setProjectChosen, setSetFromRepo, handleRepoChange],
   );
 
   // The Projet the form opens on, once the Projets are known. A fresh open
@@ -70,7 +102,8 @@ export function useLaunchProject(open: boolean, openIntent: OpenIntent, s: NewRu
       return;
     }
     if (openIntent.kind === "edit-trigger" || projects === null) return;
-    const stillOffered = projectId === null ? allowNone : offered.some((p) => p.id === projectId);
+    // Search-only, no Projet is the form before a repository is picked.
+    const stillOffered = projectId === null ? allowNone || searchOnly : offered.some((p) => p.id === projectId);
     if (seeded.current && (projectChosen || stillOffered)) return;
     seeded.current = true;
     // API 0.22: the Projet an extension opened the form with, if offered, else
@@ -83,7 +116,7 @@ export function useLaunchProject(open: boolean, openIntent: OpenIntent, s: NewRu
       wanted && offered.some((p) => p.id === wanted)
         ? wanted
         : ((primary ? offered.find((p) => p.members.includes(primary))?.id : undefined) ??
-          initialProject(offered, rights, readLastProject()));
+          initialProject(offered, rights, readLastProject(), searchOnly));
     const keepPrimary = primary !== undefined;
     if (initial !== projectId || !stillOffered) apply(initial, keepPrimary);
     else if (initial) {
@@ -91,7 +124,21 @@ export function useLaunchProject(open: boolean, openIntent: OpenIntent, s: NewRu
       const primary = offered.find((p) => p.id === initial)?.primary_repo;
       if (primary && !keepPrimary && !targetRepo.trim()) handleRepoChange(primary);
     }
-  }, [open, openIntent, projects, offered, rights, allowNone, projectId, projectChosen, apply, targetRepo, handleRepoChange]);
+  }, [open, openIntent, projects, offered, rights, allowNone, searchOnly, projectId, projectChosen, apply, targetRepo, handleRepoChange]);
+
+  // Search-only, the Projet follows a repository the form put in the field
+  // (its prefill): the one offered Projet holding it, unless the form's
+  // already does. Held by several, the caller picks (the form says why);
+  // a Projet the form does not offer (an edited Trigger's) stays.
+  useEffect(() => {
+    if (!open || !searchOnly || !targetRepo.trim()) return;
+    if (projectId !== null && (project === null || launchesInProject(project, targetRepo))) return;
+    const holders = projectsHolding(offered, targetRepo);
+    if (holders.length !== 1) return;
+    const holder = holders[0];
+    apply(holder.id, true);
+    setSetFromRepo(holder.id);
+  }, [open, searchOnly, targetRepo, projectId, project, offered, apply, setSetFromRepo]);
 
   // A secondary that became the primary is no longer a secondary.
   useEffect(() => {
@@ -106,6 +153,10 @@ export function useLaunchProject(open: boolean, openIntent: OpenIntent, s: NewRu
 
   const otherRepos = useMemo(() => projectSecondaries(project, targetRepo), [project, targetRepo]);
   const primaryInProject = launchesInProject(project, targetRepo);
+  // In no Projet, a repository several Projets hold is refused by the daemon:
+  // the form says it first, with the same sentence.
+  const holders = projectId === null ? projectsHolding(projects ?? rightsProjects, targetRepo) : [];
+  const ambiguousReason = holders.length > 1 ? ambiguousRepository(holders.map((p) => p.name)) : undefined;
 
   return {
     offeredProjects: offered,
@@ -115,5 +166,9 @@ export function useLaunchProject(open: boolean, openIntent: OpenIntent, s: NewRu
     chooseProject,
     projectRepos: otherRepos,
     primaryInProject,
+    ambiguousReason,
+    searchOnly,
+    pickRepo,
+    projectFromRepo: setFromRepo !== null && setFromRepo === projectId,
   };
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Project } from "../../workspace/model/project";
 import {
+  canCreateOutsideProjects,
   canCreateSomeRun,
   hiddenProjectsNote,
   isRestricted,
@@ -8,7 +9,9 @@ import {
   repoGroups,
   runCreationQuestions,
   runCreationRights,
+  searchesOnly,
   UNKNOWN_RIGHTS,
+  whyNoRunAnywhere,
 } from "./runCreationRights";
 
 function project(id: string, name: string, members: string[]): Project {
@@ -61,14 +64,29 @@ describe("the rights to create a Run (CORE-5)", () => {
     const rights = runCreationRights([EXT, PDO, SECRET], [DENY, DENY, ALLOW, ALLOW, DENY]);
     const recents = ["/home/bob/code/PDO-v2", "/tmp/scratch"];
     expect(repoGroups(rights, recents, [EXT, PDO, SECRET])).toEqual([
-      { label: "PDO", repos: ["/home/bob/code/PDO-v2", "/home/bob/code/pdo-docs"] },
-      { label: "pdo-widgets", repos: ["/home/bob/code/pdo-widgets"] },
+      { label: "PDO", repos: ["/home/bob/code/PDO-v2", "/home/bob/code/pdo-docs"], projectId: "p1" },
+      { label: "pdo-widgets", repos: ["/home/bob/code/pdo-widgets"], projectId: "p2" },
     ]);
-    const outside = { ...rights, outsideProjects: true };
+    const outside = { ...rights, outsideProjects: true, canBrowse: true };
     expect(repoGroups(outside, recents, [EXT, PDO, SECRET]).at(-1)).toEqual({
       label: "Other",
       repos: ["/tmp/scratch"],
     });
+    // A repository of no Projet is read from the disk: without it, no « Other ».
+    const noDisk = { ...rights, outsideProjects: true };
+    expect(repoGroups(noDisk, recents, [EXT, PDO, SECRET]).map((g) => g.label)).toEqual(["PDO", "pdo-widgets"]);
+  });
+
+  it("searches only the Projets' repositories without reading the disk, and creates no Run in none", () => {
+    const noDisk = runCreationRights([PDO], [DENY, ALLOW, ALLOW]);
+    expect(searchesOnly(noDisk)).toBe(true);
+    expect(canCreateOutsideProjects(noDisk)).toBe(false);
+    expect(searchesOnly(UNKNOWN_RIGHTS)).toBe(false);
+    expect(searchesOnly(runCreationRights([PDO], [ALLOW, ALLOW, ALLOW]))).toBe(false);
+    // No Projet allows a Run and the disk may not be read: no Run anywhere, saying why.
+    const nowhere = runCreationRights([PDO], [{ decision: "deny", reason: "no", sentence: "Ask for the disk." }, ALLOW, DENY]);
+    expect(canCreateSomeRun(nowhere)).toBe(false);
+    expect(whyNoRunAnywhere(nowhere)).toBe("Ask for the disk.");
   });
 
   describe("the repository the form opens on", () => {
@@ -85,9 +103,26 @@ describe("the rights to create a Run (CORE-5)", () => {
     });
 
     it("falls back to the first repository offered when no recent one is", () => {
-      expect(prefillRepo(restricted, ["/home/bob/code/secret", "/loose"], [PDO, EXT, SECRET])).toBe(
+      const browsing = runCreationRights([PDO, EXT, SECRET], [ALLOW, DENY, ALLOW, ALLOW, DENY]);
+      expect(prefillRepo(browsing, ["/home/bob/code/secret", "/loose"], [PDO, EXT, SECRET])).toBe(
         "/home/bob/code/PDO-v2",
       );
+    });
+
+    it("is none rather than the first one offered when the field only searches", () => {
+      expect(prefillRepo(restricted, ["/home/bob/code/secret", "/loose"], [PDO, EXT, SECRET])).toBeNull();
+    });
+
+    it("skips, when the field only searches, a recent repository of several Projets, unless the last Projet chosen holds it", () => {
+      const BOTH = project("p4", "Ledger", ["/home/bob/code/PDO-v2"]);
+      const searching = runCreationRights([PDO, EXT, BOTH], [DENY, DENY, ALLOW, ALLOW, ALLOW]);
+      const recent = ["/home/bob/code/PDO-v2", "/home/bob/code/pdo-widgets"];
+      // No Projet to open on: the form would open on « pick its Project ».
+      expect(prefillRepo(searching, recent, [PDO, EXT, BOTH])).toBe("/home/bob/code/pdo-widgets");
+      expect(prefillRepo(searching, recent, [PDO, EXT, BOTH], "p2")).toBe("/home/bob/code/pdo-widgets");
+      // The form opens on a Projet holding it: no ambiguity.
+      expect(prefillRepo(searching, recent, [PDO, EXT, BOTH], "p4")).toBe("/home/bob/code/PDO-v2");
+      expect(prefillRepo(searching, ["/home/bob/code/PDO-v2"], [PDO, EXT, BOTH])).toBeNull();
     });
 
     it("is none when the form offers nothing", () => {

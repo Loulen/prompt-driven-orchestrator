@@ -30,8 +30,12 @@ impl Workspace {
                 paths.push(path);
             }
         }
-        // A member of another Projet joins this one too (ADR-0087).
+        // A member of another Projet joins this one too (ADR-0087), when it
+        // may be read there.
         self.authorize(actor, Operation::new(ResourceKind::Project, Verb::Create))?;
+        for path in &paths {
+            self.authorize_joining(actor, path).await?;
+        }
         let mut project = self
             .projects
             .create(name)
@@ -133,7 +137,13 @@ mod tests {
             project.members,
             vec!["/repos/front".to_string(), "/repos/back".to_string()]
         );
-        let asked = f.host.asked();
+        // Each member is only read where it is (the disk, here).
+        let asked: Vec<_> = f
+            .host
+            .asked()
+            .into_iter()
+            .filter(|o| !o.is_read())
+            .collect();
         assert_eq!(
             asked.len(),
             1,
@@ -177,5 +187,31 @@ mod tests {
             WorkspaceError::Invalid("member path is required".into())
         );
         assert!(f.projects.all().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_initial_member_is_judged_where_it_is_before_anything_is_written() {
+        use crate::application::testing::{outside_of, person, refusing};
+        let f = refusing(|_, operation| {
+            operation.resource == ResourceKind::Repository && outside_of("p", operation)
+        });
+        let mut s = Project::named("s", "Secret");
+        s.members = vec!["/repos/s".into()];
+        f.projects.seed(s);
+        let mia = person("mia");
+        for member in ["/repos/s", "/anywhere"] {
+            let err = f
+                .workspace
+                .create_project(&mia, "Mine", &[member.into()])
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, WorkspaceError::Denied(_)),
+                "{member}: {err:?}"
+            );
+        }
+        assert_eq!(f.projects.all().len(), 1, "nothing created");
+        let mine = f.workspace.create_project(&mia, "Mine", &[]).await.unwrap();
+        assert!(mine.members.is_empty());
     }
 }

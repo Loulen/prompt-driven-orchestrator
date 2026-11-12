@@ -3,23 +3,29 @@
 //! arbitrary `sh -c` in a repository, so an extension may refuse it.
 //!
 //! Zero-side-effect invariant: it resolves the repository, reads the timeout and
-//! runs the guard — nothing else. It never fires, never touches the store (no
+//! runs the guard with the environment the extensions give who asks it (told
+//! when it ends, as on a fire) — nothing else. It never fires, never touches the store (no
 //! fire row, no `next_fire_at` recompute) and never starts a Run.
 
 use pdo_kernel::{Actor, Verb};
 use serde::Deserialize;
 
+use super::guard_for::GuardFor;
+use super::read_access::{named_project, projects_of};
 use super::{operation, TriggerError, TEST_GUARD};
 use crate::domain::fire_decision::GuardResult;
 use crate::Triggers;
 
 /// The guard command *as currently typed in the New-trigger tab* plus an
-/// optional target repo. No trigger id — this is pre-save.
+/// optional target repo and the Projet the Trigger is in, if any. No trigger
+/// id — this is pre-save.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GuardTestRequest {
     pub guard_command: String,
     #[serde(default)]
     pub target_repo: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 impl Triggers {
@@ -28,9 +34,13 @@ impl Triggers {
         actor: &Actor,
         req: GuardTestRequest,
     ) -> Result<GuardResult, TriggerError> {
+        // Judged in the Projet it names: the guard runs with what the extensions
+        // give the caller there.
+        let project = named_project(req.project_id.as_deref());
         self.authorize(
             actor,
-            &operation(Verb::Action(TEST_GUARD.to_string()), None),
+            &operation(Verb::Action(TEST_GUARD.to_string()), None)
+                .in_projects(projects_of(project.as_deref())),
         )?;
         if req.guard_command.trim().is_empty() {
             return Err(TriggerError::Invalid(
@@ -43,12 +53,17 @@ impl Triggers {
             .repositories
             .required(req.target_repo.as_deref())
             .map_err(TriggerError::Invalid)?;
-        // Same `stored → env → default` precedence a real fire uses (ADR-0015), so the
-        // dry-run reflects the bound the scheduler would apply.
-        let timeout = self.settings.guard_timeout().await;
+        // Same `stored → env → default` timeout and same environment a real fire
+        // uses (ADR-0015), so the dry-run reflects what the scheduler would do; it
+        // acts for who asks it, in the Projet the Trigger is (or will be) in.
         Ok(self
-            .guards
-            .run(req.guard_command.trim(), &cwd, timeout)
+            .run_guard_for(GuardFor {
+                actor,
+                project: project.as_deref(),
+                trigger_id: None,
+                command: req.guard_command.trim(),
+                cwd: &cwd,
+            })
             .await)
     }
 }

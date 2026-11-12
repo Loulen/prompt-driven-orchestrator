@@ -22,10 +22,15 @@ use pdo_platform::domain::service_unit::PortState;
 use pdo_platform::domain::update_check::UpdateCache;
 use pdo_platform::domain::update_plan::UpdatePlan;
 
-/// An extension host that refuses everything, or allows everything.
+/// The rule of a [`Host`] that refuses some Operations only.
+type Rule = Box<dyn Fn(&Actor, &Operation) -> bool + Send + Sync>;
+
+/// An extension host that refuses everything, allows everything, or refuses
+/// what its rule says.
 pub struct Host {
     pub refuse: bool,
     pub asked: Mutex<Vec<Operation>>,
+    refuses: Option<Rule>,
 }
 
 impl Host {
@@ -33,6 +38,7 @@ impl Host {
         Arc::new(Self {
             refuse: false,
             asked: Mutex::new(Vec::new()),
+            refuses: None,
         })
     }
 
@@ -40,7 +46,23 @@ impl Host {
         Arc::new(Self {
             refuse: true,
             asked: Mutex::new(Vec::new()),
+            refuses: None,
         })
+    }
+
+    /// Refuses what `rule` says, with the sentence « You can't. ».
+    pub fn refusing_when(
+        rule: impl Fn(&Actor, &Operation) -> bool + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            refuse: false,
+            asked: Mutex::new(Vec::new()),
+            refuses: Some(Box::new(rule)),
+        })
+    }
+
+    pub fn asked(&self) -> Vec<Operation> {
+        self.asked.lock().unwrap().clone()
     }
 }
 
@@ -49,10 +71,16 @@ impl ExtensionHost for Host {
         Actor::LocalOperator
     }
 
-    fn authorize(&self, _actor: &Actor, operation: &Operation) -> Authorization {
+    fn authorize(&self, actor: &Actor, operation: &Operation) -> Authorization {
         self.asked.lock().unwrap().push(operation.clone());
         if self.refuse {
             Authorization::deny("admins only")
+        } else if self
+            .refuses
+            .as_ref()
+            .is_some_and(|rule| rule(actor, operation))
+        {
+            Authorization::deny("not a member").saying("You can't.")
         } else {
             Authorization::Allow
         }
@@ -104,6 +132,20 @@ impl PageMountRepository for Pages {
             Ok((before - map.len()) as u64)
         })
     }
+    fn place<'a>(
+        &'a self,
+        name: &'a str,
+        owner: Option<&'a Actor>,
+        project_id: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<(), StorageError>> {
+        Box::pin(async move {
+            if let Some(mount) = self.0.lock().unwrap().get_mut(name) {
+                mount.owner = owner.cloned();
+                mount.project_id = project_id.map(str::to_string);
+            }
+            Ok(())
+        })
+    }
 }
 
 /// Every directory is mountable as itself; files are served from a map.
@@ -151,6 +193,8 @@ pub struct FakeRuns {
     pub nodes: BTreeMap<String, Vec<String>>,
     /// The Projets each Run was launched in.
     pub projects: BTreeMap<String, Vec<String>>,
+    /// Who created each Run.
+    pub creators: BTreeMap<String, Actor>,
 }
 
 impl Runs for FakeRuns {
@@ -197,6 +241,9 @@ impl Runs for FakeRuns {
     }
     fn projects_of_run<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Vec<String>> {
         Box::pin(async move { self.projects.get(run_id).cloned().unwrap_or_default() })
+    }
+    fn creator_of_run<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Option<Actor>> {
+        Box::pin(async move { self.creators.get(run_id).cloned() })
     }
 }
 

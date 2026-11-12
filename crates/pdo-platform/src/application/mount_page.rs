@@ -23,6 +23,9 @@ pub struct MountPageCommand {
     pub guide: Option<String>,
     /// The origin the caller declared, for the audit row.
     pub hint: ActorHint,
+    /// The Projet the page goes in, when the caller names one; an agent's
+    /// page is always in the Projet of its Run.
+    pub project_id: Option<String>,
 }
 
 /// Why the page was not mounted.
@@ -69,18 +72,31 @@ impl MountPage {
     }
 
     /// Mount for `actor`. An agent's mount belongs to its Run (archived with
-    /// it), is judged in the Projet of that Run and journaled in its log;
-    /// anyone else's is judged in no Projet and audited.
+    /// it), is in the Projet of that Run, owned by the one who created it, and
+    /// journaled in its log; anyone else's is theirs, in the Projet they name
+    /// (none by default), and audited. The mount is judged in its Projet.
     pub async fn execute(
         &self,
         actor: &Actor,
         command: MountPageCommand,
     ) -> Result<PageMount, MountPageError> {
-        let operation = Operation::new(ResourceKind::PageMount, Verb::Create);
-        let operation = self.place.execute(actor, operation).await;
+        let session = SessionClaim::of(actor);
+        let (owner, project_id) = match &session {
+            Some(claim) => {
+                let project = self.place.project_of_run(&claim.run_id).await;
+                if command.project_id.is_some() && command.project_id != project {
+                    return Err(MountPageError::Invalid(MountError::Invalid(
+                        "a node mounts its pages in the Projet of its Run".to_string(),
+                    )));
+                }
+                (self.runs.creator_of_run(&claim.run_id).await, project)
+            }
+            None => (Some(actor.clone()), command.project_id.clone()),
+        };
+        let operation =
+            Operation::new(ResourceKind::PageMount, Verb::Create).in_projects(project_id.clone());
         authorize(self.host.as_ref(), actor, &operation).map_err(MountPageError::Refused)?;
         let _guard = self.lock.lock().await;
-        let session = SessionClaim::of(actor);
         if let Some(claim) = &session {
             self.runs
                 .verify(&claim.run_id, &claim.node_id)
@@ -109,6 +125,8 @@ impl MountPage {
             node_id: session.as_ref().map(|claim| claim.node_id.clone()),
             created_at: pdo_kernel::clock::now_iso(),
             guide,
+            owner,
+            project_id,
         };
         match self.pages.insert(&mount).await {
             Ok(()) => {}

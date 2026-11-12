@@ -1,6 +1,9 @@
 //! Fetch every remote of a repository, read-only and non-interactive (#802,
 //! ADR-0070 §1).
 
+use std::collections::hash_map::DefaultHasher;
+use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use crate::domain::branches::{classify_fetch_error, FetchError, FetchErrorKind};
@@ -57,25 +60,53 @@ impl FetchHeadSnapshot {
     }
 }
 
-/// The in-flight fetch of each repo, so concurrent callers **join** the running one
-/// instead of starting a second (spec #801). The value is the outcome slot the leader
-/// publishes into; followers clone the receiver and await it.
-#[allow(clippy::type_complexity)]
-pub fn fetch_in_flight() -> &'static std::sync::Mutex<
-    std::collections::HashMap<PathBuf, tokio::sync::watch::Receiver<Option<Option<FetchError>>>>,
-> {
+/// A fetch in flight: its repo, and a digest of the environment it runs with,
+/// so two callers with different credentials never share one outcome (the
+/// digest keeps no value of the environment in memory).
+pub type FlightKey = (PathBuf, u64);
+
+/// The outcome slot of a fetch in flight.
+type Flight = tokio::sync::watch::Receiver<Option<Option<FetchError>>>;
+
+/// The in-flight fetch of each repo and environment, so concurrent callers
+/// **join** the running one instead of starting a second (spec #801). The value
+/// is the outcome slot the leader publishes into; followers clone the receiver
+/// and await it.
+pub fn fetch_in_flight() -> &'static std::sync::Mutex<std::collections::HashMap<FlightKey, Flight>>
+{
     static FLIGHTS: std::sync::OnceLock<
-        std::sync::Mutex<
-            std::collections::HashMap<
-                PathBuf,
-                tokio::sync::watch::Receiver<Option<Option<FetchError>>>,
-            >,
-        >,
+        std::sync::Mutex<std::collections::HashMap<FlightKey, Flight>>,
     > = std::sync::OnceLock::new();
     FLIGHTS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
-/// Fetch every remote of `repo`, pruning refs that vanished server-side. Returns
+/// The lock of each repo's fetches: two flights of one repo (two Actors, two
+/// credentials) never run at once, since both write its refs and `FETCH_HEAD`.
+fn repo_lock(repo: &Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: std::sync::OnceLock<
+        std::sync::Mutex<
+            std::collections::HashMap<PathBuf, std::sync::Arc<tokio::sync::Mutex<()>>>,
+        >,
+    > = std::sync::OnceLock::new();
+    LOCKS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .entry(repo.to_path_buf())
+        .or_default()
+        .clone()
+}
+
+/// The flight `repo` fetched with `env` joins.
+fn flight_key(repo: &Path, env: &BTreeMap<String, String>) -> FlightKey {
+    let mut hasher = DefaultHasher::new();
+    env.hash(&mut hasher);
+    (repo.to_path_buf(), hasher.finish())
+}
+
+/// Fetch every remote of `repo` with `env` added to git's environment (the
+/// credentials an extension provides, never in an argv), pruning refs that
+/// vanished server-side. Returns
 /// `None` on success, or the named reason it did not happen (#802, ADR-0070 §1).
 ///
 /// Read-only and **non-interactive by construction**: `GIT_TERMINAL_PROMPT=0` plus a
@@ -83,21 +114,23 @@ pub fn fetch_in_flight() -> &'static std::sync::Mutex<
 /// hanging on a prompt nobody can see (the precedent of `clone::clone_shallow`). Bounded by
 /// `FETCH_TIMEOUT`. Never pushes, merges or rebases — that is the whole of ADR-0070 §2.
 ///
-/// Only ONE fetch per repo runs at a time: the form fetches on open and on repo
-/// change, and the sync popover refetches, so three overlapping asks on the same repo
-/// are routine. The second and third await the first's outcome.
-pub async fn fetch_all_remotes(repo: &Path) -> Option<FetchError> {
+/// Only ONE fetch per repo and environment runs at a time: the form fetches on open
+/// and on repo change, and the sync popover refetches, so three overlapping asks on
+/// the same repo are routine. The second and third await the first's outcome. A
+/// fetch of the same repo with another environment waits for it, then runs.
+pub async fn fetch_all_remotes(repo: &Path, env: &BTreeMap<String, String>) -> Option<FetchError> {
     enum Role {
         Leader(tokio::sync::watch::Sender<Option<Option<FetchError>>>),
         Follower(tokio::sync::watch::Receiver<Option<Option<FetchError>>>),
     }
+    let key = flight_key(repo, env);
     let role = {
         let mut map = fetch_in_flight().lock().unwrap_or_else(|p| p.into_inner());
-        match map.get(repo) {
+        match map.get(&key) {
             Some(rx) => Role::Follower(rx.clone()),
             None => {
                 let (tx, rx) = tokio::sync::watch::channel(None);
-                map.insert(repo.to_path_buf(), rx);
+                map.insert(key.clone(), rx);
                 Role::Leader(tx)
             }
         }
@@ -106,7 +139,11 @@ pub async fn fetch_all_remotes(repo: &Path) -> Option<FetchError> {
     let mut rx = match role {
         Role::Follower(rx) => rx,
         Role::Leader(tx) => {
-            let outcome = run_git_fetch(repo).await;
+            let outcome = {
+                let lock = repo_lock(repo);
+                let _one_at_a_time = lock.lock().await;
+                run_git_fetch(repo, env).await
+            };
             // Leave the map BEFORE publishing, so a caller arriving after the result
             // starts a fresh fetch rather than joining a finished one. Followers that
             // already cloned the receiver still read the value: a watch receiver keeps
@@ -114,7 +151,7 @@ pub async fn fetch_all_remotes(repo: &Path) -> Option<FetchError> {
             fetch_in_flight()
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
-                .remove(repo);
+                .remove(&key);
             let _ = tx.send(Some(outcome.clone()));
             return outcome;
         }
@@ -137,7 +174,7 @@ pub async fn fetch_all_remotes(repo: &Path) -> Option<FetchError> {
 
 /// The fetch itself, with no in-flight bookkeeping. Split out so the join logic above
 /// stays readable, and so tests can drive a real `git fetch` against a bare origin.
-pub async fn run_git_fetch(repo: &Path) -> Option<FetchError> {
+pub async fn run_git_fetch(repo: &Path, env: &BTreeMap<String, String>) -> Option<FetchError> {
     match git_remote_names(repo) {
         // A repo with no remote is a legitimate case, not a failure to report as one:
         // named so the popover can say "no remote" instead of quoting git at the user.
@@ -156,14 +193,6 @@ pub async fn run_git_fetch(repo: &Path) -> Option<FetchError> {
         }
     }
 
-    // Keep an operator's own `GIT_SSH_COMMAND` (a jump host, an identity file) and
-    // only append the batch flag — replacing it would break the very setups that need
-    // a custom command, in the name of not prompting.
-    let ssh_command = match std::env::var("GIT_SSH_COMMAND") {
-        Ok(existing) if !existing.trim().is_empty() => format!("{existing} -oBatchMode=yes"),
-        _ => "ssh -oBatchMode=yes".to_string(),
-    };
-
     // Taken BEFORE the attempt: git truncates FETCH_HEAD on its way in, so by the time
     // we know the fetch failed the previous date is already gone.
     let snapshot = FetchHeadSnapshot::take(repo);
@@ -174,18 +203,11 @@ pub async fn run_git_fetch(repo: &Path) -> Option<FetchError> {
         Some(error)
     };
 
-    let mut cmd = tokio::process::Command::new("git");
-    cmd.args(["fetch", "--all", "--prune", "--quiet"])
-        .current_dir(repo)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_ASKPASS", "true")
-        .env("SSH_ASKPASS_REQUIRE", "never")
-        .env("GIT_SSH_COMMAND", ssh_command)
-        .env("LC_ALL", "C")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
+    // Non-interactive, the operator's own `GIT_SSH_COMMAND` kept with the batch
+    // flag added: replacing it would break the very setups that need a custom
+    // command, in the name of not prompting.
+    let mut cmd = super::clone::network_git(&["fetch", "--all", "--prune", "--quiet"], env);
+    cmd.current_dir(repo);
 
     let spawned = match cmd.spawn() {
         Ok(child) => child,

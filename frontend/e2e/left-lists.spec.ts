@@ -9,7 +9,9 @@ import { E2E_TARGET_REPO, runBody } from "./helpers";
 // lines of 46 px whose long name ends in an ellipsis; its hover bar floats over
 // the row without moving a line; the extensions' marks sit at the end of the
 // meta line without growing the row; a Trigger switches from its row and a
-// Pipeline opens from its row, one gesture each.
+// Pipeline opens from its row, one gesture each; a two-line Trigger row's hover
+// bar sits on its second line, so an extension's button on its first line stays
+// clickable.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
@@ -55,8 +57,10 @@ test.afterAll(async () => {
   await fs.rm(path.join(PIPELINE_DIR, `${PIPELINE}.prompts`), { recursive: true, force: true });
 });
 
-/** The test extension, marking every Run row (`run/item`). */
-async function playDecorations(page: Page) {
+const RUN_BADGE = { location: "run/item", id: "badge", label: "Badge", type: "decoration", component: "EntityBadge" };
+
+/** The test extension, marking every Run row (`run/item`) unless told otherwise. */
+async function playDecorations(page: Page, contributions: object[] = [RUN_BADGE]) {
   const bundle = await fs.readFile(BUNDLE_PATH, "utf8");
   const extension = {
     id: "marks",
@@ -67,7 +71,7 @@ async function playDecorations(page: Page) {
       react_major: 19,
       ui_module_major: null,
       locations: [],
-      contributions: [{ location: "run/item", id: "badge", label: "Badge", type: "decoration", component: "EntityBadge" }],
+      contributions,
       commands: [],
     },
   };
@@ -278,6 +282,75 @@ test("a Trigger row and a Pipeline row take one line once Settings › Appearanc
   expect((await box(pipelineRow)).height).toBeCloseTo(30, 0);
   await pipelineRow.click();
   await expect(page.getByRole("tab", { name: new RegExp(PIPELINE) }).first()).toBeVisible();
+
+  await page.request.delete(`${baseURL}/triggers/${triggerId}`);
+});
+
+test("a two-line Trigger row's hover bar sits on its second line: the extension's button stays clickable; one line keeps it centred", async ({
+  page,
+  baseURL,
+}) => {
+  const created = await page.request.post(`${baseURL}/triggers`, {
+    data: { name: `${PIPELINE}-slot`, pipeline_id: PIPELINE, cron: "0 3 * * *", target_repo: E2E_TARGET_REPO },
+  });
+  expect(created.status()).toBe(201);
+  const { id: triggerId } = (await created.json()) as { id: string };
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await playDecorations(page, [
+    { location: "trigger/item", id: "action", label: "Action", type: "decoration", component: "TriggerMark" },
+  ]);
+  await stubAppearance(page, null);
+  await page.goto("/");
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await page.getByRole("tab", { name: "Triggers" }).click();
+  const trigger = page.locator(`[data-trigger-row="${triggerId}"]`);
+  await expect(trigger).toHaveAttribute("data-lines", "2");
+  const action = trigger.getByTestId("test-trigger-action");
+  await expect(action).toBeVisible({ timeout: 10_000 });
+
+  // Hovered: the bar shows, under the first line; the button is still the
+  // element under its own centre, and a click reaches it, not the row.
+  await trigger.hover();
+  const bar = trigger.getByTestId("trigger-row-actions");
+  await expect(bar).toBeVisible();
+  const rowBox = await box(trigger);
+  const barBox = await box(bar);
+  const actionBox = await box(action);
+  expect(barBox.y + barBox.height).toBeLessThanOrEqual(rowBox.y + rowBox.height);
+  expect(barBox.y).toBeGreaterThanOrEqual(actionBox.y + actionBox.height);
+  const centre = { x: actionBox.x + actionBox.width / 2, y: actionBox.y + actionBox.height / 2 };
+  expect(
+    await page.evaluate(
+      ({ x, y }) => Boolean(document.elementFromPoint(x, y)?.closest('[data-testid="test-trigger-action"]')),
+      centre,
+    ),
+  ).toBe(true);
+  await page.mouse.click(centre.x, centre.y);
+  await expect(action).toHaveAttribute("data-clicks", "1");
+  await expect(bar).toBeVisible();
+  await expect(trigger).not.toHaveAttribute("data-open", "true");
+
+  // « Delete trigger » still asks; Cancel keeps the Trigger.
+  await trigger.getByTestId("trigger-delete").click();
+  const confirm = page.getByTestId("confirm-delete-modal");
+  await expect(confirm).toContainText("Delete this trigger?");
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirm).toHaveCount(0);
+  await expect(trigger).toBeVisible();
+
+  // One line: the bar stays centred on the row.
+  await page.unroute("**/actors/me/appearance");
+  await stubAppearance(page, { "triggers.list.pipeline": false, "triggers.list.last": false, "triggers.list.next": false });
+  await page.reload();
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await page.getByRole("tab", { name: "Triggers" }).click();
+  await expect(trigger).toHaveAttribute("data-lines", "1");
+  await trigger.hover();
+  await expect(bar).toBeVisible();
+  const oneLine = await box(trigger);
+  const centred = await box(bar);
+  expect(centred.y + centred.height / 2).toBeCloseTo(oneLine.y + oneLine.height / 2, 0);
 
   await page.request.delete(`${baseURL}/triggers/${triggerId}`);
 });

@@ -10,7 +10,11 @@ use crate::Triggers;
 impl Triggers {
     /// Why an extension suspends `trigger`, if one does.
     pub fn suspension_of(&self, trigger: &Trigger) -> Option<Suspension> {
-        let target = TriggerRef::new(&trigger.id, &trigger.name, trigger.last_editor.clone());
+        let mut target = TriggerRef::new(&trigger.id, &trigger.name, trigger.last_editor.clone());
+        // 0.26: judged in its Projet, like every Operation on it.
+        if let Some(project) = &trigger.project_id {
+            target = target.in_project(project);
+        }
         self.extensions()
             .trigger_suspension(&target)
             .map(|s| Suspension {

@@ -12,6 +12,7 @@ fn req(command: &str, repo: Option<&str>) -> GuardTestRequest {
     GuardTestRequest {
         guard_command: command.to_string(),
         target_repo: repo.map(str::to_string),
+        project_id: None,
     }
 }
 

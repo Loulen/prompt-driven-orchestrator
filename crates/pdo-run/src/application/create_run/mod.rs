@@ -2,7 +2,10 @@
 //! JSON, multipart, CLI, retry and Trigger-fire callers converge on.
 //!
 //! [`Runs::create_run`] is the gesture of an actor: it refuses an unknown
-//! extension id, asks the Autorisation d'opération (`run` × `create`), then
+//! extension id, places the Run in its Projet ([`project`]), asks the
+//! Autorisation d'opération (`run` × `create`, and `repository` × `read`
+//! for a Run reading the disk: in no Projet, or on a secondary repository
+//! outside its Projet), then
 //! each extension whose data the request carries (`validate_create`), before
 //! any effect. [`Runs::start_run`] is the creation itself, for a caller that
 //! has already passed its own gate: a `retry_all` command, a Trigger fire. In
@@ -66,15 +69,31 @@ impl Runs {
             };
             return (StatusCode::BAD_REQUEST, Json(refusal.body())).into_response();
         }
-        let operation = Operation::new(ResourceKind::Run, Verb::Create)
-            .in_projects(self.projects_of_new_run(&req, session.as_ref()).await);
+        // ADR-0087: the Projet the Run is launched in, before it is asked
+        // about — the one its repository is in when the request names none.
+        let projects = match self.place_new_run(actor, &mut req, session.as_ref()).await {
+            Ok(projects) => projects,
+            Err((status, body)) => return (status, Json(body)).into_response(),
+        };
+        let operation =
+            Operation::new(ResourceKind::Run, Verb::Create).in_projects(projects.clone());
         if let Err(denied) = self.authorize(actor, &operation).await {
             return denied.into_response();
         }
-        // ADR-0087: launched in a Projet, the Run works in one of its
-        // repositories.
-        if let Err((status, body)) = self.check_primary_in_project(&req).await {
-            return (status, Json(body)).into_response();
+        // Its repositories are its Projet's; outside it, they are read from
+        // the disk.
+        let reads_disk = match self
+            .check_new_run_repositories(&req, session.is_some(), &projects)
+            .await
+        {
+            Ok(reads_disk) => reads_disk,
+            Err((status, body)) => return (status, Json(body)).into_response(),
+        };
+        if reads_disk {
+            let disk = Operation::new(ResourceKind::Repository, Verb::Read);
+            if let Err(denied) = self.authorize(actor, &disk).await {
+                return denied.into_response();
+            }
         }
         // Then each extension checks its value, before any effect.
         if let Err(refusal) =

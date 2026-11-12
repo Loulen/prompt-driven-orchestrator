@@ -47,14 +47,23 @@ export interface CreateRepoResponse {
  *
  * The created path is deliberately NOT added to recent repositories — that list
  * is built from Runs, and nothing has run here yet.
+ *
+ * With `projectId`, it is made for that Projet and joins it: judged in that
+ * Projet, in the clones folder when `parent` is `null` (CORE-97).
  */
 export function createRepo(
-  parent: string,
+  parent: string | null,
   name: string,
   files: CreateRepoFile[] = [],
+  projectId?: string,
 ): Promise<CreateRepoResponse> {
   return request<CreateRepoResponse>("POST", "/repos/create", {
-    body: { parent, name, files },
+    body: {
+      ...(parent !== null ? { parent } : {}),
+      name,
+      files,
+      ...(projectId ? { project_id: projectId } : {}),
+    },
     label: "POST /repos/create",
   });
 }
@@ -155,11 +164,12 @@ export function fetchRecentRepos(): Promise<string[]> {
 
 /**
  * Where the clone of `url` goes (CORE-97): `<clones folder>/<name>`, and whether
- * that folder already is a clone of it (reused, not cloned again).
+ * that folder already is a clone of it (reused, not cloned again). Asked for
+ * the Projet `projectId`, it is judged there.
  */
-export function fetchCloneTarget(url: string): Promise<CloneTarget> {
+export function fetchCloneTarget(url: string, projectId?: string): Promise<CloneTarget> {
   return request<CloneTarget>("GET", "/repos/clone-target", {
-    query: { url },
+    query: projectId ? { url, project_id: projectId } : { url },
     label: "GET /repos/clone-target",
   });
 }

@@ -6,6 +6,7 @@
 mod add_project_member;
 mod clone_jobs;
 mod clone_repository;
+mod clone_run;
 mod create_project;
 mod create_repository;
 mod delete_project;
@@ -27,6 +28,7 @@ pub use clone_jobs::{CloneJob, CloneJobs, CloneState};
 pub use clone_repository::{CloneRequest, CloneTarget};
 pub use error::{WorkspaceError, WorkspaceResult};
 pub use fast_forward_branch::FastForwarded;
+pub use fetch_remotes::fetch_for;
 pub use queries::{PreviewRequest, RECENT_REPOSITORIES};
 pub use remove_project_member::MemberRemoved;
 pub use save_provisioning_rules::{RulesOwner, INSTANCE_SCOPE_ID};

@@ -35,7 +35,7 @@ export type {
   TabsProps,
 } from "./structure";
 export { Menu, Popover } from "./menu";
-export type { MenuEntry, MenuItem, MenuProps, PopoverProps } from "./menu";
+export type { MenuEntry, MenuItem, MenuProps, MenuReasonsAt, PopoverProps } from "./menu";
 export { Select } from "./Select";
 export type { SelectOption, SelectProps } from "./Select";
 export { ConfirmDialog, Modal } from "./Modal";

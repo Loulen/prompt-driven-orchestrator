@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{error, OriginHint};
 use crate::application::mount_page::{MountPageCommand, MountPageError};
+use crate::application::read_pages::ReadPageError;
 use crate::application::unmount_page::UnmountPageError;
 use crate::domain::page_mount::{MountError, PageMount};
 use crate::Platform;
@@ -26,6 +27,9 @@ pub(super) struct CreatePageMountRequest {
     /// The guide file's text (YAML or JSON), checked before the mount.
     #[serde(default)]
     guide: Option<String>,
+    /// The Projet the page goes in; none by default.
+    #[serde(default)]
+    project_id: Option<String>,
 }
 
 /// The mount, and the instance's Public URL its links are printed under
@@ -37,8 +41,11 @@ struct MountedPage {
     public_url: Option<String>,
 }
 
-pub(super) async fn list(State(platform): State<Arc<Platform>>) -> Response {
-    match platform.read_pages.list().await {
+pub(super) async fn list(
+    State(platform): State<Arc<Platform>>,
+    Extension(actor): Extension<Actor>,
+) -> Response {
+    match platform.read_pages.list(&actor).await {
         Ok(mounts) => Json(mounts).into_response(),
         Err(e) => {
             tracing::error!("failed to list page mounts: {e}");
@@ -58,6 +65,7 @@ pub(super) async fn mount(
         directory: request.directory,
         guide: request.guide,
         hint,
+        project_id: request.project_id,
     };
     match platform.mount_page.execute(&actor, command).await {
         Ok(mount) => {
@@ -111,34 +119,34 @@ pub(super) async fn unmount(
 /// `/pages/{name}` → `/pages/{name}/`, so the page's relative links resolve.
 pub(super) async fn redirect(
     State(platform): State<Arc<Platform>>,
+    Extension(actor): Extension<Actor>,
     AxumPath(name): AxumPath<String>,
 ) -> Response {
-    match platform.read_pages.get(&name).await {
+    match platform.read_pages.get(&actor, &name).await {
         Ok(Some(_)) => Redirect::permanent(&format!("/pages/{name}/")).into_response(),
         Ok(None) => page_not_found(),
-        Err(e) => {
-            tracing::error!("failed to resolve page mount: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        Err(error) => read_refused(error, "failed to resolve page mount"),
     }
 }
 
 pub(super) async fn serve_root(
     State(platform): State<Arc<Platform>>,
+    Extension(actor): Extension<Actor>,
     AxumPath(name): AxumPath<String>,
 ) -> Response {
-    serve(&platform, &name, "").await
+    serve(&platform, &actor, &name, "").await
 }
 
 pub(super) async fn serve_file(
     State(platform): State<Arc<Platform>>,
+    Extension(actor): Extension<Actor>,
     AxumPath((name, path)): AxumPath<(String, String)>,
 ) -> Response {
-    serve(&platform, &name, &path).await
+    serve(&platform, &actor, &name, &path).await
 }
 
-async fn serve(platform: &Platform, name: &str, path: &str) -> Response {
-    match platform.read_pages.file(name, path).await {
+async fn serve(platform: &Platform, actor: &Actor, name: &str, path: &str) -> Response {
+    match platform.read_pages.file(actor, name, path).await {
         Ok(Some(file)) => {
             let mime = mime_guess::from_path(&file.mime_path).first_or_octet_stream();
             (
@@ -149,8 +157,16 @@ async fn serve(platform: &Platform, name: &str, path: &str) -> Response {
                 .into_response()
         }
         Ok(None) => page_not_found(),
-        Err(e) => {
-            tracing::error!("failed to serve mounted page: {e}");
+        Err(error) => read_refused(error, "failed to serve mounted page"),
+    }
+}
+
+/// The answer to a page read that failed: the refusal, or a storage error.
+fn read_refused(error: ReadPageError, context: &str) -> Response {
+    match error {
+        ReadPageError::Refused(denied) => denied.into_response(),
+        ReadPageError::Storage(e) => {
+            tracing::error!("{context}: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }

@@ -36,7 +36,8 @@ impl Skills {
             Operation::new(ResourceKind::Skill, Verb::Action("scan".into())),
         )
         .map_err(|denied| ImportError::Skill(denied.into()))?;
-        let mut outcome = self.scanner.scan(scan_id, &source).await?;
+        let credentials = self.source_credentials(actor, &source);
+        let mut outcome = self.scanner.scan(scan_id, &source, &credentials).await?;
         let folders = self.folders.list().await?;
         let mut candidates = Vec::with_capacity(outcome.candidates.len());
         for candidate in std::mem::take(&mut outcome.candidates) {

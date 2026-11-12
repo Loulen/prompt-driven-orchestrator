@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use futures_util::{SinkExt, StreamExt};
 use pdo::{serve_with_config, DaemonConfig, DaemonHandle};
 use serde_json::{json, Value};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::Message;
 
 use crate::common::{lock_session_cap, TestDaemon};
@@ -296,7 +297,7 @@ async fn a_shell_carries_the_token_of_who_opened_it() {
 }
 
 /// A refused Operation opens nothing; the attach of its terminal is asked in
-/// the Projet of its record.
+/// the Projet of its record, and refused, the terminal opens read-only.
 #[tokio::test]
 async fn the_gestures_are_operations_in_the_projet_of_the_session() {
     let envs = tempfile::tempdir().unwrap();
@@ -342,8 +343,24 @@ async fn the_gestures_are_operations_in_the_projet_of_the_session() {
         daemon.addr,
         shell["id"].as_str().unwrap()
     );
-    let refused = tokio_tungstenite::connect_async(&url).await;
-    assert!(refused.is_err(), "the attach is refused in p1");
+    // Refused the attach in p1, the terminal opens read-only, and says why.
+    let (mut watched, _) = tokio_tungstenite::connect_async(&url)
+        .await
+        .expect("read-only, not refused");
+    let role = first_role(&mut watched).await;
+    assert_eq!(
+        role["read_only"],
+        "You can't attach this session here. Ask an administrator of the test extension.",
+        "{role}"
+    );
+    // Bob may not read it either: no terminal.
+    let mut bobs = url.as_str().into_client_request().unwrap();
+    bobs.headers_mut()
+        .insert(ACTOR_HEADER, "bob".parse().unwrap());
+    assert!(
+        tokio_tungstenite::connect_async(bobs).await.is_err(),
+        "no read, no terminal"
+    );
     let asked = control.asked();
     let attach = asked
         .iter()
@@ -351,6 +368,26 @@ async fn the_gestures_are_operations_in_the_projet_of_the_session() {
         .find(|(_, op)| op.verb == pdo::extension_api::Verb::Action("attach".into()))
         .unwrap();
     assert_eq!(attach.1.projects, ["p1"]);
+}
+
+/// The first role frame a PTY socket is sent.
+async fn first_role<S>(ws: &mut S) -> Value
+where
+    S: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        assert!(Instant::now() < deadline, "no role frame");
+        let Ok(Some(Ok(Message::Text(text)))) =
+            tokio::time::timeout(Duration::from_millis(100), ws.next()).await
+        else {
+            continue;
+        };
+        let frame: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        if frame["type"] == "role" {
+            return frame;
+        }
+    }
 }
 
 /// FP 5: the Cap counts the Sessions hébergées, and refuses at once.
@@ -921,6 +958,41 @@ fn zooms_of(messages: &[Value], id: &str) -> Vec<u64> {
         .filter(|m| m["type"] == "hosted_session_changed" && m["session"]["id"] == id)
         .filter_map(|m| m["session"]["terminal_zoom"].as_u64())
         .collect()
+}
+
+/// A concealed refusal of `session` × `read` answers each read of the
+/// session exactly as for a name no session has.
+#[tokio::test]
+async fn a_concealed_session_answers_like_an_unknown_one() {
+    let envs = tempfile::tempdir().unwrap();
+    let (daemon, control) = daemon(envs.path()).await;
+    let url = daemon.url();
+    let home = tempfile::tempdir().unwrap();
+    let mut body = in_path("hidden", "shell", home.path());
+    body["project"] = json!("p1");
+    let (status, shell) = open_as(&url, "alice", body).await;
+    assert_eq!(status, 201, "{shell}");
+    let id = shell["id"].as_str().unwrap().to_string();
+    let unknown = "pdo-hosted-nobody-knows";
+    control.set(Refusal::parse("session:read@p1~bob?").unwrap());
+
+    for path in [
+        "/sessions/{}/hosted",
+        "/sessions/{}/events",
+        "/sessions/{}/live",
+        "/sessions/{}/terminal-zoom",
+    ] {
+        let (status, seen) = get_as(&url, &path.replace("{}", &id), "bob").await;
+        let seen = serde_json::from_str::<Value>(&seen.to_string().replace(&id, unknown)).unwrap();
+        let never = get_as(&url, &path.replace("{}", unknown), "bob").await;
+        assert_eq!((status, seen), never, "{path}");
+    }
+    let (status, _) = get_as(&url, &format!("/sessions/{id}/hosted"), "alice").await;
+    assert_eq!(status, 200);
+
+    control.set(Refusal::parse("session:read@p1~bob").unwrap());
+    let (status, _) = get_as(&url, &format!("/sessions/{id}/hosted"), "bob").await;
+    assert_eq!(status, 403, "without the mark, the refusal stays readable");
 }
 
 /// CORE-124: the Zoom du terminal of a Session hébergée is set by the API

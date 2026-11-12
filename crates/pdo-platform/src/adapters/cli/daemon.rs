@@ -97,6 +97,11 @@ impl Daemon {
         }
     }
 
+    /// The daemon's address, without a trailing `/`.
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
     pub fn get(&self, path: &str) -> Result<Answer> {
         self.send(Method::GET, path, None)
     }

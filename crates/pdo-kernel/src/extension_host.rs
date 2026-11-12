@@ -15,7 +15,7 @@ use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::actor::actor_from_headers;
-use crate::attributes::{prefixed, AttributeStore, NoAttributes};
+use crate::attributes::{AttributeStore, NoAttributes};
 use crate::delivery::Delivery;
 use crate::event_bus::{unguarded, EventBus};
 use crate::project_names::ProjectNames;
@@ -23,6 +23,7 @@ use crate::registration::{check_manifests, RegistrationError};
 use crate::{Actor, Operation};
 
 mod creation;
+mod git;
 mod host_of;
 mod hosted;
 mod identity;
@@ -33,12 +34,15 @@ mod port;
 mod run_view;
 mod skills;
 pub use creation::{CreationRefusal, RunCreator};
+pub use git::{actor_in_sentence, GitCredentials, ProvidedFor, CORE_GIT_VARIABLES};
 use host_of::{panic_message, ExtensionHostOf};
 pub use hosted::HostedSessions;
 pub use identity::Identification;
 pub use launch::{is_env_name, NodeContribution, TriggerSuspension};
 pub use neutral::NoExtensions;
 pub use node_write::NodeWrites;
+/// What a network git operation is, as the extensions see it.
+pub use pdo_extension_api::{GitOperation, GitOperationKind, GuardEnd, GuardOutcome, GuardRun};
 pub use port::ExtensionHost;
 pub use run_view::RunViews;
 pub use skills::ProvidedSkills;
@@ -247,34 +251,6 @@ impl Extensions {
             None => self.publish(&event),
         }
     }
-
-    /// Every extension's attributes for `entity`, but those of `except`, each
-    /// handed its value of `data`.
-    fn stamps(
-        &self,
-        actor: &Actor,
-        entity: &EntityRef,
-        data: &ExtensionData,
-        except: Option<&str>,
-    ) -> Attributes {
-        let mut stamped = Attributes::new();
-        for r in &self.registry.registered {
-            if Some(r.manifest.id.as_str()) == except {
-                continue;
-            }
-            let value = data.get(&r.manifest.id);
-            match catch_unwind(AssertUnwindSafe(|| {
-                r.extension.on_create_with_data(actor, entity, value)
-            })) {
-                Ok(attributes) => stamped.extend(prefixed(&r.manifest.id, attributes)),
-                Err(_) => tracing::warn!(
-                    "extension `{}` panicked in on_create; it stamps nothing",
-                    r.manifest.id
-                ),
-            }
-        }
-        stamped
-    }
 }
 
 impl ExtensionHost for Extensions {
@@ -395,6 +371,14 @@ impl ExtensionHost for Extensions {
 
     fn trigger_suspension(&self, trigger: &TriggerRef) -> Option<TriggerSuspension> {
         launch::trigger_suspension(self, trigger)
+    }
+
+    fn git_credentials(&self, operation: &GitOperation) -> GitCredentials {
+        git::git_credentials(self, operation)
+    }
+
+    fn guard_ended(&self, end: &GuardEnd) {
+        git::guard_ended(self, end)
     }
 }
 

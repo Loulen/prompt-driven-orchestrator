@@ -4,10 +4,11 @@
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use pdo_extension_api::{ExtensionData, NewRun, ResourceKind, RunCreation};
+use pdo_extension_api::{Attributes, EntityRef, ExtensionData, NewRun, ResourceKind, RunCreation};
 use serde_json::{json, Value};
 
 use super::{panic_message, Extensions};
+use crate::attributes::prefixed;
 use crate::Actor;
 
 /// Why a creation's extension data is refused: `400`, nothing created.
@@ -101,6 +102,36 @@ pub(super) fn validate(
 /// creates one for `actor`.
 pub trait RunCreator: Send + Sync {
     fn create_run(&self, actor: Actor, run: NewRun) -> RunCreation;
+}
+
+impl Extensions {
+    /// Every extension's attributes for `entity`, but those of `except`, each
+    /// handed its value of `data`.
+    pub(super) fn stamps(
+        &self,
+        actor: &Actor,
+        entity: &EntityRef,
+        data: &ExtensionData,
+        except: Option<&str>,
+    ) -> Attributes {
+        let mut stamped = Attributes::new();
+        for r in &self.registry.registered {
+            if Some(r.manifest.id.as_str()) == except {
+                continue;
+            }
+            let value = data.get(&r.manifest.id);
+            match catch_unwind(AssertUnwindSafe(|| {
+                r.extension.on_create_with_data(actor, entity, value)
+            })) {
+                Ok(attributes) => stamped.extend(prefixed(&r.manifest.id, attributes)),
+                Err(_) => tracing::warn!(
+                    "extension `{}` panicked in on_create; it stamps nothing",
+                    r.manifest.id
+                ),
+            }
+        }
+        stamped
+    }
 }
 
 #[cfg(test)]

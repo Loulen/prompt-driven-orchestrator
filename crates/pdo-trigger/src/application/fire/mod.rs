@@ -14,9 +14,10 @@ pub mod tick;
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
-use pdo_kernel::Verb;
+use pdo_kernel::{Actor, Verb};
 use tracing::warn;
 
+use super::guard_for::GuardFor;
 use super::ports::RunFromTrigger;
 use crate::domain::fire_decision::{overlap_ceiling, FireDecision, OverlapPolicy};
 use crate::domain::schedule::{recompute_next_fire, FireSource, Transition};
@@ -56,10 +57,20 @@ impl Triggers {
                 // Guaranteed present: `dangling_reason` refused the fire upstream
                 // otherwise. No fallback to the daemon root.
                 let cwd = PathBuf::from(trigger.target_repo.as_deref().unwrap_or_default());
-                // Resolve the timeout fresh each tick so a settings change takes effect
-                // without a restart.
-                let timeout = self.settings.guard_timeout().await;
-                Some(self.guards.run(cmd, &cwd, timeout).await)
+                // The guard acts for whoever answers for the Trigger: its last
+                // editor, in its Projet (the Trigger itself when no one edited it
+                // since editors were recorded).
+                let editor = last_editor(trigger);
+                Some(
+                    self.run_guard_for(GuardFor {
+                        actor: &editor,
+                        project: trigger.project_id.as_deref(),
+                        trigger_id: Some(&trigger.id),
+                        command: cmd,
+                        cwd: &cwd,
+                    })
+                    .await,
+                )
             }
             _ => None,
         };
@@ -108,12 +119,21 @@ impl Triggers {
         // read-decide-act, and the act needs the decision's inputs to still be true.
         // `next_fire_at` was written before, so a slow fetch delays THIS fire without
         // ever shifting the schedule.
+        //
+        // The fetch is its last editor's, who answers for the Run it fires: the
+        // credentials the extensions provide for them, else the daemon's. A Trigger
+        // no one edited since editors were recorded fetches as itself.
+        let editor = last_editor(trigger);
         let source_fetch_error = self
             .repositories
-            .refresh(&targets::fetch_targets(
-                trigger.target_repo.as_deref(),
-                trigger.target_repos.as_deref(),
-            ))
+            .refresh(
+                &targets::fetch_targets(
+                    trigger.target_repo.as_deref(),
+                    trigger.target_repos.as_deref(),
+                ),
+                &editor,
+                trigger.project_id.as_deref(),
+            )
             .await;
         let started = self
             .runs
@@ -184,4 +204,14 @@ impl Triggers {
             .required(trigger.target_repo.as_deref())
             .err()
     }
+}
+
+/// Who answers for `trigger`'s fire: its last editor, else the Trigger itself.
+fn last_editor(trigger: &Trigger) -> Actor {
+    trigger
+        .last_editor
+        .clone()
+        .unwrap_or_else(|| Actor::Trigger {
+            trigger_id: trigger.id.clone(),
+        })
 }

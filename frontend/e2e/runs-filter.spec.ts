@@ -228,6 +228,9 @@ test("the Project filter offers the Projet recorded on each Run, by name", async
   page,
   baseURL,
 }) => {
+  // Before the Projets exist: once two of them hold repoA, a creation must name one
+  // (ADR-0106). The Run stays in no Projet, its Projet is never recomputed.
+  await seedRun(page, baseURL!, PIPE_A, repoA, `in-none-${TAG}`);
   const ids: Record<string, string> = {};
   for (const name of [`checkout-${TAG}`, `mobile-${TAG}`]) {
     const res = await page.request.post(`${baseURL}/projects`, {
@@ -241,7 +244,6 @@ test("the Project filter offers the Projet recorded on each Run, by name", async
   const mobile = ids[`mobile-${TAG}`];
   await seedRun(page, baseURL!, PIPE_A, repoA, `in-checkout-${TAG}`, undefined, checkout);
   await seedRun(page, baseURL!, PIPE_A, repoA, `in-mobile-${TAG}`, undefined, mobile);
-  await seedRun(page, baseURL!, PIPE_A, repoA, `in-none-${TAG}`);
 
   await page.goto("/");
   await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });

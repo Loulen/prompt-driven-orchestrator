@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.78.0
 
 - New seam, the Provenance of a Run an extension creates: `NewRun::from_source(Provenance::new(label,
   link))` gives the Run a short label and a deep link of the interface (`#/ext/…`, `#/runs/…`) toward what started

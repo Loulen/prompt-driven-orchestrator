@@ -121,6 +121,22 @@
     gap: var(--g-2);
     min-width: 0;
   }
+  /* The External source of a Run (its Provenance): its label, underlined, links. */
+  .ei-src {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    min-width: 0;
+    overflow: hidden;
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ei-src:hover {
+    color: var(--text);
+  }
   .ei-line > .d-input,
   .ei-line > .ei-select {
     flex: 1 1 auto;

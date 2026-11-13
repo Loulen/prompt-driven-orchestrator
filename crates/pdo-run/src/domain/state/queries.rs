@@ -78,6 +78,7 @@ impl RunState {
             triggered_by: None,
             created_by: None,
             trigger_editor: None,
+            provenance: None,
             parent_run_id: None,
             parent_node_id: None,
             project_id: None,

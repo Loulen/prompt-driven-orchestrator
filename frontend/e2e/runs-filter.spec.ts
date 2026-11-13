@@ -7,7 +7,7 @@ import { cleanupRuns } from "./helpers";
 
 // Layer 4 (e2e) per ADR 0004 — proves #336 end-to-end in a browser: the Runs
 // header's funnel (CORE-110) opens one row per filter (Project / Pipeline /
-// Trigger / Date) with AND semantics, an "All" default, a Manual trigger
+// Launched by / Date) with AND semantics, an "All" default ("Anyone" for Launched by), a "By hand" launch
 // option; the funnel counts the filters in force and a cross clears them.
 // Filtering also drives the #258 grouped/flat flip.
 
@@ -179,11 +179,12 @@ test("Runs list filters by project, pipeline and trigger with AND semantics and 
   await expect(page.getByText(`alpha-b-${TAG}`)).toBeVisible();
   await expect(page.getByText(`beta-a-${TAG}`)).toBeVisible();
 
-  // The funnel opens the rows, each on "All".
+  // The funnel opens the rows, each on "All" (« Launched by » on "Anyone").
   await funnel.click();
-  for (const axis of ["project", "pipeline", "trigger"]) {
+  for (const axis of ["project", "pipeline"]) {
     await expect(page.getByTestId(`run-filter-${axis}`).getByRole("button")).toHaveText("All");
   }
+  await expect(page.getByTestId("run-filter-trigger").getByRole("button")).toHaveText("Anyone");
 
   // Pipeline filter: only PIPE_A runs remain.
   await pickFilter(page, "pipeline", PIPE_A);
@@ -208,8 +209,8 @@ test("Runs list filters by project, pipeline and trigger with AND semantics and 
   names = await visibleRunNames(page);
   expect(names).toContain(`beta-a-${TAG}`);
 
-  // Contradictory AND: Manual + repoB + PIPE_A ⇒ zero rows ⇒ empty state.
-  await pickFilter(page, "trigger", "Manual");
+  // Contradictory AND: By hand + repoB + PIPE_A ⇒ zero rows ⇒ empty state.
+  await pickFilter(page, "trigger", "By hand");
   await expect(page.getByTestId("run-filter-empty")).toBeVisible();
 
   // The cross beside the funnel clears everything.

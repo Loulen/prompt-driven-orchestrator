@@ -4,6 +4,8 @@ import type { ElementMarks } from "../../../hooks/useElementMarks";
 import type { NodeProgress } from "../../../shared/generated/NodeProgress";
 import type { RunListEntry } from "../../../shared/generated/RunListEntry";
 import { StatusIcon, Tooltip } from "../../../shared/ui/kit";
+import { followDeepLink } from "../../../shared/extensions/deepLink";
+import type { RunProvenance } from "../../../shared/generated/RunProvenance";
 import type { StatusTone } from "../../../shared/ui/kit";
 import { runStatusTone } from "../../../shared/ui/kit/statusMeta";
 import StatusMark from "../../../shared/ui/leftList/StatusMark";
@@ -147,6 +149,33 @@ export function TriggerMark({ name, onOpen, marks }: { name: string; onOpen: () 
         onKeyDown={(e) => e.stopPropagation()}
       >
         <Zap size={11} strokeWidth={1.75} aria-hidden />
+      </button>
+    </Tooltip>
+  );
+}
+
+/**
+ * The External source of a Run an extension created (its Provenance), as a
+ * small chip after its name: its label; the click follows its link. Not the
+ * Trigger's bolt ({@link TriggerMark}), which stays as it is.
+ */
+export function ExternalSourceChip({ source, marks }: { source: RunProvenance; marks?: ElementMarks }) {
+  const label = `External source: ${source.label} (${source.extension}) · open`;
+  return (
+    <Tooltip label={label}>
+      <button
+        type="button"
+        className="lp-src"
+        aria-label={label}
+        data-testid="run-external-source"
+        {...marks}
+        onClick={(e) => {
+          e.stopPropagation();
+          followDeepLink(source.link);
+        }}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
+        {source.label}
       </button>
     </Tooltip>
   );

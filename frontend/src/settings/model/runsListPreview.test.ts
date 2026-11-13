@@ -84,6 +84,23 @@ describe("the preview of the Runs list block", () => {
     expect(runsListPreview(runs.slice(0, 3)).caption).toBe("Your most recent run, and a triggered run");
   });
 
+  it("adds the most recent Run from an External source when no other row has one, so its chip appears once", () => {
+    const source = { label: "Demo", link: "#/ext/test/x", extension: "test" };
+    const runs = [
+      run("new", "2026-01-01T12:00:00Z"),
+      run("sourced-old", "2026-01-01T08:00:00Z", { provenance: source }),
+      run("sourced", "2026-01-01T11:00:00Z", { provenance: source }),
+    ];
+    expect(ids(runs)).toEqual([
+      ["new", 0],
+      ["sourced", 0],
+    ]);
+    expect(runsListPreview(runs).caption).toBe("Your most recent run, and a run from an external source");
+    expect(ids([run("sourced", "2026-01-01T12:00:00Z", { provenance: source }), run("old", "2026-01-01T11:00:00Z")])).toEqual([
+      ["sourced", 0],
+    ]);
+  });
+
   it("adds no triggered Run when a row already has a Trigger", () => {
     const runs = [
       run("nightly", "2026-01-01T12:00:00Z", { triggered_by: "t1" }),

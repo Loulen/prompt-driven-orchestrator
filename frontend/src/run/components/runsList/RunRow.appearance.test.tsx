@@ -21,6 +21,12 @@ import { resetRunCosts } from "../../store/runCosts";
 import { resetAppearance } from "../../../hooks/useAppearance";
 import { ELEMENTS_STORAGE_KEY } from "../../../lib/appearance";
 import RunTreeList from "./RunTreeList";
+import { followDeepLink } from "../../../shared/extensions/deepLink";
+
+vi.mock("../../../shared/extensions/deepLink", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../shared/extensions/deepLink")>()),
+  followDeepLink: vi.fn(),
+}));
 
 const NOW = Date.now();
 const ago = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString();
@@ -288,5 +294,36 @@ describe("the Runs list on one line", () => {
     expect(row("child")).toBeNull();
     fireEvent.keyDown(row("parent"), { key: "ArrowRight" });
     expect(row("child")).toBeInTheDocument();
+  });
+});
+
+describe("a Run's row, with an External source (a Provenance)", () => {
+  const source = { label: "Demo", link: "#/ext/test/topbar/end/demo", extension: "test" };
+  const runs = [...RUNS.slice(0, 2), entry({ run_id: "lone", name: "Lone", provenance: source })];
+
+  it("draws a chip with its label after the name, beside an unchanged Trigger mark", () => {
+    mount(runs);
+    const lone = within(row("lone"));
+    const chip = lone.getByTestId("run-external-source");
+    expect(chip).toHaveTextContent("Demo");
+    expect(chip).toHaveAccessibleName("External source: Demo (test) · open");
+    expect(lone.queryByTestId("run-trigger-badge")).toBeNull();
+    const parent = within(row("parent"));
+    expect(parent.getByTestId("run-trigger-badge")).toBeInTheDocument();
+    expect(parent.queryByTestId("run-external-source")).toBeNull();
+  });
+
+  it("follows its link on a click, without selecting the Run", () => {
+    mount(runs);
+    fireEvent.click(within(row("lone")).getByTestId("run-external-source"));
+    expect(followDeepLink).toHaveBeenCalledWith("#/ext/test/topbar/end/demo");
+    expect(onSelectRun).not.toHaveBeenCalled();
+  });
+
+  it("leaves the chip out once hidden", () => {
+    appearance({ "runs.list.external-source": false });
+    mount(runs);
+    expect(within(row("lone")).queryByTestId("run-external-source")).toBeNull();
+    expect(within(row("lone")).getByTestId("run-display-label")).toHaveTextContent("Lone");
   });
 });

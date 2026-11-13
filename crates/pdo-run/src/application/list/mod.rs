@@ -18,6 +18,7 @@ use ts_rs::TS;
 
 use crate::application::paths::effective_repo_of;
 use crate::domain::child_awaiting;
+use crate::domain::provenance::RunProvenance;
 use crate::domain::run_activity::ActivitySpan;
 use crate::domain::run_root;
 use crate::domain::run_summary::NodeProgress;
@@ -71,6 +72,11 @@ pub struct RunListEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub created_by: Option<pdo_kernel::Actor>,
+    /// Where it comes from, when an extension created it with a Provenance:
+    /// the « External source » of its row and of the list's filter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub provenance: Option<RunProvenance>,
     /// Provenance: the parent Run + node whose session created this Run
     /// (ADR-0064) — the key the "orchestrated" badge and the "root runs only"
     /// filter read. `None` on a root run. Mechanical: never caller-declared.
@@ -164,6 +170,7 @@ impl Runs {
                     name: summary.name,
                     triggered_by: summary.triggered_by,
                     created_by: summary.created_by,
+                    provenance: summary.provenance,
                     parent_run_id: summary.parent_run_id,
                     parent_node_id: summary.parent_node_id,
                     root_run_id,

@@ -13,7 +13,8 @@
 //!   them, which proves a Run is stamped before its first Node.
 //! - `POST /ext/test/runs` creates a Run through the extension's `Host`, on
 //!   behalf of the caller (`{pipeline, input, repo, source_branch?, name?,
-//!   extensions?}`), and answers what the Host answered.
+//!   extensions?, provenance?: {label, link}}`), and answers what the Host
+//!   answered.
 
 use std::sync::{Arc, Mutex};
 
@@ -21,7 +22,7 @@ use pdo::extension_api::axum::http::StatusCode;
 use pdo::extension_api::axum::routing::{get, post};
 use pdo::extension_api::axum::{Extension, Json, Router};
 use pdo::extension_api::{
-    Actor, Attributes, EntityRef, Host, NewRun, NodeLaunch, ResourceKind, RunRepo,
+    Actor, Attributes, EntityRef, Host, NewRun, NodeLaunch, Provenance, ResourceKind, RunRepo,
 };
 use serde_json::{json, Value};
 
@@ -173,6 +174,16 @@ async fn create(
         for (id, value) in extensions {
             run = run.with_extension(id.clone(), value.clone());
         }
+    }
+    if let Some(provenance) = body["provenance"].as_object() {
+        let field = |key: &str| {
+            provenance
+                .get(key)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        };
+        run = run.from_source(Provenance::new(field("label"), field("link")));
     }
     match host.create_run(&actor, run).await {
         Ok(run_id) => (StatusCode::CREATED, Json(json!({ "run_id": run_id }))),

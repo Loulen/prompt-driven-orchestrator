@@ -6,6 +6,10 @@ import {
   runFilterOptions,
   projectKey,
   runMatchesFilter,
+  launchKey,
+  ANY_SOURCE,
+  ANY_TRIGGER,
+  MANUAL_TRIGGER,
   type RunFilterValue,
 } from "./runFilter";
 import type { RunListEntry } from "../../shared/generated/RunListEntry";
@@ -121,9 +125,10 @@ describe("runFilter — the menu's options and its count (funnel)", () => {
     const { pipeline, trigger } = runFilterOptions(runs, [{ id: "t1", name: "Nightly" }], projectOf);
     expect(pipeline.map((o) => o.label)).toEqual(["(unnamed)", "audit", "deploy"]);
     expect(trigger).toEqual([
-      { value: "__manual__", label: "Manual" },
-      { value: "gone", label: "gone" },
-      { value: "t1", label: "Nightly" },
+      { value: "__manual__", label: "By hand" },
+      { value: "__trigger__", label: "A trigger" },
+      { value: "gone", label: "gone", group: "Triggers" },
+      { value: "t1", label: "Nightly", group: "Triggers" },
     ]);
   });
 
@@ -139,5 +144,41 @@ describe("runFilter — the menu's options and its count (funnel)", () => {
     expect(activeFilterCount(f, { "x/a": "1", "x/b": "2" }, { "x/c": "3" })).toBe(6);
     // The mode alone narrows nothing.
     expect(activeFilterCount({ ...EMPTY_RUN_FILTER, date: { mode: "started", range: null } })).toBe(0);
+  });
+});
+
+describe("runFilter — « Launched by »: by hand, a trigger, an External source", () => {
+  const demo = { label: "Demo", link: "#/ext/test/x", extension: "test" };
+  const sync = { label: "Sync", link: "#/ext/test/y", extension: "test" };
+  const byHand = run({ run_id: "h" });
+  const fired = run({ run_id: "f", triggered_by: "t1" });
+  const sourced = run({ run_id: "s", provenance: demo });
+  const sourced2 = run({ run_id: "s2", provenance: demo });
+  const synced = run({ run_id: "y", provenance: sync });
+  const all = [byHand, fired, sourced, sourced2, synced];
+  const kept = (trigger: string) => all.filter((r) => runMatchesFilter(r, { ...EMPTY_RUN_FILTER, trigger })).map((r) => r.run_id);
+
+  it("offers each External source by its label, with its number of Runs, after the triggers", () => {
+    const { trigger } = runFilterOptions(all, [{ id: "t1", name: "Nightly" }]);
+    expect(trigger.map((o) => [o.label, o.group ?? null, o.hint ?? null])).toEqual([
+      ["By hand", null, null],
+      ["A trigger", null, null],
+      ["Nightly", "Triggers", null],
+      ["An external source", null, null],
+      ["Demo", "External sources", "2"],
+      ["Sync", "External sources", "1"],
+    ]);
+  });
+
+  it("keeps a Run with an External source out of « By hand »", () => {
+    expect(kept(MANUAL_TRIGGER)).toEqual(["h"]);
+    expect(kept(ANY_TRIGGER)).toEqual(["f"]);
+    expect(kept(ANY_SOURCE)).toEqual(["s", "s2", "y"]);
+    expect(kept("t1")).toEqual(["f"]);
+    expect(kept(launchKey(sourced))).toEqual(["s", "s2"]);
+  });
+
+  it("offers neither « A trigger » nor « An external source » when no Run has one", () => {
+    expect(runFilterOptions([byHand], []).trigger).toEqual([{ value: MANUAL_TRIGGER, label: "By hand" }]);
   });
 });

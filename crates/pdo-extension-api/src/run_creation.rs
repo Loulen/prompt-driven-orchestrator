@@ -7,7 +7,7 @@ use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// The data a creation carries for the extensions: extension id → a JSON
@@ -55,6 +55,71 @@ impl RunRepo {
     }
 }
 
+/// Where a Run an extension creates comes from, as a person reads it: a short
+/// `label` ("Nightly sync") and a `link`, a deep link of the interface
+/// (`#/ext/<id>/<location>/<path>`, `#/runs/<id>`) toward what started it.
+/// The core freezes it on the Run with the id of the extension that created
+/// it, keeps it on a retry, and shows it as an "External source": a chip on
+/// the Run's row (a click follows the link), a value of the list's filter, a
+/// row of its Info tab. It is not a Trigger's `triggered_by`: the Triggers tab
+/// never sees it.
+///
+/// Only an extension sets it ([`NewRun::from_source`]): `POST /runs` takes no
+/// Provenance. The core refuses (`400`) a blank label, a label longer than
+/// [`Provenance::MAX_LABEL`] characters, and a link that is not a deep link of
+/// the interface (`#/ext/…` or `#/runs/…`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Provenance {
+    pub label: String,
+    pub link: String,
+}
+
+/// The deep links of the interface a Provenance may point at: an
+/// extension's page, a Run.
+const DEEP_LINK_PREFIXES: [&str; 2] = ["#/ext/", "#/runs/"];
+
+impl Provenance {
+    /// The longest label the core accepts, in characters.
+    pub const MAX_LABEL: usize = 80;
+
+    /// The Provenance `label`, linking to `link`.
+    pub fn new(label: impl Into<String>, link: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            link: link.into(),
+        }
+    }
+
+    /// Why the core refuses this Provenance, if it does: a blank or too long
+    /// label, a link that is not a deep link of the interface.
+    pub fn refusal(&self) -> Option<String> {
+        let label = self.label.trim();
+        if label.is_empty() {
+            return Some("the label of a Provenance cannot be blank".into());
+        }
+        if label.chars().count() > Self::MAX_LABEL {
+            return Some(format!(
+                "the label of a Provenance holds at most {} characters",
+                Self::MAX_LABEL
+            ));
+        }
+        if label.chars().any(char::is_control) {
+            return Some("the label of a Provenance cannot hold a control character".into());
+        }
+        let link = &self.link;
+        let deep = DEEP_LINK_PREFIXES
+            .iter()
+            .any(|prefix| link.len() > prefix.len() && link.starts_with(prefix));
+        if !deep || link.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            return Some(format!(
+                "the link of a Provenance must be a deep link of the interface (`#/ext/…` or `#/runs/…`): `{link}`"
+            ));
+        }
+        None
+    }
+}
+
 /// The Run an extension asks its [`Host`](crate::Host) to create
 /// ([`Host::create_run`](crate::Host::create_run)): what `POST /runs` takes,
 /// for the fields an extension needs. The first repository is the primary,
@@ -77,6 +142,9 @@ pub struct NewRun {
     pub project_id: Option<String>,
     /// The data it carries for the extensions, as `POST /runs` `extensions`.
     pub extensions: ExtensionData,
+    /// Where it comes from ([`Provenance`]); `None`: a Run like any other.
+    /// Not part of [`NewRun::to_request_body`]: `POST /runs` takes none.
+    pub provenance: Option<Provenance>,
 }
 
 impl NewRun {
@@ -113,11 +181,18 @@ impl NewRun {
         self
     }
 
+    /// The same Run, coming from `provenance`: the core shows it as an
+    /// "External source" ([`Provenance`]).
+    pub fn from_source(mut self, provenance: Provenance) -> Self {
+        self.provenance = Some(provenance);
+        self
+    }
+
     /// The body of the `POST /runs` this Run is: `pipeline`, `input`,
     /// `target_repo` (the primary), `source_branch` (the primary's branch),
     /// `target_repos` (every repository, only with a secondary), `name`,
     /// `project_id` (only in a Projet), `extensions` (only when it carries
-    /// some).
+    /// some). Never its [`Provenance`], which no `POST /runs` takes.
     pub fn to_request_body(&self) -> Value {
         let mut body = serde_json::json!({
             "pipeline": self.pipeline,
@@ -246,6 +321,49 @@ mod tests {
             json!({ "pipeline": "relay", "input": "x" }),
             "no repository, no name, no data: the bare request"
         );
+    }
+
+    #[test]
+    fn a_provenance_rides_beside_the_body_never_in_it() {
+        let run = NewRun::new("relay", "go").from_source(Provenance::new("Demo", "#/ext/test/x"));
+        assert_eq!(
+            run.provenance,
+            Some(Provenance::new("Demo", "#/ext/test/x"))
+        );
+        assert_eq!(
+            run.to_request_body(),
+            json!({ "pipeline": "relay", "input": "go" })
+        );
+    }
+
+    #[test]
+    fn a_provenance_needs_a_label_and_a_deep_link_of_the_interface() {
+        assert_eq!(
+            Provenance::new("Demo", "#/ext/test/topbar/end/x").refusal(),
+            None
+        );
+        assert_eq!(Provenance::new("⚡ Demo", "#/runs/abc").refusal(), None);
+        assert!(Provenance::new("  ", "#/ext/test").refusal().is_some());
+        for link in ["#/settings", "#/", "#/ext/", "#/runs/"] {
+            assert!(Provenance::new("Demo", link).refusal().is_some(), "{link}");
+        }
+        assert!(Provenance::new("a\nb", "#/ext/test").refusal().is_some());
+        assert!(Provenance::new("x".repeat(81), "#/ext/test")
+            .refusal()
+            .is_some());
+        assert_eq!(
+            Provenance::new("x".repeat(80), "#/ext/test").refusal(),
+            None
+        );
+        for link in [
+            "javascript:alert(1)",
+            "https://example.com",
+            "/ext/test",
+            "#/a b",
+            "",
+        ] {
+            assert!(Provenance::new("Demo", link).refusal().is_some(), "{link}");
+        }
     }
 
     #[test]

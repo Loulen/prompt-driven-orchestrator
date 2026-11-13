@@ -99,9 +99,10 @@ pub(super) fn validate(
 
 /// What creates a Run for an extension's [`Host::create_run`](pdo_extension_api::Host::create_run)
 /// (a port: the Runs of the run context in the daemon), as `POST /runs`
-/// creates one for `actor`.
+/// creates one for `actor`. `extension` is the id of the extension that asks:
+/// a Run's [`Provenance`](pdo_extension_api::Provenance) is frozen with it.
 pub trait RunCreator: Send + Sync {
-    fn create_run(&self, actor: Actor, run: NewRun) -> RunCreation;
+    fn create_run(&self, extension: &str, actor: Actor, run: NewRun) -> RunCreation;
 }
 
 impl Extensions {
@@ -261,8 +262,11 @@ mod tests {
     async fn a_host_creates_runs_once_the_daemon_plugs_its_runs() {
         struct Echo;
         impl RunCreator for Echo {
-            fn create_run(&self, actor: Actor, run: NewRun) -> RunCreation {
-                Box::pin(async move { Ok(format!("{}:{}", actor.kind(), run.pipeline)) })
+            fn create_run(&self, extension: &str, actor: Actor, run: NewRun) -> RunCreation {
+                let extension = extension.to_string();
+                Box::pin(
+                    async move { Ok(format!("{extension}:{}:{}", actor.kind(), run.pipeline)) },
+                )
             }
         }
         let extensions = Extensions::register(vec![Box::new(Picky::default())]).unwrap();
@@ -276,7 +280,8 @@ mod tests {
         assert_eq!(
             host.create_run(&Actor::LocalOperator, NewRun::new("relay", ""))
                 .await,
-            Ok::<_, RunNotCreated>("local_operator:relay".to_string())
+            Ok::<_, RunNotCreated>("picky:local_operator:relay".to_string()),
+            "the creator learns which extension asks"
         );
     }
 }

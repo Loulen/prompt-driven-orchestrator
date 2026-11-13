@@ -139,7 +139,7 @@ impl Host for ExtensionHostOf {
             .upgrade()
             .and_then(|registry| registry.runs.get().cloned());
         match runs {
-            Some(runs) => runs.create_run(actor.clone(), run),
+            Some(runs) => runs.create_run(&self.id, actor.clone(), run),
             None => Box::pin(std::future::ready(Err(RunNotCreated::unavailable(
                 "the daemon creates no Run yet (starting or stopping)",
             )))),

@@ -16,13 +16,14 @@ use ts_rs::TS;
 use crate::domain::child_awaiting::{child_awaiting_reason, AwaitingTree, ChildWait};
 use crate::domain::event::Event;
 use crate::domain::projection::{is_stalled, project};
+use crate::domain::provenance::RunProvenance;
 use crate::domain::run_activity::{activity_of, ActivitySpan};
 use crate::domain::state::{NodeStatus, RunState, RunStatus};
 
 /// The shape of [`RunSummary`]: the Résumés written under another version
 /// are rebuilt from the event log at boot. Bump it with any change of the
 /// fields or of how they are derived.
-pub const SUMMARY_VERSION: i64 = 5;
+pub const SUMMARY_VERSION: i64 = 6;
 
 /// One Run, as the lists show it and the access checks read it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -44,6 +45,9 @@ pub struct RunSummary {
     pub waiting_for_started_nodes: Option<u32>,
     pub triggered_by: Option<String>,
     pub created_by: Option<Actor>,
+    /// Where it comes from, when an extension created it with a Provenance.
+    #[serde(default)]
+    pub provenance: Option<RunProvenance>,
     pub parent_run_id: Option<String>,
     pub parent_node_id: Option<String>,
     /// The primary repository the Run names; `None` for a Run older than the
@@ -117,6 +121,7 @@ impl RunSummary {
             waiting_for_started_nodes: run.waiting_for_started_nodes,
             triggered_by: run.triggered_by.clone(),
             created_by: run.created_by.clone(),
+            provenance: run.provenance.clone(),
             parent_run_id: run.parent_run_id.clone(),
             parent_node_id: run.parent_node_id.clone(),
             target_repo: run.target_repo.clone(),

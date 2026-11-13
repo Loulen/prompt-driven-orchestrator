@@ -14,6 +14,21 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- New seam, the Provenance of a Run an extension creates: `NewRun::from_source(Provenance::new(label,
+  link))` gives the Run a short label and a deep link of the interface (`#/ext/…`, `#/runs/…`) toward what started
+  it. The core freezes it in `RunStarted` with the extension's id, serves it as `provenance` on the
+  Run and on its entry of `GET /runs`, and a retry keeps it. `POST /runs` takes none; a blank or too
+  long label, or a link that is not a deep link, is refused with a `400`.
+- A Run an extension created with a Provenance shows it as an "External source": a chip with its
+  label after the Run's name in the Runs list (a click follows the link), a row of its Info tab
+  (the label, linking, and the extension's id), each with its switch in Settings › Appearance.
+  The Trigger mark does not change, and the Triggers tab never sees it.
+- The Runs list's "Trigger" filter becomes "Launched by": Anyone, By hand, A trigger (then each
+  Trigger), An external source (then each label, with its number of Runs). A Run from an external
+  source is no longer "By hand" (formerly "Manual").
+
 ## 2.77.0
 
 - New seam, the environment and the end of a Trigger's guard: before a guard runs, `git_env` is

@@ -276,6 +276,11 @@ pub(super) async fn run_started(state: &Runs, frozen: Frozen<'_>) -> Started {
     if let Some(editor) = &req.trigger_editor {
         run_payload["trigger_editor"] = serde_json::json!(editor);
     }
+    // FREEZE where the Run comes from, when an extension created it with a
+    // Provenance. Written only when set, so every other Run keeps its shape.
+    if let Some(provenance) = &req.provenance {
+        run_payload["provenance"] = serde_json::json!(provenance);
+    }
     // API 0.9: FREEZE the data the Run carries for the extensions, as checked
     // by them at the create. Written only when non-empty, so a Run carrying
     // none keeps its shape.

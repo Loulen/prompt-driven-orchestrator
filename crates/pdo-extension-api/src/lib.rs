@@ -94,7 +94,7 @@ pub use node_write::{
     NODE_WRITE_REFUSED, NODE_WRITE_UNAVAILABLE,
 };
 pub use operation::{Operation, ResourceKind, Verb};
-pub use run_creation::{ExtensionData, NewRun, RunCreation, RunNotCreated, RunRepo};
+pub use run_creation::{ExtensionData, NewRun, Provenance, RunCreation, RunNotCreated, RunRepo};
 pub use run_view::{
     Presence, RunCost, RunCostRead, RunDepthCost, RunTreeCost, PRESENCE_ARRIVED, PRESENCE_LEFT,
 };

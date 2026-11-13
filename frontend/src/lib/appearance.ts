@@ -103,6 +103,7 @@ export type Surface = "runs.list" | "run.canvas" | "run.info" | "triggers.list" 
  */
 export const ELEMENT_DEFAULTS: ElementDeviations = {
   "runs.list.trigger": true,
+  "runs.list.external-source": true,
   "runs.list.child-pills": false,
   "runs.list.node-pips": false,
   "runs.list.pipeline": true,
@@ -123,6 +124,7 @@ export const ELEMENT_DEFAULTS: ElementDeviations = {
   "run.info.sandbox": true,
   "run.info.started": true,
   "run.info.trigger": true,
+  "run.info.external-source": true,
   "run.info.source": true,
   "run.info.duration": true,
   "run.info.sessions": false,

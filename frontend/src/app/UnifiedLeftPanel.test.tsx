@@ -1968,9 +1968,10 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     expect(funnel).toHaveAccessibleName("Filter");
     expect(funnel).not.toHaveAttribute("data-on");
     await user.click(funnel);
-    for (const axis of ["project", "pipeline", "trigger"]) {
+    for (const axis of ["project", "pipeline"]) {
       expect(within(screen.getByTestId(`run-filter-${axis}`)).getByRole("button")).toHaveTextContent("All");
     }
+    expect(within(screen.getByTestId("run-filter-trigger")).getByRole("button")).toHaveTextContent("Anyone");
     expect(screen.getByTestId("run-filter-date")).toHaveTextContent("Any time");
     expect(screen.getByTestId("run-filter-count")).toHaveTextContent("No filter");
     expect(screen.getByTestId("run-filter-clear-all")).toBeDisabled();
@@ -2068,18 +2069,18 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     renderPanel({ runs, triggers: [trig] });
 
     // Known trigger resolves to its name; deleted trigger falls back to the id.
-    expect(await filterOptions(user, "trigger")).toEqual(["All", "Manual", "Nightly audit", "trg-gone"]);
+    expect(await filterOptions(user, "trigger")).toEqual(["Anyone", "By hand", "A trigger", "Nightly audit", "trg-gone"]);
 
     await user.click(screen.getByRole("option", { name: "Nightly audit" }));
     const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
     expect(labels).toEqual(["Alpha auditor"]);
   });
 
-  it("offers a Manual option matching runs with no trigger", async () => {
+  it("offers a By hand option matching runs with no trigger", async () => {
     const user = userEvent.setup();
     renderPanel({ runs, triggers: [trig] });
 
-    await pickFilter(user, "trigger", "Manual");
+    await pickFilter(user, "trigger", "By hand");
 
     // r2 (active manual) visible; r4 (archived manual) counted in Archived.
     const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);

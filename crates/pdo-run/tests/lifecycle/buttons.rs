@@ -267,11 +267,11 @@ edges:
         .await
         .unwrap();
 
-    assert_eq!(resp.status(), StatusCode::OK);
-
+    let status = resp.status();
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["ok"], true);
     assert_eq!(json["iter"], 2);
@@ -433,11 +433,11 @@ edges:
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-
+    let status = resp.status();
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["ok"], true);
     assert_eq!(json["iter"], 2);
@@ -480,10 +480,14 @@ async fn node_retry_on_terminal_run_embeds_reopen() {
         .unwrap();
 
     // A 2xx — the retry was accepted, not refused.
+    let status = resp.status();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     assert!(
-        resp.status().is_success(),
-        "retry must embed the re-open and succeed, got {}",
-        resp.status()
+        status.is_success(),
+        "retry must embed the re-open and succeed, got {status}: {}",
+        String::from_utf8_lossy(&body)
     );
 
     // The re-open gesture is in the log, the Run is live again, and the node
@@ -568,11 +572,11 @@ async fn node_retry_on_live_run_with_failed_node_spawns_truthfully() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-
+    let status = resp.status();
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["ok"], true);
     assert_eq!(json["iter"], 2, "retry advances to iter+1");
@@ -661,11 +665,11 @@ edges:
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-
+    let status = resp.status();
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     let downstream = json["downstream"].as_array().unwrap();
@@ -759,11 +763,11 @@ edges:
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-
+    let status = resp.status();
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["affected_count"], 0);
 }

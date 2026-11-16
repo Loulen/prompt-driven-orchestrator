@@ -443,6 +443,8 @@ test("Action locations: the header, a row's « ⋯ » menu with its when, a fail
   await row.getByTestId("run-row-menu").click();
   await expect(page.getByTestId("run-menu-copy-id")).toBeVisible();
   await page.keyboard.press("Escape");
+  // Closed, its inert backdrop included, before the row is hovered again.
+  await expect(page.getByTestId("run-menu-copy-id")).toHaveCount(0);
 
   // `runs/bulk`: the selection's ids reach the command.
   // The status dot is the row's checkbox (#577): hidden on hover, the ring

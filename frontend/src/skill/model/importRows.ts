@@ -144,3 +144,24 @@ export function importSummary(
   const sameCommit = candidates.filter((c) => c.status === "same_commit").length;
   return { willImport, unresolved, unchecked, invalid, sameCommit, files };
 }
+
+/** A row the bulk selection acts on: valid, and not imported yet. */
+export function isEligible(candidate: SkillCandidate, doneRows: Set<string>): boolean {
+  return candidate.valid && !doneRows.has(candidate.path);
+}
+
+/**
+ * The state of the results header box (CORE-196): are the eligible rows
+ * (valid, not imported yet) all, some or none checked? Mirrors `checkState`
+ * of the bank tree's export boxes; `"none"` when no row is eligible.
+ */
+export function importCheckState(
+  candidates: SkillCandidate[],
+  rows: Map<string, RowState>,
+  doneRows: Set<string>,
+): "all" | "some" | "none" {
+  const eligible = candidates.filter((c) => isEligible(c, doneRows));
+  const hits = eligible.filter((c) => rows.get(c.path)?.checked).length;
+  if (eligible.length > 0 && hits === eligible.length) return "all";
+  return hits > 0 ? "some" : "none";
+}

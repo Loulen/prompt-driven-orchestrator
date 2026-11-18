@@ -32,11 +32,12 @@ import { isRefusal, toastRefusal } from "../../shared/authorization/refusal";
 import { copyToClipboard } from "../../shared/lib/clipboard";
 import { toast } from "../../shared/ui/toast";
 import { SettingsIcon, StatsIcon } from "../../shared/ui/brand/AccentIcons";
-import { pauseRun, resumeRun, retryAll } from "../../run/api/commands";
+import { killNode, pauseRun, resumeRun, retryAll } from "../../run/api/commands";
 import { retryNode, retryNodePreview, stopNode } from "../../run/api/nodes";
 import { markNodeDone, releaseNodeCompletion } from "../../run/api/completion";
 import { whyNotOnNode, whyNotOnRun, type GestureRights, type NodeGesture, type RunGesture } from "../../run/model/runGestures";
 import { isMarkCompletable } from "../../run/model/nodeStatus";
+import { nodeGestureConfirmation } from "../../run/model/nodeGestureConfirmation";
 import { APPROVE_LABEL, AUTO_APPROVE_ARMED, AUTO_APPROVE_LABEL, approveWaitReason } from "../../run/model/approve";
 import type { Icon } from "../../shared/ui/kit";
 import type { ThemeChoice, Theme } from "../../lib/theme";
@@ -180,7 +181,17 @@ export function selectionItems(
       add("node-retry", "Retry", RotateCcw, () => void retryWithPreview(runId, node.id, confirm), whyNode("retry"));
     }
     if (NODE_STOPPABLE.has(node.status)) {
-      add("node-stop", "Stop", Square, () => void stopNode(runId, node.id).catch(report), { danger: true, ...whyNode("stop") });
+      // CORE-206: asked first, in the window the node panel opens: a stale
+      // node's Stop is its stale banner's (kill, marks it failed).
+      const nodeName = node.name || node.id;
+      const stale = node.status === "stale";
+      const gesture = nodeGestureConfirmation({ gesture: stale ? "kill_stale" : "stop", status: node.status, nodeName });
+      const stop = () =>
+        void (stale ? killNode(runId, node.id, node.iter) : stopNode(runId, node.id)).catch(report);
+      add("node-stop", "Stop", Square, () => (gesture ? confirm({ gesture, target: nodeName, run: stop }) : stop()), {
+        danger: true,
+        ...whyNode(stale ? "kill_node" : "stop"),
+      });
     }
   }
   const whyRun = (gesture: RunGesture) => ({ disabledReason: whyNotOnRun(rights, runId, gesture) });

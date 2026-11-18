@@ -147,10 +147,10 @@ describe("uiPrefs — transcript order", () => {
 
   it("degrades to the default when the storage is unavailable", () => {
     localStorage.setItem("pdo.ui.transcriptOrder", JSON.stringify("oldest-first"));
-    vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new Error("SecurityError");
     });
-    vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("QuotaExceededError");
     });
     expect(() => saveTranscriptOrder("oldest-first")).not.toThrow();

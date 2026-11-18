@@ -11,6 +11,13 @@ import CommandPalette from "./CommandPalette";
 import { usePaletteHost, type PaletteHost } from "./paletteHost";
 import { usePalette } from "./paletteStore";
 
+// CORE-206: the node's Stop the palette sends, once confirmed.
+const stopNode = vi.hoisted(() => vi.fn());
+vi.mock("../../run/api/nodes", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  stopNode,
+}));
+
 const run = (id: string, name: string, status = "running"): RunListEntry =>
   ({ run_id: id, name, pipeline_name: "implement-review", status, stalled: false, started_at: null, effective_repo: "/r" }) as RunListEntry;
 
@@ -296,5 +303,54 @@ describe("CommandPalette", () => {
       "palette-group-ext:second",
       "palette-group-ext:plain",
     ]);
+  });
+
+  describe("a node's Stop asks first, in the node panel's window (CORE-206)", () => {
+    const selectRunningNode = () =>
+      usePaletteHost.getState().setHost(
+        host({
+          selection: {
+            kind: "node",
+            run: { id: "r1", status: "running" },
+            node: { id: "implement", name: "implement", type: "agent", status: "running", iter: 1 },
+          },
+        }),
+      );
+    const pickStop = async () => {
+      fireEvent.click(screen.getByTestId("command-field"));
+      const selection = await screen.findByTestId("palette-group-selection");
+      fireEvent.click(within(selection).getByText("Stop"));
+    };
+
+    beforeEach(() => {
+      stopNode.mockReset().mockResolvedValue(undefined);
+      act(() => usePalette.getState().settle());
+    });
+
+    it("closes the palette, then asks as the panel's Stop asks; cancel sends nothing", async () => {
+      await load([]);
+      selectRunningNode();
+      renderPalette();
+      await pickStop();
+      expect(screen.queryByTestId("command-palette")).toBeNull();
+      const dialog = screen.getByRole("dialog", { name: "Stop node implement?" });
+      expect(within(dialog).getByTestId("gesture-confirm-line")).toHaveTextContent("Ends its agent session");
+      expect(within(dialog).getByTestId("gesture-confirm-info")).toHaveAccessibleName("Ends this conversation");
+      expect(within(dialog).getByRole("button", { name: "Stop" })).toHaveClass("d-btn--danger");
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(stopNode).not.toHaveBeenCalled();
+    });
+
+    it("stops the node once confirmed", async () => {
+      await load([]);
+      selectRunningNode();
+      renderPalette();
+      await pickStop();
+      const dialog = screen.getByRole("dialog", { name: "Stop node implement?" });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Stop" }));
+      expect(stopNode).toHaveBeenCalledExactlyOnceWith("r1", "implement");
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
   });
 });

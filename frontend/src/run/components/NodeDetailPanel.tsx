@@ -20,6 +20,8 @@ import "./inspector.css";
 import DetailsPane from "./nodeDetail/DetailsPane";
 import TerminalSection from "./nodeDetail/TerminalSection";
 import RetryConfirmDialog from "./nodeDetail/RetryConfirmDialog";
+import GestureConfirmDialog from "./GestureConfirmDialog";
+import { useConfirmedGestures } from "../store/useConfirmedGestures";
 import ApproveButton from "./nodeDetail/ApproveButton";
 import { approveShown } from "../model/approve";
 import { useShowApprove } from "./nodeDetail/useShowApprove";
@@ -144,6 +146,13 @@ function NodeDetailPanelOfRun({
     onRetryStarted: showTerminalSplit,
   });
 
+  // CORE-206: Stop, Restart clean and the stale Stop ask first, from the controls and the banners.
+  const shownName = nodeName || node.node_id;
+  const gesture = useConfirmedGestures(node.status, shownName);
+  const askStop = () => gesture.ask("stop", stop);
+  const askRestart = () => gesture.ask("restart", restartIteration);
+  const askKillStale = () => gesture.ask("kill_stale", killStale);
+
   // CORE-42, CORE-205: the gestures the caller may not make here, greyed with why.
   const refused = useNodeGestureRefusals(runId, node.node_id);
   // The daemon would complete the node: the command field offers it on the same condition (paletteItems.ts).
@@ -213,8 +222,8 @@ function NodeDetailPanelOfRun({
   const controls = !isArchived ? (
     <NodeControls
       node={node}
-      stop={stop}
-      restartIteration={restartIteration}
+      stop={askStop}
+      restartIteration={askRestart}
       start={start}
       retry={retry}
       refused={refused}
@@ -272,8 +281,8 @@ function NodeDetailPanelOfRun({
           onOpenOrchestration={showOrchestration ? focusOrchestration : undefined}
           failedChildren={childCounts.failed}
           failedChildId={failedChild?.run_id ?? null}
-          killStale={killStale}
-          restartIteration={restartIteration}
+          killStale={askKillStale}
+          restartIteration={askRestart}
           retry={retry}
           refused={refused}
         />
@@ -362,6 +371,15 @@ function NodeDetailPanelOfRun({
           portType={modal.portType}
           source={modalSource}
           onClose={closeModal}
+        />
+      )}
+
+      {gesture.pending && (
+        <GestureConfirmDialog
+          confirmation={gesture.pending.confirmation}
+          target={shownName}
+          onConfirm={gesture.confirm}
+          onClose={gesture.cancel}
         />
       )}
 

@@ -4,7 +4,7 @@ import { followDeepLink } from "../../shared/extensions/deepLink";
 import type { EntityContext } from "../../shared/extensions/contract";
 import { usePaletteActions, useSearch, useSearchSources } from "../../shared/extensions/palette";
 import { useExtensions } from "../../shared/extensions/store";
-import { ConfirmDialog } from "../../shared/ui/kit";
+import PaletteConfirmDialog from "./PaletteConfirmDialog";
 import { FOCUSABLE } from "../../shared/ui/kit/layer";
 import { toCss } from "../../shared/ui/zoom";
 import { useTheme } from "../../hooks/useTheme";
@@ -46,20 +46,7 @@ export default function CommandPalette() {
   return (
     <>
       {open && <PaletteBox />}
-      {confirm && (
-        <ConfirmDialog
-          title={confirm.title}
-          consequence={confirm.consequence}
-          target={confirm.target}
-          actionLabel={confirm.actionLabel}
-          danger={confirm.danger}
-          onClose={settle}
-          onConfirm={() => {
-            settle();
-            confirm.run();
-          }}
-        />
-      )}
+      {confirm && <PaletteConfirmDialog confirm={confirm} settle={settle} />}
     </>
   );
 }

@@ -42,7 +42,8 @@ function firstBox(el: Element | null): HTMLElement | null {
  * The bubble next to one control. Shows after `delay` once the pointer moves
  * on it (not when a layout brings it under a still pointer) or on keyboard
  * focus (not on a focus given back by code), at once when another closed less
- * than 300 ms ago; hides on leave, blur, pointer-down and Escape.
+ * than 300 ms ago; hides on leave, blur, pointer-down and Escape (which goes
+ * no further: it closes the tooltip, not the dialog it sits in).
  */
 export function TooltipLayer({
   content,
@@ -83,7 +84,12 @@ export function TooltipLayer({
   React.useEffect(() => {
     if (!anchor) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") hide();
+      if (e.key !== "Escape") return;
+      // The Escape closes the tooltip alone, not the dialog or panel under it
+      // (WCAG 1.4.13): a modal around ignores the `cancel` it would send.
+      e.preventDefault();
+      e.stopPropagation();
+      hide();
     };
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);

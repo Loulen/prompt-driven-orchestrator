@@ -117,6 +117,8 @@ describe("the gestures of the view of a Run (CORE-42, CORE-205)", () => {
     const { stopNode } = await import("../api/nodes");
     fireEvent.click(screen.getByTestId("stop-btn"));
     expect(stopNode).not.toHaveBeenCalled();
+    // CORE-206: a refused gesture opens no confirmation.
+    expect(screen.queryByRole("dialog")).toBeNull();
     // The tooltip: the gesture's name, then the sentence; never the technical reason.
     await userEvent.setup().hover(screen.getByTestId("retry-btn"));
     const tip = await screen.findByRole("tooltip");

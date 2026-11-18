@@ -159,6 +159,14 @@ import type { NodeState } from "../../shared/generated/NodeState";
 import { useGestureRightsStore, useRunViewGestures } from "../store/gestureRightsStore";
 import { NOTHING_REFUSED } from "../model/runGestures";
 
+/** CORE-206: answers the confirmation `title` opened with its `action` button. */
+async function confirmGesture(title: string, action: string) {
+  const dialog = screen.getByRole("dialog", { name: title });
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole("button", { name: action }));
+  });
+}
+
 function makeNode(overrides?: Partial<NodeState>): NodeState {
   return { frontmatter_retries: 0,
     node_id: "test-node",
@@ -303,6 +311,7 @@ describe("NodeDetailPanel", () => {
         await act(async () => {
           fireEvent.click(screen.getByTestId("restart-iteration-btn"));
         });
+        await confirmGesture("Restart node test-node?", "Restart");
         expect(restartNodeMock).toHaveBeenCalledWith("run-1", "test-node", 1);
         expect(screen.getByTestId("action-verdict")).toHaveTextContent(
           "Restart refused — restart refused",
@@ -1669,6 +1678,7 @@ describe("NodeDetailPanel", () => {
       await act(async () => {
         fireEvent.click(screen.getByTestId("stale-stop-btn"));
       });
+      await confirmGesture("Stop stale node test-node?", "Stop");
       expect(killNodeMock).toHaveBeenCalledWith("run-1", "test-node", 1);
     });
 
@@ -1681,6 +1691,7 @@ describe("NodeDetailPanel", () => {
       await act(async () => {
         fireEvent.click(screen.getByTestId("stale-retry-btn"));
       });
+      await confirmGesture("Restart node test-node?", "Restart");
       expect(restartNodeMock).toHaveBeenCalledWith("run-1", "test-node", 1);
     });
 
@@ -1880,6 +1891,7 @@ describe("NodeDetailPanel", () => {
       await act(async () => {
         fireEvent.click(screen.getByTestId("stop-btn"));
       });
+      await confirmGesture("Stop node test-node?", "Stop");
       expect(stopNodeMock).toHaveBeenCalledWith("run-1", "test-node");
     });
 

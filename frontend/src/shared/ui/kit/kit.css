@@ -1336,6 +1336,9 @@
     min-width: 0;
   }
   .d-confirm__line {
+    display: flex;
+    align-items: center;
+    gap: var(--g-2);
     margin: 0;
     color: var(--text);
     font-size: var(--fs-md);

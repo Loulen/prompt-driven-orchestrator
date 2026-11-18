@@ -14,6 +14,16 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- A node's Stop, its Restart clean and the stale node's Stop ask first, in one confirmation window
+  from the node panel's controls, its banners and the Ctrl+K palette: the node's name, what the
+  gesture ends, in the danger tone; Cancel, Escape or a click outside send nothing, Confirm or
+  Enter sends it as before. The Stop's (i) says that Retry starts a fresh agent, and how to resume
+  the conversation by hand in the run's worktree until the run is archived. A gesture the caller
+  may not make stays greyed and opens nothing. Escape on an open tooltip now closes the tooltip
+  alone, not the window under it.
+
 ## 2.77.0
 
 - New seam, the environment and the end of a Trigger's guard: before a guard runs, `git_env` is

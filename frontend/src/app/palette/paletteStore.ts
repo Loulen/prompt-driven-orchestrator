@@ -1,14 +1,23 @@
 import { create } from "zustand";
+import type { GestureConfirmation } from "../../run/model/nodeGestureConfirmation";
 
-/** A gesture the palette asks to confirm once it closed (Retry all, a Retry that resets nodes). */
-export interface PaletteConfirm {
-  title: string;
-  consequence?: string;
-  target?: string;
-  actionLabel: string;
-  danger?: boolean;
-  run: () => void;
-}
+/**
+ * A gesture the palette asks to confirm once it closed: Retry all, a Retry
+ * that resets nodes (the kit's `ConfirmDialog` fields), or a node gesture
+ * (CORE-206), whose `gesture` the node panel's window shows, the node's name
+ * as `target`.
+ */
+export type PaletteConfirm =
+  | {
+      gesture?: undefined;
+      title: string;
+      consequence?: string;
+      target?: string;
+      actionLabel: string;
+      danger?: boolean;
+      run: () => void;
+    }
+  | { gesture: GestureConfirmation; target: string; run: () => void };
 
 /**
  * Whether the command palette is open, and its query. The command field of the

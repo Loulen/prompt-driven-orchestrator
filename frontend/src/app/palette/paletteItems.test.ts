@@ -101,6 +101,36 @@ describe("the selection's gestures", () => {
     expect(labels({ kind: "trigger", trigger: { id: "t", name: "nightly" } } as PaletteSelection)).toEqual([]);
   });
 
+  it("asks before a node's Stop, with the rule the node panel follows (CORE-206)", () => {
+    const confirm = vi.fn();
+    const stop = selectionItems(node("running"), NOTHING_REFUSED, confirm, vi.fn()).find((i) => i.label === "Stop")!;
+    stop.run();
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: "Review",
+        gesture: expect.objectContaining({
+          title: "Stop node Review?",
+          consequences: ["Ends its agent session"],
+          danger: true,
+          actionLabel: "Stop",
+        }),
+      }),
+    );
+  });
+
+  it("asks before a stale node's Stop as its stale banner does, and kills its iteration once confirmed (CORE-206)", () => {
+    const confirm = vi.fn();
+    const stop = selectionItems(node("stale"), NOTHING_REFUSED, confirm, vi.fn()).find((i) => i.label === "Stop")!;
+    stop.run();
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: "Review",
+        gesture: expect.objectContaining({ title: "Stop stale node Review?", consequences: ["Marks it failed"] }),
+      }),
+    );
+    expect(rows(node("stale"), ["r1/review kill_node"]).find(([l]) => l === "Stop")).toEqual(["Stop", WHY]);
+  });
+
   it("asks before Retry all", () => {
     const confirm = vi.fn();
     const run = { kind: "run", run: { id: "r1", name: null, pipeline: "p", status: "failed", attributes: {} } } as PaletteSelection;

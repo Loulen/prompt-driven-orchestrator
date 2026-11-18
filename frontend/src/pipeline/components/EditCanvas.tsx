@@ -31,7 +31,7 @@ import AddNodeFromYamlModal from "./AddNodeFromYamlModal";
 import CanvasLines from "./CanvasLines";
 import DraftPresence from "./DraftPresence";
 import RunSearchHost from "../../run/components/runSearch/RunSearchHost";
-import { NodePlayRetryConfirm } from "../../run/components/WaitingForStartedNodesBanner";
+import NodePlayRetryConfirm from "../../run/components/NodePlayRetryConfirm";
 import DragConnectionLine from "./DragConnectionLine";
 import CanvasZoomBadge from "./CanvasZoomBadge";
 import { DragHighlightProvider } from "./DragHighlightContext";

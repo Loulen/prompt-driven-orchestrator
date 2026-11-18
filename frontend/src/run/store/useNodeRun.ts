@@ -3,18 +3,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { killNode, restartNode } from "../api/commands";
 import { markNodeDone, releaseNodeCompletion } from "../api/completion";
 import type { MarkNodeDoneOutcome, ReleaseNodeCompletionOutcome } from "../api/completion";
-import {
-  fetchNodeIO,
-  fetchPrompt,
-  retryNode,
-  retryNodePreview,
-  startNode,
-  stopNode,
-} from "../api/nodes";
+import { fetchNodeIO, fetchPrompt, retryNode, startNode, stopNode } from "../api/nodes";
 import type { PortIO } from "../api/nodes";
 import type { NodeState } from "../../shared/generated/NodeState";
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
 import type { WsMessage } from "../model/liveStream";
+import type { GestureConfirmation } from "../model/nodeGestureConfirmation";
+import { retryConfirmation } from "./retryConfirmation";
 import { useLiveRefresh } from "./useLiveRefresh";
 import { useDaemonStreamStatus } from "./useDaemonSocket";
 import { toastRefusal } from "../../shared/authorization/refusal";
@@ -81,6 +76,8 @@ export type ActionVerdict = {
 
 export interface UseNodeRunOptions {
   isArchived?: boolean;
+  /** The node's name, said in the Retry's confirmation; its id when absent. */
+  nodeName?: string | null;
   /**
    * Fired once a retry has actually been sent (#346 seam). The terminal inset's
    * display mode stays presentational state in `NodeDetailPanel`, but a retry
@@ -113,7 +110,7 @@ export function useNodeRun(
   runId: string,
   node: NodeState,
   selectedIter: number,
-  { isArchived, onRetryStarted }: UseNodeRunOptions,
+  { isArchived, nodeName, onRetryStarted }: UseNodeRunOptions,
 ) {
   const [promptText, setPromptText] = useState<string | null>(null);
   const [inputs, setInputs] = useState<PortIO[]>([]);
@@ -137,9 +134,8 @@ export function useNodeRun(
   const [releaseVerdict, setReleaseVerdict] = useState<
     ({ iter: number } & ReleaseVerdict) | null
   >(null);
-  const [retryConfirm, setRetryConfirm] = useState<{
-    affectedCount: number;
-  } | null>(null);
+  // CORE-206: the confirmation a Retry asks (live session, downstream reset), until answered.
+  const [retryConfirm, setRetryConfirm] = useState<GestureConfirmation | null>(null);
   // #487: the refusal of the last Retry/Play or Start click, rendered at the
   // gesture. `null` while nothing was refused.
   const [actionVerdict, setActionVerdict] = useState<ActionVerdict | null>(null);
@@ -247,42 +243,53 @@ export function useNodeRun(
     }
   }, [runId, node.node_id]);
 
-  const retry = useCallback(async () => {
-    // #487: a fresh attempt clears the previous refusal, then either writes a new
-    // one or resolves silently. The daemon's `409` ("resume the run first") is no
-    // longer swallowed — it becomes the rendered verdict below.
+  // #487: a fresh attempt clears the previous refusal, then either writes a new
+  // one or resolves silently. The daemon's `409` ("resume the run first") is no
+  // longer swallowed — it becomes the rendered verdict.
+  const refuseRetry = useCallback((e: unknown) => {
+    setActionVerdict({
+      action: "retry",
+      message: e instanceof Error ? e.message : String(e),
+    });
+  }, []);
+
+  const sendRetry = useCallback(async () => {
     setActionVerdict(null);
     try {
-      const preview = await retryNodePreview(runId, node.node_id);
-      if (preview.affected_count > 0) {
-        setRetryConfirm({ affectedCount: preview.affected_count });
-        return; // not retried yet → leave terminalView untouched
-      }
       await retryNode(runId, node.node_id);
       // Session revives (status → running once refreshRun lands the NodeStarted
       // event); re-show the terminal beside the details rather than full-frame.
       onRetryStarted?.();
     } catch (e) {
-      setActionVerdict({
-        action: "retry",
-        message: e instanceof Error ? e.message : String(e),
-      });
+      refuseRetry(e);
     }
-  }, [runId, node.node_id, onRetryStarted]);
+  }, [runId, node.node_id, onRetryStarted, refuseRetry]);
+
+  // CORE-206: a Retry that ends a live session or resets downstream nodes asks
+  // first; otherwise it goes at once.
+  const retry = useCallback(async () => {
+    setActionVerdict(null);
+    let confirmation: GestureConfirmation | null;
+    try {
+      confirmation = await retryConfirmation({
+        runId,
+        nodeId: node.node_id,
+        status: node.status,
+        nodeName: nodeName || node.node_id,
+      });
+    } catch (e) {
+      refuseRetry(e);
+      return;
+    }
+    // Not retried yet → leave terminalView untouched.
+    if (confirmation) setRetryConfirm(confirmation);
+    else await sendRetry();
+  }, [runId, node.node_id, node.status, nodeName, sendRetry, refuseRetry]);
 
   const confirmRetry = useCallback(async () => {
     setRetryConfirm(null);
-    setActionVerdict(null);
-    try {
-      await retryNode(runId, node.node_id);
-      onRetryStarted?.();
-    } catch (e) {
-      setActionVerdict({
-        action: "retry",
-        message: e instanceof Error ? e.message : String(e),
-      });
-    }
-  }, [runId, node.node_id, onRetryStarted]);
+    await sendRetry();
+  }, [sendRetry]);
 
   const cancelRetry = useCallback(() => {
     setRetryConfirm(null);

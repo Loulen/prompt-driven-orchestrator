@@ -1,12 +1,26 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { askAuthorization } from "../../shared/authorization/api";
 import { toast } from "../../shared/ui/toast";
-import { retryNode, retryNodePreview, startNode } from "../api/nodes";
+import type { NodeStatus } from "../../shared/generated/NodeStatus";
+import { retryNode, startNode } from "../api/nodes";
+import type { GestureConfirmation } from "../model/nodeGestureConfirmation";
 import { playKey, playQuestion, refusedPlays, type PlayKind } from "../model/nodePlay";
+import { retryConfirmation } from "./retryConfirmation";
 
 export interface PlayCandidate {
   nodeId: string;
   kind: PlayKind;
+  /** The node's projected status, `pending` for a node the Run never launched. */
+  status: NodeStatus;
+  /** The node's name, else its id: what a Retry's confirmation names. */
+  nodeName: string;
+}
+
+/** A ▶ Retry asked and not answered yet: its node, and what the window says. */
+export interface PendingPlayRetry {
+  nodeId: string;
+  nodeName: string;
+  confirmation: GestureConfirmation;
 }
 
 /**
@@ -15,8 +29,9 @@ export interface PlayCandidate {
  * greyed until the answer arrives, as without extension (CORE-205) — and the
  * gesture itself.
  *
- * A retry that would reset downstream nodes with artifacts asks first, like
- * the panel's Retry; a refusal of the daemon is said in a toast.
+ * A Retry that ends a live session or resets downstream nodes with artifacts
+ * asks first, in the window the node panel opens (CORE-206); a refusal of the
+ * daemon is said in a toast.
  */
 export function useNodePlay(runId: string | null, candidates: PlayCandidate[]) {
   const key = useMemo(
@@ -24,9 +39,7 @@ export function useNodePlay(runId: string | null, candidates: PlayCandidate[]) {
     [runId, candidates],
   );
   const [rights, setRights] = useState<{ key: string; refused: Map<string, string> } | null>(null);
-  const [retryConfirm, setRetryConfirm] = useState<{ nodeId: string; affectedCount: number } | null>(
-    null,
-  );
+  const [retryConfirm, setRetryConfirm] = useState<PendingPlayRetry | null>(null);
 
   useEffect(() => {
     if (!runId || candidates.length === 0) return;
@@ -60,16 +73,16 @@ export function useNodePlay(runId: string | null, candidates: PlayCandidate[]) {
   }, []);
 
   const play = useCallback(
-    async (nodeId: string, kind: PlayKind) => {
+    async ({ nodeId, kind, status, nodeName }: PlayCandidate) => {
       if (!runId) return;
       try {
         if (kind === "start") {
           await startNode(runId, nodeId);
           return;
         }
-        const preview = await retryNodePreview(runId, nodeId);
-        if (preview.affected_count > 0) {
-          setRetryConfirm({ nodeId, affectedCount: preview.affected_count });
+        const confirmation = await retryConfirmation({ runId, nodeId, status, nodeName });
+        if (confirmation) {
+          setRetryConfirm({ nodeId, nodeName, confirmation });
           return;
         }
         await retryNode(runId, nodeId);

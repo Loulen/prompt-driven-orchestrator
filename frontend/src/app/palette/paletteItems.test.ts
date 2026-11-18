@@ -1,6 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NOTHING_REFUSED } from "../../run/model/runGestures";
 import { coreItems, selectionItems } from "./paletteItems";
+
+// CORE-206: the Retry's preview and the retry itself.
+const { retryNode, retryNodePreview } = vi.hoisted(() => ({ retryNode: vi.fn(), retryNodePreview: vi.fn() }));
+vi.mock("../../run/api/nodes", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  retryNode,
+  retryNodePreview,
+}));
 import type { ThemeChoice } from "../../lib/theme";
 import type { PaletteSelection } from "./paletteHost";
 
@@ -57,6 +65,7 @@ describe("the selection's gestures", () => {
   it("offers « Auto-approve when ready » on an interactive node whose session lives, missing outputs or not", () => {
     expect(labels(node("running", { releasable: true }), [], ["out"])).toEqual([
       "Auto-approve when ready",
+      "Retry",
       "Stop",
       "Pause",
       "Copy run id",
@@ -129,6 +138,48 @@ describe("the selection's gestures", () => {
       }),
     );
     expect(rows(node("stale"), ["r1/review kill_node"]).find(([l]) => l === "Stop")).toEqual(["Stop", WHY]);
+  });
+
+  describe("a node's Retry follows the rule the node panel follows (CORE-206)", () => {
+    beforeEach(() => {
+      retryNode.mockReset().mockResolvedValue({ ok: true, iter: 2, invalidated: [] });
+      retryNodePreview.mockReset();
+    });
+    const pickRetry = async (status: string, affected: number) => {
+      retryNodePreview.mockResolvedValue({ downstream: [], affected_count: affected, with_artifacts: [] });
+      const confirm = vi.fn();
+      const retry = selectionItems(node(status), NOTHING_REFUSED, confirm, vi.fn()).find((i) => i.label === "Retry")!;
+      retry.run();
+      await vi.waitFor(() => expect(retryNodePreview).toHaveBeenCalledWith("r1", "review"));
+      return confirm;
+    };
+
+    it("is offered on a running node, as in the node panel", () => {
+      expect(labels(node("running"))).toContain("Retry");
+    });
+
+    it("asks on a running node, one line per consequence, in the danger tone", async () => {
+      const confirm = await pickRetry("running", 1);
+      await vi.waitFor(() => expect(confirm).toHaveBeenCalled());
+      expect(confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target: "Review",
+          gesture: {
+            title: "Retry node Review?",
+            consequences: ["Ends its live session", "Resets 1 downstream node"],
+            danger: true,
+            actionLabel: "Retry",
+          },
+        }),
+      );
+      expect(retryNode).not.toHaveBeenCalled();
+    });
+
+    it("retries a failed node with nothing downstream at once", async () => {
+      const confirm = await pickRetry("failed", 0);
+      await vi.waitFor(() => expect(retryNode).toHaveBeenCalledWith("r1", "review"));
+      expect(confirm).not.toHaveBeenCalled();
+    });
   });
 
   it("asks before Retry all", () => {

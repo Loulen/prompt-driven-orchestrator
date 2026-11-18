@@ -1,7 +1,9 @@
 /**
  * CORE-206: Stop, Restart clean and the stale node's Stop ask first, in the
  * kit's confirmation window: Cancel, Escape or the backdrop send nothing;
- * Confirm or Enter sends the gesture, as before.
+ * Confirm or Enter sends the gesture, as before. A Retry asks there too when
+ * it ends a live session or resets downstream nodes, and goes at once
+ * otherwise.
  */
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -52,7 +54,7 @@ vi.mock("../../shared/ui/resizable", () => ({
 
 const { default: NodeDetailPanel } = await import("./NodeDetailPanel");
 const { killNode, restartNode } = await import("../api/commands");
-const { stopNode } = await import("../api/nodes");
+const { stopNode, retryNode, retryNodePreview } = await import("../api/nodes");
 const { useGestureRightsStore } = await import("../store/gestureRightsStore");
 const { NOTHING_REFUSED } = await import("../model/runGestures");
 
@@ -73,11 +75,16 @@ function node(overrides: Partial<NodeState> = {}): NodeState {
 const dialog = (name: string) => screen.getByRole("dialog", { name });
 const noDialog = () => expect(screen.queryByRole("dialog")).toBeNull();
 const click = (el: Element) => act(async () => void fireEvent.click(el));
+const preview = (affected: number) =>
+  vi.mocked(retryNodePreview).mockReset().mockResolvedValue({ downstream: [], affected_count: affected, with_artifacts: [] });
+const lines = (d: HTMLElement) => within(d).getAllByTestId("gesture-confirm-line").map((l) => l.textContent);
 
 beforeEach(() => {
   vi.mocked(stopNode).mockReset().mockResolvedValue(undefined as never);
   vi.mocked(killNode).mockReset().mockResolvedValue(undefined as never);
   vi.mocked(restartNode).mockReset().mockResolvedValue(undefined as never);
+  vi.mocked(retryNode).mockReset().mockResolvedValue({ ok: true, iter: 2, invalidated: [] });
+  preview(0);
   useGestureRightsStore.setState({ rights: NOTHING_REFUSED, viewed: null, listed: new Set() });
 });
 
@@ -103,7 +110,7 @@ describe("the node panel's Stop asks first (CORE-206)", () => {
     const tip = await screen.findByRole("tooltip");
     expect(tip).toHaveTextContent("Ends this conversation");
     expect(tip).toHaveTextContent("Retry starts a fresh agent.");
-    expect(tip).toHaveTextContent("`claude --resume`");
+    expect(tip).toHaveTextContent("(e.g. claude --resume)");
     expect(tip).toHaveTextContent("until the run is archived.");
   });
 
@@ -188,5 +195,83 @@ describe("the stale banner's Stop asks first (CORE-206)", () => {
     await click(screen.getByTestId("stale-stop-btn"));
     await click(within(dialog("Stop stale node implement?")).getByRole("button", { name: "Stop" }));
     expect(killNode).toHaveBeenCalledExactlyOnceWith("r1", "implement", 1);
+  });
+});
+
+describe("a Retry asks when it ends a live session or resets downstream nodes (CORE-206)", () => {
+  it("on a running node: « Retry node <name>? », it ends its live session, in the danger tone; cancel keeps it running", async () => {
+    render(<NodeDetailPanel node={node()} runId="r1" nodeName="implement" />);
+    await click(screen.getByTestId("retry-btn"));
+    const d = dialog("Retry node implement?");
+    expect(lines(d)).toEqual(["Ends its live session"]);
+    expect(within(d).queryByTestId("gesture-confirm-info")).toBeNull();
+    expect(d.querySelector(".d-confirm__target")).toHaveTextContent("implement");
+    const action = within(d).getByRole("button", { name: "Retry" });
+    expect(action).toHaveClass("d-btn--danger");
+    expect(action).toHaveFocus();
+    await click(within(d).getByRole("button", { name: "Cancel" }));
+    noDialog();
+    expect(retryNode).not.toHaveBeenCalled();
+  });
+
+  it("both: one line per consequence in one window; Enter retries", async () => {
+    preview(2);
+    render(<NodeDetailPanel node={node()} runId="r1" nodeName="implement" />);
+    await click(screen.getByTestId("retry-btn"));
+    expect(lines(dialog("Retry node implement?"))).toEqual(["Ends its live session", "Resets 2 downstream nodes"]);
+    await act(async () => void (await userEvent.setup().keyboard("{Enter}")));
+    expect(retryNode).toHaveBeenCalledExactlyOnceWith("r1", "implement");
+    noDialog();
+  });
+
+  it("on a completed node whose downstream holds artifacts: says how many it resets; Escape sends nothing, confirm retries", async () => {
+    preview(1);
+    render(<NodeDetailPanel node={node({ status: "completed" })} runId="r1" nodeName="implement" />);
+    await click(screen.getByTestId("play-retry-btn"));
+    const d = dialog("Retry node implement?");
+    expect(lines(d)).toEqual(["Resets 1 downstream node"]);
+    expect(within(d).getByRole("button", { name: "Retry" })).toHaveClass("d-btn--danger");
+    fireEvent.keyDown(d, { key: "Escape" });
+    noDialog();
+    expect(retryNode).not.toHaveBeenCalled();
+    await click(screen.getByTestId("play-retry-btn"));
+    await click(within(dialog("Retry node implement?")).getByRole("button", { name: "Retry" }));
+    expect(retryNode).toHaveBeenCalledExactlyOnceWith("r1", "implement");
+  });
+
+  for (const status of ["failed", "stopped", "completed", "interrupted"] as const) {
+    it(`on a ${status} node with nothing downstream: retries at once, no window`, async () => {
+      render(<NodeDetailPanel node={node({ status })} runId="r1" nodeName="implement" />);
+      await click(screen.getByTestId("play-retry-btn"));
+      noDialog();
+      expect(retryNode).toHaveBeenCalledExactlyOnceWith("r1", "implement");
+    });
+  }
+
+  it("the failed banner's Retry follows the same rule", async () => {
+    render(<NodeDetailPanel node={node({ status: "failed" })} runId="r1" nodeName="implement" />);
+    await click(screen.getByTestId("failed-retry-btn"));
+    noDialog();
+    expect(retryNode).toHaveBeenCalledTimes(1);
+    preview(3);
+    await click(screen.getByTestId("failed-retry-btn"));
+    expect(lines(dialog("Retry node implement?"))).toEqual(["Resets 3 downstream nodes"]);
+    await click(within(dialog("Retry node implement?")).getByRole("button", { name: "Cancel" }));
+    expect(retryNode).toHaveBeenCalledTimes(1);
+  });
+
+  it("the interrupted banner's Reopen follows the same rule", async () => {
+    preview(1);
+    render(<NodeDetailPanel node={node({ status: "interrupted" })} runId="r1" nodeName="implement" />);
+    await click(screen.getByTestId("interrupted-reopen-btn"));
+    await click(within(dialog("Retry node implement?")).getByRole("button", { name: "Retry" }));
+    expect(retryNode).toHaveBeenCalledExactlyOnceWith("r1", "implement");
+  });
+
+  it("a refused Retry still renders its verdict in the panel", async () => {
+    vi.mocked(retryNode).mockRejectedValueOnce(new Error("resume the run first"));
+    render(<NodeDetailPanel node={node({ status: "failed" })} runId="r1" nodeName="implement" />);
+    await click(screen.getByTestId("play-retry-btn"));
+    expect(screen.getByTestId("action-verdict")).toHaveTextContent("resume the run first");
   });
 });

@@ -19,7 +19,6 @@ import { reviewUrl } from "../model/runRefs";
 import "./inspector.css";
 import DetailsPane from "./nodeDetail/DetailsPane";
 import TerminalSection from "./nodeDetail/TerminalSection";
-import RetryConfirmDialog from "./nodeDetail/RetryConfirmDialog";
 import GestureConfirmDialog from "./GestureConfirmDialog";
 import { useConfirmedGestures } from "../store/useConfirmedGestures";
 import ApproveButton from "./nodeDetail/ApproveButton";
@@ -143,6 +142,7 @@ function NodeDetailPanelOfRun({
     restartIteration,
   } = useNodeRun(runId, node, selectedIter, {
     isArchived,
+    nodeName,
     onRetryStarted: showTerminalSplit,
   });
 
@@ -384,10 +384,11 @@ function NodeDetailPanelOfRun({
       )}
 
       {retryConfirm && (
-        <RetryConfirmDialog
-          retryConfirm={retryConfirm}
-          confirmRetry={confirmRetry}
-          cancelRetry={cancelRetry}
+        <GestureConfirmDialog
+          confirmation={retryConfirm}
+          target={shownName}
+          onConfirm={() => void confirmRetry()}
+          onClose={cancelRetry}
         />
       )}
     </aside>

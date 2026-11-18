@@ -11,11 +11,17 @@ import CommandPalette from "./CommandPalette";
 import { usePaletteHost, type PaletteHost } from "./paletteHost";
 import { usePalette } from "./paletteStore";
 
-// CORE-206: the node's Stop the palette sends, once confirmed.
-const stopNode = vi.hoisted(() => vi.fn());
+// CORE-206: the node's Stop and Retry the palette sends, once confirmed.
+const { stopNode, retryNode, retryNodePreview } = vi.hoisted(() => ({
+  stopNode: vi.fn(),
+  retryNode: vi.fn(),
+  retryNodePreview: vi.fn(),
+}));
 vi.mock("../../run/api/nodes", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   stopNode,
+  retryNode,
+  retryNodePreview,
 }));
 
 const run = (id: string, name: string, status = "running"): RunListEntry =>
@@ -350,6 +356,73 @@ describe("CommandPalette", () => {
       const dialog = screen.getByRole("dialog", { name: "Stop node implement?" });
       fireEvent.click(within(dialog).getByRole("button", { name: "Stop" }));
       expect(stopNode).toHaveBeenCalledExactlyOnceWith("r1", "implement");
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
+  describe("a node's Retry asks first when it destroys something, in the node panel's window (CORE-206)", () => {
+    const selectNode = (status: string) =>
+      usePaletteHost.getState().setHost(
+        host({
+          selection: {
+            kind: "node",
+            run: { id: "r1", status: "running" },
+            node: { id: "implement", name: "implement", type: "agent", status, iter: 1 },
+          } as PaletteHost["selection"],
+        }),
+      );
+    const pickRetry = async () => {
+      fireEvent.click(screen.getByTestId("command-field"));
+      const selection = await screen.findByTestId("palette-group-selection");
+      await act(async () => void fireEvent.click(within(selection).getByText("Retry")));
+    };
+    const preview = (affected: number) =>
+      retryNodePreview.mockResolvedValue({ downstream: [], affected_count: affected, with_artifacts: [] });
+
+    beforeEach(() => {
+      retryNode.mockReset().mockResolvedValue({ ok: true, iter: 2, invalidated: [] });
+      retryNodePreview.mockReset();
+      act(() => usePalette.getState().settle());
+    });
+
+    it("on a running node, closes the palette and says it ends its live session, in the danger tone; cancel sends nothing", async () => {
+      preview(0);
+      await load([]);
+      selectNode("running");
+      renderPalette();
+      await pickRetry();
+      expect(screen.queryByTestId("command-palette")).toBeNull();
+      const dialog = await screen.findByRole("dialog", { name: "Retry node implement?" });
+      expect(within(dialog).getAllByTestId("gesture-confirm-line").map((l) => l.textContent)).toEqual([
+        "Ends its live session",
+      ]);
+      expect(within(dialog).getByRole("button", { name: "Retry" })).toHaveClass("d-btn--danger");
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(retryNode).not.toHaveBeenCalled();
+    });
+
+    it("on a completed node whose downstream holds artifacts, says how many it resets, in the danger tone; confirm retries", async () => {
+      preview(2);
+      await load([]);
+      selectNode("completed");
+      renderPalette();
+      await pickRetry();
+      const dialog = await screen.findByRole("dialog", { name: "Retry node implement?" });
+      expect(within(dialog).getByTestId("gesture-confirm-line")).toHaveTextContent("Resets 2 downstream nodes");
+      expect(within(dialog).getByRole("button", { name: "Retry" })).toHaveClass("d-btn--danger");
+      fireEvent.click(within(dialog).getByRole("button", { name: "Retry" }));
+      expect(retryNode).toHaveBeenCalledExactlyOnceWith("r1", "implement");
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("on a failed node with nothing downstream, retries at once, no window", async () => {
+      preview(0);
+      await load([]);
+      selectNode("failed");
+      renderPalette();
+      await pickRetry();
+      await waitFor(() => expect(retryNode).toHaveBeenCalledExactlyOnceWith("r1", "implement"));
       expect(screen.queryByRole("dialog")).toBeNull();
     });
   });

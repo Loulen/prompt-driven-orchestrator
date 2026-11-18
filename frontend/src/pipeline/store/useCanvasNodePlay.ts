@@ -17,12 +17,9 @@ export function useCanvasNodePlay(
   const candidates = useMemo<PlayCandidate[]>(() => {
     if (!pipeline || !runState) return [];
     return pipeline.nodes.flatMap((n) => {
-      const kind = nodePlayKind({
-        onDemand: n.on_demand ?? false,
-        status: runState.nodes[n.id]?.status ?? "pending",
-        runStatus: runState.status,
-      });
-      return kind ? [{ nodeId: n.id, kind }] : [];
+      const status = runState.nodes[n.id]?.status ?? "pending";
+      const kind = nodePlayKind({ onDemand: n.on_demand ?? false, status, runStatus: runState.status });
+      return kind ? [{ nodeId: n.id, kind, status, nodeName: n.name || n.id }] : [];
     });
   }, [pipeline, runState]);
   const nodePlay = useNodePlay(runState?.run_id ?? null, candidates);
@@ -39,7 +36,7 @@ export function useCanvasNodePlay(
           ...card.data,
           play: candidate.kind,
           playRefused: whyNotPlay(candidate.nodeId, candidate.kind),
-          onPlay: () => void play(candidate.nodeId, candidate.kind),
+          onPlay: () => void play(candidate),
         },
       };
     },

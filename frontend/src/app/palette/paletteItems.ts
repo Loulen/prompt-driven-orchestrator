@@ -33,7 +33,9 @@ import { copyToClipboard } from "../../shared/lib/clipboard";
 import { toast } from "../../shared/ui/toast";
 import { SettingsIcon, StatsIcon } from "../../shared/ui/brand/AccentIcons";
 import { killNode, pauseRun, resumeRun, retryAll } from "../../run/api/commands";
-import { retryNode, retryNodePreview, stopNode } from "../../run/api/nodes";
+import { retryNode, stopNode } from "../../run/api/nodes";
+import { retryConfirmation } from "../../run/store/retryConfirmation";
+import type { NodeStatus } from "../../shared/generated/NodeStatus";
 import { markNodeDone, releaseNodeCompletion } from "../../run/api/completion";
 import { whyNotOnNode, whyNotOnRun, type GestureRights, type NodeGesture, type RunGesture } from "../../run/model/runGestures";
 import { isMarkCompletable } from "../../run/model/nodeStatus";
@@ -120,7 +122,8 @@ export function coreItems({ host, pipelines, openPipeline, appearance, setTheme,
 }
 
 const LIVE = new Set(["running", "awaiting_user"]);
-const NODE_RETRYABLE = new Set(["failed", "stale", "stopped", "interrupted", "completed"]);
+// CORE-206: a running node's Retry too, as the node panel's: it asks first.
+const NODE_RETRYABLE = new Set(["running", "failed", "stale", "stopped", "interrupted", "completed"]);
 const NODE_STOPPABLE = new Set(["running", "stale", "awaiting_user"]);
 
 /** What a contextual row shows of the selected item. */
@@ -178,7 +181,7 @@ export function selectionItems(
       }
     }
     if (NODE_RETRYABLE.has(node.status) && runStatus !== "paused" && runStatus !== "halted" && runStatus !== "archived") {
-      add("node-retry", "Retry", RotateCcw, () => void retryWithPreview(runId, node.id, confirm), whyNode("retry"));
+      add("node-retry", "Retry", RotateCcw, () => void askRetry(runId, node, confirm), whyNode("retry"));
     }
     if (NODE_STOPPABLE.has(node.status)) {
       // CORE-206: asked first, in the window the node panel opens: a stale
@@ -229,20 +232,21 @@ export function selectionItems(
   return items;
 }
 
-/** A node's Retry: asked first when it resets downstream nodes with artifacts, as the panel's. */
-async function retryWithPreview(runId: string, nodeId: string, confirm: (request: PaletteConfirm) => void) {
-  const retry = () => void retryNode(runId, nodeId).catch(report);
+/**
+ * A node's Retry: asked first, in the window the node panel opens, when it
+ * ends a live session or resets downstream nodes with artifacts (CORE-206).
+ */
+async function askRetry(
+  runId: string,
+  node: { id: string; name?: string | null; status: NodeStatus },
+  confirm: (request: PaletteConfirm) => void,
+) {
+  const nodeName = node.name || node.id;
+  const retry = () => void retryNode(runId, node.id).catch(report);
   try {
-    const preview = await retryNodePreview(runId, nodeId);
-    if (preview.affected_count === 0) return retry();
-    const n = preview.affected_count;
-    confirm({
-      title: "Retry this node?",
-      consequence: `Resets ${n} downstream ${n === 1 ? "node" : "nodes"}`,
-      target: nodeId,
-      actionLabel: "Retry",
-      run: retry,
-    });
+    const gesture = await retryConfirmation({ runId, nodeId: node.id, status: node.status, nodeName });
+    if (gesture) confirm({ gesture, target: nodeName, run: retry });
+    else retry();
   } catch (e) {
     report(e);
   }

@@ -1,8 +1,6 @@
 import { LoaderCircle } from "lucide-react";
 import type { RunState } from "../../shared/generated/RunState";
 import { waitingForStartedNodesLabel } from "../model/nodePlay";
-import type { useNodePlay } from "../store/useNodePlay";
-import RetryConfirmDialog from "./nodeDetail/RetryConfirmDialog";
 
 /**
  * ADR-0086 « Attente des nœuds lancés »: the Run reached `End` but still runs,
@@ -38,17 +36,5 @@ export function WaitingForStartedNodesReason({ run }: { run: RunState | null }) 
       <div className="font-medium text-st-await">Reached End, {waitingForStartedNodesLabel(count)}</div>
       <div className="mt-0.5 break-words">The run ends by itself when they are done.</div>
     </div>
-  );
-}
-
-/** The « Retry this node? » confirmation of a card's ▶, while one is pending. */
-export function NodePlayRetryConfirm({ nodePlay }: { nodePlay: ReturnType<typeof useNodePlay> }) {
-  if (!nodePlay.retryConfirm) return null;
-  return (
-    <RetryConfirmDialog
-      retryConfirm={nodePlay.retryConfirm}
-      confirmRetry={() => void nodePlay.confirmRetry()}
-      cancelRetry={nodePlay.cancelRetry}
-    />
   );
 }

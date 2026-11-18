@@ -12,14 +12,16 @@ vi.mock("../api/nodes", async (importOriginal) => ({
   retryNodePreview: vi.fn(),
 }));
 
+vi.mock("../../shared/ui/toast", () => ({ toast: vi.fn() }));
+
 import { askAuthorization } from "../../shared/authorization/api";
+import { toast } from "../../shared/ui/toast";
 import { retryNode, retryNodePreview, startNode } from "../api/nodes";
 import { useNodePlay, type PlayCandidate } from "./useNodePlay";
 
-const CANDIDATES: PlayCandidate[] = [
-  { nodeId: "review", kind: "start" },
-  { nodeId: "branch", kind: "retry" },
-];
+const REVIEW: PlayCandidate = { nodeId: "review", kind: "start", status: "pending", nodeName: "Review" };
+const BRANCH: PlayCandidate = { nodeId: "branch", kind: "retry", status: "skipped", nodeName: "Branch" };
+const CANDIDATES: PlayCandidate[] = [REVIEW, BRANCH];
 
 beforeEach(() => {
   vi.mocked(askAuthorization).mockReset();
@@ -46,27 +48,64 @@ describe("useNodePlay (ADR-0086)", () => {
     ]);
   });
 
-  it("starts an on-demand node and retries a skipped one, asking first when it resets work", async () => {
+  it("starts an on-demand node, and retries a skipped one with nothing downstream at once", async () => {
     vi.mocked(askAuthorization).mockResolvedValue([{ decision: "allow" }, { decision: "allow" }]);
     const { result } = renderHook(() => useNodePlay("r1", CANDIDATES));
 
-    await act(() => result.current.play("review", "start"));
+    await act(() => result.current.play(REVIEW));
     expect(startNode).toHaveBeenCalledWith("r1", "review");
 
     vi.mocked(retryNodePreview).mockResolvedValueOnce({ downstream: [], affected_count: 0, with_artifacts: [] });
-    await act(() => result.current.play("branch", "retry"));
+    await act(() => result.current.play(BRANCH));
     expect(retryNode).toHaveBeenCalledWith("r1", "branch");
+    expect(result.current.retryConfirm).toBeNull();
+  });
 
-    vi.mocked(retryNode).mockClear();
-    vi.mocked(retryNodePreview).mockResolvedValueOnce({
-      downstream: ["end"],
-      affected_count: 1,
-      with_artifacts: ["end"],
-    });
-    await act(() => result.current.play("branch", "retry"));
+  // CORE-206: the panel's rule, the panel's window.
+  it("asks first when the retry resets downstream nodes; cancel sends nothing, confirm retries", async () => {
+    vi.mocked(askAuthorization).mockResolvedValue([{ decision: "allow" }, { decision: "allow" }]);
+    vi.mocked(retryNodePreview).mockResolvedValue({ downstream: ["end"], affected_count: 1, with_artifacts: ["end"] });
+    const { result } = renderHook(() => useNodePlay("r1", CANDIDATES));
+
+    await act(() => result.current.play(BRANCH));
     expect(retryNode).not.toHaveBeenCalled();
-    expect(result.current.retryConfirm).toEqual({ nodeId: "branch", affectedCount: 1 });
+    expect(result.current.retryConfirm).toEqual({
+      nodeId: "branch",
+      nodeName: "Branch",
+      confirmation: {
+        title: "Retry node Branch?",
+        consequences: ["Resets 1 downstream node"],
+        danger: true,
+        actionLabel: "Retry",
+      },
+    });
+    act(() => result.current.cancelRetry());
+    expect(result.current.retryConfirm).toBeNull();
+    expect(retryNode).not.toHaveBeenCalled();
+
+    await act(() => result.current.play(BRANCH));
     await act(() => result.current.confirmRetry());
-    expect(retryNode).toHaveBeenCalledWith("r1", "branch");
+    expect(retryNode).toHaveBeenCalledExactlyOnceWith("r1", "branch");
+    expect(result.current.retryConfirm).toBeNull();
+  });
+
+  it("asks on a live node too: it ends its live session", async () => {
+    vi.mocked(askAuthorization).mockResolvedValue([{ decision: "allow" }]);
+    vi.mocked(retryNodePreview).mockResolvedValue({ downstream: [], affected_count: 0, with_artifacts: [] });
+    const live: PlayCandidate = { ...BRANCH, status: "running" };
+    const candidates = [live];
+    const { result } = renderHook(() => useNodePlay("r1", candidates));
+    await act(() => result.current.play(live));
+    expect(result.current.retryConfirm?.confirmation.consequences).toEqual(["Ends its live session"]);
+    expect(retryNode).not.toHaveBeenCalled();
+  });
+
+  it("says a refused retry in a toast", async () => {
+    vi.mocked(askAuthorization).mockResolvedValue([{ decision: "allow" }, { decision: "allow" }]);
+    vi.mocked(retryNodePreview).mockResolvedValue({ downstream: [], affected_count: 0, with_artifacts: [] });
+    vi.mocked(retryNode).mockRejectedValueOnce(new Error("resume the run first"));
+    const { result } = renderHook(() => useNodePlay("r1", CANDIDATES));
+    await act(() => result.current.play(BRANCH));
+    expect(toast).toHaveBeenCalledWith("Retry refused — resume the run first", "error");
   });
 });

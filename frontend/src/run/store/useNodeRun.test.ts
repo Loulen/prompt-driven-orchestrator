@@ -387,10 +387,10 @@ describe("useNodeRun — commands", () => {
 });
 
 describe("useNodeRun — retry", () => {
-  it("retries straight away when nothing downstream is affected, and signals the retry", async () => {
+  it("retries a settled node with nothing downstream straight away, and signals the retry", async () => {
     const onRetryStarted = vi.fn();
     const { result } = renderHook(() =>
-      useNodeRun("run-1", makeNode({ status: "running" }), 1, { onRetryStarted }),
+      useNodeRun("run-1", makeNode({ status: "failed" }), 1, { onRetryStarted }),
     );
     await flush();
 
@@ -402,6 +402,25 @@ describe("useNodeRun — retry", () => {
     expect(onRetryStarted).toHaveBeenCalledTimes(1);
   });
 
+  // CORE-206: a Retry that ends a live session asks first, naming the node.
+  it("asks on a running node with nothing downstream: it ends its live session", async () => {
+    const { result } = renderHook(() =>
+      useNodeRun("run-1", makeNode({ status: "running" }), 1, { nodeName: "implement" }),
+    );
+    await flush();
+
+    await act(async () => {
+      await result.current.retry();
+    });
+    expect(result.current.retryConfirm).toEqual({
+      title: "Retry node implement?",
+      consequences: ["Ends its live session"],
+      danger: true,
+      actionLabel: "Retry",
+    });
+    expect(api.retryNode).not.toHaveBeenCalled();
+  });
+
   it("asks for confirmation instead, and does NOT signal a retry that has not happened", async () => {
     vi.mocked(api.retryNodePreview).mockResolvedValue({
       downstream: ["b", "c"],
@@ -410,14 +429,15 @@ describe("useNodeRun — retry", () => {
     });
     const onRetryStarted = vi.fn();
     const { result } = renderHook(() =>
-      useNodeRun("run-1", makeNode({ status: "running" }), 1, { onRetryStarted }),
+      useNodeRun("run-1", makeNode({ status: "completed" }), 1, { onRetryStarted }),
     );
     await flush();
 
     await act(async () => {
       await result.current.retry();
     });
-    expect(result.current.retryConfirm).toEqual({ affectedCount: 2 });
+    expect(result.current.retryConfirm?.title).toBe("Retry node n1?");
+    expect(result.current.retryConfirm?.consequences).toEqual(["Resets 2 downstream nodes"]);
     expect(api.retryNode).not.toHaveBeenCalled();
     expect(onRetryStarted).not.toHaveBeenCalled();
 
@@ -443,11 +463,26 @@ describe("useNodeRun — retry", () => {
     await act(async () => {
       await result.current.retry();
     });
-    expect(result.current.retryConfirm).toEqual({ affectedCount: 1 });
+    expect(result.current.retryConfirm?.consequences).toEqual(["Ends its live session", "Resets 1 downstream node"]);
 
     await act(async () => {
       result.current.cancelRetry();
     });
+    expect(result.current.retryConfirm).toBeNull();
+    expect(api.retryNode).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a failed retry preview as an actionVerdict, sending nothing", async () => {
+    vi.mocked(api.retryNodePreview).mockRejectedValue(new Error("run not found"));
+    const { result } = renderHook(() =>
+      useNodeRun("run-1", makeNode({ status: "failed" }), 1, {}),
+    );
+    await flush();
+
+    await act(async () => {
+      await result.current.retry();
+    });
+    expect(result.current.actionVerdict).toEqual({ action: "retry", message: "run not found" });
     expect(result.current.retryConfirm).toBeNull();
     expect(api.retryNode).not.toHaveBeenCalled();
   });
@@ -492,7 +527,7 @@ describe("useNodeRun — retry", () => {
     await act(async () => {
       await result.current.retry();
     });
-    expect(result.current.retryConfirm).toEqual({ affectedCount: 1 });
+    expect(result.current.retryConfirm?.consequences).toEqual(["Resets 1 downstream node"]);
 
     await act(async () => {
       await result.current.confirmRetry();

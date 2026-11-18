@@ -21,7 +21,8 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   banners, the canvas ▶ and the Ctrl+K palette: one line per consequence ("Ends its live
   session", "Resets N downstream nodes"), always in the danger tone. A Retry of a failed,
   stopped, completed or interrupted node with nothing downstream still goes at once. The palette
-  now offers Retry on a running node, as the node panel does. The former Retry dialog is gone.
+  now offers Retry on a running or a skipped node, as the node panel does. The former Retry dialog
+  is gone.
 - A node's Stop, its Restart clean and the stale node's Stop ask first, in one confirmation window
   from the node panel's controls, its banners and the Ctrl+K palette: the node's name, what the
   gesture ends, in the danger tone; Cancel, Escape or a click outside send nothing, Confirm or

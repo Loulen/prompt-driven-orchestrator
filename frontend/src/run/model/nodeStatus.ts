@@ -21,6 +21,21 @@ export const isMarkCompletable = (status: NodeStatus, run: RunStatus): boolean =
   MARK_COMPLETABLE.has(status) && run !== "paused" && run !== "archived";
 
 /**
+ * The statuses a Retry re-drives (#598, ADR-0049, ADR-0086), a live one
+ * included: one list for the node panel and the command field, so Ctrl+K
+ * offers Retry wherever the panel does (CORE-206).
+ */
+export const RETRYABLE: ReadonlySet<NodeStatus> = new Set([
+  "running",
+  "completed",
+  "failed",
+  "stopped",
+  "stale",
+  "interrupted",
+  "skipped",
+]);
+
+/**
  * Three tones, because the three answers demand three different reactions:
  * `await` = it is still your turn, `failed` = the node is failed *now*,
  * `stopped` = refused with no state change, or indeterminable.

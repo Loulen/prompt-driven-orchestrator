@@ -38,7 +38,7 @@ import { retryConfirmation } from "../../run/store/retryConfirmation";
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
 import { markNodeDone, releaseNodeCompletion } from "../../run/api/completion";
 import { whyNotOnNode, whyNotOnRun, type GestureRights, type NodeGesture, type RunGesture } from "../../run/model/runGestures";
-import { isMarkCompletable } from "../../run/model/nodeStatus";
+import { RETRYABLE, isMarkCompletable } from "../../run/model/nodeStatus";
 import { nodeGestureConfirmation } from "../../run/model/nodeGestureConfirmation";
 import { APPROVE_LABEL, AUTO_APPROVE_ARMED, AUTO_APPROVE_LABEL, approveWaitReason } from "../../run/model/approve";
 import type { Icon } from "../../shared/ui/kit";
@@ -122,8 +122,6 @@ export function coreItems({ host, pipelines, openPipeline, appearance, setTheme,
 }
 
 const LIVE = new Set(["running", "awaiting_user"]);
-// CORE-206: a running node's Retry too, as the node panel's: it asks first.
-const NODE_RETRYABLE = new Set(["running", "failed", "stale", "stopped", "interrupted", "completed"]);
 const NODE_STOPPABLE = new Set(["running", "stale", "awaiting_user"]);
 
 /** What a contextual row shows of the selected item. */
@@ -180,7 +178,7 @@ export function selectionItems(
         });
       }
     }
-    if (NODE_RETRYABLE.has(node.status) && runStatus !== "paused" && runStatus !== "halted" && runStatus !== "archived") {
+    if (RETRYABLE.has(node.status) && runStatus !== "paused" && runStatus !== "halted" && runStatus !== "archived") {
       add("node-retry", "Retry", RotateCcw, () => void askRetry(runId, node, confirm), whyNode("retry"));
     }
     if (NODE_STOPPABLE.has(node.status)) {

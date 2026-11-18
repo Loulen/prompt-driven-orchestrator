@@ -1,22 +1,11 @@
 import { Play, RefreshCw, RotateCcw, Square } from "lucide-react";
 import type { NodeState } from "../../../shared/generated/NodeState";
-import type { NodeStatus } from "../../../shared/generated/NodeStatus";
 import { IconButton, Tooltip } from "../../../shared/ui/kit";
 import { ReviewIcon } from "../../../shared/ui/brand/AccentIcons";
 import type { ActionVerdict } from "../../store/useNodeRun";
+import { RETRYABLE } from "../../model/nodeStatus";
 import NodeBanner from "./NodeBanner";
 import type { NodeGestureRefusals } from "./types";
-
-/** The statuses a Retry re-drives (#598, ADR-0049, ADR-0086), with a live one. */
-const RETRYABLE: ReadonlySet<NodeStatus> = new Set([
-  "running",
-  "completed",
-  "failed",
-  "stopped",
-  "stale",
-  "interrupted",
-  "skipped",
-]);
 
 /**
  * The node's lifecycle controls, one line: Review, Retry, Start, Restart clean

@@ -175,6 +175,27 @@ describe("the selection's gestures", () => {
       expect(retryNode).not.toHaveBeenCalled();
     });
 
+    it("is offered on every status the node panel offers it on, a skipped one included", () => {
+      for (const status of ["running", "completed", "failed", "stopped", "stale", "interrupted", "skipped"]) {
+        expect(labels(node(status)), status).toContain("Retry");
+      }
+      for (const status of ["pending", "waiting", "awaiting_user"]) {
+        expect(labels(node(status)), status).not.toContain("Retry");
+      }
+    });
+
+    it("asks on a skipped node whose downstream has artifacts, as the canvas ▶ does", async () => {
+      const confirm = await pickRetry("skipped", 2);
+      await vi.waitFor(() => expect(confirm).toHaveBeenCalled());
+      expect(confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target: "Review",
+          gesture: expect.objectContaining({ consequences: ["Resets 2 downstream nodes"], danger: true }),
+        }),
+      );
+      expect(retryNode).not.toHaveBeenCalled();
+    });
+
     it("retries a failed node with nothing downstream at once", async () => {
       const confirm = await pickRetry("failed", 0);
       await vi.waitFor(() => expect(retryNode).toHaveBeenCalledWith("r1", "review"));

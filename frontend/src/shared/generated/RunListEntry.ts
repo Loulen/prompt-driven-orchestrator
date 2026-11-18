@@ -2,6 +2,7 @@
 import type { ActivitySpan } from "./ActivitySpan";
 import type { Actor } from "./Actor";
 import type { NodeProgress } from "./NodeProgress";
+import type { RunProvenance } from "./RunProvenance";
 import type { RunStatus } from "./RunStatus";
 
 export type RunListEntry = { run_id: string, pipeline_name: string, status: RunStatus, 
@@ -41,6 +42,11 @@ triggered_by?: string,
  * Who created the Run (API 0.8), as `RunState::created_by`.
  */
 created_by?: Actor, 
+/**
+ * Where it comes from, when an extension created it with a Provenance:
+ * the « External source » of its row and of the list's filter.
+ */
+provenance?: RunProvenance, 
 /**
  * Provenance: the parent Run + node whose session created this Run
  * (ADR-0064) — the key the "orchestrated" badge and the "root runs only"

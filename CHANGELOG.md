@@ -30,6 +30,20 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   the conversation by hand in the run's worktree until the run is archived. A gesture the caller
   may not make stays greyed and opens nothing. Escape on an open tooltip now closes the tooltip
   alone, not the window under it.
+## 2.78.0
+
+- New seam, the Provenance of a Run an extension creates: `NewRun::from_source(Provenance::new(label,
+  link))` gives the Run a short label and a deep link of the interface (`#/ext/…`, `#/runs/…`) toward what started
+  it. The core freezes it in `RunStarted` with the extension's id, serves it as `provenance` on the
+  Run and on its entry of `GET /runs`, and a retry keeps it. `POST /runs` takes none; a blank or too
+  long label, or a link that is not a deep link, is refused with a `400`.
+- A Run an extension created with a Provenance shows it as an "External source": a chip with its
+  label after the Run's name in the Runs list (a click follows the link), a row of its Info tab
+  (the label, linking, and the extension's id), each with its switch in Settings › Appearance.
+  The Trigger mark does not change, and the Triggers tab never sees it.
+- The Runs list's "Trigger" filter becomes "Launched by": Anyone, By hand, A trigger (then each
+  Trigger), An external source (then each label, with its number of Runs). A Run from an external
+  source is no longer "By hand" (formerly "Manual").
 
 ## 2.77.0
 

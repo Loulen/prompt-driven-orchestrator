@@ -13,6 +13,7 @@
 //!   [`run_root`]: the Run at the top of a chain of parents.
 //! - [`live_session`]: a node's facts for the gestures that speak to its agent.
 //! - [`presence`]: who has a Run open in a browser (API 0.12).
+//! - [`provenance`]: where a Run an extension created comes from.
 //! - What a Run costs: [`prices`] (the price table's tiers) and [`run_cost`]
 //!   (the contributions and a transcript's usage).
 
@@ -34,6 +35,7 @@ pub mod on_demand;
 pub mod presence;
 pub mod prices;
 pub mod projection;
+pub mod provenance;
 pub mod reap_policy;
 pub mod recovery;
 pub mod restart_verdict;

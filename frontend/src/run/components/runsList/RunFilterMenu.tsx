@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { ArrowRight, Calendar, FolderGit2, Workflow, X, Zap } from "lucide-react";
+import { ArrowRight, Calendar, ExternalLink, FolderGit2, UserRound, Workflow, X, Zap } from "lucide-react";
 import type { Attributes } from "../../../shared/extensions/attributes";
 import ExtensionBoundary from "../../../shared/extensions/ExtensionBoundary";
 import { useListFilters } from "../../../shared/extensions/listFilters";
@@ -15,10 +15,17 @@ import {
   type DateRange,
   type RunDateFilter,
 } from "../../model/runDateFilter";
-import type { RunFilterOption, RunFilterOptions, RunFilterValue } from "../../model/runFilter";
+import {
+  ANY_SOURCE,
+  ANY_TRIGGER,
+  MANUAL_TRIGGER,
+  type RunFilterOption,
+  type RunFilterOptions,
+  type RunFilterValue,
+} from "../../model/runFilter";
 
 /* CORE-110 — the Runs filters, in the popover the header's funnel opens: one
-   row per filter (Project, Pipeline, Trigger, Date), then the extensions'
+   row per filter (Project, Pipeline, Launched by, Date), then the extensions'
    list filters of the Runs (`runs/filter`) and of their Projet
    (`projects/filter`), then the count and « Clear all ». */
 
@@ -70,11 +77,20 @@ function Row({ icon: RowIcon, label, testId, top, children }: {
   );
 }
 
-function AxisSelect({ label, options, value, onChange }: {
+/** The icon of a « Launched by » choice that stands for a whole population. */
+const LAUNCH_ICONS: Record<string, Icon> = {
+  [MANUAL_TRIGGER]: UserRound,
+  [ANY_TRIGGER]: Zap,
+  [ANY_SOURCE]: ExternalLink,
+};
+
+function AxisSelect({ label, options, value, onChange, all = "All" }: {
   label: string;
   options: RunFilterOption[];
   value: string | null;
   onChange: (v: string | null) => void;
+  /** The label of the choice that narrows nothing. */
+  all?: string;
 }) {
   return (
     <Select
@@ -82,9 +98,12 @@ function AxisSelect({ label, options, value, onChange }: {
       className="sh-rf__sel"
       active={value !== null}
       label={label}
-      placeholder="All"
+      placeholder={all}
       value={value ?? ANY}
-      options={[{ value: ANY, label: "All" }, ...options.map((o) => ({ ...o, title: o.label }))]}
+      options={[
+        { value: ANY, label: all },
+        ...options.map((o) => ({ ...o, title: o.title ?? o.label, icon: LAUNCH_ICONS[o.value] })),
+      ]}
       onChange={(v) => onChange(v === ANY ? null : v)}
     />
   );
@@ -228,9 +247,10 @@ export default function RunFilterMenu({
           onChange={(pipeline) => onChange({ ...value, pipeline })}
         />
       </Row>
-      <Row icon={Zap} label="Trigger" testId="run-filter-trigger">
+      <Row icon={UserRound} label="Launched by" testId="run-filter-trigger">
         <AxisSelect
-          label="Trigger"
+          label="Launched by"
+          all="Anyone"
           options={options.trigger}
           value={value.trigger}
           onChange={(trigger) => onChange({ ...value, trigger })}

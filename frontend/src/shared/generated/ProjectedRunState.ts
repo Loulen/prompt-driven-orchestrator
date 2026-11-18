@@ -14,6 +14,7 @@ import type { NodeState } from "./NodeState";
 import type { PipelineVersionRef } from "./PipelineVersionRef";
 import type { RepoPin } from "./RepoPin";
 import type { ReviewComment } from "./ReviewComment";
+import type { RunProvenance } from "./RunProvenance";
 import type { RunStatus } from "./RunStatus";
 import type { SandboxMode } from "./SandboxMode";
 import type { SandboxPrepState } from "./SandboxPrepState";
@@ -284,6 +285,10 @@ created_by?: Actor,
  * [`RunState::created_by`].
  */
 trigger_editor?: Actor, 
+/**
+ * The Provenance an extension gave the Run: frozen, kept by a retry.
+ */
+provenance?: RunProvenance, 
 /**
  * Provenance: the Run whose node session created this one (ADR-0064).
  * **Mechanical**: posed by the daemon at create time from the caller's

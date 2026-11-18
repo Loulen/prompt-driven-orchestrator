@@ -136,6 +136,8 @@ fn request(fire: RunFromTrigger) -> CreateRunRequest {
             trigger_id: trigger.id.clone(),
         }),
         trigger_editor: trigger.last_editor.clone(),
+        // A Trigger's Run says where it comes from by `triggered_by`.
+        provenance: None,
     }
 }
 

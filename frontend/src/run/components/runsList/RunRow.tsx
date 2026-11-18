@@ -11,7 +11,7 @@ import HoverBar, { RowAction } from "../../../shared/ui/leftList/HoverBar";
 import RunRowMenu, { type RunRowMenuPane } from "./RunRowMenu";
 import RunParentLink, { type RunParentLinkPane } from "./RunParentLink";
 import RunRowPeople from "./RunRowPeople";
-import { ChildPills, NodePips, RunFigures, RunStatusMark, TriggerMark } from "./RunRowParts";
+import { ChildPills, ExternalSourceChip, NodePips, RunFigures, RunStatusMark, TriggerMark } from "./RunRowParts";
 import { shownNodes } from "../../model/runRowNodes";
 import type { RunGesture } from "../../model/runGestures";
 import { hasSecondLine, isSecondLineElement, RUN_ROW, RUN_ROW_LOCATIONS } from "../../model/runRowElements";
@@ -125,6 +125,7 @@ export default function RunRow({
     (pointed !== RUN_ROW.parent || linkedParent !== undefined) &&
     !(preview?.sample && contributionIds.includes(pointed));
   const triggerMarks = marksOf(RUN_ROW.trigger);
+  const sourceMarks = marksOf(RUN_ROW.externalSource);
   const pillsMarks = marksOf(RUN_ROW.childPills);
   const pipsMarks = marksOf(RUN_ROW.nodePips);
   const pipelineMarks = marksOf(RUN_ROW.pipeline);
@@ -290,6 +291,7 @@ export default function RunRow({
             {label}
           </span>
         )}
+        {run.provenance && sourceMarks && <ExternalSourceChip source={run.provenance} marks={sourceMarks} />}
         {trigger !== null && triggerMarks && (
           <TriggerMark
             name={trigger}

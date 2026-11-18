@@ -317,6 +317,10 @@ pub struct RunState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub trigger_editor: Option<pdo_kernel::Actor>,
+    /// The Provenance an extension gave the Run: frozen, kept by a retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub provenance: Option<crate::domain::provenance::RunProvenance>,
     /// Provenance: the Run whose node session created this one (ADR-0064).
     /// **Mechanical**: posed by the daemon at create time from the caller's
     /// verified live node session — never declared by the caller, whose body may

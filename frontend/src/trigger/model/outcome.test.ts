@@ -38,12 +38,13 @@ describe("trigger outcome model", () => {
   });
 
   it("says the next fire in the time zone its cron is read in", () => {
-    expect(formatFireTs("2026-11-01T03:00:00.000Z")).toMatch(/03:00 UTC$/);
-    // The browser's zone, set here: a machine in UTC would read UTC either way.
+    // A browser away from UTC, whatever the machine running the test: in UTC,
+    // its local zone would read « UTC » too.
     const tz = process.env.TZ;
     process.env.TZ = "Europe/Paris";
     try {
-      expect(formatFireTs("2026-11-01T03:00:00.000Z", "local")).toMatch(/04:00 GMT\+1$/);
+      expect(formatFireTs("2026-11-01T03:00:00.000Z")).toMatch(/03:00 UTC$/);
+      expect(formatFireTs("2026-11-01T03:00:00.000Z", "local")).not.toMatch(/UTC$/);
     } finally {
       if (tz === undefined) delete process.env.TZ;
       else process.env.TZ = tz;

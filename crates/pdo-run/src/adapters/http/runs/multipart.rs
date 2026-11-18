@@ -333,6 +333,7 @@ pub(super) async fn parse_multipart_create_run(
         source_fetch_error: None,
         created_by: None,
         trigger_editor: None,
+        provenance: None,
     };
     Ok((req, attachments))
 }

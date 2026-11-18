@@ -161,6 +161,9 @@ pub async fn retry_all_run(state: &Arc<Runs>, run_id: &str) -> Response {
         // command carries no Actor of its own.
         created_by: run_state.created_by.clone(),
         trigger_editor: run_state.trigger_editor.clone(),
+        // The twin comes from where the original came from: a retry does not
+        // make an extension's Run look launched by hand.
+        provenance: run_state.provenance.clone(),
     };
     // ADR-0064: a retried Run is created by the daemon, not from a node
     // session — it is a root even when the archived original had a parent.

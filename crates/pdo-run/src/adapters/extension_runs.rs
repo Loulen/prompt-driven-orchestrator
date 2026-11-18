@@ -14,6 +14,7 @@ use pdo_kernel::Actor;
 use crate::application::create_run::{reject_unknown_create_run_fields, CreateRunRequest};
 use crate::application::tree_cost::TreeCosts;
 use crate::domain::projection::project;
+use crate::domain::provenance::RunProvenance;
 use crate::domain::state::{CostStat, TreeCost};
 use crate::Runs;
 
@@ -28,8 +29,9 @@ impl ExtensionRuns {
 }
 
 impl RunCreator for ExtensionRuns {
-    fn create_run(&self, actor: Actor, run: NewRun) -> RunCreation {
+    fn create_run(&self, extension: &str, actor: Actor, run: NewRun) -> RunCreation {
         let runs = self.0.upgrade();
+        let extension = extension.to_string();
         Box::pin(async move {
             let Some(runs) = runs else {
                 return Err(RunNotCreated::unavailable("the daemon is stopping"));
@@ -38,12 +40,21 @@ impl RunCreator for ExtensionRuns {
             let body = run.to_request_body();
             reject_unknown_create_run_fields(&body)
                 .map_err(|(status, body)| RunNotCreated::new(status.as_u16(), body))?;
-            let request: CreateRunRequest = serde_json::from_value(body).map_err(|e| {
+            let mut request: CreateRunRequest = serde_json::from_value(body).map_err(|e| {
                 RunNotCreated::new(
                     400,
                     serde_json::json!({ "error": format!("invalid run: {e}") }),
                 )
             })?;
+            // Its Provenance rides beside the body (no `POST /runs` takes
+            // one), checked before anything exists, frozen with the extension.
+            if let Some(provenance) = run.provenance {
+                request.provenance = Some(
+                    RunProvenance::declared(&extension, provenance).map_err(|refusal| {
+                        RunNotCreated::new(400, serde_json::json!({ "error": refusal }))
+                    })?,
+                );
+            }
             // A root Run (no node session), created by `actor`.
             let response = runs.create_run(&actor, request, Vec::new(), None).await;
             let status = response.status();

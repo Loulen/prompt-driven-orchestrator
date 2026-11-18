@@ -850,6 +850,10 @@ declaration order, whatever its `when`) and hands `<path>` to it as `context.pat
 - A link toward an extension that is not installed, whose interface is not loaded, or that has no
   page at that location shows an error toast and opens nothing.
 
+- The **External source** of a Run an extension created (its Provenance,
+  [extension-api.md](extension-api.md#the-provenance-of-a-run-an-extension-creates)) is a deep link
+  the core follows: a click on its chip in the Runs list, or on its row of the Info tab, opens it.
+
 ### Toward a Run
 
 `#/runs/<run_id>` is the core's own deep link toward a Run. Following it closes the open

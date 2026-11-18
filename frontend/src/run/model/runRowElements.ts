@@ -9,6 +9,7 @@ import type { UiLocation } from "../../shared/generated/UiLocation";
 
 export const RUN_ROW = {
   trigger: "runs.list.trigger",
+  externalSource: "runs.list.external-source",
   childPills: "runs.list.child-pills",
   nodePips: "runs.list.node-pips",
   pipeline: "runs.list.pipeline",
@@ -20,6 +21,7 @@ export const RUN_ROW = {
 export type { RowElement } from "../../lib/appearance";
 
 export const RUN_ROW_FIRST_LINE: readonly RowElement[] = [
+  { id: RUN_ROW.externalSource, label: "External source" },
   { id: RUN_ROW.trigger, label: "Trigger" },
   { id: RUN_ROW.childPills, label: "Child runs" },
   { id: RUN_ROW.nodePips, label: "Node progress" },

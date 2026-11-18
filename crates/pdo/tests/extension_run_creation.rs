@@ -308,3 +308,96 @@ async fn an_extension_creates_a_run_through_its_host_on_behalf_of_an_actor() {
     assert_eq!(body["reason"], "the test extension refuses cle=refuse");
     assert_eq!(runs(&daemon).await.len(), 1, "only alice's first Run");
 }
+
+/// `POST /ext/test/runs` as `alice`, with `provenance`.
+async fn create_through_the_host(daemon: &TestDaemon, provenance: Value) -> (u16, Value) {
+    let response = reqwest::Client::new()
+        .post(format!("{}/ext/test/runs", daemon.url()))
+        .header(ACTOR_HEADER, "alice")
+        .json(&json!({
+            "pipeline": "solo",
+            "input": "from the backend",
+            "repo": daemon.target_repo(),
+            "provenance": provenance,
+        }))
+        .send()
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    (status, response.json::<Value>().await.unwrap())
+}
+
+#[tokio::test]
+async fn a_run_an_extension_creates_carries_its_provenance_frozen_and_listed() {
+    let (daemon, control) = daemon().await;
+    let (status, body) = create_through_the_host(
+        &daemon,
+        json!({ "label": " Demo ", "link": "#/ext/test/topbar/end/demo" }),
+    )
+    .await;
+    assert_eq!(status, 201, "{body}");
+    let run_id = body["run_id"].as_str().unwrap().to_string();
+    let frozen =
+        json!({ "label": "Demo", "link": "#/ext/test/topbar/end/demo", "extension": "test" });
+
+    assert_eq!(run_started(&daemon, &run_id).await["provenance"], frozen);
+    let run = daemon.get_json(&format!("/runs/{run_id}")).await;
+    assert_eq!(run["provenance"], frozen, "{run}");
+    assert!(run.get("triggered_by").is_none(), "not a Trigger's Run");
+    let listed = runs(&daemon).await;
+    let entry = listed
+        .iter()
+        .find(|r| r["run_id"] == run_id.as_str())
+        .unwrap();
+    assert_eq!(entry["provenance"], frozen, "{entry}");
+    assert!(entry.get("triggered_by").is_none());
+    timeline_once_launched(&control, &run_id).await;
+
+    let manual = crate::common::flow::create_run(&daemon, "solo").await;
+    let listed = runs(&daemon).await;
+    let entry = listed
+        .iter()
+        .find(|r| r["run_id"] == manual.as_str())
+        .unwrap();
+    assert!(
+        entry.get("provenance").is_none(),
+        "a Run like any other keeps its shape"
+    );
+    timeline_once_launched(&control, &manual).await;
+}
+
+#[tokio::test]
+async fn a_provenance_the_core_refuses_creates_nothing() {
+    let (daemon, _control) = daemon().await;
+    for provenance in [
+        json!({ "label": "Demo", "link": "javascript:alert(1)" }),
+        json!({ "label": "Demo", "link": "https://example.com" }),
+        json!({ "label": "Demo", "link": "#/settings" }),
+        json!({ "label": "  ", "link": "#/ext/test" }),
+    ] {
+        let (status, body) = create_through_the_host(&daemon, provenance.clone()).await;
+        assert_eq!(status, 400, "{provenance}: {body}");
+        assert!(
+            body["error"].as_str().unwrap().contains("Provenance"),
+            "{body}"
+        );
+    }
+    assert!(runs(&daemon).await.is_empty(), "no Run");
+}
+
+#[tokio::test]
+async fn no_post_runs_sets_a_provenance() {
+    let (daemon, _control) = daemon().await;
+    let mut body = create_body(&daemon, json!({}));
+    body["provenance"] = json!({ "label": "Demo", "link": "#/ext/test", "extension": "test" });
+    let (status, answer) = post_json(&daemon, "/runs", body).await;
+    assert_eq!(status, 400, "{answer}");
+    assert!(
+        answer["error"]
+            .as_str()
+            .unwrap()
+            .contains("unknown field `provenance`"),
+        "{answer}"
+    );
+    assert!(runs(&daemon).await.is_empty());
+}

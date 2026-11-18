@@ -17,12 +17,18 @@ import { ANY_TIME, runMatchesDate, type RunDateFilter } from "./runDateFilter";
 /** Sentinel filter values for rows whose axis key is absent/empty. */
 export const MANUAL_TRIGGER = "__manual__";
 export const NONE = "__none__";
+/** The « Launched by » axis: any Trigger, any External source (a Provenance). */
+export const ANY_TRIGGER = "__trigger__";
+export const ANY_SOURCE = "__source__";
+/** The prefix of one External source's value: `__source__:<extension>:<label>`. */
+const SOURCE_PREFIX = `${ANY_SOURCE}:`;
 
 export interface RunFilterValue {
   /** A {@link projectKey}: the Projet recorded on the Run, else its repo. */
   repo: string | null;
   pipeline: string | null;
-  /** A trigger id, or MANUAL_TRIGGER for manually launched runs. */
+  /** The « Launched by » axis: MANUAL_TRIGGER (by hand), ANY_TRIGGER, a
+   *  trigger id, ANY_SOURCE, or one External source ({@link launchKey}). */
   trigger: string | null;
   /** The Date axis (`runDateFilter.ts`): Active / Started over a range. */
   date: RunDateFilter;
@@ -61,8 +67,17 @@ export function pipelineKey(r: RunListEntry): string {
   const name = r.pipeline_name ?? "";
   return name.trim().length > 0 ? name : NONE;
 }
-export function triggerKey(r: RunListEntry): string {
+/** The « Launched by » key of a Run: its External source, else its Trigger, else by hand. */
+export function launchKey(r: RunListEntry): string {
+  if (r.provenance) return `${SOURCE_PREFIX}${r.provenance.extension}:${r.provenance.label}`;
   return r.triggered_by ?? MANUAL_TRIGGER;
+}
+
+/** Whether `r` was launched as the « Launched by » value `value` says. */
+function launchedBy(r: RunListEntry, value: string): boolean {
+  if (value === ANY_TRIGGER) return !!r.triggered_by;
+  if (value === ANY_SOURCE) return !!r.provenance;
+  return launchKey(r) === value;
 }
 
 /**
@@ -79,7 +94,7 @@ export function runMatchesFilter(
 ): boolean {
   if (f.repo !== null && projectKey(r, projectOf) !== f.repo) return false;
   if (f.pipeline !== null && pipelineKey(r) !== f.pipeline) return false;
-  if (f.trigger !== null && triggerKey(r) !== f.trigger) return false;
+  if (f.trigger !== null && !launchedBy(r, f.trigger)) return false;
   return runMatchesDate(r, f.date, now);
 }
 
@@ -101,6 +116,11 @@ export function activeFilterCount(f: RunFilterValue, ...attributes: object[]): n
 export interface RunFilterOption {
   value: string;
   label: string;
+  /** The caps header it is listed under. */
+  group?: string;
+  /** Right-aligned meta: the number of Runs of an External source. */
+  hint?: string;
+  title?: string;
 }
 
 /** The choices of each axis, read off the Runs themselves. */
@@ -123,9 +143,11 @@ function repoLabel(path: string): string {
 
 /**
  * The options of the three single-value axes. The Project axis offers the
- * list's groups: each Projet by name, then each repo of a Run in none. A
- * trigger resolves to its name, a deleted one keeps its id; « Manual » only
- * when a Run was launched by hand.
+ * list's groups: each Projet by name, then each repo of a Run in none. The
+ * « Launched by » axis offers « By hand » when a Run was launched by hand,
+ * « A trigger » and each trigger (by name, a deleted one by its id) when a
+ * Trigger launched one, « An external source » and each of them (its label,
+ * its number of Runs) when an extension created one with a Provenance.
  */
 export function runFilterOptions(
   runs: RunListEntry[],
@@ -149,9 +171,40 @@ export function runFilterOptions(
     value: v,
     label: v === NONE ? "(unnamed)" : v,
   }));
-  const trigger = uniqueSorted(runs.map(triggerKey)).map((v) => ({
-    value: v,
-    label: v === MANUAL_TRIGGER ? "Manual" : (triggers.find((t) => t.id === v)?.name ?? v),
-  }));
-  return { project, pipeline, trigger };
+  return { project, pipeline, trigger: launchOptions(runs, triggers) };
+}
+
+/** The « Launched by » options (see {@link runFilterOptions}). */
+function launchOptions(runs: RunListEntry[], triggers: { id: string; name: string }[]): RunFilterOption[] {
+  const options: RunFilterOption[] = [];
+  if (runs.some((r) => !r.provenance && !r.triggered_by)) options.push({ value: MANUAL_TRIGGER, label: "By hand" });
+  const triggerIds = uniqueSorted(runs.filter((r) => !r.provenance && r.triggered_by).map((r) => r.triggered_by!));
+  if (triggerIds.length > 0) {
+    options.push({ value: ANY_TRIGGER, label: "A trigger" });
+    for (const id of triggerIds) {
+      options.push({ value: id, label: triggers.find((t) => t.id === id)?.name ?? id, group: "Triggers" });
+    }
+  }
+  const sources = new Map<string, { label: string; extension: string; count: number }>();
+  for (const r of runs) {
+    if (!r.provenance) continue;
+    const key = launchKey(r);
+    const seen = sources.get(key);
+    if (seen) seen.count += 1;
+    else sources.set(key, { label: r.provenance.label, extension: r.provenance.extension, count: 1 });
+  }
+  if (sources.size > 0) {
+    options.push({ value: ANY_SOURCE, label: "An external source" });
+    const sorted = [...sources.entries()].sort(([, a], [, b]) => a.label.localeCompare(b.label));
+    for (const [value, source] of sorted) {
+      options.push({
+        value,
+        label: source.label,
+        group: "External sources",
+        hint: String(source.count),
+        title: `${source.label} (${source.extension})`,
+      });
+    }
+  }
+  return options;
 }

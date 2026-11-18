@@ -147,6 +147,8 @@ describe("uiPrefs — transcript order", () => {
 
   it("degrades to the default when the storage is unavailable", () => {
     localStorage.setItem("pdo.ui.transcriptOrder", JSON.stringify("oldest-first"));
+    // On the prototype, as the other storage tests: jsdom's Storage takes an
+    // own property set on it for an item, so a spy on the instance never runs.
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new Error("SecurityError");
     });

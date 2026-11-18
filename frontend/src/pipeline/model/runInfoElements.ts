@@ -15,6 +15,7 @@ export const RUN_INFO = {
   harness: "run.info.harness",
   repo: "run.info.repo",
   sandbox: "run.info.sandbox",
+  externalSource: "run.info.external-source",
   started: "run.info.started",
   trigger: "run.info.trigger",
   source: "run.info.source",
@@ -32,6 +33,7 @@ export const RUN_INFO_GROUPS: readonly ElementGroup[] = [
     label: "Run",
     elements: [
       { id: RUN_INFO.status, label: "Status" },
+      { id: RUN_INFO.externalSource, label: "External source" },
       { id: RUN_INFO.harness, label: "Harness" },
       { id: RUN_INFO.repo, label: "Repo" },
       { id: RUN_INFO.sandbox, label: "Sandbox" },

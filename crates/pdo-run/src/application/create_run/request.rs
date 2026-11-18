@@ -118,6 +118,12 @@ pub struct CreateRunRequest {
     /// `RunStarted` as `trigger_editor`. `None` on every other path.
     #[serde(skip)]
     pub trigger_editor: Option<pdo_kernel::Actor>,
+    /// Where the Run comes from, when an extension creates it with a
+    /// Provenance (`Host::create_run`), already checked. `#[serde(skip)]`
+    /// like `created_by`: no `POST /runs` body sets it. Frozen into
+    /// `RunStarted` as `provenance`; a retry keeps it.
+    #[serde(skip)]
+    pub provenance: Option<crate::domain::provenance::RunProvenance>,
 }
 
 /// The top-level keys `POST /runs` accepts, kept in lock-step with

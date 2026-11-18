@@ -225,6 +225,11 @@ async fn due_trigger_creates_a_run_with_triggered_by_provenance() {
         Some(trigger_id.as_str()),
         "the run must carry triggered_by provenance"
     );
+    assert!(
+        runs[0].get("provenance").is_none(),
+        "a Trigger's Run has no External source: {}",
+        runs[0]
+    );
 
     let fires: Vec<serde_json::Value> = reqwest::Client::new()
         .get(format!("{}/triggers/{}/fires", daemon.url(), trigger_id))

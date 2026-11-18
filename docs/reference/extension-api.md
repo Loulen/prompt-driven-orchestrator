@@ -292,7 +292,8 @@ core's mechanisms (amendment #34):
 - `display_name(actor)` (0.8): how an Actor shows, the first extension that names it (the
   caller's included); `None` when none does.
 - `create_run(actor, NewRun)` (0.9): create a Run on behalf of `actor`, as `POST /runs` does for
-  that caller (below); answers its id or the refusal (`RunNotCreated`: status, message, body).
+  that caller (below); answers its id or the refusal (`RunNotCreated`: status, message, body). The
+  Run may say where it comes from, its [Provenance](#the-provenance-of-a-run-an-extension-creates).
 - `project_name(project_id)` (0.11): the name of a Projet (`"P1"`), or `None` for an id the core
   does not know. Synchronous and quick: call it from your own `authorize` to name the Projet in a
   refusal's reason. The core reads the Projets once before it serves and again at each change, so
@@ -762,6 +763,28 @@ The surfaces that fill `extensions`:
   /runs` creates it for `actor`: the same authorization (a refused Actor gets `403`
   `operation_refused`), the same checks, the same stamps, `created_by` = `actor`, a root Run. Await
   it from a route or a task; never from a hook of the creation it starts.
+
+### The Provenance of a Run an extension creates
+
+`NewRun::from_source(Provenance::new(label, link))` says where the Run comes from, as a person
+reads it: a short `label` ("Nightly sync") and a `link`, a deep link of the interface
+([extension-ui.md](extension-ui.md#deep-links): `#/ext/<id>/<location>/<path>` or
+`#/runs/<id>`) toward what started it.
+
+- The core freezes it in `RunStarted` as `provenance` = `{ label, link, extension }`, `extension`
+  being the id of the extension that created the Run, and serves it on the Run (`GET /runs/{id}`,
+  `/ws`) and on its entry of `GET /runs`. A `retry_all` keeps it.
+- The interface shows it as an **External source**: a chip with the label after the Run's name in
+  the Runs list (a click follows the link), a value of the list's « Launched by » filter, beside
+  « By hand » and the Triggers (such a Run is no longer « By hand »), and a row of its Info tab
+  (the label, linking, then the extension's id).
+- It is not a Trigger's `triggered_by`: the Triggers tab never sees it, and the Trigger mark of the
+  row does not change.
+- Only an extension sets it: `POST /runs` takes no `provenance` (`400`, unknown field), and it is
+  not part of `NewRun::to_request_body`. The creation is refused with a `400`, before anything
+  exists, for a blank label, a label longer than `Provenance::MAX_LABEL` (80) characters or holding
+  a control character, and a link that is not a deep link the interface follows (`#/ext/…`,
+  `#/runs/…`) or holds a space.
 
 ## Presences (0.12)
 

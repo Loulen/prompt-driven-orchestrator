@@ -1,9 +1,10 @@
 /**
  * What the preview of the Runs list block of Settings › Appearance shows: the
  * most recent Run the user sees, the most recent triggered Run when none of the
- * other rows has a Trigger, and a parent with its child, so that every element
- * of a row (Trigger mark, child pills, parent link) appears once; a sample Run
- * when the user sees none.
+ * other rows has a Trigger, the most recent Run from an External source when
+ * none of them has one, and a parent with its child, so that every element of
+ * a row (External source, Trigger mark, child pills, parent link) appears once;
+ * a sample Run when the user sees none.
  */
 import type { RunListEntry } from "../../shared/generated/RunListEntry";
 import { buildRunTree, type RunTreeNode } from "../../run/model/runTree";
@@ -31,6 +32,8 @@ export function sampleRun(now: number): RunListEntry {
     stalled: false,
     started_at: new Date(now - 6 * 60_000).toISOString(),
     triggered_by: "Sample trigger",
+    // `#/` is no deep link: `followDeepLink` ignores it, so the sample's chip opens nothing.
+    provenance: { label: "Sample source", link: "#/", extension: "sample" },
     effective_repo: "",
     nodes: [
       { id: "plan", status: "completed" },
@@ -92,9 +95,15 @@ export function runsListPreview(runs: RunListEntry[], now: number = Date.now()):
   const hasTrigger = [...rows, ...family].some((node) => node.run.triggered_by);
   const addTriggered = triggered !== undefined && !hasTrigger;
   if (addTriggered) rows.push({ ...triggered, depth: 0 });
+  // The External source too: the most recent Run with one joins when no row has one.
+  const sourced = sorted.find((node) => node.run.provenance);
+  const hasSource = [...rows, ...family].some((node) => node.run.provenance);
+  const addSourced = sourced !== undefined && !hasSource;
+  if (addSourced) rows.push({ ...sourced, depth: 0 });
   const parts = [
     "Your most recent run",
     ...(addTriggered ? ["a triggered run"] : []),
+    ...(addSourced ? ["a run from an external source"] : []),
     ...(family.length > 0 ? ["a parent with its child"] : []),
   ];
   const caption = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;

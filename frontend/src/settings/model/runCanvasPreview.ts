@@ -96,6 +96,8 @@ export function sampleRunState(now: number): RunState {
     harness: "claude-code",
     target_repo: "my-repo",
     sandbox: "full",
+    // `#/` is no deep link: the Info tab draws the sample's label as text, opening nothing.
+    provenance: { label: "Sample source", link: "#/", extension: "sample" },
     started_at: new Date(now - 14 * 60_000).toISOString(),
     completed_at: null,
     sessions_spawned: 5,

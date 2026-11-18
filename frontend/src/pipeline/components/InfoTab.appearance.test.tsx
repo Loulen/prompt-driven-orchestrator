@@ -32,7 +32,13 @@ vi.mock("../../run/api/runs", async (importOriginal) => ({
   ...(await import("../../settings/api/settings")),
 }));
 
+vi.mock("../../shared/extensions/deepLink", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../shared/extensions/deepLink")>()),
+  followDeepLink: vi.fn(),
+}));
+
 import { InfoTab } from "./InfoTab";
+import { followDeepLink } from "../../shared/extensions/deepLink";
 
 const RUN: RunState = {
   collection_states: {},
@@ -126,6 +132,33 @@ describe("a Run's Info tab, with an Apparence", () => {
     );
     draw();
     await waitFor(() => expect(screen.getByTestId("run-trigger")).toHaveTextContent("Nightly audit"));
+  });
+
+  it("shows the External source of a Run an extension created: its label links, then the extension's id", async () => {
+    appearance({});
+    const provenance = { label: "Demo", link: "#/ext/test/topbar/end/demo", extension: "test" };
+    draw({ ...RUN, triggered_by: undefined, provenance } as RunState);
+    await screen.findByTestId("run-source-block");
+    expect(rowKeys()).toContain("External source");
+    expect(rowKeys()).not.toContain("Trigger");
+    const row = screen.getByTestId("run-external-source-info");
+    expect(row).toHaveTextContent("Demo");
+    expect(row).toHaveTextContent("test");
+    const link = screen.getByRole("link", { name: "Demo" });
+    expect(link).toHaveAttribute("href", "#/ext/test/topbar/end/demo");
+    link.click();
+    expect(followDeepLink).toHaveBeenCalledWith("#/ext/test/topbar/end/demo");
+  });
+
+  it("has no External source row for a Run without one, nor once hidden", async () => {
+    appearance({});
+    draw();
+    await screen.findByTestId("run-source-block");
+    expect(rowKeys()).not.toContain("External source");
+    appearance({ "run.info.external-source": false });
+    const provenance = { label: "Demo", link: "#/ext/test/x", extension: "test" };
+    draw({ ...RUN, provenance } as RunState);
+    expect(screen.queryByTestId("run-external-source-info")).toBeNull();
   });
 
   it("shows the defaults: no read-only note, no Status row, no Node sessions, no Graph rows", async () => {

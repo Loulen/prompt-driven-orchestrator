@@ -375,6 +375,33 @@
   .lp-trig:hover {
     color: var(--text);
   }
+  /* The External source of a Run (its Provenance): a labelled chip after the name. */
+  .lp-src {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 120px;
+    height: 16px;
+    padding: 0 5px;
+    overflow: hidden;
+    border: 0;
+    border-radius: var(--radius-ui);
+    background: var(--hover);
+    color: var(--text-3);
+    font: inherit;
+    font-size: var(--fs-2xs);
+    line-height: 16px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .lp-src:hover {
+    background: var(--active);
+    color: var(--text);
+  }
+  .lp-src:focus-visible {
+    outline: 1px solid var(--focus-ring);
+    outline-offset: 1px;
+  }
   .lp-pills {
     display: inline-flex;
     flex: none;

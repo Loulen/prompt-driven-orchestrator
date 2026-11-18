@@ -267,6 +267,11 @@ pub(super) fn apply_run_started(state: &mut RunState, event: &Event) {
         state.trigger_editor = payload
             .get("trigger_editor")
             .and_then(|v| serde_json::from_value(v.clone()).ok());
+        // The Provenance an extension gave its Run; absent ⇒ none (every Run
+        // not created by an extension with one, every historical Run).
+        state.provenance = payload
+            .get("provenance")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
         // ADR-0064: the mechanical parent provenance the daemon froze at
         // create. Absent keys ⇒ a root run (every historical Run).
         if let Some(pr) = payload.get("parent_run_id").and_then(|v| v.as_str()) {

@@ -14,6 +14,15 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## 2.78.1
+
+- Harness probes no longer leave Bun's native libraries in `/tmp`: the version and
+  catalogue probes (daemon boot, the version re-check behind Settings) run each harness binary with
+  a private temp dir and delete it afterwards; a temp dir left by a process stopped mid-probe is
+  removed after an hour, on a later probe. `opencode` left a ~4 MB `.<hex>-00000000.so` per launch.
+- A clone shows as done only once its repository is in the Projets it was asked for: a Projet
+  read right after the clone ended could still miss it.
+
 ## 2.78.0
 
 - New seam, the Provenance of a Run an extension creates: `NewRun::from_source(Provenance::new(label,

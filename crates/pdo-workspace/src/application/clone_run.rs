@@ -38,10 +38,23 @@ impl Running {
         let path = dest.to_string_lossy().into_owned();
         match outcome {
             Ok(()) => {
-                let projects = self.clones.finish(&id, CloneState::Done, None);
-                joined(&*self.projects, &*self.events, &projects, &path).await;
+                self.done(&id, &path).await;
             }
             Err(failure) => self.failed(&id, &url, failure),
+        }
+    }
+
+    /// The repository joins its Projets, then the clone is done: `done` is
+    /// the signal a client waits for before reading the Projet.
+    async fn done(&self, id: &str, path: &str) {
+        let mut joined_ids: Vec<String> = Vec::new();
+        loop {
+            let pending = self.clones.done_once_joined(id, &joined_ids);
+            if pending.is_empty() {
+                return;
+            }
+            joined(&*self.projects, &*self.events, &pending, path).await;
+            joined_ids.extend(pending);
         }
     }
 
@@ -79,8 +92,7 @@ impl Running {
         let path = dest.to_string_lossy().into_owned();
         match outcome {
             Ok(()) => {
-                let projects = self.clones.finish(&id, CloneState::Done, None);
-                joined(&*self.projects, &*self.events, &projects, &path).await;
+                self.done(&id, &path).await;
             }
             Err(failure) => self.failed(&id, &url, failure),
         }

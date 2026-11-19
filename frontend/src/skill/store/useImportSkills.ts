@@ -10,7 +10,9 @@ import { parseSkillSource } from "../model/skillSource";
 import { newScanId } from "../model/scanId";
 import {
   defaultRow,
+  importCheckState,
   importSummary,
+  isEligible,
   isRenameFree,
   renameTargetsOf,
   type RowState,
@@ -141,7 +143,7 @@ export function useImportSkills({
       const next = new Map(prev);
       for (const candidate of candidates) {
         const current = next.get(candidate.path);
-        if (current && candidate.valid && !doneRows.has(candidate.path)) {
+        if (current && isEligible(candidate, doneRows)) {
           next.set(candidate.path, { ...current, checked: true });
         }
       }
@@ -163,6 +165,15 @@ export function useImportSkills({
       }
       return next;
     });
+  };
+
+  // CORE-196: the results header box — checked, half-checked or empty over the
+  // eligible rows; a click deselects all when all are checked, else selects all valid.
+  const checkState = useMemo(() => importCheckState(candidates, rows, doneRows), [candidates, rows, doneRows]);
+  const hasEligible = useMemo(() => candidates.some((c) => isEligible(c, doneRows)), [candidates, doneRows]);
+  const toggleAll = () => {
+    if (checkState === "all") deselectAll();
+    else selectAllValid();
   };
 
   const owner = scan?.source.repo.split("/")[0] ?? "";
@@ -274,6 +285,7 @@ export function useImportSkills({
     editingName, setEditingName, recent, browsing, setBrowsing, scan, scanError, setScanError, rows,
     filter, setFilter, failedRows, doneRows, importError, confirmDiscard, setConfirmDiscard, inputRef,
     parsed, runScan, cancelScan, startScan, changeSource, candidates, setRow, selectAllValid, deselectAll,
+    checkState, hasEligible, toggleAll,
     owner, renameIsFree, summary, intoFolder, homonym, canImport, submit, requestClose,
   };
 }

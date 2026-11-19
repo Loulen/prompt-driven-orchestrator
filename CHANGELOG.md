@@ -30,6 +30,14 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   the conversation by hand in the run's worktree until the run is archived. A gesture the caller
   may not make stays greyed and opens nothing. Escape on an open tooltip now closes the tooltip
   alone, not the window under it.
+## 2.79.0
+
+- In the Skill bank's "Import skills from a source" popup, the box left of "N skills found" becomes
+  a real checkbox: checked when every valid skill not imported yet is checked, indeterminate when
+  some are, empty otherwise. A click deselects them all when all are checked, else selects them
+  all; it is disabled with no such skill or during the import. "Select all valid" and "Deselect
+  all" stay.
+
 ## 2.78.1
 
 - Harness probes no longer leave Bun's native libraries in `/tmp`: the version and

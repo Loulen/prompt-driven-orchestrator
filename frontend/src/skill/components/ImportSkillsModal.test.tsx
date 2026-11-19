@@ -279,6 +279,99 @@ describe("ImportSkillsModal (#670)", () => {
     expect(within(screen.getByTestId("import-candidate-frontend-design")).getByRole("checkbox")).toBeChecked();
   });
 
+  describe("the header box selects or deselects every valid row (CORE-196)", () => {
+    const box = () => screen.getByTestId("import-check-all") as HTMLInputElement;
+    const validRows = ["pdf", "webapp-testing", "code-review", "mcp-builder", "frontend-design"];
+    const rowBox = (name: string) => within(screen.getByTestId(`import-candidate-${name}`)).getByRole("checkbox");
+
+    it("is a real checkbox, indeterminate after the scan (the same-commit row starts unchecked)", async () => {
+      setup();
+      await scanned();
+      expect(box()).toHaveAttribute("type", "checkbox");
+      expect(box()).toHaveAccessibleName("Select all valid skills");
+      expect(box().indeterminate).toBe(true);
+      expect(box()).not.toBeChecked();
+    });
+
+    it("from partial, a click checks every valid row and leaves the invalid one", async () => {
+      setup();
+      await scanned();
+      fireEvent.click(box());
+      for (const name of validRows) expect(rowBox(name)).toBeChecked();
+      expect(rowBox("skill-creator")).not.toBeChecked();
+      expect(box()).toBeChecked();
+      expect(box().indeterminate).toBe(false);
+    });
+
+    it("when all are checked, a click unchecks every row and disables Import", async () => {
+      setup();
+      await scanned();
+      fireEvent.click(box());
+      fireEvent.click(box());
+      for (const row of within(screen.getByTestId("import-candidates")).getAllByRole("checkbox")) {
+        expect(row).not.toBeChecked();
+      }
+      expect(box()).not.toBeChecked();
+      expect(box().indeterminate).toBe(false);
+      expect(screen.getByTestId("import-submit")).toBeDisabled();
+    });
+
+    it("when empty, a click checks every valid row", async () => {
+      setup();
+      await scanned();
+      fireEvent.click(screen.getByTestId("import-deselect-all"));
+      expect(box()).not.toBeChecked();
+      expect(box().indeterminate).toBe(false);
+      fireEvent.click(box());
+      for (const name of validRows) expect(rowBox(name)).toBeChecked();
+      expect(box()).toBeChecked();
+    });
+
+    it("follows a row unchecked by hand, and a click checks it again", async () => {
+      setup();
+      await scanned();
+      fireEvent.click(screen.getByTestId("import-select-all"));
+      expect(box()).toBeChecked();
+      fireEvent.click(rowBox("pdf"));
+      expect(box().indeterminate).toBe(true);
+      fireEvent.click(box());
+      for (const name of validRows) expect(rowBox(name)).toBeChecked();
+    });
+
+    it("ignores imported rows after a partial failure and is disabled while importing", async () => {
+      setup(["tdd"]);
+      scanMock.mockResolvedValue({ ...SCAN, candidates: SCAN.candidates.filter((c) => c.status === "new") });
+      fireEvent.change(screen.getByTestId("import-source-input"), { target: { value: URL } });
+      fireEvent.keyDown(screen.getByTestId("import-source-input"), { key: "Enter" });
+      await waitFor(() => expect(screen.getByTestId("import-skills-modal")).toHaveAttribute("data-step", "results"));
+      expect(box()).toBeChecked();
+      let finish: (report: unknown) => void = () => undefined;
+      importMock.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+      fireEvent.click(screen.getByTestId("import-submit"));
+      await waitFor(() => expect(screen.getByTestId("import-skills-modal")).toHaveAttribute("data-step", "importing"));
+      expect(box()).toBeDisabled();
+      finish({
+        folder: { id: "f-new", name: "x", parent_id: null, created_at: t, updated_at: t },
+        imported: [
+          { path: "skills/engineering/pdf", action: "imported", skill: { id: "s1", name: "pdf", description: "", folder_id: "f-new", created_at: t, updated_at: t } },
+        ],
+        failed: [{ path: "skills/engineering/webapp-testing", error: "disk full", code: "storage" }],
+        commit: "3f9c2e1deadbeef",
+      });
+      await waitFor(() => expect(screen.getByTestId("import-partial")).toBeInTheDocument());
+      // pdf is done (unchecked, ignored); webapp-testing and mcp-builder stay checked.
+      expect(box()).not.toBeDisabled();
+      expect(box()).toBeChecked();
+      fireEvent.click(box());
+      expect(rowBox("webapp-testing")).not.toBeChecked();
+      expect(box()).not.toBeChecked();
+      fireEvent.click(box());
+      expect(rowBox("webapp-testing")).toBeChecked();
+      expect(rowBox("pdf")).not.toBeChecked();
+      expect(box()).toBeChecked();
+    });
+  });
+
   it("a clone refusal reads in place with git's message, the credential hint and Retry", async () => {
     setup();
     scanMock.mockRejectedValueOnce(

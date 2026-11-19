@@ -152,12 +152,23 @@ impl Runs {
                 resolve_pipeline_path(&repo_root, &run_state.pipeline_name)
             }
         };
-        let Ok(yaml) = std::fs::read_to_string(&pipeline_path) else {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "cannot read pipeline" })),
-            )
-                .into_response();
+        let yaml = match std::fs::read_to_string(&pipeline_path) {
+            Ok(yaml) => yaml,
+            Err(e) => {
+                error!(
+                    "node_retry for {node_id} in run {run_id}: cannot read pipeline {}: {e}",
+                    pipeline_path.display()
+                );
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": "cannot read pipeline",
+                        "path": pipeline_path.display().to_string(),
+                        "reason": e.to_string(),
+                    })),
+                )
+                    .into_response();
+            }
         };
         let Ok(parse_result) = pipeline::parse_pipeline(&yaml) else {
             return (

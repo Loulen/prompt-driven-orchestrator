@@ -19,6 +19,9 @@ export default function ImportCandidates({ imp }: { imp: ImportSkillsState }) {
     setRow,
     selectAllValid,
     deselectAll,
+    checkState,
+    hasEligible,
+    toggleAll,
     owner,
     renameIsFree,
     summary,
@@ -38,9 +41,19 @@ export default function ImportCandidates({ imp }: { imp: ImportSkillsState }) {
       {(step === "results" || step === "importing") && candidates.length > 0 && (
         <div className="flex min-h-0 flex-1 flex-col rounded-md border border-line bg-surface-0">
           <div className="flex items-center gap-2 border-b border-line px-3 py-2 text-xs">
-            <span className="grid h-3.5 w-3.5 place-items-center rounded-sm bg-primary text-surface-0">
-              <Check size={9} strokeWidth={3} />
-            </span>
+            <input
+              type="checkbox"
+              checked={checkState === "all"}
+              disabled={!hasEligible || step === "importing"}
+              ref={(el) => {
+                if (el) el.indeterminate = checkState === "some";
+              }}
+              onChange={toggleAll}
+              aria-label="Select all valid skills"
+              title={checkState === "all" ? "Deselect all" : "Select all valid"}
+              data-testid="import-check-all"
+              className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-[var(--primary)] disabled:cursor-default disabled:opacity-40"
+            />
             <span className="font-medium text-text" data-testid="import-found-count">
               {candidates.length} skill{candidates.length === 1 ? "" : "s"} found
             </span>

@@ -12,6 +12,16 @@ import { Recorder, withLayoutWidth } from "../lib/recorder.mjs";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..", "..", "..");
 
+/** Is `ffmpeg` on the PATH? These tests encode for real; without it they are skipped, not failed. */
+const hasFfmpeg = (() => {
+  try {
+    execFileSync("ffmpeg", ["-version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
 test("a stored Workbench layout is given the CSS width of its window, at the scene's UI scale", () => {
   const layout = { left: 18, center: 57, right: 25 };
   // The front's default UI scale is 120 %: 1200 viewport px are 1000 CSS px.
@@ -44,7 +54,7 @@ function colorAt(video, t) {
   return [...raw.subarray(0, 3)];
 }
 
-test("the video and the timeline share their 0, even when the scene waits before its first page", { skip: chromium ? false : "run `pnpm install` in frontend/" }, async (t) => {
+test("the video and the timeline share their 0, even when the scene waits before its first page", { skip: !chromium ? "run `pnpm install` in frontend/" : !hasFfmpeg ? "install ffmpeg" : false }, async (t) => {
   const videoDir = fs.mkdtempSync(path.join(os.tmpdir(), "readme-media-recorder-"));
   t.after(() => fs.rmSync(videoDir, { recursive: true, force: true }));
   const browser = await chromium.launch();

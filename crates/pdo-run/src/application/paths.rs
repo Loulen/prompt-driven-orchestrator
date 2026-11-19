@@ -95,7 +95,7 @@ pub fn archived_or_live_prompts_dir(
 }
 
 /// The instance registry of the pipeline context. A test binary of the
-/// workspace (debug build, run from cargo's `deps/` directory: this crate's
+/// workspace (debug build, run from cargo's build directory: this crate's
 /// tests, the composition root's, the daemon's integration tests) keeps it inside
 /// its temporary repository, as the pipeline context's own registry does (see
 /// [`pdo_pipeline::adapters::registry::instance_pipeline_dir`]): a test never
@@ -107,16 +107,24 @@ pub fn instance_pipeline_dir(repo_root: &Path) -> Option<PathBuf> {
     pdo_pipeline::adapters::registry::instance_pipeline_dir(repo_root)
 }
 
+/// A debug test binary, recognised by where cargo puts it: `<profile>/deps/`
+/// up to cargo 1.99, `<profile>/build/<package>/<hash>/out/` since cargo 1.100
+/// (its new build-dir layout). The daemon's own binary is never in either.
 fn cargo_test_binary() -> bool {
     cfg!(debug_assertions)
         && std::env::current_exe()
             .ok()
-            .and_then(|exe| {
-                exe.parent()
-                    .and_then(|dir| dir.file_name())
-                    .map(|name| name == "deps")
-            })
-            .unwrap_or(false)
+            .is_some_and(|exe| is_cargo_test_binary_path(&exe))
+}
+
+fn is_cargo_test_binary_path(exe: &Path) -> bool {
+    let names: Vec<_> = exe
+        .ancestors()
+        .skip(1)
+        .take(4)
+        .map(|dir| dir.file_name().and_then(|name| name.to_str()).unwrap_or(""))
+        .collect();
+    matches!(names.as_slice(), ["deps", ..] | ["out", _, _, "build"])
 }
 
 pub fn resolve_pipeline_path(repo_root: &std::path::Path, pipeline_name: &str) -> PathBuf {
@@ -155,4 +163,31 @@ pub fn dirs_next_home() -> Option<PathBuf> {
 /// `None` when `$HOME` is unset — callers skip, never fail teardown.
 pub fn durable_run_dir(run_id: &str) -> Option<PathBuf> {
     dirs_next_home().map(|home| home.join(".pdo").join("runs").join(run_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_cargo_test_binary_path;
+    use std::path::Path;
+
+    #[test]
+    fn a_test_binary_is_recognised_in_both_cargo_layouts() {
+        // Up to cargo 1.99.
+        assert!(is_cargo_test_binary_path(Path::new(
+            "/w/target/debug/deps/lifecycle-0123abcd"
+        )));
+        // Since cargo 1.100 (build-dir layout).
+        assert!(is_cargo_test_binary_path(Path::new(
+            "/w/target/debug/build/pdo-run/0123abcd/out/lifecycle-0123abcd"
+        )));
+    }
+
+    #[test]
+    fn the_daemon_binary_is_not_a_test_binary() {
+        assert!(!is_cargo_test_binary_path(Path::new("/w/target/debug/pdo")));
+        assert!(!is_cargo_test_binary_path(Path::new("/usr/local/bin/pdo")));
+        assert!(!is_cargo_test_binary_path(Path::new(
+            "/w/target/debug/build/out"
+        )));
+    }
 }

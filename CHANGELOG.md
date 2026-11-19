@@ -14,6 +14,14 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- In the Skill bank's "Import skills from a source" popup, the box left of "N skills found" becomes
+  a real checkbox: checked when every valid skill not imported yet is checked, indeterminate when
+  some are, empty otherwise. A click deselects them all when all are checked, else selects them
+  all; it is disabled with no such skill or during the import. "Select all valid" and "Deselect
+  all" stay.
+
 ## 2.78.1
 
 - Harness probes no longer leave Bun's native libraries in `/tmp`: the version and
@@ -22,13 +30,6 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   removed after an hour, on a later probe. `opencode` left a ~4 MB `.<hex>-00000000.so` per launch.
 - A clone shows as done only once its repository is in the Projets it was asked for: a Projet
   read right after the clone ended could still miss it.
-## Unreleased
-
-- In the Skill bank's "Import skills from a source" popup, the box left of "N skills found" becomes
-  a real checkbox: checked when every valid skill not imported yet is checked, indeterminate when
-  some are, empty otherwise. A click deselects them all when all are checked, else selects them
-  all; it is disabled with no such skill or during the import. "Select all valid" and "Deselect
-  all" stay.
 
 ## 2.78.0
 

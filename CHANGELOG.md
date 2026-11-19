@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.78.1
 
 - Harness probes no longer leave Bun's native libraries in `/tmp`: the version and
   catalogue probes (daemon boot, the version re-check behind Settings) run each harness binary with

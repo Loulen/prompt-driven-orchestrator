@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.79.0
 
 - In the Skill bank's "Import skills from a source" popup, the box left of "N skills found" becomes
   a real checkbox: checked when every valid skill not imported yet is checked, indeterminate when

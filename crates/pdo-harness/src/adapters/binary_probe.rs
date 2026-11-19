@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::adapters::binary_path::{binary_available, harness_probe_path};
+use crate::adapters::probe_scratch::ProbeScratch;
 use crate::adapters::rpc_probe::probe_rpc_model_efforts;
 use crate::application::ports::BinaryProbe;
 use crate::application::read_catalogue::CatalogueReader;
@@ -175,6 +176,11 @@ pub fn probe_catalogue_on(binary: &str, path: &str) -> crate::domain::catalogue:
 /// daemon's environment — the `PATH` is injected, so this is unit-testable against a
 /// fake binary.
 ///
+/// The child runs with a private `TMPDIR` ([`ProbeScratch`], CORE-140), removed
+/// once it has exited or been killed: a probe leaves nothing behind in the host's
+/// temp dir, even for a binary that extracts files there on every launch (Bun's
+/// `opencode`).
+///
 /// The timeout is a poll-and-kill loop rather than a blocking `output()` so a
 /// wedged child (blocked on stdin, a broken install) is reaped instead of hanging
 /// the caller's `spawn_blocking` worker forever.
@@ -186,20 +192,28 @@ pub fn probe_catalogue_on(binary: &str, path: &str) -> crate::domain::catalogue:
 /// script is 71 KB against a 64 KB Linux pipe buffer, so the source ADR-0056 prefers
 /// is exactly the one that hit it.
 fn run_probe(binary: &str, args: &[&str], path: &str) -> Option<String> {
+    run_probe_within(binary, args, path, CATALOGUE_PROBE_TIMEOUT)
+}
+
+/// [`run_probe`] with an explicit deadline — the testable core of its timeout path.
+fn run_probe_within(binary: &str, args: &[&str], path: &str, timeout: Duration) -> Option<String> {
     use std::io::Read;
     if binary.is_empty() {
         return None;
     }
-    let mut child = std::process::Command::new(binary)
-        .args(args)
+    // Declared before the child so it outlives it on every return path: dropped
+    // only once the child has exited (or been killed and reaped).
+    let scratch = ProbeScratch::new();
+    let mut cmd = std::process::Command::new(binary);
+    cmd.args(args)
         .env("PATH", path)
         // A probe must never inherit an interactive stdin; if a binary asks, it
         // gets EOF and exits rather than blocking.
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .ok()?;
+        .stderr(std::process::Stdio::piped());
+    scratch.apply(&mut cmd);
+    let mut child = cmd.spawn().ok()?;
 
     fn drain<R: Read + Send + 'static>(
         pipe: Option<R>,
@@ -220,7 +234,7 @@ fn run_probe(binary: &str, args: &[&str], path: &str) -> Option<String> {
         match child.try_wait() {
             Ok(Some(_)) => break,
             Ok(None) => {
-                if start.elapsed() > CATALOGUE_PROBE_TIMEOUT {
+                if start.elapsed() > timeout {
                     let _ = child.kill();
                     let _ = child.wait();
                     // Leave the readers detached rather than joining them: a killed
@@ -455,6 +469,102 @@ mod tests {
         assert_eq!(
             probe_catalogue_on("bare-harness", &path),
             crate::domain::catalogue::Catalogue::default()
+        );
+    }
+
+    /// CORE-140: write a fake binary whose `--version` records `$TMPDIR` in `seen`,
+    /// leaves a Bun-style `.so` there (named after the test's own dir, so parallel
+    /// tests never share it), then, when `hang`, spins past the deadline.
+    /// Builtins only: the probe's PATH is just this dir.
+    #[cfg(unix)]
+    fn tmpdir_littering_harness(dir: &std::path::Path, name: &str, hang: bool) -> (String, String) {
+        use std::os::unix::fs::PermissionsExt;
+        let so = format!(
+            ".{}-00000000.so",
+            dir.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .trim_start_matches('.')
+        );
+        let seen = dir.join("seen");
+        let tail = if hang {
+            "while :; do :; done"
+        } else {
+            "printf '1.0\\n'"
+        };
+        let script = format!(
+            "#!/bin/sh\nprintf '%s' \"$TMPDIR\" > '{}'\n: > \"$TMPDIR/{so}\"\n{tail}\n",
+            seen.display()
+        );
+        let bin = dir.join(name);
+        std::fs::write(&bin, script).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (dir.to_string_lossy().into_owned(), so)
+    }
+
+    /// CORE-140: the probe's child gets a private `pdo-probe-*` `TMPDIR`, and what it
+    /// extracts there (Bun's native library, for `opencode`) is gone once the probe
+    /// returns — none of it lands in the host's temp dir.
+    #[cfg(unix)]
+    #[test]
+    fn probe_removes_what_the_child_left_in_its_tmpdir() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, so) = tmpdir_littering_harness(dir.path(), "bun-harness", false);
+
+        assert_eq!(
+            probe_version_on("bun-harness", &path).as_deref(),
+            Some("1.0")
+        );
+
+        let scratch =
+            std::path::PathBuf::from(std::fs::read_to_string(dir.path().join("seen")).unwrap());
+        assert_ne!(
+            scratch,
+            std::env::temp_dir(),
+            "the child must not share the host's temp dir"
+        );
+        assert_eq!(scratch.parent(), Some(std::env::temp_dir().as_path()));
+        assert!(scratch
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("pdo-probe-"));
+        assert!(
+            !scratch.exists(),
+            "the scratch dir is removed with the probe"
+        );
+        assert!(
+            !std::env::temp_dir().join(&so).exists(),
+            "nothing leaked into the host's temp dir"
+        );
+    }
+
+    /// CORE-140: a probe killed at its deadline still removes its scratch — only
+    /// after the child is reaped, so the kill path cannot leak either.
+    #[cfg(unix)]
+    #[test]
+    fn timed_out_probe_still_removes_its_tmpdir() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, _) = tmpdir_littering_harness(dir.path(), "wedged-harness", true);
+
+        let answer = run_probe_within(
+            "wedged-harness",
+            &["--version"],
+            &path,
+            Duration::from_secs(1),
+        );
+        assert_eq!(answer, None, "a timeout is no answer");
+
+        let scratch =
+            std::path::PathBuf::from(std::fs::read_to_string(dir.path().join("seen")).unwrap());
+        assert!(scratch
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("pdo-probe-"));
+        assert!(
+            !scratch.exists(),
+            "the killed probe's scratch dir is removed"
         );
     }
 

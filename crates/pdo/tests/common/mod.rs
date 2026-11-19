@@ -1274,6 +1274,11 @@ pub fn lock_guard_timeout_ms(value: impl AsRef<str>) -> EnvVarGuard {
 ///
 /// Also collapses the catalogue version TTL to a millisecond, so the
 /// re-probe-on-version-change contract is provable without waiting a minute.
+///
+/// The real harnesses on the appended process `PATH` are still probed at daemon
+/// boot. That is harmless since CORE-140: every probe child runs with a private
+/// `TMPDIR` that the probe deletes, so Bun's `opencode` no longer leaves a ~4 MB
+/// `.<hex>-00000000.so` in `/tmp` per test daemon.
 pub fn fake_harness_bindir() -> std::path::PathBuf {
     static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {

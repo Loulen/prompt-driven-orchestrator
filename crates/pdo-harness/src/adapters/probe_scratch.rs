@@ -11,10 +11,24 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::sync::Once;
+use std::time::{Duration, SystemTime};
 
 /// The env vars a child reads its temp dir from: `TMPDIR` (POSIX, Bun), and
 /// `TMP` / `TEMP`, which some runtimes consult first.
 const TEMP_VARS: [&str; 3] = ["TMPDIR", "TMP", "TEMP"];
+
+/// The name every scratch starts with, and the one the stale sweep matches.
+const PREFIX: &str = "pdo-probe-";
+
+/// Age past which a `pdo-probe-*` dir is an orphan. A probe lasts seconds (its
+/// longest deadline is well under a minute), so an hour-old scratch belongs to
+/// a process that died mid-probe (daemon stopped, test process killed) and
+/// never ran the drop.
+const STALE_AFTER: Duration = Duration::from_secs(60 * 60);
+
+/// The orphan sweep runs once per process, on its first probe.
+static SWEEP: Once = Once::new();
 
 /// A private temp dir for one probe child. Hold it until the child has exited:
 /// dropping it removes the directory and everything the child wrote there.
@@ -27,15 +41,19 @@ pub(crate) struct ProbeScratch(Option<tempfile::TempDir>);
 
 impl ProbeScratch {
     /// A scratch under the process's temp dir (`std::env::temp_dir()`).
+    /// The first call of the process also removes the orphans
+    /// ([`sweep_stale`]) earlier processes left there.
     pub(crate) fn new() -> Self {
-        Self::in_dir(&std::env::temp_dir())
+        let base = std::env::temp_dir();
+        SWEEP.call_once(|| sweep_stale(&base, STALE_AFTER));
+        Self::in_dir(&base)
     }
 
     /// A scratch under `base`; empty when `base` refuses a new directory.
     pub(crate) fn in_dir(base: &Path) -> Self {
         Self(
             tempfile::Builder::new()
-                .prefix("pdo-probe-")
+                .prefix(PREFIX)
                 .tempdir_in(base)
                 .ok(),
         )
@@ -52,6 +70,34 @@ impl ProbeScratch {
             for var in TEMP_VARS {
                 cmd.env(var, dir);
             }
+        }
+    }
+}
+
+/// Remove the `pdo-probe-*` directories under `base` last modified more than
+/// `older_than` ago: the scratches of a process that died mid-probe, with what
+/// their child wrote (a Bun `.so` of ~4 MB for `opencode`). Best effort: an
+/// unreadable base or entry is skipped, a live probe's scratch is too recent.
+pub(crate) fn sweep_stale(base: &Path, older_than: Duration) {
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in entries.flatten() {
+        if !entry.file_name().to_string_lossy().starts_with(PREFIX) {
+            continue;
+        }
+        // `symlink_metadata`: never follow a link out of the temp dir.
+        let Ok(meta) = entry.path().symlink_metadata() else {
+            continue;
+        };
+        let stale = meta
+            .modified()
+            .ok()
+            .and_then(|at| now.duration_since(at).ok())
+            .is_some_and(|age| age >= older_than);
+        if meta.is_dir() && stale {
+            let _ = std::fs::remove_dir_all(entry.path());
         }
     }
 }
@@ -112,5 +158,30 @@ mod tests {
         for var in TEMP_VARS {
             assert_eq!(env_of(&cmd, var), None, "{var} must stay inherited");
         }
+    }
+
+    /// A daemon stopped mid-probe leaves its scratch, `.so` included: the sweep
+    /// removes old `pdo-probe-*` dirs and keeps recent ones and anything else.
+    #[test]
+    fn sweep_removes_only_stale_probe_scratches() {
+        let base = tempfile::tempdir().unwrap();
+        let orphan = base.path().join("pdo-probe-orphan");
+        std::fs::create_dir(&orphan).unwrap();
+        std::fs::write(orphan.join(".deadbeef-00000000.so"), b"lib").unwrap();
+        let other = base.path().join("not-a-probe");
+        std::fs::create_dir(&other).unwrap();
+        let link = base.path().join("pdo-probe-link");
+        std::os::unix::fs::symlink(&other, &link).unwrap();
+
+        sweep_stale(base.path(), STALE_AFTER);
+        assert!(
+            orphan.exists(),
+            "a recent scratch may belong to a live probe"
+        );
+
+        sweep_stale(base.path(), Duration::ZERO);
+        assert!(!orphan.exists(), "the stale scratch and its .so are gone");
+        assert!(other.exists(), "only pdo-probe-* dirs are swept");
+        assert!(link.symlink_metadata().is_ok(), "a link is never followed");
     }
 }

@@ -165,18 +165,42 @@ impl CloneJobs {
         }
     }
 
-    /// Ends a running clone; the Projets it joins, read at that moment.
-    pub(super) fn finish(&self, id: &str, state: CloneState, error: Option<String>) -> Vec<String> {
+    /// Ends a running clone that failed or was cancelled.
+    pub(super) fn finish(&self, id: &str, state: CloneState, error: Option<String>) {
+        let mut entries = self.lock();
+        if let Some(entry) = entries.iter_mut().find(|e| e.job.id == id) {
+            if entry.job.state == CloneState::Running {
+                entry.job.state = state;
+                entry.job.error = error;
+            }
+            entry.cancel = None;
+        }
+    }
+
+    /// Ends a clone that succeeded, once the repository is in every Projet it
+    /// was asked for: the Projets not in `joined` yet, the clone still running,
+    /// or none, the clone now done. So a client that sees `done` reads the
+    /// repository in its Projet, and a Projet asked by a join while the others
+    /// were being joined is returned on the next call, never lost.
+    pub(super) fn done_once_joined(&self, id: &str, joined: &[String]) -> Vec<String> {
         let mut entries = self.lock();
         let Some(entry) = entries.iter_mut().find(|e| e.job.id == id) else {
             return Vec::new();
         };
-        if entry.job.state == CloneState::Running {
-            entry.job.state = state;
-            entry.job.error = error;
+        let pending: Vec<String> = entry
+            .job
+            .project_ids
+            .iter()
+            .filter(|p| !joined.contains(p))
+            .cloned()
+            .collect();
+        if pending.is_empty() {
+            if entry.job.state == CloneState::Running {
+                entry.job.state = CloneState::Done;
+            }
+            entry.cancel = None;
         }
-        entry.cancel = None;
-        entry.job.project_ids.clone()
+        pending
     }
 
     /// Cancels a running clone; a finished one leaves the list (dismissed).
@@ -335,6 +359,30 @@ mod tests {
         assert_eq!(jobs.cancel("b").unwrap().state, CloneState::Running);
         assert!(rx.try_recv().is_ok());
         assert!(jobs.get("b").is_some());
+    }
+
+    /// A clone is done only once every Projet asked, even by a late join, has
+    /// been joined: `done` never shows before the repository is in its Projet.
+    #[test]
+    fn a_clone_is_done_only_once_its_projets_are_joined() {
+        let jobs = CloneJobs::default();
+        let (alice, bob) = (person("alice"), person("bob"));
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        assert_eq!(jobs.start(job("a", "p1"), &alice, 7, tx), Join::Free);
+
+        assert_eq!(jobs.done_once_joined("a", &[]), ["p1"]);
+        assert_eq!(jobs.get("a").unwrap().job.state, CloneState::Running);
+
+        // Bob joins while p1 is being joined: p2 comes next, not lost.
+        jobs.join("/clones/app", &bob, &["p2".to_string()], 7);
+        let joined = ["p1".to_string()];
+        assert_eq!(jobs.done_once_joined("a", &joined), ["p2"]);
+        assert_eq!(jobs.get("a").unwrap().job.state, CloneState::Running);
+
+        let joined = ["p1".to_string(), "p2".to_string()];
+        assert!(jobs.done_once_joined("a", &joined).is_empty());
+        assert_eq!(jobs.get("a").unwrap().job.state, CloneState::Done);
+        assert!(jobs.done_once_joined("gone", &[]).is_empty());
     }
 
     #[test]

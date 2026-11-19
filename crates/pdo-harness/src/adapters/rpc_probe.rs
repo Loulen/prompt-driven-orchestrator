@@ -3,6 +3,8 @@
 
 use std::time::{Duration, Instant};
 
+use crate::adapters::probe_scratch::ProbeScratch;
+
 /// Overall wall-clock budget for one RPC model-effort probe (#798): the spawn, the
 /// model list, and one `set_model` + `get_available_thinking_levels` round trip per
 /// model. The version cache makes this a once-per-binary-version cost; the bound
@@ -60,15 +62,18 @@ pub fn probe_rpc_model_efforts_with(
     // is PIPED (the protocol is driven over it — unlike `run_probe`, whose probes
     // get EOF) and stderr is discarded (a chatty binary cannot fill a pipe we
     // never drain and wedge itself).
-    let mut child = match std::process::Command::new(binary)
-        .args(cat::RPC_HYGIENE_FLAGS)
+    // A private TMPDIR, removed once the session is reaped (CORE-140, see
+    // `ProbeScratch`). Declared before the child so it outlives it.
+    let scratch = ProbeScratch::new();
+    let mut cmd = std::process::Command::new(binary);
+    cmd.args(cat::RPC_HYGIENE_FLAGS)
         .args(["--mode", "rpc"])
         .env("PATH", path)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
+        .stderr(std::process::Stdio::null());
+    scratch.apply(&mut cmd);
+    let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(_) => return out,
     };
@@ -454,5 +459,48 @@ esac
         assert_eq!(cat.models, vec!["from-help", "other"]);
         assert_eq!(cat.efforts, vec!["low", "high"]);
         assert!(cat.model_efforts.is_empty());
+    }
+
+    /// CORE-140: the RPC session runs with a private `pdo-probe-*` `TMPDIR`, removed
+    /// once the session is reaped — what the binary wrote there does not leak into
+    /// the host's temp dir.
+    #[cfg(unix)]
+    #[test]
+    fn rpc_probe_gives_the_session_a_private_tmpdir() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let so = format!(
+            ".{}-rpc-00000000.so",
+            dir.path()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .trim_start_matches('.')
+        );
+        let seen = dir.path().join("seen");
+        let bin = dir.path().join("bun-rpc-harness");
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\nprintf '%s' \"$TMPDIR\" > '{}'\n: > \"$TMPDIR/{so}\"\nwhile IFS= read -r line; do :; done\n",
+                seen.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+
+        let table =
+            probe_rpc_model_efforts_with("bun-rpc-harness", &path, Duration::from_millis(500), 8);
+        assert!(table.is_empty());
+
+        let scratch = std::path::PathBuf::from(std::fs::read_to_string(&seen).unwrap());
+        assert!(scratch
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("pdo-probe-"));
+        assert!(!scratch.exists(), "the session's scratch dir is removed");
+        assert!(!std::env::temp_dir().join(&so).exists());
     }
 }

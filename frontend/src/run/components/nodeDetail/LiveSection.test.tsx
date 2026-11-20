@@ -212,4 +212,19 @@ describe("LiveSection — a card, as an Output (CORE-178)", () => {
       expect(within(row(artifact.name)).getByRole("img", { name: portType })).toBeInTheDocument();
     },
   );
+
+  it.each(["image", "image_list", "files", "html"] as const)(
+    "badges its %s type next to the name, as an output of that type does",
+    (portType) => {
+      const artifact: LiveArtifactIO = { ...screens, port_type: portType };
+      render(<LiveSection live={[artifact]} runId="run-1" onOpen={vi.fn()} />);
+      const line = row(artifact.name).querySelector<HTMLElement>(".ri-port__line")!;
+      expect(within(line).getByTestId("live-type-badge")).toHaveTextContent(portType);
+    },
+  );
+
+  it("does not badge a markdown artifact, as an output does not", () => {
+    render(<LiveSection live={[progress]} runId="run-1" onOpen={vi.fn()} />);
+    expect(screen.queryByTestId("live-type-badge")).toBeNull();
+  });
 });

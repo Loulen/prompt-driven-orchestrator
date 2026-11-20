@@ -140,6 +140,12 @@ function LiveRow({
         >
           {artifact.name}
         </button>
+        {/* As on an output: every type but markdown names itself next to the name. */}
+        {artifact.port_type !== "markdown" && (
+          <span className="d-chip d-chip--mono" data-testid="live-type-badge">
+            {artifact.port_type}
+          </span>
+        )}
         {!artifact.declared && (
           <span className="d-chip d-chip--mono" title="Published by the node without being declared" data-testid="live-free-badge">
             free

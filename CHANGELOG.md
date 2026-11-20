@@ -17,9 +17,9 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 ## Unreleased
 
 - In a node's I/O tab, each Live artifact shows as a card, like an Output: a border, its name
-  large, its tools always there and its whole frontmatter in a band under the line. The live dot,
-  the `free` badge and "not produced" (a dashed card) stay; a live artifact still carries no
-  verdict.
+  large, its type badge, its tools always there and its whole frontmatter in a band under the
+  line. The live dot, the `free` badge and "not produced" (a dashed card) stay; a live artifact
+  still carries no verdict.
 
 ## 2.80.0
 

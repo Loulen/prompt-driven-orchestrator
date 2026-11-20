@@ -64,13 +64,38 @@ impl Hosted {
             HostedKind::Agent => Some(self.harness(session.config.harness.as_deref()).await?),
             _ => None,
         };
+        // A Cap refusal comes before the extensions are asked: a relaunch the
+        // Cap refuses gets no contribution.
+        let slot = self.admit("relaunched").await?;
+        let session_ref =
+            SessionRef::new(record.id(), SessionKind::Hosted).hosted_by(extension, key);
+        // Asked once for this launch, before its conversation is looked for:
+        // a `CLAUDE_CONFIG_DIR` moves where the relaunched harness keeps it.
+        let contribution = {
+            let (hosted, record, session_ref, actor) = (
+                self.clone(),
+                record.clone(),
+                session_ref.clone(),
+                actor.clone(),
+            );
+            tokio::task::spawn_blocking(move || hosted.contribution(&record, &session_ref, &actor))
+                .await
+                .map_err(|e| {
+                    HostedRefusal::new(500, format!("the launch contribution panicked: {e}"))
+                })?
+        };
         let relaunch = match &harness {
             Some(harness) => {
                 let written = match &record.conversation_id {
                     Some(id) => {
                         let cwd = std::path::Path::new(&session.cwd);
                         self.harnesses
-                            .conversation_written(&harness.name, cwd, id)
+                            .conversation_written(
+                                &harness.name,
+                                cwd,
+                                id,
+                                contribution.claude_config_dir(),
+                            )
                             .await
                     }
                     None => None,
@@ -86,7 +111,6 @@ impl Hosted {
             }
             None => None,
         };
-        let slot = self.admit("relaunched").await?;
         let now = pdo_kernel::clock::now_iso();
         let relaunched = self.registry.update(record.id(), |r| {
             if !r.relaunch(actor, &now) {
@@ -113,16 +137,9 @@ impl Hosted {
         };
         drop(slot);
 
-        let session_ref =
-            SessionRef::new(record.id(), SessionKind::Hosted).hosted_by(extension, key);
         let resume = matches!(relaunch, Some(Relaunch::Resume { .. }));
         let launched = {
-            let (hosted, record, session_ref, actor) = (
-                self.clone(),
-                record.clone(),
-                session_ref.clone(),
-                actor.clone(),
-            );
+            let (hosted, record) = (self.clone(), record.clone());
             tokio::task::spawn_blocking(move || {
                 // An ended session whose tmux session lingers (a kill that
                 // failed) would refuse the new one by its name.
@@ -130,7 +147,7 @@ impl Hosted {
                     hosted.tmux.kill(record.id());
                 }
                 let agent = harness.as_ref().map(|harness| Agent { harness, resume });
-                hosted.launch(&record, &session_ref, &actor, agent)
+                hosted.launch(&record, &contribution, agent)
             })
             .await
             .unwrap_or_else(|e| Err(anyhow::anyhow!("the launch panicked: {e}")))

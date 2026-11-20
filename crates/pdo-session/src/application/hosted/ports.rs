@@ -46,12 +46,16 @@ pub trait HostedHarness: Send + Sync {
     /// was written, as far as the core sees: `Some(false)` when the harness
     /// keeps its conversations where the core reads them and this one is not
     /// there (nobody ever spoke to it); `None` when the core cannot tell, and
-    /// by default.
+    /// by default. `claude_config_dir` is the Claude Code configuration folder
+    /// the launch that asks will run with (API 0.8): when given, the
+    /// conversation is looked for under it alone, where that launch would
+    /// find it.
     fn conversation_written<'a>(
         &'a self,
         _harness: &'a str,
         _cwd: &'a Path,
         _id: &'a str,
+        _claude_config_dir: Option<&'a Path>,
     ) -> BoxFuture<'a, Option<bool>> {
         Box::pin(std::future::ready(None))
     }

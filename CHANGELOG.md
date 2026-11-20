@@ -14,6 +14,12 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## 2.80.2
+
+- A relaunched hosted agent session resumes its conversation when an extension gives its launches a
+  `CLAUDE_CONFIG_DIR` (a personal Claude account or API key): the core now looks for the
+  conversation under that folder, where `claude --resume` will look, instead of `~/.claude`, and
+  starts a new conversation when it is not there.
 ## 2.80.1
 
 - A deep link `#/ext/<extension>/topbar/end/<path>` opens the extension's page again when the

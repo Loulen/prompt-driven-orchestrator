@@ -8,7 +8,8 @@
 //! `data-brand` the front reads before its first render, so no wrong name
 //! flashes) and serves its logos under `/shared/brand/`: `mark.svg` and
 //! `lockup.svg` drawn in `currentColor` with their accent in
-//! `var(--primary)`, to inline; `favicon.svg` in fixed colours that follow
+//! `var(--brand-accent)` (the Acogni ruby of the mode under every Theme,
+//! `/shared/tokens.css`), to inline; `favicon.svg` in fixed colours that follow
 //! `prefers-color-scheme`.
 //!
 //! [`Config::with_brand`]: crate::Config::with_brand
@@ -123,7 +124,8 @@ mod tests {
                     svg.contains(&format!("aria-label=\"{}\"", brand.name())),
                     "{brand:?} {name}"
                 );
-                assert!(svg.contains("var(--primary"), "{brand:?} {name}");
+                assert!(svg.contains("var(--brand-accent, "), "{brand:?} {name}");
+                assert!(!svg.contains("--primary"), "{brand:?} {name}");
             }
             let favicon = brand.asset("favicon.svg").unwrap();
             assert!(favicon.contains("prefers-color-scheme: dark"), "{brand:?}");

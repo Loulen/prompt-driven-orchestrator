@@ -14,6 +14,14 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- Extensions: `/shared/tokens.css` exposes `--brand-accent`, the Acogni ruby of the logo in the
+  current mode under every Theme, so a page served outside the interface paints the logo ruby
+  under Classic without copying its values. The served logos (`/shared/brand/mark.svg`,
+  `lockup.svg`) paint their accent with it instead of `--primary`: a page that recoloured an
+  inlined logo through `--primary` no longer does.
+
 ## 2.80.0
 
 - A node's Retry asks first when it ends a live session or resets downstream nodes that hold

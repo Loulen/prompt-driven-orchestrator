@@ -14,6 +14,14 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- The canvas toolbar's Library and Script node icons moved into the `+` menu, which now reads
+  Node, Script node, Note, Node from YAML…, then Library ▸. The Library opens as a side submenu
+  with its count, its search field and the saved nodes: a click adds the node to the canvas, the
+  trash beside it removes it from the library. Its former "Node from YAML…" row is gone, the same
+  item sits one level up.
+
 ## 2.80.0
 
 - A node's Retry asks first when it ends a live session or resets downstream nodes that hold

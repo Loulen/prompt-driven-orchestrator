@@ -445,6 +445,8 @@ Flag racine du YAML, défaut `true`. Mis à `false`, le pipeline est *self-suffi
 
 **Attente des nœuds lancés** *(terme, option du Pipeline, désactivée par défaut)* : activée, un Run qui atteint `End` ne se termine qu'une fois **tous les nœuds lancés** aboutis (aucun nœud `running`, `waiting` ou `awaiting_user`) ; d'ici là il reste `Running` et dit combien de nœuds il attend. Un Nœud à la demande jamais lancé ne retient rien. Désactivée, rien ne change : le Run se termine à `End`, et un nœud encore vivant voit sa complétion refusée tant que le Run n'est pas ré-ouvert.
 
+Un Run dont `Start` est relié à `End` atteint `End` dès son lancement : sans nœud lancé, il se termine aussitôt (un seul `RunCompleted`, aucun NodeRun) ; avec une arête `reason:`, il s'arrête aussitôt sur ce motif (CORE-142).
+
 À la fin d'un Run réussi, **niveau 0** par défaut : la branche `pdo/run-<run-id>` reste en l'état, le worktree reste sur disque. PDO ne fait **pas** de PR auto, **pas** d'auto-merge. Si un projet veut ce comportement, il ajoute un nœud « Shipper » dans son pipeline.
 
 ### Échec / blocage

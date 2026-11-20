@@ -17,6 +17,7 @@ pub mod reap;
 pub mod session_ledger;
 pub mod shared_terminal;
 pub mod status;
+pub mod support;
 pub mod sweep;
 pub mod terminal;
 pub mod terminal_text;

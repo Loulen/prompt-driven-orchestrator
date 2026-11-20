@@ -11,6 +11,7 @@ mod projects;
 mod reap;
 mod shell;
 mod status;
+mod support;
 mod sweep;
 mod terminal;
 mod terminal_text;

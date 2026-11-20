@@ -496,6 +496,24 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
             Some(json!({ "yaml": "name: review\n" })),
         ),
         call(
+            "POST",
+            "/sessions/support",
+            "/sessions/support".into(),
+            Some(json!({ "choice": { "mode": "custom", "harness": "claude" } })),
+        ),
+        call(
+            "POST",
+            "/sessions/support/ask",
+            "/sessions/support/ask".into(),
+            Some(json!({ "question": "how?" })),
+        ),
+        call(
+            "DELETE",
+            "/sessions/support",
+            "/sessions/support".into(),
+            None,
+        ),
+        call(
             "PUT",
             "/settings/sandbox-profiles/{name}",
             "/settings/sandbox-profiles/team".into(),

@@ -14,6 +14,23 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- **Support agent.** Ctrl+K has a Support group: "Open support agent…", or "Ask the support
+  agent: <your text>". The "Open support agent" window picks the agent (an agentic profile, or
+  Custom: harness, model, effort; only harnesses installed on this machine) with an optional
+  question; your last choice is preselected and Enter opens it. The agent opens in the enlarged
+  terminal, with your rights, outside any Run; Minimize or Escape hides it and it goes on, End
+  session ends it. With an agent open, "Ask the open agent" sends the question straight into it,
+  and choosing another agent asks before it closes the open one. It survives a page reload. Routes
+  `GET`/`POST`/`DELETE /sessions/support` and `POST /sessions/support/ask`; command
+  `pdo support open|ask|status|close`.
+- Harnesses show their logo (Claude, GitHub Copilot, opencode, pi; the initial on the harness's
+  colour for any other): in the agent picker of New run, of a node and of Settings, and in the
+  node header, where it replaces the harness's letter.
+- Extension API: `SessionKind::SupportAgent`, the kind of the support agent's session in the launch
+  hooks and the session events.
+
 ## 2.80.4
 
 - A Run whose Start is wired straight to End ends as soon as it starts: with no node to launch, it

@@ -15,6 +15,15 @@ content of this NOTICE file. The Acogni logo and theme ship in this
 repository because Acogni publishes PDO; a fork or a redistribution must not
 present itself as Acogni or Acogni Driver.
 
+Third-party marks
+-----------------
+
+The logos of the harnesses PDO launches are the marks of their owners: Claude
+(Anthropic, drawn from Simple Icons), GitHub Copilot (GitHub, the Primer
+octicon, MIT License), opencode (the favicon of opencode.ai) and pi (the
+favicon of pi.dev). PDO shows them only to say which harness runs; they are
+not covered by this product's license and imply no endorsement.
+
 Prior contributions under the MIT License
 ------------------------------------------
 

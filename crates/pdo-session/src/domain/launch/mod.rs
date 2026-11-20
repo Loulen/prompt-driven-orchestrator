@@ -5,6 +5,7 @@
 mod hosted;
 mod quote;
 mod script;
+mod support;
 mod tails;
 mod wrap;
 
@@ -13,6 +14,7 @@ pub use quote::{sh_quote_arg, sh_single_quote};
 pub use script::{
     build_resume_script, build_resume_script_with, build_tmux_script, build_tmux_script_with,
 };
+pub use support::{build_support_script, SupportTail};
 pub use tails::{build_script_tail, LIBASSIST_HOOK_SETTINGS_JSON};
 pub use wrap::{host_daemon_url, CORE_ENV_NAMES};
 

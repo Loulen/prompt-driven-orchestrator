@@ -1,0 +1,22 @@
+/* The Agent de support: its identity at the head of the enlarged terminal's bar. */
+.sa-ident {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.sa-ident__name {
+  font-size: var(--fs-sm);
+  font-weight: var(--w-strong);
+  color: var(--text);
+  white-space: nowrap;
+}
+.sa-ident__tag {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.sa-none {
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+}

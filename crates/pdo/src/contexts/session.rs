@@ -15,7 +15,7 @@ use pdo_session::application::ports::Tmux;
 use pdo_session::{Session, SessionOptions, SessionPorts};
 
 use super::ContextResources;
-use crate::ports::session::{HostedSide, RunSide, SessionRunPorts};
+use crate::ports::session::{HostedSide, RunSide, SessionRunPorts, SupportSide};
 use crate::ports::Late;
 
 pub(super) fn session(
@@ -61,12 +61,19 @@ pub(super) fn session(
                 harness: hosted.clone(),
                 admission: hosted,
             },
+            support: Arc::new(SupportSide {
+                runs: runs.clone(),
+                db: r.db.clone(),
+            }),
         },
         SessionOptions {
             daemon_port: r.port,
             repo_root: r.repo_root.clone(),
             tmux_cmd_override: r.tmux_cmd_override.clone(),
             allowed_ws_origins: r.allowed_ws_origins.clone(),
+            // One folder per Actor, under the daemon's `~/.pdo/`, like the
+            // Sessions hébergées'.
+            support_root: pdo_home.join(".pdo").join("support"),
         },
     )
 }

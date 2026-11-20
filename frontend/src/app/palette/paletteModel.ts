@@ -6,7 +6,8 @@
  * and the rows the arrows walk through.
  *
  * `>` at the start of the query keeps the commands: the core's, the
- * extensions' Actions and the selection's.
+ * extensions' Actions and the selection's. The support agent's group closes
+ * the list otherwise, whatever the query.
  */
 
 import type { RowAvatar, SearchResult } from "../../shared/extensions/contract";
@@ -24,7 +25,9 @@ export type Lead =
   | { kind: "node"; status: NodeStatus }
   | { kind: "tone"; tone: StatusTone; label: string; shape?: StatusShape | null }
   | { kind: "extension"; url: string | null; label: string }
-  | { kind: "avatar"; avatar: RowAvatar };
+  | { kind: "avatar"; avatar: RowAvatar }
+  /** A harness's logo (the support agent's rows). */
+  | { kind: "harness"; harness: string };
 
 export interface ExtensionRef {
   id: string;
@@ -42,6 +45,8 @@ export interface PaletteItem {
   meta?: string;
   lead: Lead;
   kbd?: string;
+  /** Facts shown at the right of the row, muted (the open support agent's harness). */
+  hint?: string;
   /** The current choice (the theme). */
   checked?: boolean;
   /** A contextual Action: the selected item it acts on, shown on its row. */
@@ -109,6 +114,8 @@ export interface BuildInput {
   expanded: ReadonlySet<string>;
   /** The icons of the core's groups. */
   icons: Readonly<Record<"selection" | "recent" | "commands" | "runs" | "pipelines" | "triggers", Icon>>;
+  /** The support agent's rows, a group after every other, whatever the query. */
+  support?: { icon: Icon; items: PaletteItem[] };
 }
 
 const CORE_GROUPS = [
@@ -226,6 +233,14 @@ export function buildSections(input: BuildInput): Section[] {
       title: group.extension.name,
       lead: { kind: "extension", url: group.icon, label: group.extension.name },
       rows,
+    });
+  }
+  if (input.support && input.support.items.length > 0) {
+    sections.push({
+      key: "support",
+      title: "Support",
+      lead: { kind: "icon", icon: input.support.icon },
+      rows: input.support.items.map((item) => ({ kind: "item", key: item.id, item, hits: [] })),
     });
   }
   return sections;

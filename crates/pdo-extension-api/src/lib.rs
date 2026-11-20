@@ -141,5 +141,6 @@ pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// and `hosted_live_artifacts_changed` events, the `session/detail` location
 /// and the counter of a page's icon, `UiContribution::counter`; 0.20 only
 /// added, on the wire, the rank of a `palette` contribution,
-/// `UiContribution::rank`, and the counter of a global Action of `palette`).
+/// `UiContribution::rank`, and the counter of a global Action of `palette`;
+/// the next minor only adds `SessionKind::SupportAgent`).
 pub const OLDEST_COMPATIBLE_API_VERSION: &str = "0.1.0";

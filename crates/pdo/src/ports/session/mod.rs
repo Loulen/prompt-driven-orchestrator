@@ -8,8 +8,10 @@ mod daemon;
 mod hosted;
 mod owners;
 mod runs;
+mod support;
 
 pub(crate) use hosted::HostedSide;
+pub(crate) use support::SupportSide;
 
 use std::path::PathBuf;
 use std::sync::Arc;

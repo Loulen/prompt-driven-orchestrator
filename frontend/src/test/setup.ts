@@ -16,8 +16,9 @@ configure({ asyncUtilTimeout: 5_000 });
 // flag the object exists but has none of the Storage methods, and vitest's jsdom
 // environment does not overwrite a global that is already defined — so every
 // test calling `localStorage.clear()` / `getItem()` blew up with "is not a
-// function" under Node 25. Replace any such stub with an in-memory Storage so
-// the suite behaves the same on every Node version.
+// function" under Node 25. Replace any such stub with jsdom's own Storage (an
+// instance of the global `Storage`, so a spy on `Storage.prototype` reaches it),
+// else an in-memory one, so the suite behaves the same on every Node version.
 class MemoryStorage implements Storage {
   private map = new Map<string, string>();
   get length() {
@@ -43,8 +44,9 @@ class MemoryStorage implements Storage {
 for (const name of ["localStorage", "sessionStorage"] as const) {
   const current = (globalThis as Record<string, unknown>)[name] as Partial<Storage> | undefined;
   if (!current || typeof current.clear !== "function" || typeof current.getItem !== "function") {
+    const dom = (globalThis as { jsdom?: { window?: Record<string, Storage | undefined> } }).jsdom?.window?.[name];
     Object.defineProperty(globalThis, name, {
-      value: new MemoryStorage(),
+      value: dom ?? new MemoryStorage(),
       configurable: true,
       writable: true,
     });

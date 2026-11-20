@@ -31,6 +31,9 @@ pub enum SessionKind {
     /// A Session hébergée (API 0.19): an agent or a shell an extension has
     /// the core hold outside any Run.
     Hosted,
+    /// An Agent de support: an interactive agent the core holds outside any
+    /// Run, one per Actor, with the rights of the Actor who opens it.
+    SupportAgent,
 }
 
 /// A session of the core (API 0.13): the tmux session an agent, a script or a

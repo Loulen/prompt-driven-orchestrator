@@ -10,3 +10,4 @@ pub mod pty_protocol;
 pub mod reaper;
 pub mod settings;
 pub mod shared_terminal;
+pub mod support;

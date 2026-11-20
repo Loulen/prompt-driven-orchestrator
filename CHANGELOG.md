@@ -14,12 +14,13 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.82.0
 
 - In a node's I/O tab, each Live artifact shows as a card, like an Output: a border, its name
   large, its type badge, its tools always there and its whole frontmatter in a band under the
   line. The live dot, the `free` badge and "not produced" (a dashed card) stay; a live artifact
   still carries no verdict.
+
 ## 2.81.0
 
 - Extensions: `/shared/tokens.css` exposes `--brand-accent`, the Acogni ruby of the logo in the

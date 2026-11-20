@@ -1215,7 +1215,7 @@ taking `size`, `strokeWidth` and `className`.
 | `Tabs` | A tab strip, the live tab underlined in the accent, a count |
 | `Section` | A section: caps head with a chevron and a count, actions on hover; folds |
 | `KeyValue` | A read-only property grid |
-| `Banner` | A tinted line at the top of a pane: status icon, fact, detail, actions; an `icon` in the tone's colour instead of the status icon (a lock on a read-only state, since 0.20); `wrap` (0.28): title and text wrap onto several lines, at body weight, the text under the title, instead of ending in an ellipsis, actions on the right |
+| `Banner` | A tinted line at the top of a pane: status icon, fact, detail, actions; an `icon` in the tone's colour instead of the status icon (a lock on a read-only state, since 0.20); `wrap` (0.29): title and text wrap onto several lines, at body weight, the text under the title, instead of ending in an ellipsis, actions on the right |
 | `EmptyState` | An icon, two to four words, one action; loading and error alike |
 | `Chip` | A neutral chip, a status `tone` as its icon; removable |
 | `StatusIcon` | A Run's or a node's status as the core draws it, or a `tone` with its name (and, since 0.20, a fixed `shape`: `todo`, `doing`, `review`, `done`) |

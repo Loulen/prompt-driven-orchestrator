@@ -14,6 +14,12 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- The extension contract states that `pdo service install` / `uninstall` ask `authorize` of
+  extensions that were never started (no data folder, no `Host`, no `skills`): the rustdoc of
+  `Extension`, `start`, `skills` and `authorize`, and the reference page.
+
 ## 2.80.0
 
 - A node's Retry asks first when it ends a live session or resets downstream nodes that hold

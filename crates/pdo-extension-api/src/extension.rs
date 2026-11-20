@@ -75,12 +75,25 @@ impl Eq for ExtensionContext {}
 /// When the daemon starts, it calls [`Extension::skills`] once (to seed the
 /// Banque de skills, before `start`), then [`Extension::start`] once, then
 /// [`Extension::routes`] and [`Extension::ui`], before it serves anything.
+///
+/// The daemon is not the only caller. Every `pdo service` subcommand builds
+/// the binary's extensions too (ADR-0081, amendment #23): their constructors
+/// run and [`Extension::manifest`] is called. `pdo service install` and
+/// `pdo service uninstall` then ask [`Extension::authorize`] for the
+/// [`Actor::LocalOperator`] (`service` × `create` / `delete`), but **never
+/// call** [`Extension::start`] nor [`Extension::skills`]: no data folder, no
+/// [`Host`], no async runtime. Only `manifest` and `authorize` are called
+/// there ([`Extension::on_event`]'s thread is started but receives nothing).
+/// Nothing tells the extension which of the two lifecycles it is in, other
+/// than that `start` has not been called.
 pub trait Extension: Send + Sync + 'static {
     /// Who this extension is.
     fn manifest(&self) -> Manifest;
 
     /// Receive what the core gives the extension (its data folder, its
     /// [`Host`]), once, when the daemon starts. Does nothing by default.
+    ///
+    /// Only the daemon calls it, never `pdo service`: see the trait's doc.
     fn start(&self, _context: &ExtensionContext) {}
 
     /// Identify the actor behind a request. `None` (the default) lets the next
@@ -124,6 +137,13 @@ pub trait Extension: Send + Sync + 'static {
     /// without running anything. A refused read hides the entity from a list
     /// and from `/ws`, and answers `403` for one entity: refuse a read on its
     /// resource and verb, never on a verb you do not know.
+    ///
+    /// Also asked outside the daemon, by `pdo service install` (`service` ×
+    /// `create`, not on `--dry-run`) and `pdo service uninstall` (`service` ×
+    /// `delete`), for the [`Actor::LocalOperator`], on an extension that was
+    /// **never started**: no data folder, no [`Host`]. An extension that
+    /// refuses for lack of its state (its database not open) makes
+    /// `pdo service install` fail on a fresh install.
     fn authorize(&self, _actor: &Actor, _operation: &Operation) -> Authorization {
         Authorization::Allow
     }
@@ -237,7 +257,8 @@ pub trait Extension: Send + Sync + 'static {
     /// The skills this extension brings, seeded into the Banque de skills
     /// once, when the daemon starts: called **before** [`Extension::start`],
     /// so the list must not depend on it (embed the files). A skill the list
-    /// no longer holds is removed from the bank. None by default.
+    /// no longer holds is removed from the bank. Only the daemon calls it,
+    /// never `pdo service`. None by default.
     fn skills(&self) -> Vec<ExtensionSkill> {
         Vec::new()
     }

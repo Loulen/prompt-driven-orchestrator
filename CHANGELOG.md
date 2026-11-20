@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.81.0
 
 - Extensions: `/shared/tokens.css` exposes `--brand-accent`, the Acogni ruby of the logo in the
   current mode under every Theme, so a page served outside the interface paints the logo ruby

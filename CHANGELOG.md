@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.82.1
 
 - The extension contract states that `pdo service install` / `uninstall` ask `authorize` of
   extensions that were never started (no data folder, no `Host`, no `skills`): the rustdoc of

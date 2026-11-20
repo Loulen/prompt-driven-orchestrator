@@ -121,13 +121,14 @@ function declaration(reactMajor: number) {
           { location: "settings", id: "settings", label: "Test extension", type: "section", component: "SettingsPanel" },
           { location: "runs/filter", id: "started-by", label: "Started by", type: "list_filter", component: "StartedByFilter" },
           { location: "run/detail", id: "run-tab", label: "Test", type: "tab", component: "RunTab" },
-          // Its 0.2 contributions to `topbar/end`.
-          { location: "topbar/end", id: "page", label: "Test page", type: "page", component: "TestPage", icon },
-          // 0.20: a panel under its icon, which counts the messages.
+          // Its 0.2 contributions to `topbar/end`. 0.20: a panel under its icon,
+          // which counts the messages, declared before the page so the deep
+          // links prove they open the page, never the panel (CORE-165).
           {
             location: "topbar/end", id: "messages", label: "Test messages", type: "panel", component: "MessagesPanel",
             icon: "/ext/test/messages.svg", counter: "/ext/test/messages/counter",
           },
+          { location: "topbar/end", id: "page", label: "Test page", type: "page", component: "TestPage", icon },
           {
             location: "topbar/end", id: "show-context", label: "Show context", type: "action",
             command: "test.show-context", when: { has: "run" },

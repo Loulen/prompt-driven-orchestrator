@@ -53,7 +53,9 @@ pub trait EventStore: Send + Sync {
     /// Forget `run_id` for good (ADR-0024): tombstone it and purge its log
     /// and its Résumé in one step, so no late writer resurrects it.
     fn forget<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, anyhow::Result<()>>;
-    /// The Résumé of every Run, newest first (ADR-0084).
+    /// The Résumé of every Run, newest created first: by `started_at`,
+    /// then by append order, then by `run_id`; a later event of a Run does not
+    /// move it (ADR-0084).
     fn summaries(&self) -> BoxFuture<'_, anyhow::Result<Vec<RunSummary>>>;
     /// The Résumé of `run_id`; `None` for an unknown Run.
     fn summary<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, anyhow::Result<Option<RunSummary>>>;

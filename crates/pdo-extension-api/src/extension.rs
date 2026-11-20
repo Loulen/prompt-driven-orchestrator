@@ -253,7 +253,10 @@ pub trait Extension: Send + Sync + 'static {
     ///
     /// When a variable names `CLAUDE_CONFIG_DIR`, the core reads that Node's
     /// Claude Code transcripts (its cost, its liveness) under that folder
-    /// instead of `~/.claude`.
+    /// instead of `~/.claude`. Given to the relaunch of a Session hébergée
+    /// (through [`Self::session_env`]), it is also where the core looks for the
+    /// conversation to resume: found there, the relaunch resumes it; not
+    /// found there, it starts a new one.
     ///
     /// The git identity variables (`GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`,
     /// `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL`) also sign the Node's

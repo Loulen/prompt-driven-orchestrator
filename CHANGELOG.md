@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.80.1
 
 - A deep link `#/ext/<extension>/topbar/end/<path>` opens the extension's page again when the
   extension declares a panel before it at `topbar/end`: it used to open the panel full-window. A

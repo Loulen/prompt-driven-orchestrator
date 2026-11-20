@@ -9,7 +9,7 @@ use pdo_extension_api::{
     EndReason, HostedConfig, HostedFolder, HostedSessionChanged, HostedState, OpenSession,
     SessionKind,
 };
-use pdo_kernel::extension_host::NodeContribution;
+use pdo_kernel::extension_host::{NodeContribution, CLAUDE_CONFIG_DIR};
 use pdo_kernel::{Actor, ResourceKind, Verb};
 use pdo_session::application::assistant::FocusCell;
 use pdo_session::application::declared_wait::{LiftWait, TypedInput};
@@ -645,6 +645,7 @@ async fn a_relaunched_agent_resumes_its_conversation_with_who_relaunched_it() {
     assert_eq!(relaunch.target.as_deref(), Some(session.id.as_str()));
     assert_eq!(relaunch.projects, ["p1"]);
     let launches = w.host.launches.lock().unwrap().clone();
+    assert_eq!(launches.len(), 2, "asked once per launch");
     assert_eq!(
         launches.last().unwrap().started_by,
         Some(bob()),
@@ -673,6 +674,29 @@ async fn an_agent_nobody_spoke_to_relaunches_on_a_new_conversation() {
     assert!(!script.contains("--resume"), "{script}");
     assert!(script.contains(&after), "{script}");
     assert!(script.contains("primer.md"), "its prompt is read: {script}");
+}
+
+#[tokio::test]
+async fn a_relaunch_looks_for_its_conversation_where_its_claude_config_dir_moves_it() {
+    let w = World::new();
+    let ended = w.ended(OpenSession::agent("a")).await;
+    let conversation = w.store.load()[0].conversation_id.clone().unwrap();
+    w.host.contribution.lock().unwrap().env =
+        [(CLAUDE_CONFIG_DIR.to_string(), "/x".to_string())].into();
+
+    w.hosted.relaunch(EXT, &alice(), "a").await.unwrap();
+
+    assert_eq!(
+        *w.harnesses.looked_in.lock().unwrap(),
+        [Some(PathBuf::from("/x"))],
+        "looked for under the folder the relaunch runs with"
+    );
+    let script = w.last_script_of(&ended.id);
+    assert!(
+        script.contains(&format!("--resume '{conversation}'")),
+        "{script}"
+    );
+    assert!(script.contains("export CLAUDE_CONFIG_DIR="), "{script}");
 }
 
 #[tokio::test]
@@ -719,6 +743,11 @@ async fn a_full_cap_or_a_refused_operation_relaunches_nothing() {
     );
     assert!(refused.message.contains("relaunched"), "{refused}");
     assert_eq!(w.launches_of(&ended.id), 1);
+    assert_eq!(
+        w.host.launches.lock().unwrap().len(),
+        1,
+        "a refused relaunch asks the extensions nothing"
+    );
     assert_eq!(
         w.hosted.registry().find(EXT, "a").unwrap().session.state,
         HostedState::Ended

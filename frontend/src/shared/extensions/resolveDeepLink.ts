@@ -5,8 +5,9 @@ import type { LoadedExtension } from "./store";
 /**
  * The page `link` opens, or why it cannot: the extension is absent, its
  * interface is not loaded, or it has no page at that location. A deep link
- * opens the extension's first page there, whatever its `when` (an address does
- * not depend on the selection).
+ * opens the extension's first **page** there, in declaration order, whatever
+ * its `when` (an address does not depend on the selection); the panels and
+ * actions declared there are not addressable.
  */
 export function resolveDeepLink(
   link: DeepLink,
@@ -22,7 +23,9 @@ export function resolveDeepLink(
   }
   const page =
     link.location &&
-    elementsAt(extensions, link.location).find((e) => e.extension.id === link.extension);
+    elementsAt(extensions, link.location).find(
+      (e) => e.extension.id === link.extension && e.contribution.type === "page",
+    );
   if (!link.location || !page) {
     return { error: `The extension ${name} has no page for this link: it can't be opened.` };
   }

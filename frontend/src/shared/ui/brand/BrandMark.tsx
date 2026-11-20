@@ -1,7 +1,7 @@
 /**
  * The marks of the Marques (CORE-225): the logo where the name does not fit,
- * drawn in the current colour with its accent in `--primary`, which keeps the
- * Acogni ruby under every Theme (`acogni-brand`, `brand.css`). The same drawings
+ * drawn in the current colour with its accent in `--brand-accent`, the Acogni
+ * ruby of the mode under every Theme (`/shared/tokens.css`). The same drawings
  * the daemon serves under `/shared/brand/` (`crates/pdo/assets/brand/`).
  *
  * - PDO, « Étapes »: three steps of a Run, done (ink), running (ruby), to come
@@ -22,7 +22,7 @@ function PdoSteps() {
         <path d="M39 32H46" fill="none" strokeWidth="4.5" strokeLinejoin="miter" strokeLinecap="butt" />
         <rect x="48.25" y="22.25" width="12.5" height="19.5" rx="1.5" fill="none" strokeWidth="4.5" />
       </g>
-      <rect x="25" y="20" width="14" height="24" rx="2" fill="var(--primary)" />
+      <rect x="25" y="20" width="14" height="24" rx="2" fill="var(--brand-accent)" />
     </>
   );
 }
@@ -34,7 +34,7 @@ export function MarkDrawing({ brand }: { brand: BrandId }) {
   ) : (
     <>
       <path d={ACOGNI_A} fill="currentColor" fillRule="evenodd" />
-      <path d={ACOGNI_A_ACCENT} fill="var(--primary)" />
+      <path d={ACOGNI_A_ACCENT} fill="var(--brand-accent)" />
     </>
   );
 }

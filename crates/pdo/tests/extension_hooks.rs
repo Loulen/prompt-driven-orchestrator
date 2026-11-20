@@ -611,8 +611,8 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
     assert_eq!(ui["react_major"], test_extension::REACT_MAJOR);
     let mut expected = the_four_locations_of_0_1();
     expected.extend([
-        triple("topbar/end", "page", "page"),
         triple("topbar/end", "panel", "messages"),
+        triple("topbar/end", "page", "page"),
         triple("topbar/end", "action", "show-context"),
         triple("topbar/end", "action", "never"),
         triple("node/detail", "tab", "node-tab"),
@@ -720,7 +720,7 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
     assert!(commands.iter().any(|c| c["id"] == "test.at-runs-bulk"
         && c["title"] == "Test runs/bulk"
         && c["export"] == "showContext"));
-    let page = &ui["contributions"][4];
+    let page = &ui["contributions"][5];
     assert_eq!(page["icon"], "/ext/test/icon.svg");
     assert_eq!(page["component"], "TestPage");
     let action = &ui["contributions"][6];

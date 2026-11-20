@@ -14,6 +14,12 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- A Run whose Start is wired straight to End ends as soon as it starts: with no node to launch, it
+  completes at once (or halts at once on the edge's `reason:`) instead of staying `running`
+  forever. A Run that also launches nodes from Start ends once they are done.
+
 ## 2.80.0
 
 - A node's Retry asks first when it ends a live session or resets downstream nodes that hold

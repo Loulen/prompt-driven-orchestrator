@@ -503,8 +503,8 @@ export function Banner(props: {
   actions?: ReactNode;
   icon?: Icon;
   /** Since 0.28: title and text wrap onto several lines, at body weight,
-   *  instead of ending in an ellipsis (a whole sentence in a narrow column);
-   *  the actions stay on the right. */
+   *  the text under the title, instead of ending in an ellipsis (a whole
+   *  sentence in a narrow column); the actions stay on the right. */
   wrap?: boolean;
 }): ReactNode;
 

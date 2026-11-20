@@ -183,7 +183,7 @@ export interface BannerProps {
   detail?: string;
   /** `data-testid` of the `detail`. */
   detailTestId?: string;
-  /** Title and text wrap onto several lines at body weight instead of ending in an ellipsis: a whole sentence in a narrow column. */
+  /** Title and text wrap onto several lines at body weight, the text under the title, instead of ending in an ellipsis: a whole sentence in a narrow column. */
   wrap?: boolean;
 }
 

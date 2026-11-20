@@ -245,6 +245,11 @@ function BannerPair() {
     "div",
     { style: { display: "flex", flexDirection: "column", gap: "var(--g-3)", width: "72ch", maxWidth: "100%" } },
     h("div", { "data-testid": "test-banner-wrap" }, h(Banner, { tone: "awaiting", title: BANNER_SENTENCE, actions: action(), wrap: true })),
+    h(
+      "div",
+      { "data-testid": "test-banner-wrap-text" },
+      h(Banner, { tone: "awaiting", title: "Markdown", text: BANNER_SENTENCE, actions: action(), wrap: true }),
+    ),
     h("div", { "data-testid": "test-banner-nowrap" }, h(Banner, { tone: "awaiting", title: "Markdown", text: BANNER_SENTENCE, actions: action() })),
   );
 }

@@ -17,9 +17,9 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 ## Unreleased
 
 - New seam (extension API 0.28, a minor): `Banner` of `@pdo/extension-ui` takes `wrap`. The
-  title and the text wrap onto several lines, the title at body weight, instead of ending in an
-  ellipsis: a whole sentence fits a narrow column, the actions stay on the right. Without `wrap`
-  the banner is unchanged.
+  title and the text wrap onto several lines, both at body weight and the text under the title,
+  instead of ending in an ellipsis: a whole sentence fits a narrow column, the actions stay on the
+  right. Without `wrap` the banner is unchanged.
 
 ## 2.80.0
 

@@ -1,6 +1,7 @@
 /**
  * The kit's Banner: one line ending in an ellipsis by default; with `wrap`, a
- * whole sentence over several lines, at body weight, its actions on the right.
+ * whole sentence over several lines, at body weight, the text under the title,
+ * its actions on the right.
  */
 import { render, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
@@ -48,8 +49,17 @@ describe("Banner", () => {
     const text = rule(".d-banner[data-wrap] .d-banner__text");
     expect(text).toMatch(/white-space:\s*normal/);
     expect(text).toMatch(/text-overflow:\s*clip/);
+    // The text no lighter than the title: both at body weight.
+    expect(text).toMatch(/font-weight:\s*var\(--w-regular\)/);
     expect(rule(".d-banner[data-wrap]")).toMatch(/padding-block:\s*var\(--g-2\)/);
     for (const r of [title, text]) expect(r).not.toMatch(/#[0-9a-f]{3,6}|\d+px/i);
+    // A grid: the text under the title (not squeezed beside it), the actions on the right.
+    expect(rule(".d-banner[data-wrap]")).toMatch(/display:\s*grid/);
+    expect(title).toMatch(/grid-row:\s*1;/);
+    expect(text).toMatch(/grid-row:\s*2;/);
+    expect(text).toMatch(/grid-column:\s*2;/);
+    expect(rule(".d-banner[data-wrap] .d-banner__actions")).toMatch(/grid-column:\s*3/);
+    expect(rule(".d-banner[data-wrap] .d-banner__detail")).toMatch(/grid-column:\s*1 \/ -1/);
     // The default stays one line.
     expect(rule(".d-banner__title")).toMatch(/white-space:\s*nowrap/);
     expect(rule(".d-banner__text")).toMatch(/text-overflow:\s*ellipsis/);

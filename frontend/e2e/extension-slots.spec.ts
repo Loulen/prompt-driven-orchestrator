@@ -446,6 +446,29 @@ test("a Banner with wrap shows a whole sentence on several lines, its actions on
   // Without wrap: one line, the text cut with an ellipsis.
   expect(layout.plain.titleWhiteSpace).toBe("nowrap");
   expect(layout.plain.textOverflow).toBe("ellipsis");
+
+  // wrap with a title and a text: the text under the title, as wide, no lighter.
+  const stacked = await page.evaluate(() => {
+    const root = document.querySelector('[data-testid="test-banner-wrap-text"] .d-banner') as HTMLElement;
+    const title = root.querySelector(".d-banner__title") as HTMLElement;
+    const text = root.querySelector(".d-banner__text") as HTMLElement;
+    const actions = root.querySelector(".d-banner__actions") as HTMLElement;
+    const [t, x, a] = [title, text, actions].map((el) => el.getBoundingClientRect());
+    return {
+      textBelowTitle: x.top >= t.bottom - 0.5,
+      sameLeft: Math.abs(x.left - t.left) < 1,
+      textOverflows: text.scrollWidth > text.clientWidth,
+      textWeight: getComputedStyle(text).fontWeight,
+      actionsRightOfText: a.left >= x.right,
+    };
+  });
+  expect(stacked).toEqual({
+    textBelowTitle: true,
+    sameLeft: true,
+    textOverflows: false,
+    textWeight: "400",
+    actionsRightOfText: true,
+  });
 });
 
 test("Action locations: the header, a row's « ⋯ » menu with its when, a failing command, the bulk bar", async ({

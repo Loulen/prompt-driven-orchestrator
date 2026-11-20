@@ -1141,23 +1141,42 @@
     gap: var(--g-2);
     margin-left: auto;
   }
-  /* wrap: a whole sentence over several lines, at body weight; icon and actions stay centred, actions on the right */
+  /* wrap: a whole sentence over several lines, at body weight. A grid: the icon, the title with the
+     text under it, the actions on the right; icon and actions centred on the block, the detail below */
   .d-banner[data-wrap] {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    row-gap: 0;
     padding-block: var(--g-2);
   }
+  .d-banner[data-wrap] > svg {
+    grid-row: 1 / span 2;
+    grid-column: 1;
+  }
   .d-banner[data-wrap] .d-banner__title {
-    flex: 1 1 auto;
+    grid-row: 1;
+    grid-column: 2;
     min-width: 0;
     font-weight: var(--w-regular);
     overflow-wrap: anywhere;
     white-space: normal;
   }
   .d-banner[data-wrap] .d-banner__text {
-    flex: 1 1 auto;
+    grid-row: 2;
+    grid-column: 2;
     overflow: visible;
+    font-weight: var(--w-regular);
     text-overflow: clip;
     overflow-wrap: anywhere;
     white-space: normal;
+  }
+  .d-banner[data-wrap] .d-banner__actions {
+    grid-row: 1 / span 2;
+    grid-column: 3;
+  }
+  .d-banner[data-wrap] .d-banner__detail {
+    grid-row: 3;
+    grid-column: 1 / -1;
   }
   .d-kv {
     display: grid;

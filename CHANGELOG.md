@@ -19,6 +19,7 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - The extension contract states that `pdo service install` / `uninstall` ask `authorize` of
   extensions that were never started (no data folder, no `Host`, no `skills`): the rustdoc of
   `Extension`, `start`, `skills` and `authorize`, and the reference page.
+
 ## 2.82.0
 
 - In a node's I/O tab, each Live artifact shows as a card, like an Output: a border, its name

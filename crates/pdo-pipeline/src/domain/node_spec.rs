@@ -81,7 +81,8 @@ pub fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
     }
 
     // 5. Normalize the node `type` in place — shared with `parse_pipeline`:
-    //    default/coerce to non-isolated (warnings), refuse retired `for-each`.
+    //    default/coerce to `agent` (warnings), stamp the type's isolation
+    //    default, refuse retired `for-each`.
     let mut warnings: Vec<String> = pipeline::normalize_node_value(&mut value)
         .map_err(|e| format!("{e}"))?
         .into_iter()
@@ -178,15 +179,15 @@ mod tests {
     fn parse_node_spec_happy_path_library_shape() {
         // Exactly what the front export emits (LibraryEntry shape) → no warnings.
         let body = parse_node_spec(
-            "name: Writer\ntype: agent\nisolated_worktree: false\noutputs:\n  - name: adr\nprompt: |\n  Write an ADR.\n",
+            "name: Writer\ntype: agent\nisolated_worktree: true\noutputs:\n  - name: adr\nprompt: |\n  Write an ADR.\n",
         )
         .unwrap();
         assert_eq!(body["spec"]["type"], "agent");
         assert_eq!(body["spec"]["name"], "Writer");
         assert_eq!(body["spec"]["outputs"][0]["name"], "adr");
-        // #653: the pasted node's opt-out of isolation rides through — dropping
-        // it would silently fork a sub-worktree on instantiation.
-        assert_eq!(body["spec"]["isolated_worktree"], false);
+        // #653: the pasted node's isolation rides through — dropping it would
+        // silently put the node back in the Run worktree on instantiation.
+        assert_eq!(body["spec"]["isolated_worktree"], true);
         assert_eq!(body["prompt"], "Write an ADR.\n");
         assert_eq!(body["warnings"].as_array().unwrap().len(), 0);
     }
@@ -209,11 +210,11 @@ mod tests {
     #[test]
     fn parse_node_spec_states_the_isolation_for_every_node() {
         for (yaml, expected) in [
-            ("name: n\ntype: agent\n", serde_json::json!(true)),
+            ("name: n\ntype: agent\n", serde_json::json!(false)),
             ("name: n\ntype: script\n", serde_json::json!(false)),
             (
-                "name: n\ntype: agent\nisolated_worktree: false\n",
-                serde_json::json!(false),
+                "name: n\ntype: agent\nisolated_worktree: true\n",
+                serde_json::json!(true),
             ),
             ("name: n\ntype: start\n", serde_json::Value::Null),
             // #655: a stray line on a type that carries no isolation is dropped,

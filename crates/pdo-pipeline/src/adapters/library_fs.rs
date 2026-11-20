@@ -694,8 +694,8 @@ mod tests {
         assert_eq!(agent.isolated_worktree, None);
         assert_eq!(
             entry_from_node(&agent, "p").isolated_worktree,
-            Some(true),
-            "a silent agent stars as isolated"
+            Some(false),
+            "a silent agent stars on the Run's worktree"
         );
 
         agent.node_type = crate::domain::pipeline::NodeType::Script;
@@ -730,15 +730,15 @@ mod tests {
     fn sync_state_diverges_on_isolation_change() {
         with_temp_home(|| {
             let mut node = make_node("Worker");
-            node.isolated_worktree = Some(false);
+            node.isolated_worktree = Some(true);
             save(&entry_from_node(&node, "prompt")).unwrap();
             assert_eq!(sync_state(&node, "prompt"), SyncState::Synced);
 
-            node.isolated_worktree = Some(true);
+            node.isolated_worktree = Some(false);
             assert_eq!(sync_state(&node, "prompt"), SyncState::Diverged);
 
-            // Going silent is going back to the Agent default (isolated), which
-            // still differs from the entry's explicit `false`.
+            // Going silent is going back to the Agent default (shared), which
+            // still differs from the entry's explicit `true`.
             node.isolated_worktree = None;
             assert_eq!(sync_state(&node, "prompt"), SyncState::Diverged);
         });
@@ -767,8 +767,8 @@ mod tests {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("legacy.yaml"), legacy).unwrap();
 
-            assert_eq!(get("Legacy").unwrap().isolated_worktree, Some(true));
-            assert_eq!(list()[0].isolated_worktree, Some(true));
+            assert_eq!(get("Legacy").unwrap().isolated_worktree, Some(false));
+            assert_eq!(list()[0].isolated_worktree, Some(false));
             assert_eq!(sync_state(&node, "p"), SyncState::Synced);
         });
     }

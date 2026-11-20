@@ -881,6 +881,72 @@ async fn spawn_places_an_agent_by_its_isolation_and_freezes_it() {
     }
 }
 
+/// Isolation opt-in (ADR draft-l-isolation-est-un-opt-in): an `agent` whose
+/// document says nothing about isolation works in the Run's worktree. Parsed
+/// from a YAML without the line, it spawns with no sub-worktree, and the start
+/// event freezes `false`.
+#[tokio::test]
+async fn a_silent_agent_spawns_in_the_run_worktree() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    init_test_repo(repo);
+    let state = test_state_with_dir(repo).await;
+
+    let run_id = "iso-silent";
+    seed_run_for_node_control(&state, run_id, "spawn-unit").await;
+    let wt_dir = repo.join(".pdo/runs").join(run_id).join("worktree");
+    create_worktree(repo, &wt_dir, &format!("pdo/run-{run_id}"), "HEAD").unwrap();
+
+    let parsed = pipeline::parse_pipeline(&format!(
+        "name: spawn-unit\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: agent\n"
+    ))
+    .unwrap()
+    .pipeline;
+    let node = parsed
+        .nodes
+        .iter()
+        .find(|n| n.id == "worker")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        node.isolated_worktree,
+        Some(false),
+        "the parse states the default"
+    );
+
+    let (pipeline, _, pipeline_path) = spawn_test_fixture(repo, "worker", false);
+    let pipeline = pipeline::PipelineDef {
+        nodes: vec![node.clone()],
+        ..pipeline
+    };
+    let artifacts_dir = wt_dir.join(".pdo").join("artifacts");
+    let resolved_vars = HashMap::new();
+    let ctx = SpawnContext {
+        pipeline: &pipeline,
+        run_id,
+        pipeline_path: &pipeline_path,
+        worktree_dir: &wt_dir,
+        artifacts_dir: &artifacts_dir,
+        resolved_vars: &resolved_vars,
+        repo_root: repo,
+    };
+    let outcome = spawn_node(SpawnDeps::from_state(&state.run), &ctx, &node, 1).await;
+    assert!(
+        matches!(outcome, SpawnOutcome::Spawned { .. }),
+        "spawn must start, got {outcome:?}"
+    );
+
+    assert!(
+        !sub_worktree_path(repo, run_id, "worker", 1).exists(),
+        "a silent agent must not get a sub-worktree"
+    );
+    let events = load_events(&state.db, run_id).await.unwrap();
+    assert_eq!(
+        merge_action::frozen_isolation(&events, "worker", 1),
+        Some(false)
+    );
+}
+
 /// ADR-0050 §2 — a dispatch that finds its iteration already started is the
 /// benign loser, refused before any side effect: no second `NodeStarted`. The
 /// window it closes: a first dispatch's `NodeStarted` is durable before its tmux

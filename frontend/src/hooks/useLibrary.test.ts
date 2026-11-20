@@ -145,11 +145,11 @@ describe("computeSyncState", () => {
     expect(computeSyncState(makeNode(), "You review code.", [makeEntry()])).toBe("synced");
     expect(
       computeSyncState(makeNode(), "You review code.", [
-        makeEntry({ isolated_worktree: true }),
+        makeEntry({ isolated_worktree: false }),
       ]),
     ).toBe("synced");
     expect(
-      computeSyncState(makeNode({ isolated_worktree: false }), "You review code.", [
+      computeSyncState(makeNode({ isolated_worktree: true }), "You review code.", [
         makeEntry(),
       ]),
     ).toBe("diverged");

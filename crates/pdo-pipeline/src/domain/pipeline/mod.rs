@@ -1883,11 +1883,12 @@ edges:
     }
 
     #[test]
-    fn legacy_merge_node_parses_as_an_isolated_agent_with_its_ports() {
+    fn legacy_merge_node_parses_as_an_agent_with_its_ports() {
         // ADR-0082: `merge` is retired with no alias and no migrator. It takes
         // the generic unknown-type path (like `doc-only` / `code-mutating`,
-        // #653): an isolated `agent`, the ordinary warning, ports untouched so
-        // edges and prompts naming `branches` / `merged` keep working.
+        // #653): an `agent` with the type's default isolation (shared), the
+        // ordinary warning, ports untouched so edges and prompts naming
+        // `branches` / `merged` keep working.
         let yaml = with_start_end(
             r#"
 name: merge-test
@@ -1910,8 +1911,8 @@ nodes:
             .find(|n| n.id == "ab000001")
             .unwrap();
         assert_eq!(mg.node_type, NodeType::Agent);
-        assert!(mg.is_isolated());
-        assert_eq!(mg.isolated_worktree, Some(true));
+        assert!(!mg.is_isolated());
+        assert_eq!(mg.isolated_worktree, Some(false));
         assert!(
             result
                 .diagnostics
@@ -3274,12 +3275,67 @@ edges: []
     }
 
     #[test]
-    fn a_silent_agent_parses_isolated_and_says_so() {
-        // The editor default is `true`, and the parsed document STATES it: an
-        // author who never touched the control still reads where the node works.
+    fn a_silent_agent_parses_shared_and_says_so() {
+        // Isolation is an opt-in: a silent `agent` shares the Run worktree, and
+        // the parsed document STATES it, so an author who never touched the
+        // control still reads where the node works.
         let mut v = node_value("id: n1\nname: X\ntype: agent\n");
         assert!(normalize_node_value(&mut v).unwrap().is_empty());
-        assert_eq!(isolation_of(&v), Some(Some(true)));
+        assert_eq!(isolation_of(&v), Some(Some(false)));
+    }
+
+    #[test]
+    fn the_stamped_default_is_the_types_default() {
+        // One source for the default: what normalization writes into a silent
+        // document is exactly `NodeType::default_isolation`, for every type.
+        for t in VALID_NODE_TYPES {
+            let mut v = node_value(&format!("id: n1\nname: X\ntype: {t}\n"));
+            normalize_node_value(&mut v).unwrap();
+            let node_type = NodeType::from_wire(t).expect("a valid type has a NodeType");
+            assert_eq!(node_type.as_str(), *t);
+            assert_eq!(
+                isolation_of(&v),
+                Some(node_type.default_isolation()),
+                "type {t}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_type_read_from_its_spelling_has_the_same_default() {
+        // Readers that hold the type as a string (a Run snapshot) reach the
+        // same default through `default_isolation_of`.
+        for t in VALID_NODE_TYPES {
+            let node_type = NodeType::from_wire(t).unwrap();
+            assert_eq!(
+                NodeType::default_isolation_of(t),
+                node_type.default_isolation().unwrap_or(false),
+                "type {t}"
+            );
+        }
+        assert!(!NodeType::default_isolation_of("agent"));
+        // A retired type in a historical snapshot carries no default.
+        for retired in ["doc-only", "code-mutating", "merge", "bogus"] {
+            assert_eq!(NodeType::from_wire(retired), None);
+            assert!(!NodeType::default_isolation_of(retired));
+        }
+    }
+
+    #[test]
+    fn a_node_built_in_code_without_a_line_is_shared() {
+        // The fallback of a `NodeDef` built in code, not parsed, is the same
+        // default: an `agent` or a `script` with no line works in the Run
+        // worktree.
+        for node_type in ["agent", "script"] {
+            // Deserialized straight into a `NodeDef`, skipping normalization:
+            // the line stays absent, as on a node assembled in code.
+            let node: NodeDef = serde_yaml::from_str(&format!(
+                "id: n1\nname: X\ntype: {node_type}\ninputs: []\noutputs: []\n"
+            ))
+            .unwrap();
+            assert_eq!(node.isolated_worktree, None);
+            assert!(!node.is_isolated(), "{node_type}");
+        }
     }
 
     #[test]
@@ -3355,6 +3411,10 @@ nodes:
   - id: forked
     name: Forked
     type: agent
+    isolated_worktree: true
+  - id: silent
+    name: Silent
+    type: agent
   - id: builder
     name: Builder
     type: script
@@ -3373,12 +3433,13 @@ edges: []
         let by_id = |id: &str| parsed.nodes.iter().find(|n| n.id == id).unwrap();
         assert_eq!(by_id("shared").isolated_worktree, Some(false));
         assert_eq!(by_id("forked").isolated_worktree, Some(true));
+        assert_eq!(by_id("silent").isolated_worktree, Some(false));
         assert_eq!(by_id("builder").isolated_worktree, Some(false));
         assert_eq!(by_id("sandboxed").isolated_worktree, Some(true));
 
         // Re-serialize and re-parse: every agent/script still states its choice.
         let out = serde_yaml::to_string(&parsed).unwrap();
-        assert_eq!(out.matches("isolated_worktree:").count(), 4, "{out}");
+        assert_eq!(out.matches("isolated_worktree:").count(), 5, "{out}");
         let again = parse_pipeline(&out).unwrap().pipeline;
         for node in &again.nodes {
             let original = parsed.nodes.iter().find(|n| n.id == node.id).unwrap();
@@ -3402,6 +3463,10 @@ nodes:
   - id: forked
     name: Forked
     type: agent
+    isolated_worktree: true
+  - id: silent
+    name: Silent
+    type: agent
   - id: start
     name: Start
     type: start
@@ -3418,6 +3483,7 @@ edges: []
         let by_id = |id: &str| parsed.nodes.iter().find(|n| n.id == id).unwrap();
         assert!(!by_id("shared").is_isolated());
         assert!(by_id("forked").is_isolated());
+        assert!(!by_id("silent").is_isolated());
         assert!(!by_id("start").is_isolated());
     }
 

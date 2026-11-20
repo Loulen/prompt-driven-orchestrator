@@ -3,7 +3,7 @@
  *
  * Order and content come from the ticket: create a pipeline, build an
  * **implementer** and a **tester**, give the tester a `verdict` enum and an
- * annotated screenshot, then wire Start to the implementer (CORE-241) and the
+ * annotated screenshot, then wire Start to the implementer and the
  * loop (`verdict = fail` back to the implementer, `verdict = pass` to End),
  * save, validate it for the projects that should see it, and decide whether to
  * keep it.
@@ -160,10 +160,12 @@ const STEPS: TourStep[] = [
   },
   {
     id: "implementer-worktree",
-    title: "Share the Run's worktree",
-    // Named the way the button reads (FP of CORE-227): the segmented control
-    // says Isolated and Shared; « Run worktree » is only its tooltip.
-    body: `Pick ${workspaceButton(false)}, under Worktree. This node then works in the Run's own worktree, the branch the Run owns, so what it writes is what the Run carries.`,
+    title: "Keep it on the Run's worktree",
+    // Named the way the button reads: the segmented control says Isolated and
+    // Shared; « Run worktree » is only its tooltip. A new node already shares
+    // the Run's worktree (isolation is an opt-in), so the step is an
+    // acknowledge: entered satisfied, it waits for Next.
+    body: `It is already on ${workspaceButton(false)}, under Worktree, the default for a new node. It works in the Run's own worktree, the branch the Run owns, so what it writes is what the Run carries.`,
     target: () => ['[data-testid="workspace-shared"]'],
     waitingFor: "the Workspace choice",
     done: (o) => agent(o.app, 0)?.isolated_worktree === false,

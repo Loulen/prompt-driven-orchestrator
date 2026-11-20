@@ -139,17 +139,18 @@ describe("LibraryDropdown", () => {
 
   it("names each entry's workspace in the preview", () => {
     const entries = [
-      makeEntry("Forker"),
-      { ...makeEntry("Sharer"), isolated_worktree: false },
+      { ...makeEntry("Forker"), isolated_worktree: true },
+      makeEntry("Sharer"),
       { ...makeEntry("Marker"), type: "start" },
     ];
     renderDropdown({ entries, onDelete: vi.fn() });
     fireEvent.click(screen.getByTestId("toolbar-library"));
 
-    // A silent entry (pre-#655 on disk) still reads as the Agent default.
     expect(screen.getByTestId("library-workspace-isolated")).toHaveTextContent(
       "Isolated worktree",
     );
+    // A silent entry (pre-#655 on disk) still reads as the Agent default: the
+    // Run worktree.
     expect(screen.getByTestId("library-workspace-shared")).toHaveTextContent("Run worktree");
     // A structural type carries no workspace, so the row shows no label to argue with.
     expect(screen.getAllByTestId(/^library-workspace-/)).toHaveLength(2);

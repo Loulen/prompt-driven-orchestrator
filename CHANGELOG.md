@@ -14,6 +14,22 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- A node shares its Run's worktree by default; isolation is an opt-in. A new `agent` added on the
+  canvas starts on Shared in the inspector's Worktree choice and is saved with
+  `isolated_worktree: false`, like a `script`. Tick Isolated for a node that runs in parallel with
+  another one, or whose commits must be attributed to it alone. The node library follows the same
+  default. A NodeRun already started keeps the worktree it started in.
+
+### Upgrading
+
+- An `agent` node whose YAML has no `isolated_worktree` line now works in the Run's shared
+  worktree instead of a sub-worktree of its own, in pipelines and in node library entries alike.
+  No migration rewrites them. Add `isolated_worktree: true` to the nodes that need their own
+  worktree, typically agents that run on parallel branches. Pipelines saved from the editor already
+  state the line and keep their meaning.
+
 ## 2.80.4
 
 - A Run whose Start is wired straight to End ends as soon as it starts: with no node to launch, it

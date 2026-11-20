@@ -12,6 +12,12 @@ import {
   saveTranscriptOrder,
 } from "./uiPrefs";
 
+/** The prototype `localStorage` reads its methods from: jsdom's `Storage`, or
+ *  the in-memory Storage the test setup installs under Node ≥ 22. */
+function storageProto(): Storage {
+  return Object.getPrototypeOf(localStorage) as Storage;
+}
+
 beforeEach(() => {
   localStorage.clear();
 });
@@ -50,14 +56,14 @@ describe("uiPrefs — tabsDisabled (#342)", () => {
   });
 
   it("degrades to false when localStorage.getItem throws (private mode)", () => {
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+    vi.spyOn(storageProto(), "getItem").mockImplementation(() => {
       throw new Error("SecurityError");
     });
     expect(loadTabsDisabled()).toBe(false);
   });
 
   it("swallows a throwing setItem (quota / disabled) without raising", () => {
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    vi.spyOn(storageProto(), "setItem").mockImplementation(() => {
       throw new Error("QuotaExceededError");
     });
     expect(() => saveTabsDisabled(true)).not.toThrow();
@@ -149,10 +155,12 @@ describe("uiPrefs — transcript order", () => {
     localStorage.setItem("pdo.ui.transcriptOrder", JSON.stringify("oldest-first"));
     // On the prototype, as the other storage tests: jsdom's Storage takes an
     // own property set on it for an item, so a spy on the instance never runs.
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+    // The prototype of the live object, not `Storage.prototype`: under Node ≥ 22
+    // the test setup swaps in its own in-memory Storage class.
+    vi.spyOn(storageProto(), "getItem").mockImplementation(() => {
       throw new Error("SecurityError");
     });
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    vi.spyOn(storageProto(), "setItem").mockImplementation(() => {
       throw new Error("QuotaExceededError");
     });
     expect(() => saveTranscriptOrder("oldest-first")).not.toThrow();

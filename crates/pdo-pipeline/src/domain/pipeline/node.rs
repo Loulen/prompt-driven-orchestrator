@@ -46,17 +46,46 @@ impl NodeType {
     }
 
     /// The isolation this type carries when the document says nothing (#653 /
-    /// ADR-0060): an `agent` is isolated, a `script` shares the Run worktree,
-    /// and every other type carries no isolation setting at all — structural
-    /// nodes never run in a worktree of their own. `None` is what keeps
-    /// `isolated_worktree` off a Start/End document instead of writing a line
-    /// nobody may edit.
+    /// ADR-0060, amended by ADR draft-l-isolation-est-un-opt-in): an `agent` and a
+    /// `script` share the Run worktree, isolation being the author's explicit
+    /// choice; every other type carries no isolation setting at all, as
+    /// structural nodes never run in a worktree of their own. `None` is what
+    /// keeps `isolated_worktree` off a Start/End document instead of writing a
+    /// line nobody may edit.
+    ///
+    /// The one source of this default: the parse normalization, the node
+    /// library and a `NodeDef` built in code all read it from here.
     pub fn default_isolation(&self) -> Option<bool> {
         match self {
-            NodeType::Agent => Some(true),
-            NodeType::Script => Some(false),
-            _ => None,
+            NodeType::Agent | NodeType::Script => Some(false),
+            NodeType::Start | NodeType::End | NodeType::Switch | NodeType::Loop => None,
         }
+    }
+
+    /// The type a wire/YAML spelling names, the inverse of [`Self::as_str`].
+    /// `None` for a spelling this build does not know, such as a retired type
+    /// in a historical Run snapshot.
+    pub fn from_wire(spelling: &str) -> Option<NodeType> {
+        [
+            NodeType::Agent,
+            NodeType::Start,
+            NodeType::End,
+            NodeType::Switch,
+            NodeType::Loop,
+            NodeType::Script,
+        ]
+        .into_iter()
+        .find(|t| t.as_str() == spelling)
+    }
+
+    /// The isolation a node of this wire spelling carries when nothing states
+    /// it: [`Self::default_isolation`], with `false` for a type that carries
+    /// none or that this build does not know. For readers that hold the type
+    /// as a string (a Run snapshot, an event payload).
+    pub fn default_isolation_of(spelling: &str) -> bool {
+        Self::from_wire(spelling)
+            .and_then(|t| t.default_isolation())
+            .unwrap_or(false)
     }
 
     /// The wire/YAML spelling of this type — the single place the strings live.
@@ -274,7 +303,7 @@ pub struct NodeDef {
     /// Where this node's NodeRun works (#653, ADR-0060). `true` ⇒ a sub-worktree
     /// of its own; `false` ⇒ the Run's shared worktree. Carried only by `agent`
     /// and `script`, where [`normalize_node_value`] fills the type's default
-    /// (`agent` isolated, `script` shared) so the parsed document ALWAYS states
+    /// (shared, [`NodeType::default_isolation`]) so the parsed document ALWAYS states
     /// the choice — including when it equals the default. `None` on structural
     /// nodes (no worktree of their own). Semantic, not layout: moving a node between worktrees changes what
     /// the pipeline does, so it enters the diff and the library content hash.

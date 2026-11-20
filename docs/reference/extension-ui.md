@@ -1116,6 +1116,7 @@ copies it.
 | `--text`, `--text-2`, `--text-3` | Primary, secondary and muted ink; every one holds 4.5:1 on every surface |
 | `--line`, `--line-soft`, `--line-strong` | Hairlines |
 | `--primary`, `--primary-hi`, `--primary-ink` | The accent of the one primary action of a view and of the selection (ruby under Acogni, emerald under Classic), its hover, the ink on it |
+| `--brand-accent` (since 0.28) | The Marque's accent: the Acogni ruby of the mode, under every Theme. Paint a logo with it, never an action: the action is `--primary` |
 | `--selected-edge`, `--focus-ring`, `--scrim`, `--shadow`, `--dim`, `--dim-soft` | The selection's edge, the focus ring, a dialog's backdrop, a floating layer's shadow, a tour's dim |
 | `--color-st-running`, `-await`, `-done`, `-blocked`, `-failed`, `-skipped` | The six status colours (a status is shown as colour and icon) |
 | `--fs-2xs` … `--fs-xl`, `--lh-ui`, `--w-regular`, `--w-medium`, `--w-strong` | The type scale, 10 to 16 px, 13 px for the body text; line height; weights |
@@ -1147,15 +1148,16 @@ mounted page) takes the logos from the binary rather than embedding its own copy
 
 | Address | What it is |
 | --- | --- |
-| `/shared/brand/mark.svg` | The mark, square. Ink in `currentColor`, accent in `var(--primary)` (ruby when absent) |
+| `/shared/brand/mark.svg` | The mark, square. Ink in `currentColor`, accent in `var(--brand-accent)` (ruby when absent) |
 | `/shared/brand/lockup.svg` | The mark with the name: PDO's mark and « PDO » in `--font-code`; Acogni Driver's wordmark, rule and tag |
 | `/shared/brand/favicon.svg` | The mark in fixed colours that follow `prefers-color-scheme`, for `<link rel="icon">` and `<img>`; `/shared/favicon.svg` answers the same |
 
 `mark.svg` and `lockup.svg` take the colour of the page once inlined (fetch the file, insert its
-text): through an `<img>` an SVG reads neither `currentColor` nor the tokens. Put them in an
-element with the class `acogni-brand` to keep their accent ruby under the Classic Theme too, as the
-interface does. `document.documentElement.dataset.brand` is not set on such a page; the interface's
-own carries `pdo` or `acogni-driver`.
+text): through an `<img>` an SVG reads neither `currentColor` nor the tokens. Their accent reads
+`--brand-accent` from `/shared/tokens.css`, so it stays the Acogni ruby of the mode under the
+Classic Theme too, with no class or rule of the page's own. Before 0.28 it read `--primary`, and
+turned emerald under Classic. `document.documentElement.dataset.brand` is not set on such a page;
+the interface's own carries `pdo` or `acogni-driver`.
 
 The interface is drawn at the **UI scale** (Settings › Interface, 100, 110 or 120 %, 120 by
 default), a CSS `zoom` on its root. A length in pixels needs nothing. A position computed from

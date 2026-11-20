@@ -19,6 +19,7 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - A Run whose Start is wired straight to End ends as soon as it starts: with no node to launch, it
   completes at once (or halts at once on the edge's `reason:`) instead of staying `running`
   forever. A Run that also launches nodes from Start ends once they are done.
+
 ## 2.80.3
 
 - The Runs list (`GET /runs`, `pdo run list`, the web UI) shows Runs newest created first again,

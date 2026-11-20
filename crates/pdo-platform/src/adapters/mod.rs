@@ -9,6 +9,7 @@ pub mod env;
 pub mod fs_update_journal;
 pub mod github_releases;
 pub mod host_installation;
+pub mod host_os;
 pub mod host_service;
 pub mod http;
 pub mod instance_defaults;

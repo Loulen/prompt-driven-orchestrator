@@ -14,6 +14,22 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- **Report a bug**: a new window, opened from Ctrl+K (Support group, "Report a bug…") and from
+  Settings › Diagnostics › Bug report, files a bug of the core on its public GitHub issues. It
+  takes a description and a screenshot (paste it anywhere in the window, or choose a file), joins
+  the details of a Run (statuses, failure reasons, durations) and the structure of a Pipeline,
+  both checked and prefilled from the selection, and always the version, the daemon's OS and the
+  installed harnesses. Prompts never go to the public tracker. The Preview tab shows the markdown
+  that leaves and can be edited. "Open GitHub issue" opens a new issue on the "Bug report"
+  template, its fields prefilled, and copies the screenshot to the clipboard to paste it there.
+- The repository has an issue template, "Bug report" (`.github/ISSUE_TEMPLATE/bug_report.yml`),
+  with the same fields, labelled `needs-triage`.
+- `GET /settings` states the daemon's system in `host_os` (`Linux 6.8.0 (x86_64)`).
+- Kit (`@pdo/extension-ui`): `Select` takes `invalid` (the failed edge, `aria-invalid`), and a
+  `Tabs` item takes `mark`, a short word after its label (`edited`).
+
 ## 2.80.4
 
 - A Run whose Start is wired straight to End ends as soon as it starts: with no node to launch, it

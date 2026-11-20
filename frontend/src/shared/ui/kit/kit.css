@@ -581,6 +581,12 @@
     outline: 1px solid var(--focus-ring);
     outline-offset: -1px;
   }
+  .d-sel[aria-invalid="true"] {
+    border-color: var(--color-st-failed);
+  }
+  .d-sel[aria-invalid="true"]:focus-visible {
+    outline-color: var(--color-st-failed);
+  }
   .d-sel:disabled {
     color: var(--text-2);
     cursor: default;

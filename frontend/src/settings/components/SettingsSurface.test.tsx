@@ -8,6 +8,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { useBugReport } from "../../platform/store/bugReport";
 import { isOn, rowOf, switchFor, switchOf, tipFor, tipOf } from "./settingsSurface/testing";
 
 // Every case renders the whole surface: a few seconds each on a busy machine,
@@ -2546,7 +2547,11 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     );
     const diagnostics = screen.getByTestId("settings-page-diagnostics");
     expect(diagnostics).not.toHaveAttribute("hidden");
-    expect(entries()).toEqual(["Price table", "Harness descriptors"]);
+    expect(entries()).toEqual(["Bug report", "Price table", "Harness descriptors"]);
+    // Bug report first: a button that opens its window on the selection.
+    fireEvent.click(screen.getByTestId("settings-report-bug"));
+    expect(useBugReport.getState().opened).toEqual({ runId: null, pipeline: null });
+    act(() => useBugReport.getState().closeBugReport());
     // Read-only: values are there, nothing to edit, and the sync lives in Stats.
     expect(
       screen.getByTestId("setting-price-table-fetched-path"),

@@ -38,6 +38,8 @@ export interface SelectProps<V extends string = string> {
   align?: "start" | "end";
   /** A filter in force: the trigger is tinted. */
   active?: boolean;
+  /** A refused value: the failed edge, and `aria-invalid`. */
+  invalid?: boolean;
   className?: string;
 }
 
@@ -60,6 +62,7 @@ export function Select<V extends string>({
   search,
   align,
   active,
+  invalid,
   className,
 }: SelectProps<V>) {
   const [open, setOpen] = React.useState(false);
@@ -184,6 +187,7 @@ export function Select<V extends string>({
         aria-activedescendant={open && !withSearch && hi >= 0 ? optId(hi) : undefined}
         className={cx("d-sel", size === "sm" && "d-sel--sm", mono && "d-sel--mono", className)}
         data-active={active || undefined}
+        aria-invalid={invalid || undefined}
         onClick={() => (open ? closeList() : openList())}
         onKeyDown={(e) => onKey(e, false)}
       >

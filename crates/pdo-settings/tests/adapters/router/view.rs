@@ -249,3 +249,12 @@ async fn refresh_models_answers_the_harness_entry_or_404() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(body["error"].as_str().unwrap().contains("ghost"), "{body}");
 }
+
+#[tokio::test]
+async fn settings_view_states_the_host_system() {
+    // A bug report states the daemon's system next to its version and harnesses.
+    let state = test_state().await;
+    let view = state.settings.view().await.unwrap();
+    let os = view["host_os"].as_str().expect("host_os is a string");
+    assert!(os.contains(std::env::consts::ARCH), "{os}");
+}

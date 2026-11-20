@@ -13,6 +13,7 @@ import { whyNoRunAnywhere } from "../run/model/runCreationRights";
 import { useRunCreationRightsStore } from "../run/store/runCreationRightsStore";
 import CommandField from "./palette/CommandField";
 import CommandPalette from "./palette/CommandPalette";
+import BugReportHost from "../platform/components/bugReport/BugReportHost";
 
 /** What `topbar/account` adds to the base context: no item. */
 const ACCOUNT_ITEM: Omit<DecorationContext, "location" | "run" | "project"> = { entity: null };
@@ -25,7 +26,8 @@ const ACCOUNT_ITEM: Omit<DecorationContext, "location" | "run" | "project"> = { 
  * extensions' `topbar/account` components (an avatar menu, say). Under it, the
  * banner of the extensions whose interface could not be loaded, and the
  * extension page open (by its entry or its deep link), under the bar like
- * Settings and Stats (CORE-183); over everything, the command palette.
+ * Settings and Stats (CORE-183); over everything, the command palette, and
+ * the Bug report window it opens.
  *
  * The entry of the surface open under the bar is selected (`aria-pressed`): a
  * second click on it closes the surface, another entry replaces it.
@@ -93,6 +95,7 @@ export default function TopBar({
       <ExtensionBanner />
       <ExtensionPageHost />
       <CommandPalette />
+      <BugReportHost />
     </>
   );
 }

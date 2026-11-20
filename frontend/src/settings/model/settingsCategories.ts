@@ -39,6 +39,7 @@ export type SettingsSectionId =
   | "prometheus-metrics"
   | "identity"
   | "what-is-sent"
+  | "bug-report"
   | "price-table"
   | "harness-descriptors";
 
@@ -64,6 +65,11 @@ export interface SettingsSection {
    * Rendered as the `Your account, saved at once` icon next to the title.
    */
   account?: boolean;
+  /**
+   * The section saves nothing: its rows are gestures (a button that opens a window), never
+   * greyed by the instance form's lock. No badge.
+   */
+  gesture?: boolean;
 }
 
 export interface SettingsCategory {
@@ -241,6 +247,12 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
     id: "diagnostics",
     label: "Diagnostics",
     sections: [
+      {
+        // The Rapport de bug (CONTEXT.md): a button that opens its window, nothing to save.
+        id: "bug-report",
+        label: "Bug report",
+        gesture: true,
+      },
       {
         id: "price-table",
         label: "Price table",

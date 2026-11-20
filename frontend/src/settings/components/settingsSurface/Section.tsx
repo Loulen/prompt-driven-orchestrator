@@ -16,7 +16,7 @@ export default function Section({
   children,
 }: {
   /** A core section, or an extension's (keyed by its contribution). */
-  section: Pick<SettingsSection, "label" | "readOnly" | "ownPersistence" | "deviceLocal" | "account"> & { id: string };
+  section: Pick<SettingsSection, "label" | "readOnly" | "ownPersistence" | "deviceLocal" | "account" | "gesture"> & { id: string };
   /** After the title (who added an extension's section). */
   badge?: ReactNode;
   /** Icon buttons at the right of the title bar. */

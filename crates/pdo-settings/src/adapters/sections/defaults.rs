@@ -115,8 +115,9 @@ impl SettingsSection for ReviewDefaults {
     }
 }
 
-/// Whether the daemon may ask the release source for a newer version, and the
-/// address humans open PDO at.
+/// Whether the daemon may ask the release source for a newer version, the
+/// address humans open PDO at, and the system the daemon runs on (a fact a
+/// bug report states, not a knob).
 pub struct PlatformDefaults;
 
 impl SettingsSection for PlatformDefaults {
@@ -128,6 +129,7 @@ impl SettingsSection for PlatformDefaults {
                     "public_url",
                     json(platform::public_url(c.public_url.as_deref())),
                 ),
+                ("host_os", json(platform::host_os())),
             ]))
         })
     }

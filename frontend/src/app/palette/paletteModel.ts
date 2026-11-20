@@ -7,6 +7,8 @@
  *
  * `>` at the start of the query keeps the commands: the core's, the
  * extensions' Actions and the selection's.
+ *
+ * The Support group (Report a bug…) comes last, after every result.
  */
 
 import type { RowAvatar, SearchResult } from "../../shared/extensions/contract";
@@ -35,7 +37,7 @@ export interface ExtensionRef {
 export interface PaletteItem {
   /** Unique in the palette. */
   id: string;
-  /** `commands`, `runs`, `pipelines`, `triggers`, `selection`, or `ext:<extension>` for a global Action. */
+  /** `commands`, `runs`, `pipelines`, `triggers`, `support`, `selection`, or `ext:<extension>` for a global Action. */
   group: string;
   label: string;
   /** Facts the match also reads (a Run's pipeline, a Trigger's schedule); never shown in the row. */
@@ -108,7 +110,7 @@ export interface BuildInput {
   /** The groups « Show all » opened. */
   expanded: ReadonlySet<string>;
   /** The icons of the core's groups. */
-  icons: Readonly<Record<"selection" | "recent" | "commands" | "runs" | "pipelines" | "triggers", Icon>>;
+  icons: Readonly<Record<"selection" | "recent" | "commands" | "runs" | "pipelines" | "triggers" | "support", Icon>>;
 }
 
 const CORE_GROUPS = [
@@ -201,7 +203,16 @@ export function buildSections(input: BuildInput): Section[] {
   if (text) core.sort((a, b) => b.best - a.best);
   sections.push(...core.map((c) => c.section));
 
-  if (commands) return sections;
+  const support = match(
+    input.items.filter((item) => item.group === "support"),
+    text,
+  );
+  const supportSection: Section[] =
+    support.length > 0
+      ? [{ key: "support", title: "Support", lead: { kind: "icon", icon: icons.support }, rows: support.map(itemRow) }]
+      : [];
+
+  if (commands) return [...sections, ...supportSection];
   for (const group of byRank(input.extensions)) {
     const key = `ext:${group.extension.id}`;
     const actions = match(group.actions, text).map(itemRow);
@@ -228,7 +239,7 @@ export function buildSections(input: BuildInput): Section[] {
       rows,
     });
   }
-  return sections;
+  return [...sections, ...supportSection];
 }
 
 /**

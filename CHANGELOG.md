@@ -14,6 +14,13 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- In a node's I/O tab, each Live artifact shows as a card, like an Output: a border, its name
+  large, its tools always there and its whole frontmatter in a band under the line. The live dot,
+  the `free` badge and "not produced" (a dashed card) stay; a live artifact still carries no
+  verdict.
+
 ## 2.80.0
 
 - A node's Retry asks first when it ends a live session or resets downstream nodes that hold

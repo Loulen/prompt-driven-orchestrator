@@ -169,3 +169,47 @@ describe("LiveSection — inherited files (#796)", () => {
     expect(row("progress").dataset.produced).toBe("false");
   });
 });
+
+describe("LiveSection — a card, as an Output (CORE-178)", () => {
+  it("shows a produced artifact as an output card, without a verdict edge", () => {
+    render(<LiveSection live={[progress]} runId="run-1" onOpen={vi.fn()} />);
+    const card = row("progress");
+    expect(card).toHaveClass("ri-port", "ri-port--card");
+    expect(card).not.toHaveAttribute("data-st");
+    expect(card).not.toHaveClass("port-row");
+  });
+
+  it("shows a declared artifact not produced yet as a dashed, quiet card", () => {
+    render(<LiveSection live={[risks]} runId="run-1" onOpen={vi.fn()} />);
+    const card = row("risks");
+    expect(card).toHaveClass("ri-port--card");
+    expect(card).toHaveAttribute("data-pending");
+    expect(within(card).getByTestId("live-not-produced")).toHaveTextContent("not produced");
+    expect(card).not.toHaveAttribute("data-open");
+  });
+
+  it("puts the whole frontmatter in the card's band, warnings included", () => {
+    render(<LiveSection live={[progress]} runId="run-1" onOpen={vi.fn()} />);
+    const fm = screen.getByTestId("live-frontmatter");
+    expect(fm.closest(".ri-port__fm")).not.toBeNull();
+    expect(fm.closest(".ri-port__sub")).toBeNull();
+    expect(within(fm).getByTestId("live-tag-warning")).toBeInTheDocument();
+  });
+
+  it("keeps the live dot and the free badge on the card's line", () => {
+    render(<LiveSection live={[notes]} runId="run-1" onOpen={vi.fn()} />);
+    const line = row("notes-for-builder").querySelector<HTMLElement>(".ri-port__line")!;
+    expect(within(line).getByRole("img", { name: "live" })).toBeInTheDocument();
+    expect(within(line).getByTestId("live-free-badge")).toBeInTheDocument();
+  });
+
+  it.each(["markdown", "image_list", "files", "html"] as const)(
+    "names its %s icon as an output of that type does",
+    (portType) => {
+      const base = portType === "markdown" || portType === "html" ? progress : screens;
+      const artifact: LiveArtifactIO = { ...base, port_type: portType };
+      render(<LiveSection live={[artifact]} runId="run-1" onOpen={vi.fn()} />);
+      expect(within(row(artifact.name)).getByRole("img", { name: portType })).toBeInTheDocument();
+    },
+  );
+});

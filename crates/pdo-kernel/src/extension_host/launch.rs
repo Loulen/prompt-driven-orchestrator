@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 
 use super::Extensions;
 
+/// The name of the variable that moves Claude Code's configuration folder,
+/// hence where its transcripts are written (`$CLAUDE_CONFIG_DIR/projects/`).
+pub const CLAUDE_CONFIG_DIR: &str = "CLAUDE_CONFIG_DIR";
+
 /// What the extensions add to the launch of a session.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NodeContribution {
@@ -23,6 +27,16 @@ pub struct NodeContribution {
 }
 
 impl NodeContribution {
+    /// The Claude Code configuration folder the extensions give the session
+    /// (API 0.8), as exported: where it writes its transcripts, under
+    /// `projects/`. `None` when none is given, or a blank one.
+    pub fn claude_config_dir(&self) -> Option<&std::path::Path> {
+        self.env
+            .get(CLAUDE_CONFIG_DIR)
+            .filter(|dir| !dir.trim().is_empty())
+            .map(std::path::Path::new)
+    }
+
     /// `prompt`, under the extensions' text at its very top (followed by a
     /// blank line), if any.
     pub fn above(&self, prompt: String) -> String {
@@ -138,6 +152,20 @@ mod tests {
     use super::*;
     use crate::extension_host::{ExtensionHost, NoExtensions};
     use pdo_extension_api::{Actor, Extension, Manifest, NodeEnv, NodeLaunch, SessionRef};
+
+    #[test]
+    fn the_claude_config_dir_is_the_one_given_and_none_when_empty_or_absent() {
+        let with = |value: &str| NodeContribution {
+            env: BTreeMap::from([(CLAUDE_CONFIG_DIR.to_string(), value.to_string())]),
+            preamble: None,
+        };
+        assert_eq!(
+            with("/home/u/.pdo/alice").claude_config_dir(),
+            Some(std::path::Path::new("/home/u/.pdo/alice"))
+        );
+        assert_eq!(with("  ").claude_config_dir(), None);
+        assert_eq!(NodeContribution::default().claude_config_dir(), None);
+    }
 
     /// Gives `vars` and `preamble` to every launch, suspends every Trigger
     /// when `suspends`; panics everywhere when `panics`.

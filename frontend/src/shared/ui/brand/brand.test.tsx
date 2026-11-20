@@ -41,7 +41,7 @@ describe("BrandMark", () => {
     expect(mark).toHaveAttribute("width", "16");
     expect(mark).toHaveAttribute("viewBox", "0 0 64 64");
     expect(mark.getAttribute("class")).toContain("acogni-brand");
-    expect(mark.querySelector('[fill="var(--primary)"]')).not.toBeNull();
+    expect(mark.querySelector('[fill="var(--brand-accent)"]')).not.toBeNull();
     // Decorative: never a control.
     expect(mark).not.toHaveAttribute("tabindex");
   });
@@ -58,6 +58,8 @@ describe("BrandMark", () => {
     const mark = screen.getByRole("img", { name: "Acogni Driver" });
     expect(mark).toHaveAttribute("data-brand", "acogni-driver");
     expect(mark).toHaveAttribute("viewBox", "0 -1460 1520 1520");
+    expect(mark.querySelector('[fill="var(--brand-accent)"]')).not.toBeNull();
+    expect(mark.innerHTML).not.toContain("--primary");
   });
 });
 
@@ -77,6 +79,8 @@ describe("BrandLockup", () => {
     expect(lockup).toHaveAttribute("data-testid", "acogni-lockup");
     expect(lockup).toHaveTextContent("Driver");
     expect(lockup.querySelector("svg")).toHaveAttribute("viewBox", "-60 -1540 6970 2100");
+    expect(lockup.innerHTML).toContain("stroke:var(--brand-accent)");
+    expect(lockup.innerHTML).not.toContain("--primary");
   });
 });
 
@@ -94,6 +98,6 @@ describe("the gear of Acogni", () => {
     const gear = screen.getByTestId("acogni-gear");
     expect(gear).toHaveAttribute("width", "14");
     expect(gear.getAttribute("class")).toContain("acogni-brand");
-    expect(gear.querySelector('[stroke="var(--primary)"]')).not.toBeNull();
+    expect(gear.querySelector('[stroke="var(--brand-accent)"]')).not.toBeNull();
   });
 });

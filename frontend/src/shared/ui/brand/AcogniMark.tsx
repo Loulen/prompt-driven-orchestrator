@@ -1,6 +1,6 @@
 /**
  * The gear of Acogni, the publisher's logo: drawn in the current colour, its
- * triangle in the ruby under every Theme (`brand.css`). Since CORE-225 it is no
+ * triangle in `--brand-accent`, the ruby under every Theme. Since CORE-225 it is no
  * longer the product's logo (the Marque's mark is, `BrandMark`): it is the
  * Settings icon (`AccentIcons.SettingsIcon`) and signs « by Acogni »
  * (`BySignature`).
@@ -17,7 +17,7 @@ export function GearDrawing() {
   return (
     <g transform="translate(32 32)" fill="none" strokeLinejoin="round" strokeWidth={4.2}>
       <path d={GEAR} stroke="currentColor" />
-      <path d={TRIANGLE} stroke="var(--primary)" />
+      <path d={TRIANGLE} stroke="var(--brand-accent)" />
     </g>
   );
 }

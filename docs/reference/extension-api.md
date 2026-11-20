@@ -20,11 +20,11 @@ default, and with no extension the daemon behaves as if none existed.
 | Hook | Called | Default |
 | --- | --- | --- |
 | `manifest` | at registration | required |
-| `start(context)` | once, before serving; `context.data_dir`, `context.host` | nothing |
+| `start(context)` | once, before serving (the daemon only, never `pdo service`, below); `context.data_dir`, `context.host` | nothing |
 | `identify(request)` | on every request; the first `Some` wins | `None`: the core decides |
 | `admit(request)` (0.8) | on a request no extension identified, before any route; the first non-`Admit` wins, a panic refuses | `Admission::Admit` |
 | `display_name(actor)` (0.8) | wherever an Actor is shown; the first `Some` wins, a panic is skipped | `None`: shown as without extension |
-| `authorize(actor, operation)` | before every mutation of an actor, and every guarded read (0.8, below); the first refusal wins, a panic refuses | allow |
+| `authorize(actor, operation)` | before every mutation of an actor, and every guarded read (0.8, below); the first refusal wins, a panic refuses; also by `pdo service install` / `uninstall`, unstarted (below) | allow |
 | `on_create(actor, entity)` | after a creation; attributes prefixed `<id>/` | none |
 | `validate_create(actor, kind, value)` (0.9) | before a creation carrying a value for this extension, after the authorization; `Err(reason)` refuses with `400`, a panic refuses | accept |
 | `on_create_with_data(actor, entity, data)` (0.9) | in place of `on_create`, with the value the creation carried (`None` without one); a Run's before its first Node | `on_create(actor, entity)` |
@@ -32,7 +32,7 @@ default, and with no extension the daemon behaves as if none existed.
 | `routes()` | once; nested under `/ext/<id>/` | none |
 | `ui()` | on every `GET /ext` | none |
 | `cli()` / `run_cli(invocation)` | `pdo ext <id> …` | no command line |
-| `skills()` | once, before `start` | none |
+| `skills()` | once, before `start` (the daemon only) | none |
 | `node_env(launch)` (0.8) | at every launch of a Node, agent or script, and at an agent's resume; the first registered wins a name | none |
 | `node_preamble(launch)` (0.8) | at every launch of an agent; texts follow in registration order | none |
 | `session_env(launch)` (0.13) | at every launch of a session that makes an agent act or runs a script Node: a Node (the core asks this hook, never `node_env` directly), the Pipeline Manager, the library assistant; the first registered wins a name | `node_env` for a Node, none otherwise |
@@ -40,6 +40,16 @@ default, and with no extension the daemon behaves as if none existed.
 | `trigger_suspension(trigger)` (0.8) | at every read of a Trigger and every due tick; the first `Some` wins, a panic suspends nothing | not suspended |
 | `git_env(operation)` | at every network git operation the daemon runs for an Actor: the clone of a repository added by its URL, the fetch of New Run, the clone of a Source de skills, the fetch before a Trigger fires; and before a Trigger's guard runs (its dry-run included); the first registered wins a name | none: the daemon's credentials, a guard as before |
 | `guard_ended(end)` | once a guard `git_env` was asked about has ended, whatever its end (passed, skipped, failed, timed out); in registration order, a panic is ignored | nothing |
+
+### Outside the daemon: `pdo service`
+
+Every `pdo service` subcommand builds the binary's extensions too (ADR-0081): their constructors
+run and `manifest` is called. `pdo service install` and `pdo service uninstall` then ask
+`authorize` for the local operator: `service` × `create` for the install (not on `--dry-run`),
+`service` × `delete` for the uninstall; `pdo service status` asks nothing. Only `manifest` and
+`authorize` are called, **never** `start` nor `skills`: no data folder, no `Host`, no async runtime
+(the `on_event` thread is started but receives nothing). An extension that refuses for lack of its
+state (its database not open) makes `pdo service install` fail on a fresh install.
 
 ## The Manifest
 

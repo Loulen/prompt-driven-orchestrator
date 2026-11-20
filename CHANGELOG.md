@@ -14,6 +14,13 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## 2.80.3
+
+- The Runs list (`GET /runs`, `pdo run list`, the web UI) shows Runs newest created first again,
+  even when several Runs start in the same second: it sorts by the creation instant (millisecond
+  `started_at`), then by append order, instead of by Run id, whose random suffix shuffled Runs of
+  the same second. The order is the same on every reload.
+
 ## 2.80.2
 
 - A relaunched hosted agent session resumes its conversation when an extension gives its launches a

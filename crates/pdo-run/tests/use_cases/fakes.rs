@@ -165,14 +165,20 @@ impl EventStore for Store {
             if self.broken {
                 anyhow::bail!("failed to load the run summaries");
             }
-            Ok(self
-                .summaries
-                .lock()
-                .unwrap()
-                .values()
-                .rev()
-                .cloned()
-                .collect())
+            // As the port says: newest `started_at` first, then the Run's
+            // first append, then the `run_id`.
+            let events = self.events.lock().unwrap();
+            let first_append = |run_id: &str| events.iter().position(|e| e.run_id == run_id);
+            let mut all: Vec<RunSummary> =
+                self.summaries.lock().unwrap().values().cloned().collect();
+            all.sort_by(|a, b| {
+                (&b.started_at, first_append(&b.run_id), &b.run_id).cmp(&(
+                    &a.started_at,
+                    first_append(&a.run_id),
+                    &a.run_id,
+                ))
+            });
+            Ok(all)
         })
     }
 

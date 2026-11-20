@@ -14,6 +14,13 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- New seam (extension API 0.28, a minor): `Banner` of `@pdo/extension-ui` takes `wrap`. The
+  title and the text wrap onto several lines, the title at body weight, instead of ending in an
+  ellipsis: a whole sentence fits a narrow column, the actions stay on the right. Without `wrap`
+  the banner is unchanged.
+
 ## 2.80.0
 
 - A node's Retry asks first when it ends a live session or resets downstream nodes that hold

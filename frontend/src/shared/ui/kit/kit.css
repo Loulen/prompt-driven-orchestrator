@@ -1141,6 +1141,24 @@
     gap: var(--g-2);
     margin-left: auto;
   }
+  /* wrap: a whole sentence over several lines, at body weight; icon and actions stay centred, actions on the right */
+  .d-banner[data-wrap] {
+    padding-block: var(--g-2);
+  }
+  .d-banner[data-wrap] .d-banner__title {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-weight: var(--w-regular);
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+  .d-banner[data-wrap] .d-banner__text {
+    flex: 1 1 auto;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
   .d-kv {
     display: grid;
     grid-template-columns: 96px minmax(0, 1fr);

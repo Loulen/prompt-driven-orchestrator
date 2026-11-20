@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.80.3
 
 - The Runs list (`GET /runs`, `pdo run list`, the web UI) shows Runs newest created first again,
   even when several Runs start in the same second: it sorts by the creation instant (millisecond

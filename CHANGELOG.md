@@ -14,6 +14,13 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## 2.83.0
+
+- New seam (extension API 0.29, a minor): `Banner` of `@pdo/extension-ui` takes `wrap`. The
+  title and the text wrap onto several lines, both at body weight and the text under the title,
+  instead of ending in an ellipsis: a whole sentence fits a narrow column, the actions stay on the
+  right. Without `wrap` the banner is unchanged.
+
 ## 2.82.1
 
 - The extension contract states that `pdo service install` / `uninstall` ask `authorize` of

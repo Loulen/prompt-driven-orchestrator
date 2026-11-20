@@ -675,10 +675,12 @@ impl HostedPlaces for Places {
 }
 
 /// The harnesses: `claude` by default or by name, nothing else. Every
-/// conversation was written, but those of `unwritten`.
+/// conversation was written, but those of `unwritten`; remembers the Claude
+/// Code configuration folder each look was given.
 #[derive(Default)]
 pub struct Harnesses {
     pub unwritten: Mutex<Vec<String>>,
+    pub looked_in: Mutex<Vec<Option<PathBuf>>>,
 }
 
 impl HostedHarness for Harnesses {
@@ -698,7 +700,12 @@ impl HostedHarness for Harnesses {
         _harness: &'a str,
         _cwd: &'a Path,
         id: &'a str,
+        claude_config_dir: Option<&'a Path>,
     ) -> BoxFuture<'a, Option<bool>> {
+        self.looked_in
+            .lock()
+            .unwrap()
+            .push(claude_config_dir.map(Path::to_path_buf));
         let written = !self.unwritten.lock().unwrap().iter().any(|u| u == id);
         Box::pin(async move { Some(written) })
     }

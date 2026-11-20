@@ -16,9 +16,7 @@ use crate::application::paths::effective_repo_root;
 use crate::domain::state::RunState;
 use crate::Runs;
 
-/// The name of the variable that moves Claude Code's configuration folder,
-/// hence where its transcripts are written (`$CLAUDE_CONFIG_DIR/projects/`).
-pub const CLAUDE_CONFIG_DIR: &str = "CLAUDE_CONFIG_DIR";
+pub use pdo_kernel::extension_host::CLAUDE_CONFIG_DIR;
 
 /// What the extensions add to the launch of iteration `iter` of `node_id`, a
 /// `kind` Node of `run`, started by the Run's creator. The variables the Run's

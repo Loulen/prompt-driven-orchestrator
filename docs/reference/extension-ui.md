@@ -132,7 +132,10 @@ selected Run, or when its repository belongs to no Projet.
   interface PanelProps { extension: ExtensionRef; context: LocationContext; close(): void }
   ```
 
-  `close()` closes it, before following a link it offers, say.
+  `close()` closes it, before following a link it offers, say. A deep link never opens a panel:
+  `#/ext/<id>/topbar/end/<path>` opens the extension's first page there, whatever the order of
+  its contributions, and toward an extension with only a panel or actions at `topbar/end` it shows
+  the « no page » error toast ([Deep links](#deep-links)).
 - **Counter** (since 0.19, on a panel and an action since 0.20): a page, a panel or an action
   may declare where the counter of its icon is read
   (`UiContribution::with_counter("/ext/<id>/counter")`, on the wire `counter`). The core reads it
@@ -838,8 +841,9 @@ Settings (`settings/page`) the header keeps the Settings' title: `setTitle` does
 
 ## Deep links
 
-`#/ext/<extension>/<location>/<path>` opens the extension's first page at `<location>` (in
-declaration order, whatever its `when`) and hands `<path>` to it as `context.path`.
+`#/ext/<extension>/<location>/<path>` opens the extension's first **page** at `<location>` (in
+declaration order, whatever its `when`; a panel or an action declared there, even before the page,
+is never opened by a link) and hands `<path>` to it as `context.path`.
 
 - Opening a page from its entry writes its deep link to the address bar; `navigate(path)` writes
   the new one; closing the page leaves it. « Back » and « Forward » follow.

@@ -97,10 +97,11 @@ export default function ProjectList({
               size="sm"
               tone="primary"
               onClick={() => void create()}
-              disabled={!draft.name.trim() || creating}
+              disabled={!creating && !draft.name.trim()}
+              pending={creating && "Creating…"}
               data-testid="projects-new-create"
             >
-              {creating ? "Creating…" : "Create"}
+              Create
             </Button>
           </div>
           {draft.members.length > 0 && (

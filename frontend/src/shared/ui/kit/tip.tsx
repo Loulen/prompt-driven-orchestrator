@@ -51,6 +51,7 @@ export function TooltipLayer({
   delay = TOOLTIP_DELAY,
   disabled,
   describedBy,
+  bubbleClassName = "d-tip",
   children,
 }: {
   content: React.ReactNode;
@@ -59,6 +60,8 @@ export function TooltipLayer({
   disabled?: boolean;
   /** Id given to the bubble, for the trigger's `aria-describedby`. */
   describedBy?: string;
+  /** The bubble's class: the tooltip's (`d-tip`), or a popover's look (`d-pop`) for a list. */
+  bubbleClassName?: string;
   children: React.ReactNode;
 }) {
   const wrap = React.useRef<HTMLSpanElement>(null);
@@ -134,7 +137,7 @@ export function TooltipLayer({
         role="tooltip"
         id={describedBy}
       >
-        <span className="d-tip" data-testid="tooltip-content">
+        <span className={bubbleClassName} data-testid="tooltip-content">
           {content}
         </span>
       </Floating>

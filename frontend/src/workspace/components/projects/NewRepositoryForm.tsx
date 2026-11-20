@@ -85,11 +85,12 @@ export default function NewRepositoryForm({
           size="sm"
           tone="primary"
           onClick={() => void create()}
-          disabled={!target || busy}
+          disabled={!busy && !target}
+          pending={busy && "Creating…"}
           title="git init, first commit"
           data-testid="project-new-repo-create"
         >
-          {busy ? "Creating…" : "Create and add"}
+          Create and add
         </Button>
         <IconButton icon={X} label="Cancel" kbd="Esc" size="sm" onClick={onCancel} />
       </div>

@@ -10,7 +10,7 @@ import GuardSection from "./triggerDetail/GuardSection";
 import ExtensionDetailTab from "../../shared/extensions/ExtensionDetailTab";
 import { useDetailTabs } from "../../shared/extensions/catalogue";
 import ActorLabel from "../../shared/actors/ActorLabel";
-import { Button, IconButton, KeyValue, Section, type KeyValueRow } from "../../shared/ui/kit";
+import { Button, IconButton, KeyValue, Section, usePending, type KeyValueRow } from "../../shared/ui/kit";
 import { ToneIcon } from "../../shared/ui/kit/tone";
 import MidPath from "../../shared/ui/MidPath";
 import SuspendedPill from "./triggersList/SuspendedPill";
@@ -35,7 +35,7 @@ interface Props {
    */
   promptRequired?: boolean;
   /** « Run now » (#341) and « Edit » from the header; absent, no button. */
-  onRunNow?: () => void;
+  onRunNow?: () => void | Promise<unknown>;
   onEdit?: () => void;
   /** The name of the Trigger's Projet, when it has one. */
   projectName?: string | null;
@@ -148,6 +148,8 @@ export default function TriggerDetailPanel({
   ];
 
   const fireRefusal = fireRefusalOf(trigger, refused.fire);
+  // Run now: busy until the fire answers (the paused-Triggers confirmation answers at once).
+  const runNow = usePending();
   return (
     <aside className="tg-detail" data-testid="trigger-detail-panel">
       <header className="tg-detail__head">
@@ -169,7 +171,8 @@ export default function TriggerDetailPanel({
           <Button
             size="sm"
             icon={Play}
-            onClick={onRunNow}
+            onClick={() => void runNow.run(async () => onRunNow()).catch(() => {})}
+            pending={runNow.pending && "Running…"}
             title={fireRefusal ? undefined : "Run now"}
             disabledReason={fireRefusal}
             data-testid="trigger-detail-run-now"

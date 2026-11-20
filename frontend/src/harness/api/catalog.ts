@@ -17,6 +17,6 @@ export async function fetchHarnessCatalog(): Promise<HarnessCatalog> {
  *  open page hears of it (`harness_catalogue_changed`). */
 export function refreshHarnessModels(harness: string): Promise<HarnessListItem> {
   return request<HarnessListItem>("POST", `/settings/harnesses/${encodeURIComponent(harness)}/refresh`, {
-    label: "Refresh models",
+    label: "Refreshing models",
   });
 }

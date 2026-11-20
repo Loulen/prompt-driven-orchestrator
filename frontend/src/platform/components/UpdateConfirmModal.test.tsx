@@ -67,10 +67,11 @@ describe("UpdateConfirmModal (#699)", () => {
     expect(screen.getByText(/stopped and relaunched with its current arguments/)).toBeInTheDocument();
   });
 
-  it("Cancel and Escape both cancel; busy disables the confirm", () => {
+  it("Cancel and Escape both cancel; busy turns the confirm busy (inert)", () => {
     const onCancel = vi.fn();
     render(<UpdateConfirmModal update={status()} busy onConfirm={() => {}} onCancel={onCancel} />);
-    expect(screen.getByTestId("update-confirm-ok")).toBeDisabled();
+    expect(screen.getByTestId("update-confirm-ok")).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByTestId("update-confirm-ok")).toHaveAttribute("data-pending", "busy");
     expect(screen.getByTestId("update-confirm-ok")).toHaveTextContent("Starting…");
     fireEvent.click(screen.getByTestId("update-confirm-cancel"));
     fireEvent.keyDown(document, { key: "Escape" });

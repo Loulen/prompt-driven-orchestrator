@@ -11,7 +11,7 @@ export function startRunManager(runId: string): Promise<{ ok: boolean; session: 
   return request(
     "POST",
     `/runs/${encodeURIComponent(runId)}/manager/start`,
-    { label: `POST /runs/${runId}/manager/start` },
+    { label: "Starting run manager" },
   );
 }
 
@@ -21,6 +21,6 @@ export function stopRunManager(runId: string): Promise<{ ok: boolean; stopped: b
   return request(
     "POST",
     `/runs/${encodeURIComponent(runId)}/manager/stop`,
-    { label: `POST /runs/${runId}/manager/stop` },
+    { label: "Stopping run manager" },
   );
 }

@@ -122,11 +122,12 @@ export default function TriggerFields({ form }: { form: NewRunForm }) {
             <Button
               icon={FlaskConical}
               onClick={onTestGuard}
-              disabled={!repoValid || guardCommand.trim().length === 0 || guardTesting}
+              disabled={!guardTesting && (!repoValid || guardCommand.trim().length === 0)}
+              pending={guardTesting && "Testing…"}
               title={!repoValid ? "Choose a repository first" : "Test guard"}
               data-testid="guard-test-button"
             >
-              {guardTesting ? "Testing…" : "Test"}
+              Test
             </Button>
           </div>
           {guardTestError && (

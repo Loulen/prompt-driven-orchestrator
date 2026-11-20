@@ -32,7 +32,7 @@ export function attachmentFileName(disposition: string | null, fallback: string)
 }
 
 export async function exportSkills(body: { skill_ids: string[]; folder_ids: string[] }): Promise<SkillsExport> {
-  const label = "POST /settings/skills/export";
+  const label = "Exporting skills";
   const resp = await request<Response>("POST", "/settings/skills/export", { body, responseMode: "raw", label });
   const blob = await sidecarBlob(resp, label);
   return {
@@ -47,5 +47,6 @@ export function uploadSkillsZip(file: File): Promise<SkillSidecarImportReport> {
   return request("POST", "/settings/skills/upload", {
     body: file,
     query: { name: file.name },
+    label: "Importing skills archive",
   });
 }

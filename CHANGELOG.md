@@ -14,6 +14,19 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- Every change you send to the daemon now shows while it runs. Its button turns busy (a spinner,
+  "Approving…", "Launching…", "Saving…") and takes no second click. The status bar's daemon
+  icon, now right of the sessions counter, joins the connection and the work in flight: a grey
+  check when connected and idle, a turning ruby ring with the number of operations past 300 ms
+  (their name, or their list with durations, on hover or focus), a red cross when the connection
+  is lost. A failure always shows a toast with the daemon's message; a success shows one only when
+  it took more than 2 s. Reads and refreshes stay silent.
+- Seam for extensions: `@pdo/extension-ui` exports `trackOperation(label, work, { done, icon })`,
+  so the mutations an extension sends with its own client show in the same indicator and toasts,
+  and `usePending()`, which turns a `Button` busy through its new `pending` prop.
+
 ## 2.80.4
 
 - A Run whose Start is wired straight to End ends as soon as it starts: with no node to launch, it

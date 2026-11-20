@@ -14,7 +14,7 @@ import type { Project } from "../../workspace/model/project";
 import { PageTabActions, PageTabButtons } from "../../platform/components/PageTabs";
 import { useMountedPages } from "../../platform/store/mountedPages";
 import type { RunListEntry } from "../../shared/generated/RunListEntry";
-import { Button, Tooltip } from "../../shared/ui/kit";
+import { Button, Tooltip, usePending } from "../../shared/ui/kit";
 import { useOverflowing } from "../../hooks/useOverflowing";
 import { useActiveTabInView } from "../../hooks/useActiveTabInView";
 import TabContextMenu from "./TabContextMenu";
@@ -69,6 +69,8 @@ export default function TabBar({
   const overflowing = useOverflowing(listRef);
   const save = useEditStore((s) => s.save);
   const requestSave = useEditStore((s) => s.requestSave);
+  // Save: busy until the daemon answers a direct save (a shared draft opens its window at once).
+  const saving = usePending();
   const saveVersionFor = useEditStore((s) => s.saveVersionFor);
   const closeSaveVersion = useEditStore((s) => s.closeSaveVersion);
   const lastSavedAt = useEditStore((s) => s.lastSavedAt);
@@ -213,8 +215,11 @@ export default function TabBar({
                   size="sm"
                   tone="primary"
                   icon={Save}
-                  onClick={() => { if (activeTabId) requestSave(activeTabId); }}
-                  disabled={activeDraft ? !activeTab?.dirty : !anyDirty}
+                  onClick={() => {
+                    if (activeTabId) void saving.run(async () => requestSave(activeTabId)).catch(() => {});
+                  }}
+                  disabled={!saving.pending && (activeDraft ? !activeTab?.dirty : !anyDirty)}
+                  pending={saving.pending && "Saving…"}
                   data-testid="save-button"
                 >
                   {activeDraft ? "Save…" : "Save"}

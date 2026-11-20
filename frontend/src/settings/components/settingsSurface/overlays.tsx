@@ -37,8 +37,8 @@ export function ConfirmCloseDialog({
           <Button tone="danger" onClick={onDiscard} data-testid="settings-confirm-discard">
             Discard
           </Button>
-          <Button tone="primary" onClick={onSaveAndClose} disabled={saving} data-testid="settings-confirm-save-close">
-            {saving ? "Saving…" : "Save & close"}
+          <Button tone="primary" onClick={onSaveAndClose} pending={saving && "Saving…"} data-testid="settings-confirm-save-close">
+            Save & close
           </Button>
         </>
       }

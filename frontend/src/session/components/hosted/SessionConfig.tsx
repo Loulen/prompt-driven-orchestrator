@@ -7,6 +7,7 @@ import type { HostedConfig } from "../../model/hostedSession";
 import { choiceOf, configOf } from "../../model/hostedConfig";
 import { useHostedSession } from "../../store/useHostedSession";
 import { useInstanceAgent } from "../../store/useInstanceAgent";
+import { errorAlreadyShown } from "../../../shared/http/operations";
 import "./hostedSession.css";
 
 /**
@@ -51,7 +52,9 @@ export default function SessionConfig({ session: id }: { session: string }) {
     setSaving(true);
     configure(next)
       .then(() => setDraft(null))
-      .catch((e: unknown) => toast(e instanceof Error ? e.message : String(e), "error", { title: "Configuration" }))
+      .catch((e: unknown) => {
+        if (!errorAlreadyShown(e)) toast(e instanceof Error ? e.message : String(e), "error", { title: "Configuration" });
+      })
       .finally(() => setSaving(false));
   };
   const prompt = draft ?? config.prompt ?? "";

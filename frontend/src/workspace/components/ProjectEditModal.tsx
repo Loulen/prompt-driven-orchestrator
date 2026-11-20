@@ -258,9 +258,15 @@ export default function ProjectEditModal({
           <Button onClick={cancel} data-testid="project-edit-cancel">
             Cancel
           </Button>
-          <Button tone="primary" onClick={() => void handleSave()} disabled={!canSave} data-testid="project-edit-save">
-            {submitting ? "Saving…" : "Save"}
-            {!submitting && <Kbd>Ctrl ↵</Kbd>}
+          <Button
+            tone="primary"
+            onClick={() => void handleSave()}
+            disabled={!submitting && !canSave}
+            pending={submitting && "Saving…"}
+            data-testid="project-edit-save"
+          >
+            Save
+            <Kbd>Ctrl ↵</Kbd>
           </Button>
         </>
       }

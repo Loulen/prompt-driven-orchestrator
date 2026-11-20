@@ -29,7 +29,7 @@ export function uploadSkillFiles(
     form.append("path", path);
     form.append("file", file, path.split("/").pop() ?? path);
   }
-  return request("POST", `/settings/skills/${encodeURIComponent(id)}/files`, { body: form });
+  return request("POST", `/settings/skills/${encodeURIComponent(id)}/files`, { body: form, label: "Uploading skill files" });
 }
 
 /** The explorer path: the daemon copies `from_path` (absolute, on its host). */
@@ -40,6 +40,7 @@ export function uploadSkillFileFromPath(
 ): Promise<SkillFilesUpload> {
   return request("POST", `/settings/skills/${encodeURIComponent(id)}/files`, {
     body: { from_path: fromPath, path },
+    label: "Copying skill files",
   });
 }
 
@@ -57,9 +58,9 @@ export function writeSkillFile(
   path: string,
   text: string,
 ): Promise<SkillFile & { skill?: Skill }> {
-  return request("PUT", skillFilePath(id, path), { body: new Blob([text], { type: "text/plain" }) });
+  return request("PUT", skillFilePath(id, path), { body: new Blob([text], { type: "text/plain" }), label: "Saving skill file" });
 }
 
 export function deleteSkillFile(id: string, path: string): Promise<void> {
-  return request("DELETE", skillFilePath(id, path), { responseMode: "void" });
+  return request("DELETE", skillFilePath(id, path), { responseMode: "void", label: "Deleting skill file" });
 }

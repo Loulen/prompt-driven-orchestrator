@@ -38,7 +38,7 @@ export interface RightPaneProps {
   triggerPromptRequired: boolean;
   firesRefreshKey: number;
   /** The selected Trigger's « Run now » and « Edit » (its detail's header). */
-  onRunNowTrigger?: (trigger: Trigger) => void;
+  onRunNowTrigger?: (trigger: Trigger) => void | Promise<unknown>;
   onEditTrigger?: (trigger: Trigger) => void;
   /** The Projets, to name the selected Trigger's. */
   projects?: Project[];

@@ -42,7 +42,7 @@ export function fetchTriggers(): Promise<TriggerListEntry[]> {
 }
 
 export function createTrigger(req: CreateTriggerRequest): Promise<Trigger> {
-  return request<Trigger>("POST", "/triggers", { body: req, label: "POST /triggers" });
+  return request<Trigger>("POST", "/triggers", { body: req, label: "Creating trigger" });
 }
 
 export function fetchTrigger(triggerId: string): Promise<Trigger> {
@@ -94,7 +94,7 @@ export function updateTrigger(
   return request<Trigger>(
     "PATCH",
     `/triggers/${encodeURIComponent(triggerId)}`,
-    { body: req, label: `PATCH /triggers/${triggerId}` },
+    { body: req, label: "Saving trigger" },
   );
 }
 
@@ -104,7 +104,7 @@ export async function deleteTrigger(triggerId: string): Promise<void> {
   const resp = await request<Response>(
     "DELETE",
     `/triggers/${encodeURIComponent(triggerId)}`,
-    { responseMode: "raw" },
+    { responseMode: "raw", label: "Deleting trigger" },
   );
   if (!resp.ok && resp.status !== 404) {
     throw new ApiError(`DELETE /triggers/${triggerId} failed: ${resp.status}`, { status: resp.status });
@@ -126,7 +126,7 @@ export function fireTrigger(triggerId: string): Promise<FireTriggerResponse> {
   return request<FireTriggerResponse>(
     "POST",
     `/triggers/${encodeURIComponent(triggerId)}/fire`,
-    { label: `POST /triggers/${triggerId}/fire` },
+    { label: "Running trigger now" },
   );
 }
 
@@ -143,7 +143,7 @@ export function fetchTriggerFires(triggerId: string): Promise<TriggerFire[]> {
 export function pauseTriggers(paused: boolean): Promise<{ ok: boolean; paused: boolean }> {
   return request("POST", "/triggers/pause", {
     body: { paused },
-    label: `POST /triggers/pause ${paused}`,
+    label: paused ? "Pausing triggers" : "Resuming triggers",
   });
 }
 

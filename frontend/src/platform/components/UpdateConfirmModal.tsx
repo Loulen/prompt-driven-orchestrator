@@ -70,11 +70,11 @@ export default function UpdateConfirmModal({
             tone="primary"
             icon={Download}
             onClick={onConfirm}
-            disabled={busy}
+            pending={busy && "Starting…"}
             autoFocus
             data-testid="update-confirm-ok"
           >
-            {busy ? "Starting…" : "Update now"}
+            Update now
           </Button>
         </div>
       </div>

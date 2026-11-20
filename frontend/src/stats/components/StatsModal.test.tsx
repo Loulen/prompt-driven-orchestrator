@@ -353,7 +353,7 @@ describe("StatsModal — price sync (#427, ADR-0034)", () => {
     expect(screen.getByTestId("stats-sync-prices")).not.toBeDisabled();
   });
 
-  it("disables the button while a sync is in flight", async () => {
+  it("turns the button busy (inert) while a sync is in flight", async () => {
     // Client-side guard on top of the daemon's 409 (precedent: `guardTesting`).
     let release: (r: SyncCostPricesReport) => void = () => {};
     syncCostPricesMock.mockReturnValue(
@@ -365,11 +365,12 @@ describe("StatsModal — price sync (#427, ADR-0034)", () => {
     const button = screen.getByTestId("stats-sync-prices");
     await user.click(button);
 
-    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).toHaveAttribute("data-pending", "busy");
     expect(button).toHaveTextContent(/syncing/i);
 
     release(report());
-    await waitFor(() => expect(button).not.toBeDisabled());
+    await waitFor(() => expect(button).not.toHaveAttribute("aria-disabled"));
   });
 
   it("refetches /stats/cost after a successful sync (the bumped reloadKey)", async () => {

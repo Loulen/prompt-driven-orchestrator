@@ -97,15 +97,23 @@ describe("StatusBar — icons and numbers only", () => {
   it("draws the daemon's connection as an icon named by its state", () => {
     renderStatus("connected");
     const daemon = screen.getByTestId("daemon-status");
-    expect(daemon).toHaveAccessibleName("Daemon: connected");
+    expect(daemon).toHaveAccessibleName("Daemon: connected · nothing in progress");
     expect(daemon).toHaveAttribute("data-st", "connected");
-    expect(daemon).toHaveTextContent("");
+    // Icon only: its one text is the screen reader's copy of its name, visually hidden.
+    expect(daemon.querySelector(".d-sr")).toHaveTextContent("Daemon: connected · nothing in progress");
   });
 
   it("says a lost connection in its own state", () => {
     renderStatus("disconnected");
     expect(screen.getByTestId("daemon-status")).toHaveAttribute("data-st", "disconnected");
     expect(screen.getByLabelText("Daemon: disconnected")).toBeInTheDocument();
+  });
+
+  it("puts the daemon's indicator right of the session counter", () => {
+    renderStatus("connected");
+    const counter = screen.getByTestId("session-counter");
+    const daemon = screen.getByTestId("daemon-status");
+    expect(counter.compareDocumentPosition(daemon) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("counts the sessions as live/cap, named in its tooltip", async () => {

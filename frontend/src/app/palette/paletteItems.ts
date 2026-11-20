@@ -29,6 +29,7 @@ import { runCommand } from "../../shared/extensions/commands";
 import type { PaletteAction } from "../../shared/extensions/palette";
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
 import { isRefusal, toastRefusal } from "../../shared/authorization/refusal";
+import { errorAlreadyShown } from "../../shared/http/operations";
 import { copyToClipboard } from "../../shared/lib/clipboard";
 import { toast } from "../../shared/ui/toast";
 import { SettingsIcon, StatsIcon } from "../../shared/ui/brand/AccentIcons";
@@ -273,6 +274,8 @@ async function autoApprove(runId: string, nodeId: string, iter: number) {
 
 /** A gesture that failed: its refusal, or its error, in a toast. */
 function report(e: unknown) {
+  // Its operation already said it (the HTTP client's toast).
+  if (errorAlreadyShown(e)) return;
   if (isRefusal(e)) toastRefusal(e);
   else toast(e instanceof Error ? e.message : String(e), "error");
 }

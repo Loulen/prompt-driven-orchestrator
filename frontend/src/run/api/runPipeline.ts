@@ -26,7 +26,7 @@ export function saveRunPipeline(
   return request<void>(
     "PUT",
     `/runs/${encodeURIComponent(runId)}/pipeline`,
-    { body: { yaml, prompts }, responseMode: "void", label: `PUT /runs/${runId}/pipeline` },
+    { body: { yaml, prompts }, responseMode: "void", label: "Saving run pipeline", done: "Run pipeline saved", quietOn: [404] },
   );
 }
 
@@ -44,7 +44,7 @@ export function overwriteDefaultPipelineFromRun(runId: string): Promise<{ pipeli
   return request<{ pipeline_id: string }>(
     "POST",
     `/runs/${encodeURIComponent(runId)}/pipeline/overwrite-default`,
-    { label: `POST /runs/${runId}/pipeline/overwrite-default` },
+    { label: "Overwriting default pipeline" },
   );
 }
 

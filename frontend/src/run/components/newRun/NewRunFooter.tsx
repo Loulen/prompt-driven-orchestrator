@@ -77,12 +77,11 @@ export default function NewRunFooter({ form }: { form: NewRunForm }) {
         <Button
           tone="primary"
           onClick={() => void clone(mode === "run")}
-          disabled={submitting || cloning}
+          disabled={submitting && !cloning}
+          pending={cloning && "Cloning…"}
           data-testid="clone-launch-button"
         >
-          {cloning
-            ? "Cloning…"
-            : mode === "run"
+          {mode === "run"
               ? cloneReused
                 ? "Launch"
                 : "Clone and launch"
@@ -99,12 +98,13 @@ export default function NewRunFooter({ form }: { form: NewRunForm }) {
               tone="primary"
               icon={Play}
               onClick={() => void handleLaunch()}
-              disabled={submitting || !canLaunch}
+              disabled={!submitting && !canLaunch}
+              pending={submitting && (attachments.length > 0 ? "Uploading…" : "Launching…")}
               aria-describedby={launchBlockReason ? launchReasonId : undefined}
               data-testid="launch-button"
             >
-              {submitting ? (attachments.length > 0 ? "Uploading…" : "Launching…") : "Run"}
-              {!submitting && kbd}
+              Run
+              {kbd}
             </Button>
             {launchBlockReason && (
               <span id={launchReasonId} className="d-sr">
@@ -118,11 +118,12 @@ export default function NewRunFooter({ form }: { form: NewRunForm }) {
           tone="primary"
           icon={editingTriggerId ? Save : CalendarClock}
           onClick={handleCreateTrigger}
-          disabled={submitting || !canCreateTrigger}
+          disabled={!submitting && !canCreateTrigger}
+          pending={submitting && (editingTriggerId ? "Saving…" : "Creating…")}
           data-testid={editingTriggerId ? "save-trigger-button" : "create-trigger-button"}
         >
-          {editingTriggerId ? (submitting ? "Saving…" : "Save") : submitting ? "Creating…" : "Create"}
-          {!submitting && kbd}
+          {editingTriggerId ? "Save" : "Create"}
+          {kbd}
         </Button>
       )}
     </>

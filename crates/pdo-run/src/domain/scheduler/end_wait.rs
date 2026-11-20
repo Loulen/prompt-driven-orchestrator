@@ -117,11 +117,7 @@ pub fn end_reached_action(
             }
             continue;
         }
-        let settled = run_state
-            .nodes
-            .get(&producer)
-            .is_some_and(|n| n.status.is_settled_complete());
-        if !settled {
+        if !is_settled_producer(pipeline, run_state, &producer) {
             continue;
         }
         let fields = frontmatter_by_node.get(&producer).unwrap_or(&empty);
@@ -143,4 +139,27 @@ pub fn end_reached_action(
         .find(|a| matches!(a, SchedulerAction::Halt { .. }))
         .or_else(|| ends.first())
         .cloned()
+}
+
+/// Has `producer` settled, so its routing into `End` counts? A node settles
+/// on its completion. `Start` never gets a NodeRun: it is settled as soon as
+/// the Run starts, so a `Start → End` edge reaches `End` at once (CORE-142) —
+/// unless a node the Run launched did not end well (stopped, interrupted,
+/// failed): the Run then stays open for its Retry rather than complete
+/// around it.
+fn is_settled_producer(pipeline: &PipelineDef, run_state: &RunState, producer: &str) -> bool {
+    let is_start = pipeline
+        .nodes
+        .iter()
+        .any(|n| n.id == producer && n.node_type == NodeType::Start);
+    if is_start {
+        return run_state
+            .nodes
+            .values()
+            .all(|n| n.status.is_settled_complete());
+    }
+    run_state
+        .nodes
+        .get(producer)
+        .is_some_and(|n| n.status.is_settled_complete())
 }

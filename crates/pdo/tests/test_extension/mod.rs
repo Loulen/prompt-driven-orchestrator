@@ -36,11 +36,13 @@
 //! - **`ui`** (`ui.js`): one element at each location of the catalogue. The
 //!   four locations of 0.1 through their 0.1 slots (`Navigation`,
 //!   `SettingsPanel`, `ListFilter`/`DetailTab` of the Runs), so they prove the
-//!   0.1 form still renders; `topbar/end` through 0.2 contributions: a page with
-//!   its icon (which opens `/ws` through `openProbedSocket` of
-//!   `@pdo/extension-ui`, 0.10, and shows the socket's state), a panel under
-//!   its icon (`MessagesPanel`, 0.20: the items of `messages.rs`, each deleted with
-//!   an « Undo » in a toast; the icon counts them), an action calling [`SHOW_CONTEXT`] while a Run is selected, and
+//!   0.1 form still renders; `topbar/end` through 0.2 contributions: a panel
+//!   under its icon (`MessagesPanel`, 0.20: the items of `messages.rs`, each
+//!   deleted with an « Undo » in a toast; the icon counts them), declared
+//!   **before** the page so a deep link proves it opens the page, never the
+//!   panel (CORE-165); a page with its icon (which opens `/ws` through
+//!   `openProbedSocket` of `@pdo/extension-ui`, 0.10, and shows the socket's
+//!   state), an action calling [`SHOW_CONTEXT`] while a Run is selected, and
 //!   an action whose `when` never holds. The page, at `screens/alpha` and
 //!   `screens/beta`, sets the title and the icon of the shell's header per
 //!   route; `screens/beta` shows a read-only Banner with a lock (0.20); its
@@ -777,12 +779,9 @@ impl Extension for TestExtension {
                 "Test",
                 "RunTab",
             ))
-            .contribute(
-                UiContribution::page(UiLocation::TopbarEnd, "page", "Test page", "TestPage")
-                    .with_icon(format!("/ext/{ID}/icon.svg"))
-                    .with_counter(format!("/ext/{ID}/counter")),
-            )
-            // 0.20: a panel under its icon, its counter the messages.
+            // 0.20: a panel under its icon, its counter the messages. Declared before
+            // the page, so the deep links toward the page prove they never open
+            // the panel (CORE-165).
             .contribute(
                 UiContribution::panel(
                     UiLocation::TopbarEnd,
@@ -792,6 +791,11 @@ impl Extension for TestExtension {
                 )
                 .with_icon(format!("/ext/{ID}/messages.svg"))
                 .with_counter(format!("/ext/{ID}/messages/counter")),
+            )
+            .contribute(
+                UiContribution::page(UiLocation::TopbarEnd, "page", "Test page", "TestPage")
+                    .with_icon(format!("/ext/{ID}/icon.svg"))
+                    .with_counter(format!("/ext/{ID}/counter")),
             )
             .contribute(
                 UiContribution::action(UiLocation::TopbarEnd, "show-context", &show_context)

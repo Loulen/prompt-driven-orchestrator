@@ -1274,3 +1274,87 @@ async fn the_detail_of_a_session_reads_and_drives_it_by_its_id() {
         "a key the extension never gave is not an empty list"
     );
 }
+
+/// Where a test writes the transcript of the conversation of an agent session.
+enum Transcript {
+    /// Under the `CLAUDE_CONFIG_DIR` the extension gives the launches.
+    UnderClaudeConfigDir,
+    /// Nowhere: nobody spoke to it.
+    Nowhere,
+}
+
+/// Open an agent session as `alice` with an extension giving every launch a
+/// `CLAUDE_CONFIG_DIR`, write its transcript `where_`, terminate and relaunch
+/// it: its conversation id before and after the relaunch (CORE-138).
+async fn relaunched_conversation(where_: Transcript) -> (String, String) {
+    let envs = tempfile::tempdir().unwrap();
+    let (daemon, control) = daemon(envs.path()).await;
+    let cfg = tempfile::tempdir().unwrap();
+    control.launch.set_env(
+        [(
+            pdo_kernel::extension_host::CLAUDE_CONFIG_DIR.to_string(),
+            cfg.path().to_string_lossy().into_owned(),
+        )]
+        .into(),
+    );
+    let url = daemon.url();
+    let folder = tempfile::tempdir().unwrap();
+    let (status, session) = open_as(&url, "alice", in_path("c138", "agent", folder.path())).await;
+    assert_eq!(status, 201, "{session}");
+    let id = session["id"].as_str().unwrap().to_string();
+    let env = env_of(envs.path(), &id).await;
+    assert_eq!(
+        var(&env, pdo_kernel::extension_host::CLAUDE_CONFIG_DIR),
+        cfg.path().to_string_lossy()
+    );
+    let record_path = daemon
+        .repo_root()
+        .join("home/.pdo/hosted")
+        .join(&id)
+        .join("session.json");
+    let read = || -> Value {
+        serde_json::from_str(&std::fs::read_to_string(&record_path).unwrap()).unwrap()
+    };
+    let record = read();
+    let before = record["conversation_id"].as_str().unwrap().to_string();
+    if let Transcript::UnderClaudeConfigDir = where_ {
+        let cwd = record["cwd"].as_str().unwrap();
+        let dir = cfg.path().join("projects").join(
+            pdo_harness::domain::claude_transcript::encode_working_dir(Path::new(cwd)),
+        );
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{before}.jsonl")), "{\"type\":\"user\"}\n").unwrap();
+    }
+    call_as(
+        &url,
+        reqwest::Method::DELETE,
+        "/ext/test/sessions/c138",
+        "alice",
+        None,
+    )
+    .await;
+    // The relaunch writes its own environment: the folder it runs with.
+    std::fs::remove_file(envs.path().join(format!("{id}.env"))).unwrap();
+    let (status, relaunched) =
+        post_as(&url, "/ext/test/sessions/c138/relaunch", "alice", None).await;
+    assert_eq!(status, 200, "{relaunched}");
+    let env = env_of(envs.path(), &id).await;
+    assert_eq!(
+        var(&env, pdo_kernel::extension_host::CLAUDE_CONFIG_DIR),
+        cfg.path().to_string_lossy()
+    );
+    let after = read()["conversation_id"].as_str().unwrap().to_string();
+    (before, after)
+}
+
+#[tokio::test]
+async fn a_relaunch_resumes_a_conversation_written_under_the_claude_config_dir() {
+    let (before, after) = relaunched_conversation(Transcript::UnderClaudeConfigDir).await;
+    assert_eq!(before, after, "resumed");
+}
+
+#[tokio::test]
+async fn a_relaunch_starts_a_new_conversation_when_none_was_written() {
+    let (before, after) = relaunched_conversation(Transcript::Nowhere).await;
+    assert_ne!(before, after, "a new conversation");
+}

@@ -92,6 +92,16 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   No migration rewrites them. Add `isolated_worktree: true` to the nodes that need their own
   worktree, typically agents that run on parallel branches. Pipelines saved from the editor already
   state the line and keep their meaning.
+## Unreleased
+
+- The Public URL always has a value: without one set in Settings or in `PDO_PUBLIC_URL`, it is the
+  machine's address, `http://<host name>:<port>` (`http://localhost:<port>` for a daemon bound to
+  the loopback). Agents receive it in `PDO_PUBLIC_URL` and their preamble, and `pdo page mount`,
+  the copied link of a mounted page and the `/metrics` address in Settings › Telemetry use it, so
+  their links open from another machine with nothing to set. Settings › General shows the address
+  an empty field uses as its placeholder, and the setting's tooltip names its source.
+- `GET /settings` discloses `public_url.default`, and `public_url.effective` is never `null`;
+  `POST /pages` always returns `public_url`.
 
 ## 2.80.4
 

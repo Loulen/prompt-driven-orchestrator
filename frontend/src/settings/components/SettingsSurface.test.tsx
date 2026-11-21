@@ -203,7 +203,7 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
       env: null,
       default: 50,
     },
-    public_url: { effective: null, source: "default", stored: null, env: null, default: null },
+    public_url: { effective: "http://localhost:5272", source: "default", stored: null, env: null, default: "http://localhost:5272" },
     // Unset by default (account default): effective/stored/env/default all null.
     default_model: {
       effective: null,
@@ -602,16 +602,19 @@ describe("SettingsSurface", () => {
           source: "stored",
           stored: "https://pdo.example.net",
           env: null,
-          default: null,
+          default: "http://localhost:5272",
         },
       }),
     );
     render(<SettingsSurface open onClose={() => {}} />);
     expect(await screen.findByTestId("settings-section-public-url")).toHaveTextContent("Public URL");
     const field = await screen.findByTestId("setting-public-url");
-    expect(await tipFor("public-url")).toMatch(
-      "Source: none set (PDO_PUBLIC_URL unset).",
-    );
+    // Empty, with the machine's address in its placeholder, unqualified.
+    expect(field).toHaveValue("");
+    expect(field).toHaveAttribute("placeholder", "http://localhost:5272");
+    expect(await tipFor("public-url")).toMatch("Source: default, this machine's address and port.");
+    expect(tipOf("public-url")).toContain("http://localhost:5272/#/pages/my-page");
+    expect(tipOf("public-url")).not.toMatch(/deduced/i);
 
     fireEvent.change(field, { target: { value: "pdo.example.net" } });
     expect(screen.getByTestId("setting-public-url-invalid")).toBeInTheDocument();
@@ -624,6 +627,42 @@ describe("SettingsSurface", () => {
     fireEvent.click(screen.getByTestId("settings-save"));
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
     expect(updateSettingsMock).toHaveBeenCalledWith({ public_url: "https://pdo.example.net/" });
+  });
+
+  it("General › Public URL names the tier its value comes from, and the placeholder what an empty field uses", async () => {
+    fetchSettingsMock.mockResolvedValue(
+      sample({
+        public_url: {
+          effective: "https://env.example.net",
+          source: "env",
+          stored: null,
+          env: "https://env.example.net",
+          default: "http://localhost:5272",
+        },
+      }),
+    );
+    const { unmount } = render(<SettingsSurface open onClose={() => {}} />);
+    const field = await screen.findByTestId("setting-public-url");
+    expect(field).toHaveAttribute("placeholder", "https://env.example.net");
+    expect(await tipFor("public-url")).toMatch("Source: environment variable PDO_PUBLIC_URL.");
+    unmount();
+
+    fetchSettingsMock.mockResolvedValue(
+      sample({
+        public_url: {
+          effective: "https://pdo.example.net",
+          source: "stored",
+          stored: "https://pdo.example.net",
+          env: null,
+          default: "http://localhost:5272",
+        },
+      }),
+    );
+    render(<SettingsSurface open onClose={() => {}} />);
+    expect(await screen.findByTestId("setting-public-url")).toHaveValue("https://pdo.example.net");
+    expect(await tipFor("public-url")).toMatch(
+      "Source: stored setting (overrides PDO_PUBLIC_URL and the default).",
+    );
   });
 
   it("names both price paths even though neither file exists", async () => {

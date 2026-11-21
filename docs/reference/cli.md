@@ -221,6 +221,8 @@ node named exists, every path is a file of the page. A guide it refuses mounts n
 command prints why, for example ``guide entry 2: Run `r1` not found``. The guide is stored with the mount and
 goes with it: `pdo page unmount`, or the archive of the Run whose agent mounted the page.
 
-The printed addresses start at the instance's **Public URL** (Settings › General, or
-`PDO_PUBLIC_URL`; the stored setting wins), else at `PDO_DAEMON_URL`. A node session receives the
-Public URL as `PDO_PUBLIC_URL`, and its preamble names it.
+The printed addresses start at the instance's **Public URL**: the value set in Settings › General,
+else `PDO_PUBLIC_URL`, else the machine's address. That default is `http://<host name>:<port>` for
+a daemon listening on every interface (the default), `http://localhost:<port>` for one bound to the
+loopback, and the bound address itself otherwise. A node session and the Pipeline Manager receive
+the Public URL as `PDO_PUBLIC_URL`, and the node's preamble names it.

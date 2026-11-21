@@ -1,6 +1,8 @@
 /**
  * General › Public URL: the address humans open the instance at, which agents receive and
- * `pdo page mount` prints its links under — an example link in the name's tooltip.
+ * `pdo page mount` prints its links under — an example link in the name's tooltip. Empty, the
+ * field shows in its placeholder the address used instead: `PDO_PUBLIC_URL`, else the default,
+ * this machine's address.
  */
 
 import { guidedPageUrl } from "../../../platform/model/mountedPage";
@@ -14,12 +16,13 @@ import Section from "./Section";
 export default function PublicUrlSection({ section, values, settings, dirty, setField }: FormSectionProps) {
   const typed = values.publicUrl.trim();
   const invalid = typed !== "" && !isPublicUrl(typed);
-  // What `pdo page mount` would print once saved: the typed address, else the env tier.
-  // Neither: links stay on the daemon's own address, which only this machine reaches.
-  const base = typed && !invalid ? typed : typed === "" ? settings.public_url.env : null;
+  // What an empty field leads to: the env tier, else the machine's address.
+  const fallback = settings.public_url.env ?? settings.public_url.default;
+  // What `pdo page mount` would print once saved.
+  const base = invalid ? null : typed || fallback;
   const help = base
     ? `Agents and pdo page mount print their links with it: ${guidedPageUrl(base, "my-page")}`
-    : "Agents and pdo page mount print their links with it; empty, links stay on http://localhost:<port>";
+    : "Agents and pdo page mount print their links with it";
   return (
     <Section section={section}>
       <SettingRow
@@ -44,7 +47,7 @@ export default function PublicUrlSection({ section, values, settings, dirty, set
           type="url"
           inputMode="url"
           spellCheck={false}
-          placeholder="https://pdo.example.net"
+          placeholder={fallback}
           value={values.publicUrl}
           onChange={(e) => setField("publicUrl", e.target.value)}
           invalid={invalid}

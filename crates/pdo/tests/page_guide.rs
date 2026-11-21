@@ -1,7 +1,8 @@
 //! The reading guide of a mounted page and the instance's Public URL, on a real
 //! daemon: a guide checked at mount time and listed with its mount, the links
-//! `pdo page mount` prints, the setting stored and refused, and the address a
-//! node session receives in its environment and preamble.
+//! `pdo page mount` prints, the setting stored and refused, its default (the
+//! machine's address) and the address a node session receives in its
+//! environment and preamble.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -11,6 +12,12 @@ use serde_json::{json, Value};
 
 use crate::common::flow::{create_run, seed_solo, wait_run};
 use crate::common::TestDaemon;
+
+/// The Public URL's default for a test daemon: it listens on the loopback, so
+/// only this machine reaches it, as `localhost`.
+fn default_url(daemon: &TestDaemon) -> String {
+    format!("http://localhost:{}", daemon.addr.port())
+}
 
 async fn put_settings(daemon: &TestDaemon, body: Value) -> reqwest::Response {
     reqwest::Client::new()
@@ -112,7 +119,11 @@ async fn a_page_without_a_guide_is_unchanged() {
     assert_eq!(response.status(), 201);
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["guide"], Value::Null);
-    assert_eq!(body["public_url"], Value::Null, "no Public URL by default");
+    assert_eq!(
+        body["public_url"],
+        default_url(&daemon),
+        "the machine's address by default"
+    );
     let page = reqwest::get(format!("{}/pages/plain/", daemon.url()))
         .await
         .unwrap();
@@ -156,12 +167,15 @@ async fn page_mount_prints_full_links_under_the_public_url() {
     let guide = pages.path().join("guide.yaml");
     std::fs::write(&guide, "- title: Start\n  link: index.html\n").unwrap();
 
-    // Without a Public URL: the page alone, under the daemon's address.
+    // No Public URL set: the page alone, under the machine's address.
     let alone = run_cli(&daemon, mount_args("alone", pages.path(), None)).await;
     assert!(alone.status.success(), "{alone:?}");
     let stdout = String::from_utf8_lossy(&alone.stdout);
     assert!(
-        stdout.contains(&format!("Mounted alone at {}/pages/alone/", daemon.url())),
+        stdout.contains(&format!(
+            "Mounted alone at {}/pages/alone/",
+            default_url(&daemon)
+        )),
         "{stdout}"
     );
 
@@ -196,7 +210,8 @@ async fn the_public_url_setting_is_stored_normalized_cleared_or_refused() {
     let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
     let field = |settings: &Value| settings["public_url"].clone();
     let initial = daemon.get_json("/settings").await;
-    assert_eq!(field(&initial)["effective"], Value::Null);
+    assert_eq!(field(&initial)["effective"], default_url(&daemon));
+    assert_eq!(field(&initial)["default"], default_url(&daemon));
     assert_eq!(field(&initial)["source"], "default");
 
     let stored: Value = put_settings(&daemon, json!({ "public_url": " http://10.0.0.4:5272/ " }))
@@ -225,7 +240,8 @@ async fn the_public_url_setting_is_stored_normalized_cleared_or_refused() {
         .json()
         .await
         .unwrap();
-    assert_eq!(field(&cleared)["effective"], Value::Null);
+    assert_eq!(field(&cleared)["effective"], default_url(&daemon));
+    assert_eq!(field(&cleared)["source"], "default");
 }
 
 /// Poll until `file` holds text.
@@ -265,17 +281,21 @@ fn prompt_of(repo: &Path, run_id: &str) -> String {
     std::fs::read_to_string(file).unwrap()
 }
 
-#[tokio::test]
-async fn a_node_launched_after_the_setting_receives_the_public_url() {
-    let env_file = std::env::temp_dir().join(format!(
+/// A file the node's session writes its environment to, unique to the test.
+fn env_file() -> PathBuf {
+    std::env::temp_dir().join(format!(
         "pdo-public-url-env-{}-{}.txt",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos()
-    ));
-    let daemon = TestDaemon::spawn_with_override(
+    ))
+}
+
+/// A daemon whose node sessions write their environment to `env_file`.
+async fn daemon_dumping_env(env_file: &Path) -> TestDaemon {
+    TestDaemon::spawn_with_override(
         |repo| seed_solo(repo, &[("solo", false)]),
         // Written aside then renamed: the file appears whole, never half
         // written to a reader polling for it.
@@ -285,7 +305,35 @@ async fn a_node_launched_after_the_setting_receives_the_public_url() {
         )),
     )
     .await
-    .unwrap();
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_node_receives_the_machine_s_address_when_no_public_url_is_set() {
+    let env_file = env_file();
+    let daemon = daemon_dumping_env(&env_file).await;
+    let url = default_url(&daemon);
+
+    let run_id = create_run(&daemon, "solo").await;
+    let env = read_when_written(&env_file).await;
+    let _ = std::fs::remove_file(&env_file);
+    assert!(
+        env.lines()
+            .any(|line| line == format!("PDO_PUBLIC_URL={url}")),
+        "{env}"
+    );
+    let prompt = prompt_of(daemon.repo_root(), &run_id);
+    assert!(prompt.contains("## Public URL"), "{prompt}");
+    assert!(
+        prompt.contains(&format!("{url}/#/runs/{run_id}")),
+        "{prompt}"
+    );
+}
+
+#[tokio::test]
+async fn a_node_launched_after_the_setting_receives_the_public_url() {
+    let env_file = env_file();
+    let daemon = daemon_dumping_env(&env_file).await;
     // Set while the daemon runs: no restart, the next launch reads it.
     put_settings(&daemon, json!({ "public_url": "https://pdo.example.net" })).await;
 

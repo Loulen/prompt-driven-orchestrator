@@ -76,7 +76,8 @@ fn list_text(mounts: &[PageMount]) -> String {
 }
 
 /// What `POST /pages` answers: the mount, and the Public URL to print its
-/// links under.
+/// links under. A daemon always sends it; one older than the Public URL's
+/// default may not.
 #[derive(serde::Deserialize)]
 struct MountedPage {
     #[serde(flatten)]
@@ -87,7 +88,8 @@ struct MountedPage {
 
 /// The lines `pdo page mount` prints: the full address of PDO's view with the
 /// guide when there is one, of the page alone otherwise. Under the instance's
-/// Public URL, else the daemon address this CLI reached.
+/// Public URL; the daemon address this CLI reached only when an older daemon
+/// sends none.
 fn mounted_text(mounted: &MountedPage, daemon_url: &str) -> String {
     let base = mounted.public_url.as_deref().unwrap_or(daemon_url);
     let name = &mounted.mount.name;
@@ -147,7 +149,8 @@ mod tests {
     }
 
     #[test]
-    fn a_page_alone_prints_its_address_under_the_daemon_s_without_a_public_url() {
+    fn a_page_alone_prints_its_address_under_the_daemon_s_when_an_older_daemon_sends_no_public_url()
+    {
         assert_eq!(
             mounted_text(&mounted(false, None), "http://localhost:5172"),
             "Mounted demo at http://localhost:5172/pages/demo/ from /srv/demo.\n"

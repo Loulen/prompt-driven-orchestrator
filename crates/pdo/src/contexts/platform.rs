@@ -35,7 +35,10 @@ pub(super) fn platform(
         audit: Arc::new(SqliteAuditLog::new(r.db.clone())),
         runs: Arc::new(RunsOfPlatform(run.clone())),
         update_setting: Arc::new(UpdateCheckOfPlatform(stored.config.clone())),
-        public_url: Arc::new(PublicUrlOfPlatform(stored.config.clone())),
+        public_url: Arc::new(PublicUrlOfPlatform {
+            config: stored.config.clone(),
+            default: r.public_url_default.clone(),
+        }),
         release_source: Arc::new(GithubReleases),
         update_journal: Arc::new(FsUpdateJournal::new(r.home_root.clone())),
         // A daemon whose home is overridden (the test seam) looks for the

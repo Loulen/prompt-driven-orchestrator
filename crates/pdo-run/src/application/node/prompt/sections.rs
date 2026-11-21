@@ -168,8 +168,9 @@ pub(super) fn push_source_edits(preamble: &mut String, ctx: &AugmentContext<'_>)
     }
 }
 
-/// The address humans open PDO at, when the instance sets one: every link the
-/// agent hands a human starts there, never at `localhost`.
+/// The address humans open PDO at (the machine's address unless the instance
+/// sets one): every link the agent hands a human starts there, never at the
+/// address the agent itself reaches the daemon by.
 pub(super) fn push_public_url(preamble: &mut String, ctx: &AugmentContext<'_>) {
     let Some(url) = ctx.public_url else {
         return;
@@ -177,7 +178,7 @@ pub(super) fn push_public_url(preamble: &mut String, ctx: &AugmentContext<'_>) {
     preamble.push_str("## Public URL\n\n");
     preamble.push_str(&format!(
         "Humans open this PDO at `{url}` (also in `PDO_PUBLIC_URL`). Start every link you \
-         give them there, never at `localhost`: this Run is `{url}/#/runs/{run}`, a node \
+         give them there, never at the address you reach the daemon by: this Run is `{url}/#/runs/{run}`, a node \
          `{url}/#/runs/{run}/nodes/<node>`, its Review `{url}/runs/{run}/review`. \
          `pdo page mount` prints the links of a mounted page under it.\n\n",
         run = ctx.run_id

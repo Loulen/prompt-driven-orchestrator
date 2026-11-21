@@ -116,8 +116,11 @@ impl SettingsSection for ReviewDefaults {
 }
 
 /// Whether the daemon may ask the release source for a newer version, and the
-/// address humans open PDO at.
-pub struct PlatformDefaults;
+/// address humans open PDO at, whose default is `public_url_default`: the
+/// machine's address, computed once at boot.
+pub struct PlatformDefaults {
+    pub public_url_default: String,
+}
 
 impl SettingsSection for PlatformDefaults {
     fn disclose<'a>(&'a self, c: &'a InstanceConfig) -> Keys<'a> {
@@ -126,7 +129,10 @@ impl SettingsSection for PlatformDefaults {
                 ("update_check", json(platform::update_check(c.update_check))),
                 (
                     "public_url",
-                    json(platform::public_url(c.public_url.as_deref())),
+                    json(platform::public_url(
+                        c.public_url.as_deref(),
+                        &self.public_url_default,
+                    )),
                 ),
             ]))
         })

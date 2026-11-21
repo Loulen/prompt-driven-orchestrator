@@ -76,6 +76,7 @@ pub(super) fn run(w: RunWiring<'_>) -> Arc<Runs> {
         },
         RunsOptions {
             daemon_port: r.port,
+            public_url_default: Some(r.public_url_default.clone()),
             allowed_ws_origins: r.allowed_ws_origins.clone(),
             repo_root: r.repo_root.clone(),
             tmux_cmd_override: r.tmux_cmd_override.clone(),

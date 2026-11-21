@@ -1595,7 +1595,10 @@ async fn a_profiles_env_is_posed_at_create_and_only_for_that_profile() {
                 || (spec.starts_with("PDO_OUTPUT_") && !spec.contains('='))
                 || (spec.starts_with("PDO_VAR_") && !spec.contains('='))
                 || spec == "PDO_NODE_ID"
-                || spec == "PDO_NODE_ITER",
+                || spec == "PDO_NODE_ITER"
+                // The Public URL, which every session receives (the machine's
+                // address by default).
+                || spec == "PDO_PUBLIC_URL",
             "unexpected `-e {spec}` for a profile with no env; env={env:?}"
         );
     }

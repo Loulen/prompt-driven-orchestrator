@@ -155,8 +155,10 @@ pub struct AugmentContext<'a> {
     /// The text the extensions place at the very top of the preamble (API
     /// 0.8), before `# PDO Runtime Preamble`; `None` when they give none.
     pub extension_preamble: Option<&'a str>,
-    /// The instance's Public URL the session receives as `PDO_PUBLIC_URL`;
-    /// `None` when unset, and the preamble says nothing of it.
+    /// The instance's Public URL the session receives as `PDO_PUBLIC_URL`.
+    /// Every launch carries it (the core adds it to the launch's contribution,
+    /// the machine's address by default); `None` only for a context built
+    /// without a launch, and the preamble then says nothing of it.
     pub public_url: Option<&'a str>,
 }
 
@@ -1251,10 +1253,10 @@ mod tests {
         assert!(full.contains("---"));
     }
 
-    /// The Public URL is named to the agent, with the links it opens; unset,
-    /// the preamble says nothing of it.
+    /// The Public URL is named to the agent, with the links it opens; a
+    /// context built without a launch says nothing of it.
     #[test]
-    fn the_public_url_is_given_to_the_agent_when_set() {
+    fn the_public_url_is_given_to_the_agent() {
         let pipeline = sample_pipeline();
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();

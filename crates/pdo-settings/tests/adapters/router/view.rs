@@ -6,7 +6,40 @@ use pdo_settings::domain::instance_config::UpdateInstanceConfig;
 
 use axum::http::StatusCode;
 
-use super::{get_settings_json, post_json, test_state};
+use super::{get_settings_json, post_json, test_state, PUBLIC_URL_DEFAULT};
+
+#[tokio::test]
+async fn the_public_url_always_has_a_value_and_discloses_its_default() {
+    // A suite run from a node session inherits its instance's Public URL; this
+    // view must start from none (nextest runs one process per test).
+    std::env::remove_var(pdo_kernel::public_url::PUBLIC_URL_ENV);
+    let state = test_state().await;
+
+    let fresh = get_settings_json(&state).await;
+    let field = &fresh["public_url"];
+    assert_eq!(field["effective"], PUBLIC_URL_DEFAULT, "{field}");
+    assert_eq!(field["default"], PUBLIC_URL_DEFAULT, "{field}");
+    assert_eq!(field["source"], "default", "{field}");
+    assert!(field["stored"].is_null(), "{field}");
+
+    instance_config::update(
+        &state.db,
+        UpdateInstanceConfig {
+            public_url: Some("https://pdo.example.net".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let stored = get_settings_json(&state).await;
+    let field = &stored["public_url"];
+    assert_eq!(field["effective"], "https://pdo.example.net", "{field}");
+    assert_eq!(field["source"], "stored", "{field}");
+    assert_eq!(
+        field["default"], PUBLIC_URL_DEFAULT,
+        "the default stays disclosed for the placeholder: {field}"
+    );
+}
 
 #[tokio::test]
 async fn settings_view_discloses_the_autocomplete_tiers() {

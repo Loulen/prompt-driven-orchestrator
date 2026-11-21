@@ -263,9 +263,9 @@ pub async fn spawn_node(
         .filter(|d| d.pins_session_id())
         .map(|_| uuid::Uuid::new_v4().to_string());
 
+    use crate::application::node::extension_launch as ext;
     let extension = match &loaded {
         Some((_, run)) => {
-            use crate::application::node::extension_launch as ext;
             ext::contribution(
                 deps.runs,
                 run,
@@ -275,7 +275,7 @@ pub async fn spawn_node(
             )
             .await
         }
-        None => Default::default(),
+        None => ext::with_public_url(Default::default(), deps.runs).await,
     };
     let plan = Plan {
         extension,

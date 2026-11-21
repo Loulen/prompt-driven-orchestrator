@@ -19,13 +19,9 @@ import type { FormSectionProps } from "./GeneralSections";
 const LEGAL =
   "Before you switch it on, check the law where you work: measuring each person's activity is employee monitoring in many countries. It usually requires informing the people concerned beforehand, consulting their representatives, and a data-protection basis (the GDPR in the EU) entered in your record of processing. In France: Code du travail, art. L1222-4 (information) and art. L2312-38 (CSE). This instance cannot meet these obligations for you.";
 
-/**
- * The address people open the instance at: the Public URL when the daemon names one, else
- * the address this page was opened at.
- */
+/** The address people open the instance at: the Public URL, always set by the daemon. */
 function publicOrigin(settings: InstanceSettings): string {
-  const named = settings.public_url.effective;
-  return (named || window.location.origin).replace(/\/+$/, "");
+  return settings.public_url.effective.replace(/\/+$/, "");
 }
 
 export function PrometheusRow({ values, settings, dirty, setField }: Omit<FormSectionProps, "section">) {

@@ -254,13 +254,13 @@ pub async fn force_spawn_node(
         .unwrap_or_default();
     let harness_registry = pdo_harness::adapters::descriptor_file::load(&harness_home_root);
 
+    use crate::application::node::extension_launch as ext;
     let extension_contribution = match pipeline_def.nodes.iter().find(|n| n.id == node_id) {
         Some(node) => {
-            use crate::application::node::extension_launch as ext;
             let kind = ext::node_kind(&node.node_type);
             ext::contribution(state, &run_state, node_id, iter, kind).await
         }
-        None => Default::default(),
+        None => ext::with_public_url(Default::default(), state).await,
     };
     let params = node_primitives::StartNodeParams {
         run_id,

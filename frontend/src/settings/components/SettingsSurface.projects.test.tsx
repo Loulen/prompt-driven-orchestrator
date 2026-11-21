@@ -135,7 +135,7 @@ function settings(extra: Partial<InstanceSettings> = {}): InstanceSettings {
     telemetry_otlp_headers: [],
     telemetry_prometheus: { effective: false, source: "default", stored: null, env: null, default: false },
     telemetry_include_actor: { effective: false, source: "default", stored: null, env: null, default: false },
-    public_url: { effective: null, source: "default", stored: null, env: null, default: null },
+    public_url: { effective: "http://localhost:5272", source: "default", stored: null, env: null, default: "http://localhost:5272" },
     updated_at: "2026-07-01T10:00:00.000Z",
     ...extra,
   } as unknown as InstanceSettings;

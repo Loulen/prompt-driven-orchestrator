@@ -14,6 +14,13 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- Shift+Enter inserts a new line in the web terminals (node terminal, Manager tab, library
+  assistant, run shell) instead of submitting: it sends Alt+Enter's sequence, which Claude Code
+  reads as a new line. Nothing to set up on the user's machine. In the run shell, Shift+Enter no
+  longer runs the command; Enter does.
+
 ## 2.80.0
 
 - A node's Retry asks first when it ends a live session or resets downstream nodes that hold

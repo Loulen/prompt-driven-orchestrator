@@ -14,6 +14,13 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## 2.87.0
+
+- Shift+Enter inserts a new line in the web terminals (node terminal, Manager tab, library
+  assistant, run shell) instead of submitting: it sends Alt+Enter's sequence, which Claude Code
+  reads as a new line. Nothing to set up on the user's machine. In the run shell, Shift+Enter no
+  longer runs the command; Enter does.
+
 ## 2.86.0
 
 - Closing a pipeline or Run tab that holds unsaved work, with its × or a middle click, now asks

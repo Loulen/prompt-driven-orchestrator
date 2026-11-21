@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowUpRight, FileCode, FileImage, FileText, Files, Images, type LucideIcon } from "lucide-react";
+import { ArrowUpRight, FileText } from "lucide-react";
 import { Chip, IconButton } from "../../../shared/ui/kit";
 import ExtensionDecorations from "../../../shared/extensions/ExtensionDecorations";
 import type { PortItemContext } from "../../../shared/extensions/contract";
@@ -12,6 +12,7 @@ import FrontmatterView from "../artifacts/FrontmatterView";
 import { verdictFirst, verdictTone } from "../../model/frontmatter";
 import { openFromAnywhere } from "./openFromAnywhere";
 import FileChip from "./FileChip";
+import { PORT_ICON } from "./portIcon";
 import PortDownloads from "./PortDownloads";
 import { useCopyToClipboard } from "../../store/useCopyToClipboard";
 
@@ -262,10 +263,3 @@ export default function PortRow({
   );
 }
 
-const PORT_ICON: Record<string, LucideIcon> = {
-  markdown: FileText,
-  image: FileImage,
-  image_list: Images,
-  html: FileCode,
-  files: Files,
-};

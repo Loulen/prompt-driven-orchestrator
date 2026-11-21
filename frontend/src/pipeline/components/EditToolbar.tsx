@@ -20,12 +20,13 @@ import type { PendingTone } from "../../review/model/commentStatus";
 import type { RunState } from "../../shared/generated/RunState";
 import type { NodeType } from "../../shared/generated/NodeType";
 import type { LibraryEntry } from "../model/library";
-import LibraryDropdown from "./LibraryDropdown";
+import LibrarySubmenu from "./LibrarySubmenu";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
 } from "../../shared/ui/dropdown-menu";
 import { useEditStore } from "../store/editStore";
 import { useActiveDraft } from "../store/useDraftPresence";
@@ -66,7 +67,7 @@ interface Props {
   reviewTone?: PendingTone;
   reviewTitle?: string;
   // #315: an archived run's canvas is read-only — hide every editing control
-  // (add node/note, library insert, script, undo/redo). Only the
+  // (the `+` menu with its Library and Script node, undo/redo). Only the
   // Pipeline-info button survives so the archived pipeline stays inspectable.
   // ADR-0085: a Run followed in « pilotage » is read-only the same way.
   readOnly?: boolean;
@@ -129,8 +130,12 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
       {/* #315: every editing affordance is suppressed on a read-only canvas. */}
       {!readOnly && (
         <>
-          {/* #307: the `+` is a menu — create a Node or a canvas Note, or a
-              node from YAML (#345). */}
+          {/* #307: the `+` is a menu — create a Node, a Script node or a canvas
+              Note, a node from YAML (#345), or take one from the Library.
+              CORE-194: Script node and Library moved in from their own icons;
+              the Library is a side submenu. No ForEach entry: a fan-out is a
+              `collection` loop region (#151). No Merge entry (ADR-0082):
+              convergence is drawn by wiring several edges into any node. */}
           <DropdownMenu>
             <Tooltip label="Add">
               <DropdownMenuTrigger data-testid="toolbar-add" className="d-icon" aria-label="Add">
@@ -141,6 +146,10 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
               <DropdownMenuItem data-testid="add-menu-node" className="cv-menu__item" onClick={() => onAddNode("agent")}>
                 <Bot size={14} strokeWidth={1.5} aria-hidden />
                 <span>Node</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem data-testid="add-menu-script" className="cv-menu__item" onClick={() => onAddNode("script")}>
+                <SquareTerminal size={14} strokeWidth={1.5} aria-hidden />
+                <span>Script node</span>
               </DropdownMenuItem>
               <DropdownMenuItem data-testid="add-menu-note" className="cv-menu__item" onClick={() => onAddNote()}>
                 <StickyNote size={14} strokeWidth={1.5} aria-hidden />
@@ -155,16 +164,15 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
                 <FilePlus size={14} strokeWidth={1.5} aria-hidden />
                 <span>Node from YAML…</span>
               </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <LibrarySubmenu
+                entries={libraryEntries}
+                refused={libraryRefused}
+                onDelete={onLibraryDelete}
+                getDropPosition={getDropPosition}
+              />
             </DropdownMenuContent>
           </DropdownMenu>
-
-          <LibraryDropdown entries={libraryEntries} refused={libraryRefused} onDelete={onLibraryDelete} getDropPosition={getDropPosition} onAddNodeFromYaml={onAddNodeFromYaml} />
-
-          {/* No ForEach add-button: a fan-out is a `collection` loop region
-              (#151), created by fanning a selection out over a list field. No
-              Merge add-button either (ADR-0082): convergence is drawn by wiring
-              several edges into any node. */}
-          <IconButton icon={SquareTerminal} label="Script node" data-testid="toolbar-script" onClick={() => onAddNode("script")} />
 
           {sep}
 

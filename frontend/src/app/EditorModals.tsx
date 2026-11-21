@@ -1,12 +1,15 @@
 import { useCallback } from "react";
 import SaveErrorModal from "../pipeline/components/SaveErrorModal";
 import ConfirmCloseTabsModal from "../pipeline/components/ConfirmCloseTabsModal";
+import { hasUnsavedWork } from "../pipeline/store/editState";
 import type { OpenPipeline } from "../pipeline/store/editState";
 import { useEditStore } from "../pipeline/store/editStore";
+import { useBeforeUnloadGuard } from "../hooks/useBeforeUnloadGuard";
 
 /** The editor's global modals: a refused save, and a tab change that would
  *  discard unsaved work. A file written elsewhere has no modal: it lands in
- *  the shared draft (ADR-0088). */
+ *  the shared draft (ADR-0088). A reload or a close of the browser tab asks
+ *  the browser's own alert while an open tab has unsaved work (CORE-281). */
 export default function EditorModals({
   saveErrorTab,
   onViewYaml: handleViewYaml,
@@ -23,6 +26,7 @@ export default function EditorModals({
   const pendingSingleTab = useEditStore((s) => s.pendingSingleTab);
   const confirmPendingSingleTab = useEditStore((s) => s.confirmPendingSingleTab);
   const cancelPendingSingleTab = useEditStore((s) => s.cancelPendingSingleTab);
+  useBeforeUnloadGuard(useEditStore((s) => s.openTabs.some(hasUnsavedWork)));
   return (
     <>
       <SaveErrorModal

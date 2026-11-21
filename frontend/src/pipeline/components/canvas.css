@@ -505,7 +505,8 @@
 .cv-menu--library__list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .cv-menu__item--library { height: 40px; gap: var(--g-3); white-space: normal; }
 .cv-menu__trash { flex: none; visibility: hidden; }
-.cv-menu__item--library:hover .cv-menu__trash,
+/* The highlight alone: Base UI moves it under the pointer, and a row reached by
+   the keyboard while the mouse rests on another must not show two trashes. */
 .cv-menu__item--library[data-highlighted] .cv-menu__trash { visibility: visible; }
 .cv-menu__trash:hover, .cv-menu__trash:hover svg { color: var(--color-st-failed); }
 

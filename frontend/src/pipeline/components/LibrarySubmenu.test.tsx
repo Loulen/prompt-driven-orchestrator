@@ -157,6 +157,44 @@ describe("LibrarySubmenu (CORE-194)", () => {
     expect(search).toHaveFocus();
   });
 
+  it("a letter typed while Base UI parked the focus on the submenu itself goes to the filter (FP F2)", async () => {
+    const user = await openLibrary({ entries: [makeEntry("Reviewer"), makeEntry("Implementer")], onDelete: vi.fn() });
+    const search = screen.getByRole("textbox", { name: "Search nodes" });
+    act(() => screen.getByTestId("library-submenu").focus());
+    await user.keyboard("imp");
+    expect(search).toHaveValue("imp");
+    expect(search).toHaveFocus();
+    expect(screen.queryByText("Reviewer")).not.toBeInTheDocument();
+  });
+
+  it("rows moving under a resting pointer do not take the focus from the filter (FP F2)", async () => {
+    const user = await openLibrary({ entries: [makeEntry("Reviewer"), makeEntry("Implementer")], onDelete: vi.fn() });
+    const search = screen.getByRole("textbox", { name: "Search nodes" });
+    act(() => search.focus());
+    await user.keyboard("i");
+    const row = screen.getByTestId("library-entry-Implementer");
+    // What Chrome replays once the list moved: no movement, then the old row's leave.
+    fireEvent.mouseMove(row, { movementX: 0, movementY: 0 });
+    fireEvent.pointerLeave(row);
+    await user.keyboard("mp");
+    expect(search).toHaveValue("imp");
+    expect(search).toHaveFocus();
+  });
+
+  it("keeps the height it opened with once the list changes, so a resting pointer stays inside (FP F1)", async () => {
+    const height = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(240);
+    try {
+      const user = await openLibrary({ entries: [makeEntry("Reviewer"), makeEntry("Implementer")], onDelete: vi.fn() });
+      const popup = screen.getByTestId("library-submenu");
+      expect(popup.style.minHeight).toBe("");
+      act(() => screen.getByRole("textbox", { name: "Search nodes" }).focus());
+      await user.keyboard("rev");
+      expect(popup.style.minHeight).toBe("240px");
+    } finally {
+      height.mockRestore();
+    }
+  });
+
   it("Delete on a row removes the entry from the library", async () => {
     const onDelete = vi.fn();
     const user = await openLibrary({ entries: [makeEntry("Alpha")], onDelete });

@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { KeyboardEvent, SyntheticEvent } from "react";
+import type { KeyboardEvent, MouseEvent, PointerEvent, SyntheticEvent } from "react";
 import { BookOpen, Library, Search, Trash2 } from "lucide-react";
 import { EmptyState } from "../../shared/ui/kit";
 import ListEmpty from "../../shared/ui/leftList/ListEmpty";
@@ -39,6 +39,9 @@ export default function LibrarySubmenu({
 }) {
   const [query, setQuery] = useState("");
   const filterRef = useRef<HTMLInputElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
+  // The height the submenu had before its list first changed (see `holdHeight`).
+  const [heldHeight, setHeldHeight] = useState<number | null>(null);
   const addNode = useEditStore((s) => s.addNode);
   const updatePrompt = useEditStore((s) => s.updatePrompt);
 
@@ -78,6 +81,22 @@ export default function LibrarySubmenu({
     }
   }
 
+  // FP CORE-194 F1: a list that shrinks under a resting pointer leaves the pointer
+  // outside the submenu, and Base UI's hover closes it on the next keystroke. Once
+  // the list starts changing (filter, delete), the submenu keeps the height it opened
+  // with, so the pointer stays where it was: inside.
+  const holdHeight = () => {
+    if (heldHeight === null && popupRef.current) setHeldHeight(popupRef.current.offsetHeight);
+  };
+  const filter = (next: string) => {
+    holdHeight();
+    setQuery(next);
+  };
+  const remove = (name: string) => {
+    holdHeight();
+    onDelete(name);
+  };
+
   // The filter lives inside a Base UI menu (same pattern as `PipelineSelect`).
   const onFilterKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     // List navigation lives on the popup: let these bubble to walk into the rows.
@@ -97,7 +116,7 @@ export default function LibrarySubmenu({
       // Empty the filter first; the next Escape closes the menu.
       e.preventDefault();
       e.stopPropagation();
-      setQuery("");
+      filter("");
       return;
     }
     if (e.key === "Escape") return;
@@ -105,8 +124,35 @@ export default function LibrarySubmenu({
     e.stopPropagation();
   };
 
-  // A row holds the focus once hovered or reached by the arrows: give the filter
-  // back what belongs to it, and let Delete remove the entry from the keyboard.
+  // One filtering gesture: a letter typed anywhere in the submenu (a row, or the
+  // popup itself once Base UI parked the focus there) goes to the field, never to
+  // the typeahead. Captured, so neither the rows nor the popup see it.
+  const onPopupKeyDownCapture = (e: KeyboardEvent<HTMLDivElement>) => {
+    const field = filterRef.current;
+    if (!field || e.target === field) return;
+    if (e.key.length !== 1 || e.key === " " || e.ctrlKey || e.metaKey || e.altKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    filter(query + e.key);
+    field.focus();
+  };
+
+  // FP CORE-194 F2: filtering moves the rows under a resting pointer, and Chrome
+  // replays the pointer over them without it moving. Base UI would read that as a
+  // hover: highlight the row now under the pointer, or park the focus on the popup
+  // when the row leaves it — either way the field loses the next letters. While
+  // the field holds the focus, only a pointer that really moved takes it back.
+  const fieldHoldsFocus = () => filterRef.current !== null && document.activeElement === filterRef.current;
+  const onRowMouseMove = (e: MouseEvent<HTMLDivElement>) => {
+    if (fieldHoldsFocus() && e.movementX === 0 && e.movementY === 0) preventBaseUIHandler(e);
+  };
+  const onRowPointerLeave = (e: PointerEvent<HTMLDivElement>) => {
+    // A real move into another row highlights it through its own `mousemove`.
+    if (fieldHoldsFocus()) preventBaseUIHandler(e);
+  };
+
+  // A row holds the focus once hovered or reached by the arrows: `↑` from the first
+  // goes back to the filter, and Delete removes the entry from the keyboard.
   const onRowKeyDown = (e: KeyboardEvent<HTMLDivElement>, index: number, name: string) => {
     if (e.key === "ArrowUp" && index === 0 && filterRef.current) {
       // The field sits above the first row: `↑` goes there, not to the bottom.
@@ -118,28 +164,28 @@ export default function LibrarySubmenu({
     if (e.key === "Delete") {
       e.preventDefault();
       e.stopPropagation();
-      onDelete(name);
-      return;
-    }
-    // One filtering gesture: a letter typed on a row goes to the field, not to
-    // the typeahead.
-    if (filterRef.current && e.key.length === 1 && e.key !== " " && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      e.preventDefault();
-      e.stopPropagation();
-      setQuery((q) => q + e.key);
-      filterRef.current.focus();
+      remove(name);
     }
   };
 
   return (
-    <DropdownMenuSub onOpenChange={(open) => open && setQuery("")}>
+    <DropdownMenuSub
+      onOpenChange={(open) => {
+        if (!open) return;
+        setQuery("");
+        setHeldHeight(null);
+      }}
+    >
       <DropdownMenuSubTrigger data-testid="add-menu-library" className="cv-menu__item">
         <BookOpen size={14} strokeWidth={1.5} aria-hidden />
         <span>Library</span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent
+        ref={popupRef}
         data-testid="library-submenu"
         className="cv-menu cv-menu--library"
+        style={heldHeight === null ? undefined : { minHeight: heldHeight }}
+        onKeyDownCapture={onPopupKeyDownCapture}
       >
         <div className="flex h-8 shrink-0 items-center justify-between border-b border-line px-2">
           <span className="d-caps">Library</span>
@@ -151,7 +197,7 @@ export default function LibrarySubmenu({
             <input
               ref={filterRef}
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => filter(e.target.value)}
               onKeyDown={onFilterKeyDown}
               placeholder="Search nodes"
               aria-label="Search nodes"
@@ -180,8 +226,10 @@ export default function LibrarySubmenu({
                 key={entry.name}
                 entry={entry}
                 onAdd={() => void handleAdd(entry.name)}
-                onDelete={() => onDelete(entry.name)}
+                onDelete={() => remove(entry.name)}
                 onKeyDown={(e) => onRowKeyDown(e, index, entry.name)}
+                onMouseMove={onRowMouseMove}
+                onPointerLeave={onRowPointerLeave}
               />
             ))}
         </div>
@@ -195,11 +243,15 @@ function LibraryRow({
   onAdd,
   onDelete,
   onKeyDown,
+  onMouseMove,
+  onPointerLeave,
 }: {
   entry: LibraryEntry;
   onAdd: () => void;
   onDelete: () => void;
   onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => void;
+  onMouseMove: (e: MouseEvent<HTMLDivElement>) => void;
+  onPointerLeave: (e: PointerEvent<HTMLDivElement>) => void;
 }) {
   const preview = entry.prompt.slice(0, 60).replace(/\n/g, " ");
   // #655/ADR-0060: the preview names the entry's workspace, so "which of my two
@@ -220,6 +272,8 @@ function LibraryRow({
       title="Add to canvas · Delete removes it from the library"
       onClick={onAdd}
       onKeyDown={onKeyDown}
+      onMouseMove={onMouseMove}
+      onPointerLeave={onPointerLeave}
     >
       {/* #655: the same glyph the canvas and the inspector use for the type. */}
       <span className="shrink-0 text-text-3">
@@ -261,4 +315,9 @@ function LibraryRow({
       </button>
     </DropdownMenuItem>
   );
+}
+
+/** Base UI's `mergeProps` runs our handler first and lets it skip the library's own. */
+function preventBaseUIHandler(e: SyntheticEvent) {
+  (e as SyntheticEvent & { preventBaseUIHandler?: () => void }).preventBaseUIHandler?.();
 }

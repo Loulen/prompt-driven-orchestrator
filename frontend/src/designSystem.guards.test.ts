@@ -18,7 +18,6 @@ const SRC = import.meta.dirname;
 const FRONT = join(SRC, "..");
 const TOKENS = readFileSync(join(FRONT, "public", "shared", "tokens.css"), "utf8");
 const INDEX_CSS = readFileSync(join(SRC, "index.css"), "utf8");
-const BRAND_CSS = readFileSync(join(SRC, "shared", "ui", "brand", "brand.css"), "utf8");
 
 function walk(dir: string, keep: (path: string) => boolean): string[] {
   return readdirSync(dir).flatMap((entry) => {
@@ -92,13 +91,19 @@ describe("tokens", () => {
     expect(used.filter((name) => !roles.has(name) && !palette.has(name))).toEqual([]);
   });
 
-  it("keep the logo in the Acogni ruby of each mode under Classic", () => {
-    expect(valueIn(BRAND_CSS, '[data-theme="classic"] .acogni-brand {', "--primary")).toBe(
-      valueIn(TOKENS, PALETTES["acogni dark"], "--color-accent"),
-    );
-    expect(valueIn(BRAND_CSS, '[data-theme="classic"] [data-mode="light"] .acogni-brand {', "--primary")).toBe(
-      valueIn(TOKENS, PALETTES["acogni light"], "--color-accent"),
-    );
+  it("give the logo the Acogni ruby of each mode under every Theme (--brand-accent)", () => {
+    for (const mode of ["dark", "light"] as const) {
+      const ruby = valueIn(TOKENS, PALETTES[`acogni ${mode}`], "--color-accent");
+      expect(valueIn(TOKENS, PALETTES[`acogni ${mode}`], "--brand-accent")).toBe(ruby);
+      expect(valueIn(TOKENS, PALETTES[`classic ${mode}`], "--brand-accent")).toBe(ruby);
+    }
+  });
+
+  it("let no sheet but the tokens paint the logo: no copied palette value", () => {
+    const offenders = SOURCE.filter((file) => file.endsWith(".css"))
+      .filter((file) => /--brand-accent\s*:|\.acogni-brand[^{]*\{[^}]*--primary\s*:/.test(readFileSync(file, "utf8")))
+      .map((file) => relative(FRONT, file));
+    expect(offenders).toEqual([]);
   });
 });
 

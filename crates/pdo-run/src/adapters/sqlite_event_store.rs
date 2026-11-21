@@ -677,4 +677,76 @@ mod tests {
         let store = store().await;
         init(&store.db).await.unwrap();
     }
+
+    fn started(run_id: &str, ts: &str) -> Event {
+        Event {
+            ts: ts.into(),
+            ..event(
+                run_id,
+                EventKind::RunStarted,
+                Some(serde_json::json!({ "pipeline_name": "p" })),
+            )
+        }
+    }
+
+    async fn listed(store: &SqliteEventStore) -> Vec<String> {
+        store
+            .summaries()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|s| s.run_id)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn the_summaries_started_in_the_same_instant_come_in_reverse_append_order() {
+        let store = store().await;
+        for run_id in ["r-b", "r-a", "r-c"] {
+            store
+                .append(&event(
+                    run_id,
+                    EventKind::RunStarted,
+                    Some(serde_json::json!({ "pipeline_name": "p" })),
+                ))
+                .await
+                .unwrap();
+        }
+        assert_eq!(listed(&store).await, vec!["r-c", "r-a", "r-b"]);
+    }
+
+    #[tokio::test]
+    async fn the_summaries_come_newest_started_first_whatever_their_run_id() {
+        use crate::domain::run_summary::summarize;
+        let store = store().await;
+        // Same second, the older Run has the larger random suffix.
+        store
+            .append(&started("20261120-153950-zzz", "2026-11-20T15:39:50.100Z"))
+            .await
+            .unwrap();
+        store
+            .append(&started("20261120-153950-aaa", "2026-11-20T15:39:50.900Z"))
+            .await
+            .unwrap();
+        let expected = vec!["20261120-153950-aaa", "20261120-153950-zzz"];
+        assert_eq!(listed(&store).await, expected);
+
+        // A later event on the older Run rewrites its Résumé: order kept.
+        store
+            .append(&Event {
+                ts: "2026-11-20T15:40:00.000Z".into(),
+                ..event("20261120-153950-zzz", EventKind::NodeStarted, None)
+            })
+            .await
+            .unwrap();
+        assert_eq!(listed(&store).await, expected);
+
+        // The boot rebuild keeps it too.
+        let mut all = Vec::new();
+        for run_id in store.run_ids().await.unwrap() {
+            all.extend(summarize(&store.events(&run_id).await.unwrap()));
+        }
+        store.replace_summaries(all).await.unwrap();
+        assert_eq!(listed(&store).await, expected);
+    }
 }

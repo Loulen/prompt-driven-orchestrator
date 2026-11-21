@@ -16,6 +16,7 @@
 //! Don't collapse the per-caller tail divergence ratified by ADR-0023.
 
 use crate::domain::{event, projection, state};
+use std::collections::HashMap;
 use tracing::{error, info};
 
 use crate::application::events::append_event;
@@ -96,6 +97,38 @@ pub async fn advance_run(state: &Runs, run_id: &str) {
     let loop_seed_actions = scheduler::seed_pending_loops(&pipeline, &run_state, &resolved_vars);
 
     if ready.is_empty() && loop_seed_actions.is_empty() {
+        // Nothing to spawn and nothing ever launched: a `Start → End` edge
+        // reaches `End` at launch, so the Run ends now (CORE-142). Once a node
+        // has run, its completion owns the end (`fire_edges`, then
+        // `reevaluate_end`): evaluating it here too would end the Run twice on
+        // a `SweepFirst` completion. The interpreter's `Complete`/`Halt` arm is
+        // the one emitter of the end.
+        let end_at_launch = if run_state.nodes.is_empty() {
+            scheduler::end_reached_action(&pipeline, &run_state, &HashMap::new(), &resolved_vars)
+        } else {
+            None
+        };
+        if let Some(action) = end_at_launch {
+            let spawn_ctx = SpawnContext {
+                pipeline: &pipeline,
+                run_id,
+                pipeline_path: &pipeline_path,
+                worktree_dir: &worktree_dir,
+                artifacts_dir: &artifacts_dir,
+                resolved_vars: &resolved_vars,
+                repo_root: &repo_root,
+            };
+            let _ = scheduler_interpreter::interpret(
+                state,
+                &spawn_ctx,
+                &run_state,
+                SpawnDedup::InternalOnly,
+                1,
+                &action,
+            )
+            .await;
+            return;
+        }
         // Don't use [`expected_completion_node_ids`] here: this site must judge
         // against the *current* (post-YAML-edit) pipeline, not the run's frozen
         // snapshot, or an edited run stays dangling in Running forever.

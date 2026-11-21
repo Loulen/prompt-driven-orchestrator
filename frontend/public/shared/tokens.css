@@ -6,7 +6,10 @@
  *
  * Two layers:
  *  - the palette (`--color-*`): paper, ink, rules, the accent and the six
- *    status colours, redefined by each Theme in each mode (ADR-0093);
+ *    status colours, redefined by each Theme in each mode (ADR-0093). Beside
+ *    them, `--brand-accent`: the Acogni ruby of the mode, the same under every
+ *    Theme, which the logos (the Marque's, Acogni's gear) paint their accent
+ *    with; an action never does;
  *  - the roles (`--surface-*`, `--text*`, `--line*`, `--primary*`, `--hover`…),
  *    which components paint with. They read the palette, and are declared again
  *    on every `[data-theme]` and `[data-mode]` element, so a container can carry
@@ -144,6 +147,8 @@
   --color-accent: oklch(64% 0.16 8);
   --color-accent-hi: oklch(70% 0.14 8);
   --color-accent-ink: oklch(18.5% 0.004 265);
+  /* The Acogni ruby of the mode, under every Theme: the logo's accent (ADR-0093). */
+  --brand-accent: oklch(64% 0.16 8);
   --color-st-running: oklch(68% 0.12 255);
   --color-st-await: oklch(74% 0.12 75);
   --color-st-done: oklch(70% 0.11 160);
@@ -178,6 +183,8 @@
   --color-accent: oklch(43.6% 0.155 5);
   --color-accent-hi: oklch(38.5% 0.14 5);
   --color-accent-ink: oklch(99.4% 0.005 230);
+  /* The Acogni ruby of the mode, under every Theme: the logo's accent (ADR-0093). */
+  --brand-accent: oklch(43.6% 0.155 5);
   --color-st-running: oklch(48% 0.15 255);
   --color-st-await: oklch(50% 0.11 70);
   --color-st-done: oklch(47% 0.1 160);
@@ -216,6 +223,8 @@
   --color-accent: oklch(69.6% 0.149 162);
   --color-accent-hi: oklch(75.7% 0.161 163);
   --color-accent-ink: oklch(17.4% 0.028 165);
+  /* The Acogni ruby of the mode, under every Theme: the logo's accent (ADR-0093). */
+  --brand-accent: oklch(64% 0.16 8);
   --color-st-running: oklch(62.8% 0.188 260);
   --color-st-await: oklch(76.9% 0.165 70);
   --color-st-done: oklch(69.6% 0.149 162);
@@ -250,6 +259,8 @@
   --color-accent: oklch(48.6% 0.103 164);
   --color-accent-hi: oklch(60.5% 0.13 163);
   --color-accent-ink: oklch(98% 0.011 168);
+  /* The Acogni ruby of the mode, under every Theme: the logo's accent (ADR-0093). */
+  --brand-accent: oklch(43.6% 0.155 5);
   --color-st-running: oklch(48.8% 0.217 264);
   --color-st-await: oklch(47.6% 0.119 52);
   --color-st-done: oklch(48.6% 0.103 164);

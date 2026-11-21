@@ -50,6 +50,9 @@ pub struct ContextResources {
     pub repo_root: PathBuf,
     /// The port the daemon listens on.
     pub port: u16,
+    /// The default tier of the Public URL: the machine's address, from where
+    /// the daemon listens ([`pdo_kernel::public_url::default_public_url`]).
+    pub public_url_default: String,
     /// The home the update journal lives under: the per-daemon override, else
     /// `$HOME`; `None` when neither is set.
     pub home_root: Option<PathBuf>,
@@ -291,6 +294,7 @@ pub(crate) mod testing {
                 db: db.clone(),
                 repo_root: repo_root.clone(),
                 port: next_test_daemon_port(),
+                public_url_default: "http://localhost:5272".into(),
                 home_root: None,
                 update_source_url: None,
                 release_channel: None,

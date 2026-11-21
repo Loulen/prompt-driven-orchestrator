@@ -134,9 +134,9 @@ pub trait UpdateCheckSetting: Send + Sync {
 
 /// The `public_url` instance setting. Implemented by the `settings` context.
 pub trait PublicUrlSetting: Send + Sync {
-    /// The address humans open PDO at, resolved fresh (`stored → env → none`)
-    /// so a change takes effect without a restart.
-    fn resolve(&self) -> BoxFuture<'_, Option<String>>;
+    /// The address humans open PDO at, resolved fresh (`stored → env →
+    /// default`) so a change takes effect without a restart.
+    fn resolve(&self) -> BoxFuture<'_, String>;
 }
 
 /// The release source.

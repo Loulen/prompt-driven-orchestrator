@@ -17,7 +17,7 @@ function settings(): InstanceSettings {
     libassist_idle_ttl_secs: field(120, 120),
     guard_timeout_secs: field(60, 60),
     max_attachments_mb: field(50, 50),
-    public_url: field<string | null>(null, null),
+    public_url: field("http://localhost:5272", "http://localhost:5272"),
     default_model: field<string | null>(null, null),
     default_harness: field<string | null>(null, null),
     default_harness_model: { effective: {}, stored: {} },

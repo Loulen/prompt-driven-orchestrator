@@ -14,6 +14,17 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- The Public URL always has a value: without one set in Settings or in `PDO_PUBLIC_URL`, it is the
+  machine's address, `http://<host name>:<port>` (`http://localhost:<port>` for a daemon bound to
+  the loopback). Agents receive it in `PDO_PUBLIC_URL` and their preamble, and `pdo page mount`,
+  the copied link of a mounted page and the `/metrics` address in Settings › Telemetry use it, so
+  their links open from another machine with nothing to set. Settings › General shows the address
+  an empty field uses as its placeholder, and the setting's tooltip names its source.
+- `GET /settings` discloses `public_url.default`, and `public_url.effective` is never `null`;
+  `POST /pages` always returns `public_url`.
+
 ## 2.80.4
 
 - A Run whose Start is wired straight to End ends as soon as it starts: with no node to launch, it

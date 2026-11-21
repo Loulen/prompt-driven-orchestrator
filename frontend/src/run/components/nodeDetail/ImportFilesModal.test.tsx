@@ -60,7 +60,7 @@ describe("ImportFilesModal", () => {
     clipboardMock.mockReset().mockResolvedValue(true);
     settingsMock.mockReset().mockResolvedValue({
       max_attachments_mb: { effective: 1, source: "stored", stored: 1, env: null, default: 50 },
-      public_url: { effective: null, source: "default", stored: null, env: null, default: null },
+      public_url: { effective: "http://localhost:5272", source: "default", stored: null, env: null, default: "http://localhost:5272" },
     });
   });
 

@@ -184,7 +184,7 @@ pub struct InstanceConfig {
     /// then off.
     pub telemetry_include_actor: Option<i64>,
     /// Stored Public URL, the address humans open PDO at, or `None` when unset
-    /// (`stored → env PDO_PUBLIC_URL → none`, resolved by
+    /// (`stored → env PDO_PUBLIC_URL → default`, the machine's address, resolved by
     /// [`pdo_kernel::public_url::resolve`]). Stored normalized: an origin `http(s)://host[:port]`
     /// without a trailing `/`.
     pub public_url: Option<String>,

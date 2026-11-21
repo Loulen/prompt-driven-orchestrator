@@ -88,6 +88,11 @@ pub async fn serve_with_config(
         db: db.clone(),
         repo_root: repo_root.clone(),
         port: bound_addr.port(),
+        public_url_default: pdo_kernel::public_url::default_public_url(
+            bound_addr.ip(),
+            bound_addr.port(),
+            pdo_telemetry::adapters::host::host_name().as_deref(),
+        ),
         home_root: config
             .sandbox_home_override
             .clone()

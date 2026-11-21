@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BookOpen, Check, ExternalLink, Link2 } from "lucide-react";
 import { fetchSettings } from "../../settings/api/settings";
 import { fetchPageMounts } from "../api/pages";
@@ -61,27 +61,27 @@ export function PageTabButtons({ drag }: { drag?: TabDrag } = {}) {
 }
 
 /**
- * What the tab bar offers for the page shown: copy the link of PDO's view of it (under
- * the instance's Public URL when one is set, else this browser's address), and open the
- * page alone in a browser tab.
+ * What the tab bar offers for the page shown: copy the link of PDO's view of it, under the
+ * instance's Public URL (the machine's address by default), and open the page alone in a
+ * browser tab.
  */
 export function PageTabActions({ name }: { name: string }) {
   const [copied, setCopied] = useState(false);
-  // Read before the click, so the copy stays inside the user's gesture.
-  const [publicUrl, setPublicUrl] = useState<string | null>(null);
+  // Asked before the click, so the copy stays inside the user's gesture; a click that comes
+  // first waits for it. `null`: the settings could not be read.
+  const publicUrl = useRef<Promise<string | null> | null>(null);
   useEffect(() => {
-    let live = true;
-    fetchSettings()
-      .then((settings) => live && setPublicUrl(settings.public_url?.effective ?? null))
-      .catch(() => {
-        // Unreadable settings: this browser's address still works here.
-      });
-    return () => {
-      live = false;
-    };
+    publicUrl.current = fetchSettings()
+      .then((settings) => settings.public_url.effective)
+      .catch(() => null);
   }, []);
   const copy = async () => {
-    if (await copyToClipboard(guidedPageUrl(publicUrl ?? window.location.origin, name))) {
+    const base = await publicUrl.current;
+    if (!base) {
+      toast("The link could not be copied: the instance's Public URL could not be read.", "error");
+      return;
+    }
+    if (await copyToClipboard(guidedPageUrl(base, name))) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } else {

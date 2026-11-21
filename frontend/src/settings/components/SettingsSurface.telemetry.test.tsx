@@ -121,7 +121,7 @@ function settings(extra: Partial<InstanceSettings> = {}): InstanceSettings {
     telemetry_otlp_headers: [],
     telemetry_prometheus: { effective: false, source: "default", stored: null, env: null, default: false },
     telemetry_include_actor: { effective: false, source: "default", stored: null, env: null, default: false },
-    public_url: { effective: null, source: "default", stored: null, env: null, default: null },
+    public_url: { effective: "http://localhost:5272", source: "default", stored: null, env: null, default: "http://localhost:5272" },
     updated_at: "2026-07-01T10:00:00.000Z",
     ...extra,
   } as unknown as InstanceSettings;
@@ -282,21 +282,22 @@ describe("Settings › Telemetry (ADR-0090)", () => {
     ]);
   });
 
-  it("/metrics is off by default and names the address it would answer on", async () => {
+  it("/metrics is off by default and names the address it would answer on: the Public URL's default", async () => {
     renderTelemetry();
     const toggle =(await switchFor("telemetry-prometheus"));
     expect(toggle).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByTestId("telemetry-metrics-url")).toHaveTextContent(`${window.location.origin}/metrics`);
+    expect(screen.getByTestId("telemetry-metrics-url")).toHaveTextContent("http://localhost:5272/metrics");
+    expect(screen.getByTestId("telemetry-metrics-url")).not.toHaveTextContent(window.location.origin);
     expect(tipOf("telemetry-prometheus")).toMatch("Same metrics as OTLP, no traces");
     expect(await tipFor("telemetry-prometheus")).toMatch(
       "built-in default (off)",
     );
   });
 
-  it("names the /metrics address with the Public URL when the daemon gives one", async () => {
+  it("names the /metrics address with the stored Public URL", async () => {
     fetchSettingsMock.mockResolvedValue(
       settings({
-        public_url: { effective: "https://pdo.example.org", source: "stored", stored: "https://pdo.example.org", env: null, default: null },
+        public_url: { effective: "https://pdo.example.org", source: "stored", stored: "https://pdo.example.org", env: null, default: "http://localhost:5272" },
       }),
     );
     renderTelemetry();

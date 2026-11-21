@@ -188,8 +188,8 @@ impl Platform {
         &self.check_for_update
     }
 
-    /// The instance's Public URL, read fresh (`stored → env → none`).
-    pub async fn public_url(&self) -> Option<String> {
+    /// The instance's Public URL, read fresh (`stored → env → default`).
+    pub async fn public_url(&self) -> String {
         self.public_url.resolve().await
     }
 

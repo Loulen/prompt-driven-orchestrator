@@ -74,6 +74,9 @@ pub struct RunsPorts {
 #[derive(Debug, Clone, Default)]
 pub struct RunsOptions {
     pub daemon_port: u16,
+    /// The default tier of the Public URL: the machine's address, computed at
+    /// boot from where the daemon listens. `None`: `http://localhost:<daemon_port>`.
+    pub public_url_default: Option<String>,
     /// Extra WebSocket origins (`PDO_ALLOWED_WS_ORIGINS`), parsed at boot.
     pub allowed_ws_origins: Vec<String>,
     /// The daemon's repo root (its cwd): the default repository of a Run

@@ -107,16 +107,21 @@ impl pdo_trigger::application::ports::TriggerSettings for SettingsOfTriggers {
     }
 }
 
-/// The Public URL, `stored → env → none`, for the platform's printed links.
-pub struct PublicUrlOfPlatform(pub Arc<dyn InstanceConfigStore>);
+/// The Public URL, `stored → env → default`, for the platform's printed
+/// links. `default` is the machine's address, computed once at boot.
+pub struct PublicUrlOfPlatform {
+    pub config: Arc<dyn InstanceConfigStore>,
+    pub default: String,
+}
 
 impl pdo_platform::application::ports::PublicUrlSetting for PublicUrlOfPlatform {
-    fn resolve(&self) -> pdo_platform::application::ports::BoxFuture<'_, Option<String>> {
+    fn resolve(&self) -> pdo_platform::application::ports::BoxFuture<'_, String> {
         Box::pin(async move {
-            let stored = self.0.get().await.ok().and_then(|c| c.public_url);
+            let stored = self.config.get().await.ok().and_then(|c| c.public_url);
             pdo_kernel::public_url::resolve(
                 stored.as_deref(),
                 pdo_kernel::public_url::env_public_url(),
+                &self.default,
             )
         })
     }

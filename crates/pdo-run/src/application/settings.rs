@@ -53,11 +53,27 @@ pub async fn stored_default_harness_models(runs: &Runs) -> BTreeMap<String, Stri
     map
 }
 
-/// The address humans open PDO at, resolved `stored → env → none`: what a
-/// session launched now receives as `PDO_PUBLIC_URL`.
-pub async fn public_url(runs: &Runs) -> Option<String> {
+/// The address humans open PDO at, resolved `stored → env → default`: what a
+/// session launched now receives as `PDO_PUBLIC_URL`. Always set.
+pub async fn public_url(runs: &Runs) -> String {
     let stored = runs.settings.defaults().await.and_then(|c| c.public_url);
-    pdo_kernel::public_url::resolve(stored.as_deref(), pdo_kernel::public_url::env_public_url())
+    pdo_kernel::public_url::resolve(
+        stored.as_deref(),
+        pdo_kernel::public_url::env_public_url(),
+        &public_url_default(&runs.options),
+    )
+}
+
+/// The Public URL's default tier: the machine's address the daemon computed at
+/// boot, else this machine's loopback name on the daemon's port.
+fn public_url_default(options: &crate::RunsOptions) -> String {
+    options.public_url_default.clone().unwrap_or_else(|| {
+        pdo_kernel::public_url::default_public_url(
+            std::net::Ipv4Addr::LOCALHOST.into(),
+            options.daemon_port,
+            None,
+        )
+    })
 }
 
 /// Turn-end auto-completion, resolved the way the liveness sweep does. The hook

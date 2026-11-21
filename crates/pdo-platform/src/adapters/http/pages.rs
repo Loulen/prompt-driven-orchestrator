@@ -33,12 +33,12 @@ pub(super) struct CreatePageMountRequest {
 }
 
 /// The mount, and the instance's Public URL its links are printed under
-/// (`null` when unset: the caller's own daemon address).
+/// (always set: the machine's address by default).
 #[derive(Serialize)]
 struct MountedPage {
     #[serde(flatten)]
     mount: PageMount,
-    public_url: Option<String>,
+    public_url: String,
 }
 
 pub(super) async fn list(

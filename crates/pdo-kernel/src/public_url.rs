@@ -1,11 +1,14 @@
 //! The instance's « Public URL »: the address at which humans open PDO (a VPN
 //! name, a LAN address, a reverse proxy). Agents receive it in their
 //! environment and preamble, and `pdo page mount` prints its links with it.
-//! Unset, nothing changes: links stay on the daemon's own address.
 //!
-//! The precedence is the usual `stored → env → none` (ADR-0015); the stored
-//! tier is kept by the settings context, the run and platform contexts read it
-//! through their ports and resolve it here.
+//! It always has a value. The precedence is the usual `stored → env → default`
+//! (ADR-0015); the default is the machine's address, [`default_public_url`],
+//! built once from where the daemon listens. The stored tier is kept by the
+//! settings context, the run and platform contexts read it through their ports
+//! and resolve it here.
+
+use std::net::IpAddr;
 
 /// The environment tier of the setting, and the variable a node session
 /// receives it in.
@@ -59,9 +62,39 @@ pub fn env_public_url() -> Option<String> {
     }
 }
 
-/// `stored → env → none`. A stored value that no longer normalizes is skipped.
-pub fn resolve(stored: Option<&str>, env: Option<String>) -> Option<String> {
-    stored.and_then(|raw| normalize(raw).ok().flatten()).or(env)
+/// The default tier: the machine's address, from the address the daemon
+/// listens on (`listen`, `port`) and the machine's `host_name`. A loopback
+/// address gives `http://localhost:<port>`: only this machine reaches the
+/// daemon. An unspecified one (`0.0.0.0`, `::`, every interface) gives
+/// `http://<host name>:<port>`, `localhost` when the system names no host. A
+/// precise address gives itself.
+pub fn default_public_url(listen: IpAddr, port: u16, host_name: Option<&str>) -> String {
+    // `::ffff:127.0.0.1` is the IPv4 loopback, written as IPv6.
+    let listen = listen.to_canonical();
+    let host = if listen.is_loopback() {
+        "localhost".to_string()
+    } else if listen.is_unspecified() {
+        host_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or("localhost")
+            .to_string()
+    } else {
+        match listen {
+            IpAddr::V4(ip) => ip.to_string(),
+            IpAddr::V6(ip) => format!("[{ip}]"),
+        }
+    };
+    format!("http://{host}:{port}")
+}
+
+/// `stored → env → default`. A stored value that no longer normalizes is
+/// skipped.
+pub fn resolve(stored: Option<&str>, env: Option<String>, default: &str) -> String {
+    stored
+        .and_then(|raw| normalize(raw).ok().flatten())
+        .or(env)
+        .unwrap_or_else(|| default.to_string())
 }
 
 /// The address of the page mounted as `name`, alone, under `base`.
@@ -111,15 +144,74 @@ mod tests {
     }
 
     #[test]
-    fn the_stored_tier_wins_over_the_environment() {
+    fn the_stored_tier_wins_over_the_environment_then_the_default() {
         let env = Some("http://env:1".to_string());
+        let default = "http://host:5272";
         assert_eq!(
-            resolve(Some("https://stored/"), env.clone()).as_deref(),
-            Some("https://stored")
+            resolve(Some("https://stored/"), env.clone(), default),
+            "https://stored"
         );
-        assert_eq!(resolve(None, env.clone()), env);
-        assert_eq!(resolve(Some("not a url"), env.clone()), env);
-        assert_eq!(resolve(None, None), None);
+        assert_eq!(resolve(None, env.clone(), default), "http://env:1");
+        assert_eq!(
+            resolve(Some("not a url"), env.clone(), default),
+            "http://env:1"
+        );
+        assert_eq!(resolve(Some("not a url"), None, default), default);
+        assert_eq!(resolve(None, None, default), default);
+    }
+
+    #[test]
+    fn the_default_is_the_machine_s_address_where_the_daemon_listens() {
+        let every = IpAddr::from([0, 0, 0, 0]);
+        let every_v6 = IpAddr::from(std::net::Ipv6Addr::UNSPECIFIED);
+        assert_eq!(
+            default_public_url(every, 5272, Some("atelier")),
+            "http://atelier:5272"
+        );
+        assert_eq!(
+            default_public_url(every_v6, 5272, Some("atelier")),
+            "http://atelier:5272"
+        );
+        // No host name from the system: the only name left is this machine's.
+        assert_eq!(
+            default_public_url(every, 5272, None),
+            "http://localhost:5272"
+        );
+        assert_eq!(
+            default_public_url(every, 5272, Some(" ")),
+            "http://localhost:5272"
+        );
+    }
+
+    #[test]
+    fn a_loopback_daemon_defaults_to_localhost() {
+        for ip in [
+            IpAddr::from([127, 0, 0, 1]),
+            IpAddr::from(std::net::Ipv6Addr::LOCALHOST),
+            // The IPv4 loopback written as IPv6.
+            "::ffff:127.0.0.1".parse().unwrap(),
+        ] {
+            assert_eq!(
+                default_public_url(ip, 4100, Some("atelier")),
+                "http://localhost:4100"
+            );
+        }
+    }
+
+    #[test]
+    fn a_precise_listen_address_is_its_own_default() {
+        assert_eq!(
+            default_public_url(IpAddr::from([10, 0, 0, 4]), 5272, Some("atelier")),
+            "http://10.0.0.4:5272"
+        );
+        let v6: IpAddr = "fd00::4".parse().unwrap();
+        assert_eq!(
+            default_public_url(v6, 5272, Some("atelier")),
+            "http://[fd00::4]:5272"
+        );
+        // Every default is a Public URL as the setting stores one.
+        let url = default_public_url(v6, 5272, None);
+        assert_eq!(normalize(&url).unwrap().as_deref(), Some(url.as_str()));
     }
 
     #[test]

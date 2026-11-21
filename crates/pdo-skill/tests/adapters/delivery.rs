@@ -287,3 +287,78 @@ fn a_name_that_cannot_name_a_folder_is_skipped() {
     );
     assert!(exclusions_of(&repo, "r9").is_empty());
 }
+
+#[test]
+fn a_folder_outside_any_repository_gets_the_copy_and_the_link_and_loses_what_went() {
+    use pdo_skill::adapters::delivery::deliver_to_folder;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let bank = bank_with(tmp.path(), "s1", "pdo-guide");
+    write_skill(&skill_dir(&bank, "s2"), "old");
+    let folder = tmp.path().join("support/agent");
+    std::fs::create_dir_all(&folder).unwrap();
+
+    let first =
+        deliver_to_folder(&bank, &folder, &[eff("s1", "pdo-guide"), eff("s2", "old")]).unwrap();
+    assert_eq!(first.delivered, vec!["pdo-guide", "old"]);
+    assert!(folder.join(".agents/skills/pdo-guide/SKILL.md").is_file());
+    assert!(folder
+        .join(".agents/skills/pdo-guide/references/notes.md")
+        .is_file());
+    let link = folder.join(".claude/skills/pdo-guide");
+    assert!(std::fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert!(
+        link.join("SKILL.md").is_file(),
+        "the link resolves to the copy"
+    );
+    assert!(
+        !folder.join(".git").exists() && !folder.join(".pdo").exists(),
+        "no repository, nothing excluded"
+    );
+
+    // The next delivery replaces the last: a skill gone from the selection,
+    // or from the bank, does not linger.
+    let second = deliver_to_folder(
+        &bank,
+        &folder,
+        &[eff("s1", "pdo-guide"), eff("gone", "gone")],
+    )
+    .unwrap();
+    assert_eq!(second.delivered, vec!["pdo-guide"]);
+    assert_eq!(second.skipped.len(), 1);
+    assert_eq!(
+        second.skipped[0].reason,
+        "skill content is absent from the bank"
+    );
+    assert!(!folder.join(".agents/skills/old").exists());
+    assert!(std::fs::symlink_metadata(folder.join(".claude/skills/old")).is_err());
+    assert!(folder.join(".claude/skills/pdo-guide/SKILL.md").is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_in_place_of_the_skills_folder_is_removed_never_followed() {
+    use pdo_skill::adapters::delivery::deliver_to_folder;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let bank = bank_with(tmp.path(), "s1", "pdo-guide");
+    let elsewhere = tmp.path().join("elsewhere");
+    std::fs::create_dir_all(elsewhere.join("skills/keep")).unwrap();
+    let folder = tmp.path().join("agent");
+    std::fs::create_dir_all(&folder).unwrap();
+    symlink(elsewhere.to_str().unwrap(), &folder.join(".agents"));
+
+    deliver_to_folder(&bank, &folder, &[eff("s1", "pdo-guide")]).unwrap();
+    assert!(
+        elsewhere.join("skills/keep").is_dir(),
+        "its target is intact"
+    );
+    assert!(!std::fs::symlink_metadata(folder.join(".agents"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert!(folder.join(".agents/skills/pdo-guide/SKILL.md").is_file());
+}

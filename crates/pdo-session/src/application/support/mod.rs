@@ -1,12 +1,15 @@
 //! The Agent de support: one interactive agent per Actor, outside any Run,
 //! with the rights of its Actor (the token its launch hooks give). Opened with
 //! an agentic profile or a custom combination and a first question, asked
-//! further questions while it lives, read, closed.
+//! further questions while it lives, read, closed. Its folder receives the
+//! skills PDO manages; the core's code at the instance's tag is cloned for it
+//! at the first demand.
 
 mod ask;
 mod close;
 mod open;
 mod ports;
+mod sources;
 mod status;
 
 use std::path::PathBuf;
@@ -17,12 +20,14 @@ use pdo_kernel::extension_host::ExtensionHost;
 
 pub use ask::ASK;
 pub use open::SupportOpened;
-pub use ports::{ChoiceRefusal, ResolvedAgent, SupportAgents};
+pub use ports::{ChoiceRefusal, CoreRepository, ResolvedAgent, SupportAgents, SupportSkills};
+pub use sources::{SupportSources, SOURCE};
 pub use status::SupportStatus;
 
 use crate::application::ports::Tmux;
 use crate::application::session_ledger::SessionLedger;
 use crate::domain::support::{support_dir, support_record_path, SupportAgent, SupportRecord};
+use crate::domain::support_sources::CoreSourceRefusal;
 
 /// Where the agents run, and how their launch may be stubbed.
 #[derive(Debug, Clone)]
@@ -53,6 +58,8 @@ pub enum SupportError {
     Folder(String),
     /// The session did not come up.
     Spawn(String),
+    /// The core's code was not given.
+    CoreSource(CoreSourceRefusal),
 }
 
 /// The Agents de support of the daemon, one per Actor.
@@ -62,6 +69,8 @@ pub struct Support {
     host: Arc<dyn ExtensionHost>,
     ledger: Arc<SessionLedger>,
     launch: SupportLaunch,
+    /// The skills and the core's code its agents read; `None`: none.
+    sources: Option<Arc<SupportSources>>,
 }
 
 impl Support {
@@ -77,7 +86,15 @@ impl Support {
             agents,
             host,
             launch,
+            sources: None,
         }
+    }
+
+    /// The same, its agents reading the skills and the core's code of
+    /// `sources`.
+    pub fn with_sources(mut self, sources: Arc<SupportSources>) -> Self {
+        self.sources = Some(sources);
+        self
     }
 
     /// The same, announcing the sessions it starts in `ledger`.

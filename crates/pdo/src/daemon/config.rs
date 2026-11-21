@@ -58,6 +58,10 @@ pub struct DaemonConfig {
     /// `Some(url)` points the check at a local fixture, same seam as
     /// [`Self::price_source_url`]; `None` → the channel's source, if any.
     pub update_source_url: Option<String>,
+    /// The repository the Agent de support clones the core's code from, at
+    /// the tag of this binary: the operator's `PDO_CORE_SOURCE_URL` (a mirror,
+    /// a local fixture in tests); `None` → the public repository.
+    pub core_source_url: Option<String>,
     /// The release channel a distribution declares (#24, set by
     /// `Config::with_release_channel`); `None` → the vanilla channel (`PDO`, the
     /// core's version, the public repository's releases, the detected install method).

@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use pdo_workspace::adapters::git::clone::{clone_full, clone_shallow, CloneError};
+use pdo_workspace::adapters::git::clone::{clone_full, clone_shallow, remote_has_tag, CloneError};
 use pdo_workspace::adapters::git::repository::{info_exclude_path, is_tracked};
 use pdo_workspace::domain::clone::CloneFailure;
 
@@ -173,4 +173,22 @@ fn the_exclude_file_is_the_common_one_and_tracked_paths_are_seen() {
     assert!(!is_tracked(repo.path(), "absent").unwrap());
     let outside = tempfile::tempdir().unwrap();
     assert_eq!(info_exclude_path(outside.path()).unwrap(), None);
+}
+
+#[tokio::test]
+async fn a_remote_says_whether_it_has_a_tag_or_why_it_could_not() {
+    let origin = tempfile::tempdir().unwrap();
+    init_test_repo(origin.path());
+    run_git(origin.path(), &["tag", "v1.2.3"]);
+    let url = format!("file://{}", origin.path().display());
+    let ask = |url: String, tag: &'static str| async move {
+        remote_has_tag(&url, tag, &BTreeMap::new(), Duration::from_secs(30)).await
+    };
+    assert_eq!(ask(url.clone(), "v1.2.3").await, Ok(true));
+    assert_eq!(ask(url, "v9.9.9").await, Ok(false));
+    let unreachable = ask("file:///definitely/not/a/repo.git".into(), "v1.2.3").await;
+    assert!(
+        matches!(unreachable, Err(ref why) if !why.is_empty()),
+        "{unreachable:?}"
+    );
 }

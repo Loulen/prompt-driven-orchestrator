@@ -22,8 +22,8 @@ installées peuvent être closed source : leur code n'est pas là pour qu'un age
 2. **Il agit avec les Droits de l'Acteur qui l'ouvre.** Ses hooks de lancement sont demandés avec
    lui comme Acteur qui démarre la session (genre `support_agent`) : une Extension d'identité lui
    remet le jeton de cet Acteur, comme au Node d'un Run qu'il a lancé, sans restriction de
-   Projet. Ouvrir, interroger et fermer sont des Opérations sur sa session (`session` ×
-   `create`, `ask`, `delete`).
+   Projet. Ouvrir, interroger, fermer et lui donner le code du core sont des Opérations sur sa
+   session (`session` × `create`, `ask`, `delete`, `source`).
 3. **Il tourne sur un agent choisi**, un Profil agentique ou une combinaison Custom (jamais
    « Inherit » : il n'a aucun tier dont hériter), dont le harnais doit être installé sur la
    machine ; sinon le refus dit pourquoi. Sans modèle, le défaut de l'instance pour ce harnais
@@ -33,11 +33,22 @@ installées peuvent être closed source : leur code n'est pas là pour qu'un age
    dossier : `AGENTS.md`, que les harnais chargent au démarrage, et `CLAUDE.md`, qui l'importe
    (`@AGENTS.md`) pour claude. Seule la première question est son premier message : la
    conversation commence par elle, le prompt n'y est pas recopié. Sa documentation est la CLI
-   du core et des Extensions (`pdo help`, `pdo ext <id> help`) : aucune base documentaire n'est
-   rédigée pour lui.
+   du core et des Extensions (`pdo help`, `pdo ext <id> help`), les skills que PDO gère et le
+   code du core (§6) : aucune base documentaire n'est rédigée pour lui.
 5. **Il travaille dans un dossier par Acteur sous le répertoire d'état de PDO**
    (`~/.pdo/support/<session>/`), que le core prépare à l'ouverture. Le balayage ne le tue pas :
    il s'arrête quand son Acteur le ferme.
+6. **Il reçoit les skills que PDO gère et lit le code du core au tag de l'instance.** À chaque
+   ouverture, son dossier reçoit les skills verrouillés de la Banque (ceux que le core seede et
+   ceux que les Extensions apportent par `skills()`), livrés comme dans un worktree de Run
+   (`.agents/skills/<nom>`, lien `.claude/skills/<nom>`) ; ce qu'une ouverture précédente avait
+   livré est remplacé. Le code du core est un clone peu profond du dépôt public au tag du
+   binaire (`v<version>`), fait à la première demande (`POST /sessions/support/source`,
+   `pdo support source`, Opération `session` × `source`) sous `~/.pdo/core-source/<tag>/`, puis
+   réutilisé. Le daemon demande au dépôt si le tag existe (une fois, retenu) : sans tag public,
+   aucun clone n'est tenté. La fin de ses instructions (« This instance ») nomme les skills
+   livrés et dit où en est ce code : cloné, public, sans tag public, ou non vérifiable (sans
+   réseau). `PDO_CORE_SOURCE_URL` désigne un autre dépôt (miroir, test).
 
 ## Conséquences
 
@@ -58,9 +69,24 @@ installées peuvent être closed source : leur code n'est pas là pour qu'un age
   instructions ; rien ne l'impose techniquement. À revoir si un agent conversationnel doit
   demander la permission de chaque commande.
 
+- Le skill qu'une Extension apporte déjà sert de guide à l'Agent de support : aucun nouveau seam.
+  Les skills que la personne a importés dans la Banque ne lui sont pas livrés.
+- Ouvrir un Agent de support demande au dépôt public si le tag existe, une fois par daemon
+  (`git ls-remote`, 10 s au plus) ; sans réseau, ses instructions disent que le code n'a pas pu
+  être vérifié, les ouvertures des 10 minutes suivantes ne redemandent pas, et
+  `pdo support source` réessaie. Le clone tourne sur sa propre tâche : un appelant qui
+  abandonne ne le tue pas.
+- Le cache du code du core est partagé par tous les Acteurs et un agent peut y écrire : seul un
+  `.git` absent le fait recloner. Un agent qui y change de commit fausse la lecture des suivants.
+
 ## Alternatives écartées
 
 - **Un Run « conversation »** : il impose un dépôt cible et une Pipeline, qu'une question n'a pas.
 - **Une Session hébergée** : réservée aux Extensions (ADR-0092), le core n'en ouvre pas.
+- **Le code du core embarqué dans le binaire, ou cloné à chaque ouverture** : le binaire
+  grossirait de tout le dépôt, et un clone par ouverture coûterait du réseau et du temps pour une
+  question qui n'en a souvent pas besoin.
+- **Un tag déduit à la compilation** (`git describe`) : la copie que cargo extrait pour une
+  Distribution ne porte pas les tags ; seul le dépôt sait si le tag est public.
 - **Une réponse en ligne dans la palette** : une seconde surface de réponse à construire, sans
   terminal pour suivre ce que l'agent fait ni pour lui répondre.

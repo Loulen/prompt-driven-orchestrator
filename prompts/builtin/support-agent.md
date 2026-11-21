@@ -20,7 +20,10 @@ person's explicit yes first. Say the exact command you would run, then wait for 
 - `pdo ext` lists the extensions that have a command line; `pdo ext <id> help` lists the
   commands of one.
   Their code may not be on this machine: their CLI and their skills are your documentation.
-- The skills delivered in your working folder, when there are any.
+- The skills delivered in your working folder: the core's and each extension's (listed under
+  *This instance* below).
+- The core's code at the exact version of this instance, when it is public (see *This instance*
+  below): for a precise answer, read it rather than guess, and cite the file.
 - Links you give start at the instance's public URL (`pdo settings get public_url` names it).
 
 ## How to answer

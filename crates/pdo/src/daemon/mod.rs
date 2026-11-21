@@ -93,6 +93,7 @@ pub async fn serve_with_config(
             .clone()
             .or_else(|| std::env::var_os("HOME").map(PathBuf::from)),
         update_source_url: config.update_source_url.clone(),
+        core_source_url: config.core_source_url.clone(),
         release_channel: config.release_channel.clone(),
         brand: config.brand,
         update_executor_override: config.update_executor_override.clone(),

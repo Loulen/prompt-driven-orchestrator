@@ -42,6 +42,8 @@ async fn daemon(envs: &Path) -> (TestDaemon, Control) {
         move |root, config| {
             config.tmux_cmd_override = Some(tail);
             config.sandbox_home_override = Some(root.join("home"));
+            // No network: the core's code is `support_agent_sources.rs`'s.
+            config.core_source_url = Some("file:///nonexistent/pdo-core".into());
             pdo::compose(config, ext.boxed(), None).unwrap();
         },
     )

@@ -508,6 +508,12 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
             Some(json!({ "question": "how?" })),
         ),
         call(
+            "POST",
+            "/sessions/support/source",
+            "/sessions/support/source".into(),
+            None,
+        ),
+        call(
             "DELETE",
             "/sessions/support",
             "/sessions/support".into(),

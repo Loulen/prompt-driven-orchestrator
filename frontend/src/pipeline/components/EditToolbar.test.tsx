@@ -39,7 +39,9 @@ describe("EditToolbar", () => {
   it("renders the core icon buttons", () => {
     renderToolbar();
     expect(screen.getByTestId("toolbar-add")).toBeInTheDocument();
-    expect(screen.getByTestId("toolbar-library")).toBeInTheDocument();
+    // CORE-194: Library and Script node moved into the `+` menu.
+    expect(screen.queryByTestId("toolbar-library")).toBeNull();
+    expect(screen.queryByTestId("toolbar-script")).toBeNull();
     // No Merge button (ADR-0082): convergence is wired onto any node.
     expect(screen.queryByTestId("toolbar-merge")).toBeNull();
     // The Switch node was removed (ADR-0011): conditional routing now lives on
@@ -92,32 +94,62 @@ describe("EditToolbar", () => {
     expect(onAddNode).not.toHaveBeenCalled();
   });
 
-  it("script button calls onAddNode with script (#248)", () => {
+  it("the `+` menu lists Node, Script node, Note, Node from YAML…, then the Library submenu (CORE-194)", async () => {
+    const user = userEvent.setup();
     renderToolbar();
-    expect(screen.getByTestId("toolbar-script")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("toolbar-script"));
+    await user.click(screen.getByTestId("toolbar-add"));
+    const node = await screen.findByTestId("add-menu-node");
+    const menu = node.closest("[role=menu]") as HTMLElement;
+    const ids = [...menu.querySelectorAll("[data-testid^=add-menu-]")].map((el) => el.getAttribute("data-testid"));
+    expect(ids).toEqual([
+      "add-menu-node",
+      "add-menu-script",
+      "add-menu-note",
+      "add-menu-node-from-yaml",
+      "add-menu-library",
+    ]);
+    expect(screen.getByTestId("add-menu-script")).toHaveAccessibleName("Script node");
+    expect(screen.getByTestId("add-menu-library")).toHaveAccessibleName("Library");
+    expect(screen.getByTestId("add-menu-library")).toHaveAttribute("aria-haspopup", "menu");
+  });
+
+  it("dropdown Script node item calls onAddNode with script (#248, CORE-194)", async () => {
+    const user = userEvent.setup();
+    renderToolbar();
+    await user.click(screen.getByTestId("toolbar-add"));
+    await user.click(await screen.findByTestId("add-menu-script"));
+    expect(onAddNode).toHaveBeenCalledTimes(1);
     expect(onAddNode).toHaveBeenCalledWith("script");
+  });
+
+  it("the Library submenu opens beside its row with the saved entries (CORE-194)", async () => {
+    const user = userEvent.setup();
+    renderToolbar({
+      libraryEntries: [{ name: "Reviewer", type: "agent", inputs: [], outputs: [], interactive: false, prompt: "Review" }],
+    });
+    await user.click(screen.getByTestId("toolbar-add"));
+    await user.click(await screen.findByTestId("add-menu-library"));
+    const sub = await screen.findByTestId("library-submenu");
+    expect(sub).toHaveTextContent("Reviewer");
   });
 
   it("tooltips render the correct text on hover", async () => {
     const user = userEvent.setup();
     renderToolbar();
 
-    // #307: the `+` is now a dropdown trigger (no tooltip); the library/script
-    // sibling buttons keep their tooltips.
-    await user.hover(screen.getByTestId("toolbar-library"));
+    await user.hover(screen.getByTestId("toolbar-undo"));
     await waitFor(() => {
-      expect(screen.getByTestId("tooltip-content")).toHaveTextContent("Library");
+      expect(screen.getByTestId("tooltip-content")).toHaveTextContent("Undo");
     });
 
-    fireEvent.pointerDown(screen.getByTestId("toolbar-library"));
+    fireEvent.pointerDown(screen.getByTestId("toolbar-undo"));
     await waitFor(() => {
       expect(screen.queryByTestId("tooltip-content")).not.toBeInTheDocument();
     });
 
-    await user.hover(screen.getByTestId("toolbar-script"));
+    await user.hover(screen.getByTestId("toolbar-redo"));
     await waitFor(() => {
-      expect(screen.getByTestId("tooltip-content")).toHaveTextContent("Script node");
+      expect(screen.getByTestId("tooltip-content")).toHaveTextContent("Redo");
     });
   });
 
@@ -127,8 +159,6 @@ describe("EditToolbar", () => {
     // Each name is the button's own visible tooltip text, verbatim.
     const NAMES: [string, string][] = [
       ["toolbar-add", "Add"],
-      ["toolbar-library", "Library"],
-      ["toolbar-script", "Script node"],
       ["toolbar-undo", "Undo"],
       ["toolbar-redo", "Redo"],
       ["toolbar-info", "Pipeline info"],
@@ -205,7 +235,7 @@ describe("EditToolbar", () => {
     it("adds no button — the core count is unchanged — and the old toggle is gone", () => {
       renderToolbar({ reviewHref: "/runs/r1/review", onToggleInfo: vi.fn() });
       const buttons = [...screen.getByTestId("edit-toolbar").querySelectorAll("button")];
-      expect(buttons).toHaveLength(6); // 6 core; Review is a link
+      expect(buttons).toHaveLength(4); // 4 core (CORE-194: Library and Script moved into +); Review is a link
       expect(screen.queryByTestId("toolbar-run-info")).toBeNull();
     });
   });
@@ -254,7 +284,7 @@ describe("EditToolbar", () => {
       const buttons = [
         ...screen.getByTestId("edit-toolbar").querySelectorAll("button"),
       ];
-      expect(buttons).toHaveLength(7); // 6 core + assistant
+      expect(buttons).toHaveLength(5); // 4 core + assistant
       for (const b of buttons) expect(b).toHaveAccessibleName(/\S/);
     });
 
@@ -467,7 +497,7 @@ describe("EditToolbar run « pilotage » and the Edit pencil (ADR-0085)", () => 
     return { editing, onEditForRun: vi.fn(), onEditSource: vi.fn(), onFinishEditing: vi.fn() };
   }
 
-  it("in « pilotage » hides +, Library, script and undo/redo but keeps the run controls", () => {
+  it("in « pilotage » hides + (with Library and Script node) and undo/redo but keeps the run controls", () => {
     renderToolbar({
       readOnly: true,
       runEdit: runEdit(false),
@@ -477,7 +507,7 @@ describe("EditToolbar run « pilotage » and the Edit pencil (ADR-0085)", () => 
       onOpenShell: vi.fn(),
       reviewHref: "/runs/r1/review",
     });
-    for (const id of ["toolbar-add", "toolbar-library", "toolbar-script", "toolbar-undo", "toolbar-redo"]) {
+    for (const id of ["toolbar-add", "toolbar-undo", "toolbar-redo"]) {
       expect(screen.queryByTestId(id), id).toBeNull();
     }
     for (const id of ["toolbar-edit", "toolbar-reopen", "toolbar-retry-all", "toolbar-open-shell", "toolbar-review", "toolbar-info"]) {

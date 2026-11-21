@@ -196,9 +196,8 @@ describe("#315 — EditCanvas is read-only for an archived run", () => {
   it("hides every add/edit toolbar control on an archived run", () => {
     renderCanvas("archived");
 
-    // The add-node dropdown and script buttons are gone.
+    // The `+` menu is gone, and with it Library and Script node (CORE-194).
     expect(screen.queryByTestId("toolbar-add")).toBeNull();
-    expect(screen.queryByTestId("toolbar-script")).toBeNull();
   });
 
   it("turns drag and connect off on an archived run", () => {
@@ -230,7 +229,7 @@ describe("ADR-0085 — a run tab opens in « pilotage », « Edit for this run �
     const stub = screen.getByTestId("reactflow-stub");
     expect(stub.getAttribute("data-draggable")).toBe("false");
     expect(stub.getAttribute("data-connectable")).toBe("false");
-    for (const id of ["toolbar-add", "toolbar-library", "toolbar-script", "toolbar-undo", "toolbar-redo"]) {
+    for (const id of ["toolbar-add", "toolbar-undo", "toolbar-redo"]) {
       expect(screen.queryByTestId(id), id).toBeNull();
     }
     expect(screen.getByTestId("toolbar-edit")).toBeInTheDocument();
@@ -249,7 +248,6 @@ describe("ADR-0085 — a run tab opens in « pilotage », « Edit for this run �
     useEditStore.getState().startRunEditing("__run__r1");
     renderCanvas("completed");
     expect(screen.getByTestId("toolbar-add")).toBeInTheDocument();
-    expect(screen.getByTestId("toolbar-script")).toBeInTheDocument();
     const stub = screen.getByTestId("reactflow-stub");
     expect(stub.getAttribute("data-draggable")).toBe("true");
     expect(stub.getAttribute("data-connectable")).toBe("true");

@@ -133,6 +133,7 @@ describe("rendering in both themes", () => {
         </Checkbox>
         <Chip tone="failed">qa</Chip>
         <Banner tone="awaiting" title="Approval" text="By a Maintainer" />
+        <Banner tone="awaiting" title="Editing as markdown replaces the blocks" wrap />
         <EmptyState icon={Rocket}>No deploy yet</EmptyState>
         <KeyValue rows={[{ k: "Region", v: "eu-west-3" }]} />
         <StatusIcon kind="run" status="failed" />

@@ -19,6 +19,66 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - Alone on a terminal, its bar no longer reads "You pilot", only `attached · live`: the chip
   appears with the first other browser watching ("You pilot | 1 watching") and leaves with the
   last one.
+## 2.84.0
+
+- The canvas toolbar's Library and Script node icons moved into the `+` menu, which now reads
+  Node, Script node, Note, Node from YAML…, then Library ▸. The Library opens as a side submenu
+  with its count, its search field and the saved nodes: a click adds the node to the canvas, the
+  trash beside it removes it from the library. Its former "Node from YAML…" row is gone, the same
+  item sits one level up.
+
+## 2.83.0
+
+- New seam (extension API 0.29, a minor): `Banner` of `@pdo/extension-ui` takes `wrap`. The
+  title and the text wrap onto several lines, both at body weight and the text under the title,
+  instead of ending in an ellipsis: a whole sentence fits a narrow column, the actions stay on the
+  right. Without `wrap` the banner is unchanged.
+
+## 2.82.1
+
+- The extension contract states that `pdo service install` / `uninstall` ask `authorize` of
+  extensions that were never started (no data folder, no `Host`, no `skills`): the rustdoc of
+  `Extension`, `start`, `skills` and `authorize`, and the reference page.
+
+## 2.82.0
+
+- In a node's I/O tab, each Live artifact shows as a card, like an Output: a border, its name
+  large, its type badge, its tools always there and its whole frontmatter in a band under the
+  line. The live dot, the `free` badge and "not produced" (a dashed card) stay; a live artifact
+  still carries no verdict.
+
+## 2.81.0
+
+- Extensions: `/shared/tokens.css` exposes `--brand-accent`, the Acogni ruby of the logo in the
+  current mode under every Theme, so a page served outside the interface paints the logo ruby
+  under Classic without copying its values. The served logos (`/shared/brand/mark.svg`,
+  `lockup.svg`) paint their accent with it instead of `--primary`: a page that recoloured an
+  inlined logo through `--primary` no longer does.
+## 2.80.4
+
+- A Run whose Start is wired straight to End ends as soon as it starts: with no node to launch, it
+  completes at once (or halts at once on the edge's `reason:`) instead of staying `running`
+  forever. A Run that also launches nodes from Start ends once they are done.
+
+## 2.80.3
+
+- The Runs list (`GET /runs`, `pdo run list`, the web UI) shows Runs newest created first again,
+  even when several Runs start in the same second: it sorts by the creation instant (millisecond
+  `started_at`), then by append order, instead of by Run id, whose random suffix shuffled Runs of
+  the same second. The order is the same on every reload.
+
+## 2.80.2
+
+- A relaunched hosted agent session resumes its conversation when an extension gives its launches a
+  `CLAUDE_CONFIG_DIR` (a personal Claude account or API key): the core now looks for the
+  conversation under that folder, where `claude --resume` will look, instead of `~/.claude`, and
+  starts a new conversation when it is not there.
+## 2.80.1
+
+- A deep link `#/ext/<extension>/topbar/end/<path>` opens the extension's page again when the
+  extension declares a panel before it at `topbar/end`: it used to open the panel full-window. A
+  link only ever opens a page; toward an extension with only a panel or actions there, it shows
+  the "no page" error toast.
 
 ## 2.80.0
 

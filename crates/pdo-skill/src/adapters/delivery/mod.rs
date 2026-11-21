@@ -60,6 +60,81 @@ impl SkillDelivery for WorktreeDelivery {
     fn withdraw(&self, repo_root: &Path, run_id: &str) -> Result<()> {
         remove_exclusions(repo_root, run_id)
     }
+
+    fn deliver_to_folder(&self, folder: &Path, skills: &[ActiveSkill]) -> Result<DeliveryReport> {
+        deliver_to_folder(&self.bank_root, folder, skills)
+    }
+}
+
+/// Deliver `skills` from the bank (`bank_root`, the daemon's repo root) into
+/// `folder`, a folder PDO owns outside any repository: each copied into
+/// `.agents/skills/<name>/` with its `.claude/skills/<name>` link, as in a
+/// worktree, nothing excluded from git (there is none). Both locations are
+/// emptied first: a skill the bank no longer holds, or holds updated, never
+/// lingers from an earlier delivery; a link standing for one of them is
+/// removed, never followed.
+pub fn deliver_to_folder(
+    bank_root: &Path,
+    folder: &Path,
+    skills: &[ActiveSkill],
+) -> Result<DeliveryReport> {
+    // A link where a folder of ours should be (the agent works in this
+    // folder) is removed, never followed: emptying it would empty its target.
+    for top in [".agents", ".claude"] {
+        let path = folder.join(top);
+        if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
+            std::fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
+        }
+    }
+    let agents_dir = folder.join(".agents").join("skills");
+    let claude_dir = folder.join(".claude").join("skills");
+    for dir in [&agents_dir, &claude_dir] {
+        let removed = match std::fs::symlink_metadata(dir) {
+            Ok(m) if m.file_type().is_symlink() => std::fs::remove_file(dir),
+            Ok(_) => std::fs::remove_dir_all(dir),
+            Err(_) => Ok(()),
+        };
+        removed.with_context(|| format!("clear {}", dir.display()))?;
+    }
+    let mut report = DeliveryReport::default();
+    for skill in skills {
+        let name = skill.name.trim();
+        if !usable_folder_name(name) {
+            report.skipped.push(SkippedSkill::new(
+                skill,
+                &skill.name,
+                "skill name cannot be used as a folder name",
+            ));
+            continue;
+        }
+        let dest = agents_dir.join(name);
+        if std::fs::symlink_metadata(&dest).is_ok() {
+            report.skipped.push(SkippedSkill::new(
+                skill,
+                name,
+                format!("another skill is already delivered as '{name}'"),
+            ));
+            continue;
+        }
+        let source = skill_dir(bank_root, &skill.id);
+        if !source.join(SKILL_MD).is_file() {
+            report.skipped.push(SkippedSkill::new(
+                skill,
+                name,
+                "skill content is absent from the bank",
+            ));
+            continue;
+        }
+        copy_dir(&source, &dest)
+            .with_context(|| format!("copy skill '{name}' into {}", dest.display()))?;
+        std::fs::create_dir_all(&claude_dir)
+            .with_context(|| format!("create {}", claude_dir.display()))?;
+        let link = claude_dir.join(name);
+        symlink_dir(Path::new("../../.agents/skills").join(name), &link)
+            .with_context(|| format!("link {}", link.display()))?;
+        report.delivered.push(name.to_string());
+    }
+    Ok(report)
 }
 
 /// Copy the bank folders of `skills` into the Run snapshot, **additively**: a

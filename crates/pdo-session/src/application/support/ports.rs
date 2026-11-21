@@ -1,6 +1,8 @@
 //! What the Agent de support needs from the outside world: which agent a
-//! choice resolves to on this machine, the instance's idle timeout, and the
-//! time.
+//! choice resolves to on this machine, the instance's idle timeout, the time,
+//! the skills it receives, the public repository of the core.
+
+use std::path::Path;
 
 use std::time::Duration;
 
@@ -86,4 +88,24 @@ impl SupportClock for SystemClock {
     fn now(&self) -> DateTime<Utc> {
         Utc::now()
     }
+}
+
+/// The skills an Agent de support receives. Implemented by the composition
+/// root over the Banque de skills.
+pub trait SupportSkills: Send + Sync {
+    /// Deliver the skills PDO manages (the core's and the extensions') into
+    /// `dir`, replacing what an earlier opening left there; the names
+    /// delivered.
+    fn deliver<'a>(&'a self, dir: &'a Path) -> BoxFuture<'a, Result<Vec<String>, String>>;
+}
+
+/// The public repository of the core. Implemented by the composition root
+/// over git.
+pub trait CoreRepository: Send + Sync {
+    /// Whether the repository has the tag `tag`; `Err` when it could not be
+    /// asked (no network, no git).
+    fn has_tag<'a>(&'a self, tag: &'a str) -> BoxFuture<'a, Result<bool, String>>;
+    /// Clone the repository at `tag`, one commit deep, into `dest`: complete,
+    /// or nothing left there.
+    fn clone_at<'a>(&'a self, tag: &'a str, dest: &'a Path) -> BoxFuture<'a, Result<(), String>>;
 }

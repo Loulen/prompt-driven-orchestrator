@@ -1,6 +1,6 @@
 //! `pdo support`: your Agent de support, the agent the core holds for you
 //! outside any Run, with your rights. Open it on an agentic profile or a
-//! harness, ask it, read it, close it.
+//! harness, ask it, read it, close it; and the core's code it reads.
 
 use anyhow::Result;
 use clap::Subcommand;
@@ -51,6 +51,13 @@ pub enum SupportAction {
     },
     /// Close your support agent.
     Close {
+        #[arg(long)]
+        json: bool,
+    },
+    /// The folder of the core's code at this instance's tag: a shallow clone
+    /// of the public repository, made the first time, then reused. Refused,
+    /// with nothing cloned, when this version has no public tag.
+    Source {
         #[arg(long)]
         json: bool,
     },
@@ -106,6 +113,17 @@ pub fn run_support(action: SupportAction) -> Result<()> {
         SupportAction::Close { json } => {
             let status = daemon.delete("/sessions/support", None)?.ok()?.json()?;
             report(&status, json, "closed");
+        }
+        SupportAction::Source { json } => {
+            let source: Value = daemon
+                .post("/sessions/support/source", None)?
+                .ok()?
+                .json()?;
+            if json {
+                print_json(&source);
+            } else {
+                println!("{}", source["path"].as_str().unwrap_or_default());
+            }
         }
     }
     Ok(())

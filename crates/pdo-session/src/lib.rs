@@ -56,7 +56,9 @@ use application::read_pane::ReadPane;
 use application::session_ledger::SessionLedger;
 use application::shared_terminal::SharedTerminalRegistry;
 use application::status::ReadStatus;
-use application::support::{Support, SupportAgents, SupportLaunch};
+use application::support::{
+    CoreRepository, Support, SupportAgents, SupportLaunch, SupportSkills, SupportSources,
+};
 use application::sweep::{ReaperGauge, SweepOrphans};
 use application::terminal::Terminals;
 use application::terminal_text::SendTerminalText;
@@ -92,6 +94,11 @@ pub struct SessionPorts {
     /// The kernel's bus, where the Agents de support tell what changed of
     /// them (hence `/ws`).
     pub events: Arc<dyn EventBus>,
+    /// The skills the Agents de support receive.
+    pub support_skills: Arc<dyn SupportSkills>,
+    /// The public repository of the core, the Agents de support read it at
+    /// the instance's tag.
+    pub core_repository: Arc<dyn CoreRepository>,
 }
 
 /// The daemon's knobs the context reads.
@@ -105,6 +112,9 @@ pub struct SessionOptions {
     pub allowed_ws_origins: Vec<String>,
     /// The state folder of the Agents de support: one folder per Actor.
     pub support_root: PathBuf,
+    /// Where the clones of the core the Agents de support read are kept, one
+    /// per tag.
+    pub core_source_root: PathBuf,
 }
 
 /// The context, assembled: its use cases over its ports.
@@ -151,6 +161,8 @@ impl Session {
             hosted,
             support,
             events,
+            support_skills,
+            core_repository,
         } = ports;
         let typed = Arc::new(TypedInput::default());
         let shared_terminals = Arc::new(SharedTerminalRegistry::default());
@@ -253,7 +265,13 @@ impl Session {
                 },
             )
             .with_ledger(ledger.clone())
-            .with_events(events),
+            .with_events(events)
+            .with_sources(Arc::new(SupportSources::new(
+                support_skills,
+                core_repository,
+                options.core_source_root.clone(),
+                pdo_platform::domain::release_channel::CORE_VERSION,
+            ))),
             hosted,
             tmux,
             focus,

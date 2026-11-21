@@ -12,3 +12,4 @@ pub mod settings;
 pub mod shared_terminal;
 pub mod support;
 pub mod support_idle;
+pub mod support_sources;

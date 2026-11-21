@@ -16,6 +16,13 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 
 ## Unreleased
 
+- **The support agent knows the extensions and reads the core's code.** Its folder receives the
+  skills PDO manages, its own and those the extensions bring, as a Run's worktree does: an
+  extension's skill is how the agent learns to use it, even closed source. It reads the core's code
+  at the exact version of the instance: `pdo support source` (`POST /sessions/support/source`)
+  clones the public repository at the instance's tag under `~/.pdo/core-source/` the first time,
+  then reuses it; a version without a public tag is never cloned, and the agent is told.
+  `PDO_CORE_SOURCE_URL` points the clone at a mirror.
 - **Support agent.** Ctrl+K has a Support group: "Open support agent…", or "Ask the support
   agent: <your text>". The "Open support agent" window picks the agent (an agentic profile, or
   Custom: harness, model, effort; only harnesses installed on this machine) with an optional

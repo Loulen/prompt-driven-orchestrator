@@ -27,8 +27,9 @@ impl Support {
     /// first message: the Operation `session` × `create` on its session. One
     /// per Actor: with one open already, refused, unless `replace`, which
     /// closes it once the new choice resolved. The choice resolves to an installed harness or is
-    /// refused with its reason. Its folder is prepared (its instructions, what
-    /// the extensions add then the embedded prompt, in the files its harness
+    /// refused with its reason. Its folder is prepared (the skills PDO
+    /// manages; its instructions, what the extensions add, the embedded
+    /// prompt, then what this instance gives it, in the files its harness
     /// loads at start; the question, its first message), its launch hooks
     /// asked with `actor` as who starts it (their variables, its token among
     /// them, go into its environment), and the choice is remembered as the
@@ -67,11 +68,11 @@ impl Support {
         let contribution = self
             .host
             .session_launch(&SessionLaunch::new(session_ref.clone()).started_by(actor.clone()));
-        let first_message = write_folder(
-            &dir,
-            &contribution.above(SUPPORT_AGENT_PROMPT.to_string()),
-            question,
-        )?;
+        let instructions = format!(
+            "{SUPPORT_AGENT_PROMPT}\n{}",
+            self.instance_section(&dir).await?
+        );
+        let first_message = write_folder(&dir, &contribution.above(instructions), question)?;
         let env: Vec<(String, String)> = contribution.env.into_iter().collect();
         let script = build_support_script(
             &session,

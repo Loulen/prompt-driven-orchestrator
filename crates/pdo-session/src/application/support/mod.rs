@@ -2,13 +2,16 @@
 //! with the rights of its Actor (the token its launch hooks give). Opened with
 //! an agentic profile or a custom combination and a first question, asked
 //! further questions while it lives, read, closed; closed as well once it
-//! stays idle and nobody answers « Still there? ».
+//! stays idle and nobody answers « Still there? ». Its folder receives the
+//! skills PDO manages; the core's code at the instance's tag is cloned for it
+//! at the first demand.
 
 mod ask;
 mod close;
 mod idle;
 mod open;
 mod ports;
+mod sources;
 mod status;
 
 use std::collections::HashMap;
@@ -23,12 +26,17 @@ use pdo_kernel::extension_host::ExtensionHost;
 pub use ask::ASK;
 pub use idle::IDLE_WATCH_INTERVAL;
 pub use open::SupportOpened;
-pub use ports::{ChoiceRefusal, ResolvedAgent, SupportAgents, SupportClock, SystemClock};
+pub use ports::{
+    ChoiceRefusal, CoreRepository, ResolvedAgent, SupportAgents, SupportClock, SupportSkills,
+    SystemClock,
+};
+pub use sources::{SupportSources, SOURCE};
 pub use status::{StillThere, SupportStatus};
 
 use crate::application::ports::Tmux;
 use crate::application::session_ledger::SessionLedger;
 use crate::domain::support::{support_dir, support_record_path, SupportAgent, SupportRecord};
+use crate::domain::support_sources::CoreSourceRefusal;
 
 /// Where the agents run, and how their launch may be stubbed.
 #[derive(Debug, Clone)]
@@ -59,6 +67,8 @@ pub enum SupportError {
     Folder(String),
     /// The session did not come up.
     Spawn(String),
+    /// The core's code was not given.
+    CoreSource(CoreSourceRefusal),
 }
 
 /// The Agents de support of the daemon, one per Actor.
@@ -75,6 +85,8 @@ pub struct Support {
     idle: Mutex<HashMap<String, idle::Watched>>,
     /// How many clocks were started.
     starts: AtomicU64,
+    /// The skills and the core's code its agents read; `None`: none.
+    sources: Option<Arc<SupportSources>>,
 }
 
 impl Support {
@@ -94,7 +106,15 @@ impl Support {
             events: Arc::new(BroadcastEventBus::new(1)),
             idle: Mutex::default(),
             starts: AtomicU64::new(0),
+            sources: None,
         }
+    }
+
+    /// The same, its agents reading the skills and the core's code of
+    /// `sources`.
+    pub fn with_sources(mut self, sources: Arc<SupportSources>) -> Self {
+        self.sources = Some(sources);
+        self
     }
 
     /// The same, announcing the sessions it starts in `ledger`.

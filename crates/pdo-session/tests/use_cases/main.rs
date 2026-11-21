@@ -13,6 +13,7 @@ mod shell;
 mod status;
 mod support;
 mod support_idle;
+mod support_sources;
 mod sweep;
 mod terminal;
 mod terminal_text;

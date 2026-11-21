@@ -190,6 +190,7 @@ async fn a_wiped_bank_folder_is_reseeded_by_the_next_start() {
         price_source_url: None,
         price_refresh_at_boot: false,
         update_source_url: None,
+        core_source_url: None,
         release_channel: None,
         brand: pdo::Brand::Pdo,
         run_update_check_loop: false,

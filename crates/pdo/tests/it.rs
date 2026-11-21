@@ -136,6 +136,8 @@ mod hosted_sessions;
 // The Agent de support: one per Actor, outside any Run, with its Actor's rights.
 #[path = "support_agent.rs"]
 mod support_agent;
+#[path = "support_agent_sources.rs"]
+mod support_agent_sources;
 
 // API 0.23: an extension answers a Node that waits for a person.
 #[path = "extension_node_write.rs"]

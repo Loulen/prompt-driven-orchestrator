@@ -13,6 +13,7 @@ use ts_rs::TS;
 
 use crate::application::support::{ChoiceRefusal, StillThere, SupportError, SupportStatus};
 use crate::domain::support::SupportAgent;
+use crate::domain::support_sources::CoreSourceRefusal;
 use crate::Session;
 
 /// The agent an Agent de support runs.
@@ -116,6 +117,17 @@ pub struct OpenSupportRequest {
     pub replace: Option<bool>,
 }
 
+/// `POST /sessions/support/source`: the clone of the core at the instance's
+/// tag.
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct CoreSourceResponse {
+    /// The tag of the core this instance is built on (`v2.80.4`).
+    pub tag: String,
+    /// The folder of the clone, on the daemon's machine.
+    pub path: String,
+}
+
 /// Body of `POST /sessions/support/ask`.
 #[derive(Deserialize, TS)]
 #[ts(export)]
@@ -181,6 +193,21 @@ pub(super) async fn keep(
     }
 }
 
+/// `POST /sessions/support/source`: the core's code at the instance's tag.
+pub(super) async fn source(
+    State(session): State<Arc<Session>>,
+    Extension(actor): Extension<Actor>,
+) -> Response {
+    match session.support().core_source(&actor).await {
+        Ok(checkout) => Json(CoreSourceResponse {
+            tag: checkout.tag,
+            path: checkout.dir.display().to_string(),
+        })
+        .into_response(),
+        Err(e) => refused(e),
+    }
+}
+
 pub(super) async fn close(
     State(session): State<Arc<Session>>,
     Extension(actor): Extension<Actor>,
@@ -231,6 +258,18 @@ fn refused(e: SupportError) -> Response {
             "empty_question",
             "the question is empty".into(),
         ),
+        SupportError::CoreSource(refusal) => {
+            let (status, error) = match refusal {
+                CoreSourceRefusal::NoPublicTag { .. } => (StatusCode::CONFLICT, "no_public_tag"),
+                CoreSourceRefusal::Unchecked { .. } => {
+                    (StatusCode::SERVICE_UNAVAILABLE, "core_source_unchecked")
+                }
+                CoreSourceRefusal::CloneFailed { .. } => {
+                    (StatusCode::BAD_GATEWAY, "core_source_clone_failed")
+                }
+            };
+            (status, error, refusal.to_string())
+        }
         SupportError::Folder(message) | SupportError::Spawn(message) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             "support_agent_failed",

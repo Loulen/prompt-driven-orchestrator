@@ -503,6 +503,7 @@ async fn the_bank_survives_a_daemon_restart() {
         price_source_url: None,
         price_refresh_at_boot: false,
         update_source_url: None,
+        core_source_url: None,
         release_channel: None,
         brand: pdo::Brand::Pdo,
         run_update_check_loop: false,

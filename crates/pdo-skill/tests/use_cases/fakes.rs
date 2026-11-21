@@ -533,6 +533,8 @@ impl SourceScanner for Scanner {
 pub struct Delivery {
     pub snapshots: Mutex<Vec<(PathBuf, String, Vec<String>)>>,
     pub deliveries: Mutex<Vec<(PathBuf, PathBuf, Vec<String>)>>,
+    /// Deliveries into a folder outside any repository: the folder, the names.
+    pub folder_deliveries: Mutex<Vec<(PathBuf, Vec<String>)>>,
     pub withdrawn: Mutex<Vec<String>>,
     /// Ids the bank does not hold (skipped at snapshot).
     pub absent: Mutex<Vec<String>>,
@@ -587,6 +589,21 @@ impl SkillDelivery for Delivery {
     fn withdraw(&self, _repo_root: &Path, run_id: &str) -> anyhow::Result<()> {
         self.withdrawn.lock().unwrap().push(run_id.to_string());
         Ok(())
+    }
+    fn deliver_to_folder(
+        &self,
+        folder: &Path,
+        skills: &[ActiveSkill],
+    ) -> anyhow::Result<DeliveryReport> {
+        let names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
+        self.folder_deliveries
+            .lock()
+            .unwrap()
+            .push((folder.to_path_buf(), names.clone()));
+        Ok(DeliveryReport {
+            delivered: names,
+            skipped: Vec::new(),
+        })
     }
 }
 

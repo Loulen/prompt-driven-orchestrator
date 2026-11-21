@@ -180,6 +180,15 @@ pub trait SkillDelivery: Send + Sync {
     ) -> anyhow::Result<DeliveryReport>;
     /// Take the Run's exclusions back from the repository's `info/exclude`.
     fn withdraw(&self, repo_root: &Path, run_id: &str) -> anyhow::Result<()>;
+    /// Write `skills` from the bank into `folder`, a folder PDO owns outside
+    /// any repository (an agent's working folder): the same copy and link as
+    /// a worktree's, nothing excluded from git, and what an earlier delivery
+    /// left there replaced.
+    fn deliver_to_folder(
+        &self,
+        folder: &Path,
+        skills: &[ActiveSkill],
+    ) -> anyhow::Result<DeliveryReport>;
 }
 
 /// A Projet, a Trigger or a Run that selects a skill.

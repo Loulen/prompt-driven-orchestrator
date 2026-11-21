@@ -14,6 +14,13 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## 2.86.0
+
+- Closing a pipeline or Run tab that holds unsaved work, with its × or a middle click, now asks
+  first in the "Discard unsaved changes?" window; Cancel keeps the tab. Reloading or closing the
+  browser tab raises the browser's own alert while such work is open. A clean tab or a synced
+  shared draft still closes at once.
+
 ## 2.85.0
 
 - Alone on a terminal, its bar no longer reads "You pilot", only `attached · live`: the chip

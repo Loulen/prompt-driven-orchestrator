@@ -17,6 +17,8 @@ export interface TabItem<T extends string = string> {
   label: string;
   icon?: Icon;
   count?: number;
+  /** A short word after the label, in the count's chip: `edited`. */
+  mark?: string;
   kbd?: string;
   disabled?: boolean;
 }
@@ -70,6 +72,7 @@ export function Tabs<T extends string>({ items, value, onChange, label }: TabsPr
             {t.icon && <t.icon size={13} strokeWidth={1.5} aria-hidden />}
             <span>{t.label}</span>
             {t.count != null && <span className="d-tab__n">{t.count}</span>}
+            {t.mark && <span className="d-tab__n">{t.mark}</span>}
           </button>
         );
         return t.kbd ? (

@@ -40,6 +40,8 @@ default, and with no extension the daemon behaves as if none existed.
 | `trigger_suspension(trigger)` (0.8) | at every read of a Trigger and every due tick; the first `Some` wins, a panic suspends nothing | not suspended |
 | `git_env(operation)` | at every network git operation the daemon runs for an Actor: the clone of a repository added by its URL, the fetch of New Run, the clone of a Source de skills, the fetch before a Trigger fires; and before a Trigger's guard runs (its dry-run included); the first registered wins a name | none: the daemon's credentials, a guard as before |
 | `guard_ended(end)` | once a guard `git_env` was asked about has ended, whatever its end (passed, skipped, failed, timed out); in registration order, a panic is ignored | nothing |
+| `bug_report_destinations(actor)` (0.28) | each time the Bug report window opens, and before a report is sent; in registration order, a panic offers none | none |
+| `receive_bug_report(actor, report)` (0.28) | on a blocking thread, for a report sent to one of its destinations; `Err(reason)` reaches the sender, a panic is a failure | a failure |
 
 ### Outside the daemon: `pdo service`
 
@@ -856,6 +858,35 @@ slot. While suspended:
 The suspension is asked again at each read. When its cause changes outside any mutation of a
 Trigger, call `Host::triggers_changed()` (0.11): an interface open on the Triggers then shows the
 pill appear or go without reloading.
+
+## Destinations de bug report (0.28)
+
+The Bug report window sends a report of the core either to the core's public issues (opened in the
+browser, always listed first) or to a destination an extension offers. `bug_report_destinations`
+receives the Actor and answers its `BugReportDestination`s: an `id` unique within the extension,
+a `label`, `accepts_prompts` (false by default, `accepting_prompts()`), an `icon` (an SVG it
+serves, `with_icon(url)`). Offer only where the Actor may create the item: the daemon sends a
+report only to a destination this hook lists for its sender. « Send to » lists them under the
+extension's name; the core names them `<extension>/<id>`.
+
+`receive_bug_report` gets the sender and a `BugReport`: the destination's `id`, a `title` (the
+description's first line, shortened), the `text` (the markdown the person saw in the Preview,
+edited or not), the same report section by section (`BugReportFields`: `description`, `version`,
+`os`, `harnesses`, `run`, `pipeline`, `prompts`, each `None` when left out) and the `screenshot`
+(`media_type`, `bytes`) when one was joined. `prompts` is only there toward a destination that
+accepts them, when the person checked « Include prompts »; the daemon refuses the report
+otherwise, and without a description. It runs on a blocking thread: create the item, then answer
+`BugReportSent { reference, link }`. The sender's toast says « Bug report sent: <reference> » and
+its « Open » follows `link`: an absolute URL, a path the daemon serves (opened in a new tab), or a
+link inside the interface (`#/ext/<id>/…`). `Err(reason)` creates nothing: the window stays open
+and shows the reason.
+
+The routes are the core's: `GET /bug-report/destinations` (`{destinations, last}`), `POST
+/bug-report` (`{destination, text, fields, screenshot?: {media_type, data}}`, the bytes in
+base64, at most 10 MB; `200` the `BugReportSent`, `404 unknown_destination`, `400
+bug_report_refused`, `502 bug_report_not_sent` with the extension's reason) and `PUT
+/bug-report/last` (`{destination}`), with their commands `pdo bug-report destinations | send |
+last`. The daemon remembers each Actor's last destination, which the window starts on.
 
 ## The credentials of a git operation of the daemon
 

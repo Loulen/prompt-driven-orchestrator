@@ -1,14 +1,34 @@
-import { Check, CircleX, ExternalLink, RefreshCw } from "lucide-react";
+import { Bug, Check, CircleX, ExternalLink, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
 import { modelCount, probedAgo } from "../../../harness/model/catalog";
 import type { HarnessListItem } from "../../../harness/model/harness";
 import { useRefreshModels, useRefreshModelsRefused } from "../../../harness/store/useHarnessCatalog";
-import { IconButton } from "../../../shared/ui/kit";
+import { Button, IconButton } from "../../../shared/ui/kit";
+import { openBugReport } from "../../../platform/store/bugReport";
 import { KeyValueRow } from "../../../shared/ui/key-value-row";
 import type { InstanceSettings } from "../../model/settings";
 import type { SettingsSection } from "../../model/settingsCategories";
 import type { StatsOpenIntent } from "../SettingsSurface";
 import Section, { SectionExtra } from "./Section";
+import { SettingRow } from "./fields";
+
+/** Bug report: the button that opens the Bug report window, on the selection. */
+export function BugReportRows({ section }: { section: SettingsSection }) {
+  return (
+    <Section section={section}>
+      <SettingRow
+        label="Report a bug"
+        help="Opens a prefilled issue on the public tracker, with the selected run and pipeline"
+        keywords="issue github support"
+        testId="setting-report-bug"
+      >
+        <Button icon={Bug} onClick={() => openBugReport()} data-testid="settings-report-bug">
+          Report a bug…
+        </Button>
+      </SettingRow>
+    </Section>
+  );
+}
 
 /**
  * Price table (#427, ADR-0034) — READ ONLY: which of the three price tiers is in force
@@ -229,7 +249,7 @@ function HarnessRow({
   );
 }
 
-/** Settings › Diagnostics: read-only, once `GET /settings` answered. */
+/** Settings › Diagnostics: Bug report, then the read-only sections, once `GET /settings` answered. */
 export function DiagnosticsCategory({
   sections,
   settings,
@@ -241,11 +261,17 @@ export function DiagnosticsCategory({
   onOpenStats?: (intent: StatsOpenIntent) => void;
   loading: ReactNode;
 }) {
-  if (!settings) return <>{loading}</>;
   return (
     <>
-      <PriceTableRows section={sections[0]} settings={settings} onOpenStats={onOpenStats} />
-      <HarnessDescriptorRows section={sections[1]} settings={settings} />
+      <BugReportRows section={sections[0]} />
+      {settings ? (
+        <>
+          <PriceTableRows section={sections[1]} settings={settings} onOpenStats={onOpenStats} />
+          <HarnessDescriptorRows section={sections[2]} settings={settings} />
+        </>
+      ) : (
+        loading
+      )}
     </>
   );
 }

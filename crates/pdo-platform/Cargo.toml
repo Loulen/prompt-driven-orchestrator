@@ -19,6 +19,8 @@ pdo-kernel.workspace = true
 pdo-extension-api = { workspace = true, features = ["ts"] }
 anyhow.workspace = true
 axum.workspace = true
+# The screenshot of a bug report travels in base64.
+base64 = "0.22"
 chrono.workspace = true
 clap.workspace = true
 libc = "0.2"

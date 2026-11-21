@@ -2250,6 +2250,7 @@ version = "2.85.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64",
  "chrono",
  "clap",
  "libc",

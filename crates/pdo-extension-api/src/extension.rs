@@ -1,67 +1,13 @@
-use std::fmt;
-use std::path::PathBuf;
-use std::sync::Arc;
-
 use crate::{
-    Actor, ActorDisplay, Admission, Attributes, Authorization, CliInvocation, CliOutput, CliSpec,
-    EntityRef, ExtensionSkill, GitEnv, GitOperation, GuardEnd, Host, Manifest, NeutralHost,
-    NodeEnv, NodeLaunch, Operation, ResourceKind, SessionLaunch, TriggerRef, UiContributions,
+    Actor, ActorDisplay, Admission, Attributes, Authorization, BugReport, BugReportDestination,
+    BugReportSent, CliInvocation, CliOutput, CliSpec, EntityRef, ExtensionContext, ExtensionSkill,
+    GitEnv, GitOperation, GuardEnd, Manifest, NodeEnv, NodeLaunch, Operation, ResourceKind,
+    SessionLaunch, TriggerRef, UiContributions,
 };
 
 /// The head of an HTTP request, as `identify` sees it: method, URI, headers.
 /// Never the body, which a hook must not consume.
 pub type RequestParts = axum::http::request::Parts;
-
-/// What the core gives an extension when the daemon starts.
-#[derive(Clone)]
-#[non_exhaustive]
-pub struct ExtensionContext {
-    /// The extension's own data folder, `~/.pdo/extensions/<id>/`, created
-    /// before [`Extension::start`] is called: its database, its files. Nothing
-    /// else of the core writes there.
-    pub data_dir: PathBuf,
-    /// The core's mechanisms, for the extension's own mutations: the
-    /// Autorisation d'opération of every extension, the events, the
-    /// attributes of the other extensions. Keep it: it serves as long as the
-    /// daemon runs.
-    pub host: Arc<dyn Host>,
-}
-
-impl ExtensionContext {
-    /// The context of the data folder `data_dir`, with the [`NeutralHost`]
-    /// (everything allowed, events go nowhere, no attribute).
-    pub fn new(data_dir: impl Into<PathBuf>) -> Self {
-        Self {
-            data_dir: data_dir.into(),
-            host: Arc::new(NeutralHost),
-        }
-    }
-
-    /// The same context, with `host`.
-    pub fn with_host(mut self, host: Arc<dyn Host>) -> Self {
-        self.host = host;
-        self
-    }
-}
-
-impl fmt::Debug for ExtensionContext {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ExtensionContext")
-            .field("data_dir", &self.data_dir)
-            .finish_non_exhaustive()
-    }
-}
-
-/// Two contexts are equal when they name the same folder and share the same
-/// host.
-impl PartialEq for ExtensionContext {
-    fn eq(&self, other: &Self) -> bool {
-        self.data_dir == other.data_dir
-            && std::ptr::addr_eq(Arc::as_ptr(&self.host), Arc::as_ptr(&other.host))
-    }
-}
-
-impl Eq for ExtensionContext {}
 
 /// A third-party module registered when the daemon starts (ADR-0081).
 ///
@@ -387,6 +333,37 @@ pub trait Extension: Send + Sync + 'static {
         GitEnv::default()
     }
 
+    /// The Destinations de bug report this extension offers `actor` (API
+    /// 0.28), in the order « Send to » lists them, under the extension's
+    /// name, after the core's own. Offer only where `actor` may create the
+    /// item: the core sends a report only to a destination this hook lists
+    /// for its sender. None by default.
+    ///
+    /// Called on the daemon's request path, each time the Bug report window
+    /// opens: keep it quick. A panic offers none.
+    fn bug_report_destinations(&self, _actor: &Actor) -> Vec<BugReportDestination> {
+        Vec::new()
+    }
+
+    /// Receive a Rapport de bug `actor` sends to one of this extension's
+    /// destinations (API 0.28): create the item, then answer how a person
+    /// names it and where it is ([`BugReportSent`]), which the sender's toast
+    /// links to. `Err(reason)`: nothing was created, and the window shows the
+    /// reason. The report carries the prompts only when the destination
+    /// accepts them.
+    ///
+    /// Called on a blocking thread of the daemon's tokio runtime, never on
+    /// its request path: it may take its time. A panic is a failure. By
+    /// default, a failure: offering a destination without receiving its
+    /// reports is a bug.
+    fn receive_bug_report(
+        &self,
+        _actor: &Actor,
+        _report: &BugReport,
+    ) -> Result<BugReportSent, String> {
+        Err("this extension offers a bug report destination but does not receive reports".into())
+    }
+
     /// A guard [`Self::git_env`] was asked about has ended: it passed, skipped,
     /// failed or timed out ([`GuardEnd::outcome`]). Called once per guard,
     /// whatever its end and whether or not this extension gave it anything,
@@ -483,6 +460,13 @@ mod tests {
                 crate::GitOperationKind::Clone
             ))
             .is_empty());
+        assert!(ext.bug_report_destinations(&actor).is_empty());
+        assert!(ext
+            .receive_bug_report(
+                &actor,
+                &BugReport::new("d", "t", "x", crate::BugReportFields::default())
+            )
+            .is_err());
         assert_eq!(ext.manifest().id, "bare");
     }
 
@@ -490,14 +474,5 @@ mod tests {
     fn extensions_are_object_safe() {
         let extensions: Vec<Box<dyn Extension>> = vec![Box::new(Bare)];
         assert_eq!(extensions.len(), 1);
-    }
-
-    #[test]
-    fn a_context_carries_the_neutral_host_until_given_one() {
-        let context = ExtensionContext::new("/tmp/x");
-        assert_eq!(context, context.clone());
-        let other = ExtensionContext::new("/tmp/x").with_host(Arc::new(NeutralHost));
-        assert_ne!(context, other, "another host");
-        assert!(format!("{context:?}").contains("/tmp/x"));
     }
 }

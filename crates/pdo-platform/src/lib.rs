@@ -4,6 +4,8 @@
 //! - **Page mounts**: a directory served live under `/pages/<name>/`.
 //! - **Update**: the version check, « What's new », the detached self-update.
 //! - **Audit**: the journal of the configuration mutations made outside a Run.
+//! - **Bug report**: the Destinations de bug report the extensions offer, and
+//!   the reports sent there.
 //! - **Service**: the OS unit that keeps the daemon up (`pdo service`).
 //!
 //! Hexagonal inside: `domain/` holds the pure rules, `application/` the ports
@@ -20,6 +22,7 @@ use std::sync::Arc;
 use pdo_kernel::extension_host::ExtensionHost;
 
 use application::apply_update::ApplyUpdate;
+use application::bug_report::BugReports;
 use application::check_for_update::CheckForUpdate;
 use application::get_changelog::GetChangelog;
 use application::get_update_status::GetUpdateStatus;
@@ -29,8 +32,8 @@ use application::page_journal::PageMountLock;
 use application::place_older_pages::PlaceOlderPages;
 use application::place_page_mount::PlacePageMount;
 use application::ports::{
-    AuditLog, Installation, PageFiles, PageMountRepository, PublicUrlSetting, ReleaseSource, Runs,
-    StorageError, UpdateCheckSetting, UpdateExecutor, UpdateJournal,
+    AuditLog, BugReportChoices, Installation, PageFiles, PageMountRepository, PublicUrlSetting,
+    ReleaseSource, Runs, StorageError, UpdateCheckSetting, UpdateExecutor, UpdateJournal,
 };
 use application::read_attempt_log::ReadAttemptLog;
 use application::read_pages::ReadPages;
@@ -57,6 +60,8 @@ pub struct PlatformPorts {
     pub update_journal: Arc<dyn UpdateJournal>,
     pub installation: Arc<dyn Installation>,
     pub update_executor: Arc<dyn UpdateExecutor>,
+    /// The last Destination de bug report of each Actor.
+    pub bug_report_choices: Arc<dyn BugReportChoices>,
     pub extensions: Arc<dyn ExtensionHost>,
 }
 
@@ -73,6 +78,7 @@ pub struct Platform {
     pub(crate) get_changelog: GetChangelog,
     pub(crate) apply_update: ApplyUpdate,
     pub(crate) read_attempt_log: ReadAttemptLog,
+    pub(crate) bug_reports: BugReports,
     place_page_mount: Arc<PlacePageMount>,
     place_older_pages: PlaceOlderPages,
     page_mounts: Arc<dyn PageMountRepository>,
@@ -99,6 +105,7 @@ impl Platform {
             update_journal,
             installation,
             update_executor,
+            bug_report_choices,
             extensions,
         } = ports;
         let lock = PageMountLock::default();
@@ -140,6 +147,7 @@ impl Platform {
             record_audit,
             list_audit: ListAudit::new(audit.clone(), extensions.clone()),
             check_for_update: CheckForUpdate::new(context.clone(), extensions.clone()),
+            bug_reports: BugReports::new(bug_report_choices, extensions.clone()),
             get_update_status: GetUpdateStatus::new(context.clone()),
             get_changelog: GetChangelog::new(context.clone()),
             apply_update: ApplyUpdate::new(context.clone(), extensions),
@@ -156,6 +164,10 @@ impl Platform {
     pub async fn init(&self) -> Result<(), StorageError> {
         self.audit.init().await?;
         self.page_mounts.init().await?;
+        self.bug_reports
+            .init()
+            .await
+            .map_err(|e| StorageError(e.to_string()))?;
         // Best-effort: a mount left unplaced is tried again at the next start.
         match self.place_older_pages.execute().await {
             Ok(0) => {}

@@ -425,6 +425,12 @@ describe("primitives", () => {
     expect(trigger).toHaveAttribute("data-active");
     rerender(<Select label="Pipeline" value={null} onChange={() => {}} options={options} />);
     expect(trigger).toHaveAttribute("title", "Pipeline");
+    expect(trigger).not.toHaveAttribute("aria-invalid");
+  });
+
+  it("Select wears a refused value as invalid", () => {
+    render(<Select label="Run" placeholder="Pick a run" value={null} invalid onChange={() => {}} options={[]} />);
+    expect(screen.getByRole("button", { name: "Run" })).toHaveAttribute("aria-invalid", "true");
   });
 
   it("Select opens a listbox from the keyboard and picks the highlighted option", async () => {
@@ -685,6 +691,22 @@ describe("primitives", () => {
     expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
     await user.keyboard("{Home}");
     expect(screen.getByRole("tab", { name: "Overview" })).toHaveFocus();
+  });
+
+  it("Tabs show a tab's mark after its label", () => {
+    render(
+      <Tabs
+        label="Report"
+        value="report"
+        onChange={() => {}}
+        items={[
+          { value: "report", label: "Report" },
+          { value: "preview", label: "Preview", mark: "edited" },
+        ]}
+      />,
+    );
+    expect(screen.getByRole("tab", { name: /Preview/ }).querySelector(".d-tab__n")).toHaveTextContent("edited");
+    expect(screen.getByRole("tab", { name: "Report" }).querySelector(".d-tab__n")).toBeNull();
   });
 
   it("Section folds from its head", async () => {

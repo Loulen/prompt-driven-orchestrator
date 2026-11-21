@@ -115,9 +115,10 @@ impl SettingsSection for ReviewDefaults {
     }
 }
 
-/// Whether the daemon may ask the release source for a newer version, and the
-/// address humans open PDO at, whose default is `public_url_default`: the
-/// machine's address, computed once at boot.
+/// Whether the daemon may ask the release source for a newer version, the
+/// address humans open PDO at, whose default is `public_url_default` (the
+/// machine's address, computed once at boot), and the system the daemon runs
+/// on (a fact a bug report states, not a knob).
 pub struct PlatformDefaults {
     pub public_url_default: String,
 }
@@ -134,6 +135,7 @@ impl SettingsSection for PlatformDefaults {
                         &self.public_url_default,
                     )),
                 ),
+                ("host_os", json(platform::host_os())),
             ]))
         })
     }

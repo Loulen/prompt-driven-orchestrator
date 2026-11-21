@@ -102,6 +102,37 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   an empty field uses as its placeholder, and the setting's tooltip names its source.
 - `GET /settings` discloses `public_url.default`, and `public_url.effective` is never `null`;
   `POST /pages` always returns `public_url`.
+## Unreleased
+
+- **Report a bug**: a new window, opened from Ctrl+K (Support group, "Report a bug…") and from
+  Settings › Diagnostics › Bug report, files a bug of the core on its public GitHub issues. It
+  takes a description and a screenshot (paste it anywhere in the window, or choose a file), joins
+  the details of a Run (statuses, failure reasons, durations) and the structure of a Pipeline,
+  both checked and prefilled from the selection, and always the version, the daemon's OS and the
+  installed harnesses. Prompts never go to the public tracker. The Preview tab shows the markdown
+  that leaves and can be edited. "Open GitHub issue" opens a new issue on the "Bug report"
+  template, its fields prefilled, and copies the screenshot to the clipboard to paste it there.
+- The repository has an issue template, "Bug report" (`.github/ISSUE_TEMPLATE/bug_report.yml`),
+  with the same fields, labelled `needs-triage`.
+- **Report a bug: Send to**. The window's footer chooses where the report goes: "PDO issues
+  (GitHub)" first, then the destinations the extensions offer you, grouped under each extension's
+  name. Toward an extension's destination, "Include prompts" can be checked when it accepts them,
+  and "Send to <destination>" sends the report (text, fields, screenshot, prompts if checked)
+  through the daemon: the window stays locked while it leaves, then closes on a toast naming the
+  item created, with "Open" to follow its link; a refusal stays in the window. The last
+  destination is remembered per Actor and preselected next time.
+- Extension API: an extension declares Destinations de bug report
+  (`Extension::bug_report_destinations`, per Actor: id, label, icon, whether it accepts prompts)
+  and receives the reports sent there (`Extension::receive_bug_report`), answering the reference
+  and the link of what it created (`BugReport`, `BugReportFields`, `Screenshot`,
+  `BugReportSent`). `ExtensionContext` moves to its own module; its path from the crate root is
+  unchanged.
+- Routes and CLI: `GET /bug-report/destinations` (`pdo bug-report destinations`), `POST
+  /bug-report` (`pdo bug-report send <extension>/<id> --description … [--screenshot …]`) and
+  `PUT /bug-report/last` (`pdo bug-report last <destination>`).
+- `GET /settings` states the daemon's system in `host_os` (`Linux 6.8.0 (x86_64)`).
+- Kit (`@pdo/extension-ui`): `Select` takes `invalid` (the failed edge, `aria-invalid`), and a
+  `Tabs` item takes `mark`, a short word after its label (`edited`).
 
 ## 2.80.4
 

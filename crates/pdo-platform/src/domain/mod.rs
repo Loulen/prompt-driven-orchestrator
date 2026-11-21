@@ -3,6 +3,7 @@
 
 pub mod attempt;
 pub mod audit;
+pub mod bug_report;
 pub mod changelog;
 pub mod install;
 pub mod page_guide;

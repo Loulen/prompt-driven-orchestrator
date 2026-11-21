@@ -294,3 +294,29 @@ describe("the Customize appearance entry", () => {
     expect(items().some((i) => i.id === "cmd:appearance")).toBe(false);
   });
 });
+
+describe("the Report a bug entry", () => {
+  const items = (reportBug?: () => void) =>
+    coreItems({
+      host: { runs: [], triggers: [], selection: null, openRun: vi.fn(), openTrigger: vi.fn(), reportBug },
+      pipelines: [],
+      openPipeline: vi.fn(),
+      appearance: { theme: "acogni", mode: "dark" },
+      setTheme: vi.fn(),
+      toggleMode: vi.fn(),
+      compactNodes: false,
+      toggleCompactNodes: vi.fn(),
+    });
+
+  it("sits in the Support group, a command, and opens the Bug report window", () => {
+    const open = vi.fn();
+    const entry = items(open).find((i) => i.id === "cmd:report-bug")!;
+    expect(entry).toMatchObject({ label: "Report a bug…", group: "support", command: true });
+    entry.run();
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it("is absent without a shell that opens it", () => {
+    expect(items().some((i) => i.id === "cmd:report-bug")).toBe(false);
+  });
+});

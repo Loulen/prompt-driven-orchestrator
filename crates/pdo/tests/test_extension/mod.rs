@@ -134,6 +134,11 @@
 //!   `node_write.rs`): `POST /ext/test/runs/<id>/nodes/<node>/write`
 //!   (`{"text", "iter"?}`) answers a Node that waits for a person on behalf
 //!   of the caller, and names the Node's deep link.
+//! - **`bug_report_destinations`** / **`receive_bug_report`** (API 0.28,
+//!   `bug_reports.rs`): « Test inbox » (accepts the prompts) and « Test
+//!   board », the board alone for the Actor `guest`; each report kept and
+//!   answered `BUG-<n>`, readable at `/ext/test/bug-reports/<n>`; `PUT
+//!   /ext/test/bug-reports/refusal` has it refuse them.
 //! - [`SecondTestExtension`] (`test2`): a second extension with a section at
 //!   `project/edit`, a tab at `session/detail` and a global action of
 //!   `palette` ranked 1, so two extensions share a location, and its group
@@ -152,6 +157,7 @@
 //!
 //! [`Host`]: pdo::extension_api::Host
 
+pub mod bug_reports;
 pub mod creation;
 pub mod gate;
 pub mod hosted;
@@ -171,11 +177,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pdo::extension_api::{
-    Actor, ActorDisplay, Admission, Attributes, Authorization, CliInvocation, CliOutput, CliSpec,
-    EntityRef, Extension, ExtensionContext, ExtensionSkill, GitEnv, GitOperation, GuardEnd,
-    Manifest, NodeEnv, NodeLaunch, Operation, RequestParts, ResourceDeclaration, ResourceKind,
-    SessionLaunch, Slot, TriggerRef, UiCommand, UiContribution, UiContributions, UiLocation,
-    UiSlot, Verb, When,
+    Actor, ActorDisplay, Admission, Attributes, Authorization, BugReport, BugReportDestination,
+    BugReportSent, CliInvocation, CliOutput, CliSpec, EntityRef, Extension, ExtensionContext,
+    ExtensionSkill, GitEnv, GitOperation, GuardEnd, Manifest, NodeEnv, NodeLaunch, Operation,
+    RequestParts, ResourceDeclaration, ResourceKind, SessionLaunch, Slot, TriggerRef, UiCommand,
+    UiContribution, UiContributions, UiLocation, UiSlot, Verb, When,
 };
 use serde_json::Value;
 
@@ -469,6 +475,8 @@ pub struct Control {
     pub creation: creation::Creation,
     /// The count of its `Inbox` Action (API 0.20).
     pub inbox: palette::Inbox,
+    /// The bug reports it received (API 0.28).
+    pub bug_reports: bug_reports::BugReports,
 }
 
 impl Default for Control {
@@ -487,6 +495,7 @@ impl Default for Control {
             launch: launch::Launch::default(),
             creation: creation::Creation::default(),
             inbox: palette::Inbox::default(),
+            bug_reports: bug_reports::BugReports::default(),
         }
     }
 }
@@ -692,6 +701,18 @@ impl Extension for TestExtension {
 
     fn guard_ended(&self, end: &GuardEnd) {
         self.control.launch.guard_ended(end)
+    }
+
+    fn bug_report_destinations(&self, actor: &Actor) -> Vec<BugReportDestination> {
+        self.control.bug_reports.destinations(actor)
+    }
+
+    fn receive_bug_report(
+        &self,
+        actor: &Actor,
+        report: &BugReport,
+    ) -> Result<BugReportSent, String> {
+        self.control.bug_reports.receive(actor, report)
     }
 
     fn on_create(&self, actor: &Actor, _entity: &EntityRef) -> Attributes {

@@ -15,7 +15,8 @@
 //! has it open ([`Presence`]) and what it cost ([`RunCost`]), and have the core
 //! hold agents and shells outside any Run ([`HostedSession`]), answer a Node
 //! that waits for a person on behalf of an Actor ([`NodeWrite`]) and lead a
-//! person to a Node ([`node_link`]).
+//! person to a Node ([`node_link`]), and offer Destinations de bug report
+//! that receive the reports people send there ([`BugReportDestination`]).
 //!
 //! An extension runs its **own** mutations through the same mechanisms, by the
 //! [`Host`] its [`ExtensionContext`] carries: its entities are a
@@ -46,8 +47,10 @@
 mod actor;
 mod admission;
 mod authorization;
+mod bug_report;
 mod catalogue;
 mod cli;
+mod context;
 mod display;
 mod entity;
 mod event;
@@ -69,12 +72,14 @@ mod ui;
 pub use actor::Actor;
 pub use admission::{Admission, UNAUTHENTICATED};
 pub use authorization::{Authorization, Denied, GENERIC_REFUSAL, OPERATION_REFUSED};
+pub use bug_report::{BugReport, BugReportDestination, BugReportFields, BugReportSent, Screenshot};
 pub use catalogue::{catalogue, core_resources, Resource, ResourceDeclaration};
 pub use cli::{CliInvocation, CliOutput, CliSpec, EXIT_NO_CLI};
+pub use context::ExtensionContext;
 pub use display::ActorDisplay;
 pub use entity::{Attributes, EntityRef};
 pub use event::{OperationApplied, OPERATION_APPLIED};
-pub use extension::{Extension, ExtensionContext, RequestParts};
+pub use extension::{Extension, RequestParts};
 pub use git_operation::{GitEnv, GitOperation, GitOperationKind, GuardEnd, GuardOutcome, GuardRun};
 pub use host::{ExtensionEvent, Host, NeutralHost, EXTENSION_EVENT};
 pub use hosted::{

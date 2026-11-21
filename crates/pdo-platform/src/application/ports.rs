@@ -223,3 +223,21 @@ pub trait ServiceHost {
     /// Run a side-effect command, capturing its outcome.
     fn run_cmd(&self, program: &str, args: &[&str]) -> anyhow::Result<CmdOutcome>;
 }
+
+/// The last Destination de bug report each Actor sent to: « Send to »
+/// starts on it.
+pub trait BugReportChoices: Send + Sync {
+    /// Create the storage if it does not exist yet.
+    fn init(&self) -> BoxFuture<'_, Result<(), StorageError>>;
+    /// The destination `actor` chose last; `None` while it never chose.
+    fn last<'a>(
+        &'a self,
+        actor: &'a pdo_kernel::Actor,
+    ) -> BoxFuture<'a, Result<Option<String>, StorageError>>;
+    /// Remember `destination` as `actor`'s last choice.
+    fn remember<'a>(
+        &'a self,
+        actor: &'a pdo_kernel::Actor,
+        destination: &'a str,
+    ) -> BoxFuture<'a, Result<(), StorageError>>;
+}

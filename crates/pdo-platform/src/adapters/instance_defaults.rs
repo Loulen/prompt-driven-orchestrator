@@ -31,3 +31,8 @@ pub fn public_url(stored: Option<&str>, default: &str) -> Disclosed<String, Stri
         default.to_string(),
     )
 }
+
+/// The daemon's system, for a bug report: not a knob, a fact of the instance.
+pub fn host_os() -> String {
+    super::host_os::host_os()
+}

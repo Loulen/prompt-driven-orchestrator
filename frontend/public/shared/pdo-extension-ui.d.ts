@@ -332,6 +332,8 @@ export interface SelectProps<V extends string = string> {
   align?: "start" | "end";
   /** A filter in force: the trigger is tinted. Since 0.20. */
   active?: boolean;
+  /** A refused value: the failed edge, and `aria-invalid`. */
+  invalid?: boolean;
   className?: string;
 }
 /** A single-value dropdown under a bordered 24 px trigger; its tooltip is the value shown. */
@@ -525,6 +527,8 @@ export interface TabItem<T extends string = string> {
   label: string;
   icon?: Icon;
   count?: number;
+  /** A short word after the label, in the count's chip: `edited`. */
+  mark?: string;
   kbd?: string;
   disabled?: boolean;
 }

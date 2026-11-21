@@ -100,6 +100,9 @@ export interface InstanceSettings {
    *  Agents receive it, `pdo page mount` and the copied links of a Page print their links
    *  under it. `default` is the machine's address (`http://<host>:<port>`). */
   public_url: PublicUrlField;
+  /** The system the daemon runs on (`Linux 6.8.0 (x86_64)`), which a bug report states.
+   *  Absent from an older daemon. */
+  host_os?: string;
   /** CORE-97: where a repository given by its URL is cloned (`stored → ~/pdo/repos`),
    *  as typed: `~` stands for the daemon's home. Absent from an older daemon. */
   clones_folder?: StringSettingField;

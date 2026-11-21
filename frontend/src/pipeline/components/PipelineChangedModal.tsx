@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { useBackdropDismiss } from "../../shared/ui/kit/backdropDismiss";
 
 interface Props {
   open: boolean;
@@ -22,13 +23,14 @@ export default function PipelineChangedModal({
     return () => document.removeEventListener("keydown", handleKey);
   }, [open, onKeep]);
 
+  const backdrop = useBackdropDismiss(onKeep);
   if (!open) return null;
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       data-testid="pipeline-changed-modal-backdrop"
-      onClick={onKeep}
+      {...backdrop}
     >
       <div
         className="w-[440px] rounded-lg border border-line bg-surface-1 p-4 shadow-lg text-sm"

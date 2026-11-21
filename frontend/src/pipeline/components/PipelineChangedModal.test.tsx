@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import PipelineChangedModal from "./PipelineChangedModal";
+import { clickBackdrop } from "../../test/clickBackdrop";
 
 describe("PipelineChangedModal", () => {
   it("renders nothing when closed", () => {
@@ -48,7 +49,7 @@ describe("PipelineChangedModal", () => {
       />,
     );
 
-    fireEvent.click(screen.getByTestId("pipeline-changed-modal-backdrop"));
+    clickBackdrop(screen.getByTestId("pipeline-changed-modal-backdrop"));
     expect(onKeep).toHaveBeenCalledTimes(1);
     expect(onReload).not.toHaveBeenCalled();
   });

@@ -6,6 +6,7 @@ import { registerTransientOverlay } from "../../lib/overlays";
 import type { IterationInfo } from "../../shared/generated/IterationInfo";
 import type { PortType } from "../../shared/generated/PortType";
 import ImageLightbox from "../../shared/ui/ImageLightbox";
+import { useBackdropDismiss } from "../../shared/ui/kit/backdropDismiss";
 import { stripFrontmatter } from "../model/frontmatter";
 import { filesPreviewKind } from "../model/nodeDetailFormat";
 import ArtifactBody from "./artifacts/ArtifactBody";
@@ -236,6 +237,7 @@ export default function MarkdownArtifactModal({
   // is how a guided tour starting on top of it gets a clear stage instead of a
   // frozen screen (`lib/overlays.ts`, #825). Nothing here knows what a tour is.
   useEffect(() => registerTransientOverlay(onClose), [onClose]);
+  const backdrop = useBackdropDismiss(onClose);
 
   const zoom = useCallback(
     (images: string[], index: number) => setLightbox({ images, index }),
@@ -273,9 +275,7 @@ export default function MarkdownArtifactModal({
   return (
     <div
       className="art-scrim z-50"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+      {...backdrop}
     >
       <div
         className={`art ${size === "m" ? "art--m" : ""}`}

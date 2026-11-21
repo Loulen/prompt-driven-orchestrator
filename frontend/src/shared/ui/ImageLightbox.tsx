@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { X, ChevronLeft, ChevronRight } from "lucide-react";
+import { useBackdropDismiss } from "./kit/backdropDismiss";
 
 interface Props {
   /** Ordered, fully-resolved image URLs the viewer can page through. */
@@ -72,17 +73,15 @@ export default function ImageLightbox({ images, index, alt = "", onClose }: Prop
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
 
+  // Don't let the click bubble to a parent modal backdrop.
+  const backdrop = useBackdropDismiss(onClose, true, { stopPropagation: true });
   const src = images[current] ?? images[0];
 
   return (
     <div
       className="fixed inset-0 z-[60] grid place-items-center p-6"
       style={{ background: "rgba(5,7,10,0.88)", backdropFilter: "blur(6px)" }}
-      onClick={(e) => {
-        // Don't let the click bubble to a parent modal backdrop.
-        e.stopPropagation();
-        if (e.target === e.currentTarget) onClose();
-      }}
+      {...backdrop}
       role="dialog"
       aria-modal="true"
       aria-label={alt || "Image preview"}

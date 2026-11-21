@@ -1,6 +1,7 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import DestroyLoopModal from "./DestroyLoopModal";
+import { clickBackdrop } from "../../test/clickBackdrop";
 
 describe("DestroyLoopModal (#150)", () => {
   it("renders nothing when closed", () => {
@@ -55,7 +56,13 @@ describe("DestroyLoopModal — bounded to the window (#940)", () => {
     render(<DestroyLoopModal open loopIds={["a"]} onClose={onClose} onConfirm={() => {}} />);
     fireEvent.click(screen.getByTestId("destroy-loop-body"));
     expect(onClose).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId("destroy-loop-backdrop"));
+    const backdrop = screen.getByTestId("destroy-loop-backdrop");
+    // A selection pressed in the body and released over the backdrop keeps it open.
+    fireEvent.pointerDown(screen.getByTestId("destroy-loop-body"));
+    fireEvent.pointerUp(backdrop);
+    fireEvent.click(backdrop);
+    expect(onClose).not.toHaveBeenCalled();
+    clickBackdrop(backdrop);
     expect(onClose).toHaveBeenCalledOnce();
   });
 });

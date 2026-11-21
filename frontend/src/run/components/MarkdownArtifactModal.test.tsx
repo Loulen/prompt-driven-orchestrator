@@ -28,6 +28,7 @@ import MarkdownArtifactModal from "./MarkdownArtifactModal";
 import type { IterationInfo } from "../../shared/generated/IterationInfo";
 import type { FileInfo } from "../api/nodes";
 import { dismissTransientOverlays } from "../../lib/overlays";
+import { clickBackdrop } from "../../test/clickBackdrop";
 
 function makeFile(path: string, exists = true): FileInfo {
   return { path, exists, size: 0, frontmatter: null };
@@ -540,6 +541,29 @@ describe("MarkdownArtifactModal", () => {
       expect(screen.getByText("File does not exist yet.")).toBeInTheDocument();
       // A non-existent file must never trigger a fetch.
       expect(fetchArtifactMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("backdrop", () => {
+    it("stays open when a selection pressed in the body is released over the backdrop", async () => {
+      const onClose = vi.fn();
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="out"
+          testId="art-modal"
+          source={{ kind: "static", files: [makeFile("/path/out.md")] }}
+          onClose={onClose}
+        />,
+      );
+      await act(async () => {});
+      const scrim = screen.getByTestId("art-modal").parentElement!;
+      fireEvent.pointerDown(screen.getByTestId("art-modal"));
+      fireEvent.pointerUp(scrim);
+      fireEvent.click(scrim);
+      expect(onClose).not.toHaveBeenCalled();
+      clickBackdrop(scrim);
+      expect(onClose).toHaveBeenCalledTimes(1);
     });
   });
 

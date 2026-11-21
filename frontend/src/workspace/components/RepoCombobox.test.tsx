@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import RepoCombobox from "./RepoCombobox";
 import type { BrowseResponse } from "../api/browse";
 import { browseFs } from "../api/browse";
+import { clickBackdrop } from "../../test/clickBackdrop";
 
 // #431 renamed `browseRepos` → `browseFs` (the function can now return files and
 // targets `/fs/browse`). Rewiring the mock factory + the fixture's new required
@@ -142,7 +143,7 @@ describe("RepoCombobox filesystem explorer (#131)", () => {
     renderCombobox();
     fireEvent.click(screen.getByTestId("repo-browse-trigger"));
     await screen.findByTestId("repo-browser-modal");
-    fireEvent.click(screen.getByTestId("repo-browse-backdrop"));
+    clickBackdrop(screen.getByTestId("repo-browse-backdrop"));
     await waitFor(() =>
       expect(screen.queryByTestId("repo-browser-modal")).not.toBeInTheDocument(),
     );

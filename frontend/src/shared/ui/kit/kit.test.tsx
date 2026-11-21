@@ -14,6 +14,7 @@ import type ExtensionUiDeclared from "../../../../public/shared/pdo-extension-ui
 import { extensionUiModule } from "../../extensions/uiModule";
 import { resetToasts } from "../toast";
 import Toaster from "../Toaster";
+import { clickBackdrop } from "../../../test/clickBackdrop";
 import {
   Avatar,
   Banner,
@@ -715,6 +716,31 @@ describe("primitives", () => {
     expect(submit).toHaveBeenCalledOnce();
     await user.keyboard("{Escape}");
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("Modal closes on a press and a release on its backdrop, not on a selection released there", () => {
+    const close = vi.fn();
+    const { unmount } = render(
+      <Modal title="Save" onClose={close}>
+        <p>Selectable text</p>
+      </Modal>,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Save" });
+    fireEvent.pointerDown(screen.getByText("Selectable text"));
+    fireEvent.pointerUp(dialog);
+    fireEvent.click(dialog);
+    expect(close).not.toHaveBeenCalled();
+    clickBackdrop(dialog);
+    expect(close).toHaveBeenCalledOnce();
+    unmount();
+    const locked = vi.fn();
+    render(
+      <Modal title="Secret" onClose={locked} dismissable={false}>
+        <p>once</p>
+      </Modal>,
+    );
+    clickBackdrop(screen.getByRole("dialog", { name: "Secret" }));
+    expect(locked).not.toHaveBeenCalled();
   });
 
   it("ConfirmDialog states the action, its target, and confirms", async () => {

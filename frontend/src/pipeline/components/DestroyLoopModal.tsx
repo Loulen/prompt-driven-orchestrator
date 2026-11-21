@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { useBackdropDismiss } from "../../shared/ui/kit/backdropDismiss";
 
 interface Props {
   open: boolean;
@@ -26,6 +27,7 @@ export default function DestroyLoopModal({ open, loopIds, onClose, onConfirm }: 
     return () => document.removeEventListener("keydown", handleKey);
   }, [open, onClose, onConfirm]);
 
+  const backdrop = useBackdropDismiss(onClose);
   if (!open) return null;
 
   const plural = loopIds.length > 1;
@@ -34,7 +36,7 @@ export default function DestroyLoopModal({ open, loopIds, onClose, onConfirm }: 
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       data-testid="destroy-loop-backdrop"
-      onClick={onClose}
+      {...backdrop}
     >
       <div
         className="flex max-h-[calc(85vh/var(--app-zoom,1))] w-[380px] max-w-[calc(90vw/var(--app-zoom,1))] flex-col rounded-lg border border-line bg-surface-1 p-4 shadow-lg text-sm"

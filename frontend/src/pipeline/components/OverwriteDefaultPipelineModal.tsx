@@ -4,6 +4,7 @@ import { fetchRunPipelineOverwritePreview } from "../../run/api/runPipeline";
 import type { OverwritePreview } from "../../shared/generated/OverwritePreview";
 import { useEditStore } from "../store/editStore";
 import type { OpenPipeline } from "../store/editState";
+import { useBackdropDismiss } from "../../shared/ui/kit/backdropDismiss";
 
 /**
  * ADR-0085: the warning before « Overwrite default pipeline ». It says who is
@@ -58,11 +59,12 @@ export default function OverwriteDefaultPipelineModal({
   const triggers = preview?.triggers ?? [];
   const canConfirm = preview != null && preview.pipeline_exists && !busy;
 
+  const backdrop = useBackdropDismiss(onClose, !busy);
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       data-testid="overwrite-default-backdrop"
-      onClick={() => { if (!busy) onClose(); }}
+      {...backdrop}
     >
       <div
         role="dialog"

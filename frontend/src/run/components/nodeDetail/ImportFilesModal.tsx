@@ -17,6 +17,7 @@ import { useSettings } from "../../../settings/store/useSettings";
 import { useFileDropTarget } from "../../../skill/store/useFileDropTarget";
 import { DropOverlay } from "../../../skill/components/SkillFileDropZone";
 import ImportedText from "./ImportedText";
+import { useBackdropDismiss } from "../../../shared/ui/kit/backdropDismiss";
 
 interface Props {
   runId: string;
@@ -171,13 +172,11 @@ export default function ImportFilesModal({
     }
   };
 
+  const backdrop = useBackdropDismiss(onClose, !importing, { stopPropagation: true });
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-scrim"
-      onClick={(event) => {
-        event.stopPropagation();
-        if (!importing) onClose();
-      }}
+      {...backdrop}
       data-testid="import-files-backdrop"
     >
       <div

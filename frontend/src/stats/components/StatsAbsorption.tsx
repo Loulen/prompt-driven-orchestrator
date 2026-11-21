@@ -14,6 +14,7 @@ import {
   type AbsorptionCount,
   type AbsorptionDimension,
 } from "../model/statsAbsorption";
+import { useBackdropDismiss } from "../../shared/ui/kit/backdropDismiss";
 
 /**
  * **Absorption** in Stats (#890, ADR-0077) — the visual pattern #891, #892 and
@@ -166,11 +167,12 @@ export function ModalFrame({
   size?: "s" | "m";
   children: React.ReactNode;
 }) {
+  const backdrop = useBackdropDismiss(onDismiss);
   return (
     <div
       className="sx-dlg-backdrop"
       data-testid={`${testid}-backdrop`}
-      onClick={onDismiss}
+      {...backdrop}
     >
       <div
         role="dialog"

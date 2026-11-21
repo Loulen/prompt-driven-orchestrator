@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,6 +11,8 @@ vi.mock("../api/absorptions", () => ({
 }));
 
 import StatsCharts from "./StatsCharts";
+import { ModalFrame } from "./StatsAbsorption";
+import { clickBackdrop } from "../../test/clickBackdrop";
 import { defaultAbsorbent } from "../model/statsAbsorption";
 import type { StatsAbsorbedMember } from "../../shared/generated/StatsAbsorbedMember";
 import type { StatsCost } from "../../shared/generated/StatsCost";
@@ -1614,5 +1616,23 @@ describe("defaultAbsorbent — efforts and couples (#906)", () => {
     );
     expect(chosen?.id).toBe("low");
     expect(defaultAbsorbent(rows, (row) => row.runs)?.id).toBe("");
+  });
+});
+
+describe("ModalFrame backdrop (CORE-285)", () => {
+  it("closes on a press and a release on the backdrop, not on a selection released there", () => {
+    const onDismiss = vi.fn();
+    render(
+      <ModalFrame testid="frame" onDismiss={onDismiss} title="Members">
+        <p>Selectable</p>
+      </ModalFrame>,
+    );
+    const backdrop = screen.getByTestId("frame-backdrop");
+    fireEvent.pointerDown(screen.getByText("Selectable"));
+    fireEvent.pointerUp(backdrop);
+    fireEvent.click(backdrop);
+    expect(onDismiss).not.toHaveBeenCalled();
+    clickBackdrop(backdrop);
+    expect(onDismiss).toHaveBeenCalledOnce();
   });
 });

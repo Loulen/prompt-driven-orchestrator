@@ -60,8 +60,9 @@ async function selectStart(ctx) {
 async function openImplementerTerminal(ctx, runId) {
   const { page, instance } = ctx;
   await ctx.keep(() => ctx.click(page.getByTestId("rf__node-implementer"), { duration: 750 }));
-  // Attached live, this browser at the keys: the terminal bar reads « You pilot ».
-  await page.locator('[data-testid="term-mode"][data-role="pilot"]').waitFor({ timeout: 30_000 });
+  // Attached live, this browser alone at the keys: the terminal bar names no
+  // role, only the connection (CORE-223).
+  await page.locator('[data-testid="term-mode"]', { hasText: "attached · live" }).waitFor({ timeout: 30_000 });
   await waitPane(instance, runId, "implementer", CLAUDE_UP);
   await sleep(400);
 }

@@ -4,7 +4,9 @@
 //! - the extensions of the binary rule on `pdo service` (the Opération of its
 //!   install), as they do on the daemon's;
 //! - the factory is called once by `daemon` and `service`, never by the
-//!   agent's CLI (`complete`, `fail`, `run create`…).
+//!   agent's CLI (`complete`, `fail`, `run create`…);
+//! - `pdo service` asks `authorize` of extensions it never starts (CORE-179):
+//!   neither `start` nor `skills` is called there.
 //!
 //! Each case runs `pdo::main_from` in a **child process**: this test binary,
 //! re-run on [`main_from_child`] alone. In process, the case would read the
@@ -17,19 +19,31 @@ use std::path::Path;
 use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
+use pdo_extension_api::{
+    Actor, Authorization, Extension, ExtensionContext, ExtensionSkill, Manifest, Operation,
+};
+
 use crate::test_extension::{Refusal, TestExtension};
 
 /// The command line of the child, after the program name, split on `\x1f`.
 const ARGS_ENV: &str = "PDO_TEST_MAIN_FROM_ARGS";
 /// What the child's factory does: `panic`, or `count:<refusal>` (build the
 /// test extension refusing `<refusal>`), or `count:incompatible` (build one
-/// requiring an API this build does not implement).
+/// requiring an API this build does not implement), or `count:unstarted`
+/// (build an [`Unstarted`] extension).
 const FACTORY_ENV: &str = "PDO_TEST_MAIN_FROM_FACTORY";
 /// The child's last stderr line: how many times the factory was called.
 const CALLS_MARKER: &str = "main_from factory calls: ";
 /// The child's last stderr line but one: how many times `configure` was called.
 const CONFIGURE_MARKER: &str = "main_from configure calls: ";
 const FACTORY_PANIC: &str = "the factory of the extensions was called";
+/// What an [`Unstarted`] extension panics with when started.
+const STARTED_PANIC: &str = "the unstarted extension was started";
+/// What an [`Unstarted`] extension panics with when asked its skills.
+const SKILLS_PANIC: &str = "the unstarted extension was asked its skills";
+/// What an [`Unstarted`] extension prints when asked `authorize`, before the
+/// Operation.
+const AUTHORIZE_MARKER: &str = "the unstarted extension authorizes ";
 /// A daemon nothing listens on.
 const NO_DAEMON: &str = "http://127.0.0.1:1";
 
@@ -54,6 +68,7 @@ fn main_from_child() {
                     .0
                     .requiring_api("99.0.0")
                     .boxed(),
+                Some(("count", "unstarted")) => vec![Box::new(Unstarted) as Box<dyn Extension>],
                 Some(("count", refusal)) => TestExtension::new(Refusal::parse(refusal).unwrap())
                     .0
                     .boxed(),
@@ -76,6 +91,34 @@ fn main_from_child() {
         .find(|n| ExitCode::from(*n) == code)
         .expect("an exit code is a u8");
     std::process::exit(i32::from(code));
+}
+
+/// An extension that panics if started or asked its skills, and allows every
+/// Operation it is asked, saying so on stderr: the lifecycle of `pdo service`
+/// made visible.
+struct Unstarted;
+
+impl Extension for Unstarted {
+    fn manifest(&self) -> Manifest {
+        Manifest::new("unstarted", "Unstarted", "0.0.0")
+    }
+
+    fn start(&self, _context: &ExtensionContext) {
+        panic!("{STARTED_PANIC}");
+    }
+
+    fn skills(&self) -> Vec<ExtensionSkill> {
+        panic!("{SKILLS_PANIC}");
+    }
+
+    fn authorize(&self, _actor: &Actor, operation: &Operation) -> Authorization {
+        eprintln!(
+            "{AUTHORIZE_MARKER}{} {}",
+            operation.verb.name(),
+            operation.resource
+        );
+        Authorization::Allow
+    }
 }
 
 struct Child {
@@ -240,6 +283,37 @@ fn a_service_install_dry_run_passes_with_the_extensions_of_the_binary() {
     assert_eq!(child.code, Some(0), "{child}");
     assert!(child.stdout.contains("ExecStart="), "{child}");
     assert_eq!(child.calls(), 1, "{child}");
+}
+
+/// `pdo service install` and `uninstall` ask `authorize` of an extension they
+/// never start (CORE-179, the second lifecycle of the `Extension` contract):
+/// no `start`, no `skills`, and the allowed Operation goes on to `systemctl`
+/// (a fake that refuses, hence the exit code).
+#[test]
+fn a_service_install_and_uninstall_authorize_without_starting_the_extensions() {
+    for (args, operation) in [
+        (&["service", "install", "--port", "0"][..], "create service"),
+        (&["service", "uninstall"][..], "delete service"),
+    ] {
+        let child = main_from(args, "count:unstarted", &[]);
+        assert!(
+            child
+                .stderr
+                .contains(&format!("{AUTHORIZE_MARKER}{operation}")),
+            "{args:?}: authorize is asked:\n{child}"
+        );
+        assert!(!child.stderr.contains(STARTED_PANIC), "{args:?}: {child}");
+        assert!(!child.stderr.contains(SKILLS_PANIC), "{args:?}: {child}");
+        assert!(
+            !child.stderr.contains("operation refused"),
+            "{args:?}: {child}"
+        );
+        assert!(
+            child.stderr.contains("fake"),
+            "{args:?}: the allowed Operation reaches systemctl:\n{child}"
+        );
+        assert_eq!(child.calls(), 1, "{args:?}: {child}");
+    }
 }
 
 /// `pdo daemon` serves with the binary's extensions: it builds them once, and

@@ -24,19 +24,22 @@ function renderBar(over: Partial<Props> = {}) {
 }
 
 describe("TerminalToolbar's pilot / spectator chip", () => {
-  it("reads « You pilot » with a ruby dot, and nothing after it when nobody watches", () => {
+  it("shows no role when nobody else watches: only the connection tag (CORE-223, ADR-0075)", () => {
     renderBar();
-    const chip = screen.getByTestId("term-mode");
-    expect(chip).toHaveAttribute("data-role", "pilot");
-    expect(chip).toHaveTextContent(/^You pilot$/);
-    expect(chip.querySelector(".ri-term-bar__role-dot")).not.toBeNull();
-    expect(chip.querySelector(".ri-term-bar__role-sep")).toBeNull();
+    const tag = screen.getByTestId("term-mode");
+    expect(tag).not.toHaveAttribute("data-role");
+    expect(tag).toHaveTextContent(/^attached · live$/);
+    expect(tag.querySelector(".ri-term-bar__role-dot")).toBeNull();
+    expect(screen.queryByText("You pilot")).toBeNull();
     expect(screen.queryByTestId("term-watchers")).toBeNull();
   });
 
-  it("adds « N watching » after a rule when other browsers watch", () => {
+  it("reads « You pilot │ N watching » when other browsers watch", () => {
     renderBar({ watchers: 2 });
     const chip = screen.getByTestId("term-mode");
+    expect(chip).toHaveAttribute("data-role", "pilot");
+    expect(chip).toHaveTextContent(/^You pilot/);
+    expect(chip.querySelector(".ri-term-bar__role-dot")).not.toBeNull();
     expect(chip.querySelector(".ri-term-bar__role-sep")).not.toBeNull();
     const watchers = within(chip).getByTestId("term-watchers");
     expect(watchers).toHaveTextContent("2 watching");
@@ -44,7 +47,7 @@ describe("TerminalToolbar's pilot / spectator chip", () => {
   });
 
   it("reads « Watching » for a spectator, and takes control from the chip", () => {
-    const props = renderBar({ spectating: true });
+    const props = renderBar({ spectating: true, watchers: 0 });
     const chip = screen.getByTestId("term-mode");
     expect(chip).toHaveAttribute("data-role", "spectator");
     expect(chip).toHaveTextContent("Watching");

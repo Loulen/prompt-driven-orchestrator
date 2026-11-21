@@ -99,8 +99,8 @@ test("selecting a running node shows inline xterm terminal", async ({
     timeout: 5_000,
   });
 
-  // The session bar names who drives the live session: this browser, the pilot.
-  await expect(terminal.getByTestId("term-mode")).toHaveText(/pilot|connected/, { timeout: 5_000 });
+  // Alone on the session, the bar names no role, only the connection (CORE-223).
+  await expect(terminal.getByTestId("term-mode")).toHaveText(/attached · live|connected/, { timeout: 5_000 });
 
   // Type into the terminal — `cat` echoes back through the PTY bridge
   await xtermContainer.click();

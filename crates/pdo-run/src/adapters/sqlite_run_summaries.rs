@@ -156,14 +156,23 @@ pub(crate) async fn drop_in(conn: &mut SqliteConnection, run_id: &str) -> Result
     Ok(())
 }
 
-/// Every Résumé, newest first. An unreadable row is left out (logged).
+/// Every Résumé, newest created first: by `started_at` (always `now_iso`,
+/// so its text sorts by time), then by the Run's `RunStarted` append
+/// (creation order within one millisecond, one index seek), then by `run_id` for a total order. The
+/// `run_id` alone would order the Runs of one second by their random suffix.
+/// An unreadable row is left out (logged).
 pub(crate) async fn list(db: &sqlx::SqlitePool) -> Result<Vec<RunSummary>> {
     catch_up_or_serve(db).await;
-    let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT run_id, summary FROM run_summaries ORDER BY run_id DESC")
-            .fetch_all(db)
-            .await
-            .context("failed to load the run summaries")?;
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT run_id, summary FROM run_summaries \
+         ORDER BY json_extract(summary, '$.started_at') DESC, \
+                  (SELECT MIN(id) FROM events \
+                   WHERE events.run_id = run_summaries.run_id AND kind = 'run_started') DESC, \
+                  run_id DESC",
+    )
+    .fetch_all(db)
+    .await
+    .context("failed to load the run summaries")?;
     Ok(rows
         .into_iter()
         .filter_map(|(run_id, summary)| parse(&run_id, &summary))

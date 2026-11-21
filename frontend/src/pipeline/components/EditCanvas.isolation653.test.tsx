@@ -106,9 +106,11 @@ describe("EditCanvas — new-node isolation defaults (#653)", () => {
     expect(nodes[0].isolated_worktree).toBe(true);
   });
 
-  it("creates a Script in the Run worktree, and says so on the node", () => {
+  it("creates a Script in the Run worktree, and says so on the node", async () => {
     renderCanvas();
-    fireEvent.click(screen.getByTestId("toolbar-script"));
+    // CORE-194: Script node is an item of the `+` menu.
+    fireEvent.click(screen.getByTestId("toolbar-add"));
+    fireEvent.click(await screen.findByTestId("add-menu-script"));
 
     const nodes = useEditStore.getState().openTabs[0].pipeline.nodes;
     expect(nodes).toHaveLength(1);

@@ -52,7 +52,7 @@ export default function AddNodeFromYamlModal({
     setWarnings(null);
     try {
       const result = await parseNodeYaml(yaml);
-      // Mirror LibraryDropdown.handleAdd: fresh id, drop-position, addNode
+      // Mirror LibrarySubmenu.handleAdd: fresh id, drop-position, addNode
       // (snapshots undo in one step), then the prompt sidecar. Cast covers the
       // legacy `switch`/`loop` the TS union omits (soft-warned by the daemon).
       const newId = generateNodeId();

@@ -5973,4 +5973,119 @@ loops:
             Vec::new()
         );
     }
+
+    // --- CORE-142: `Start` is settled from `RunStarted`, so a `Start → End`
+    // edge reaches `End` as soon as the Run starts. ---
+
+    fn start_end_pipeline(extra_nodes: Vec<NodeDef>, extra_edges: Vec<EdgeDef>) -> PipelineDef {
+        let mut nodes = vec![make_start_node("start"), make_end_node()];
+        nodes.extend(extra_nodes);
+        let mut edges = vec![make_edge("start", "user_prompt", "end", "result")];
+        edges.extend(extra_edges);
+        PipelineDef {
+            name: "start-end".into(),
+            version: None,
+            variables: HashMap::new(),
+            nodes,
+            edges,
+            loops: Vec::new(),
+            notes: Vec::new(),
+            prompt_required: true,
+            grid_size: None,
+            wait_for_started_nodes: false,
+        }
+    }
+
+    #[test]
+    fn start_wired_to_end_reaches_end_at_once() {
+        let pipeline = start_end_pipeline(Vec::new(), Vec::new());
+        assert_eq!(
+            end_reached_action(
+                &pipeline,
+                &empty_run_state(),
+                &HashMap::new(),
+                &HashMap::new()
+            ),
+            Some(SchedulerAction::Complete)
+        );
+    }
+
+    #[test]
+    fn start_to_end_with_a_reason_halts() {
+        let mut pipeline = start_end_pipeline(Vec::new(), Vec::new());
+        pipeline.edges = vec![make_end_edge("start", "user_prompt", "nothing to do")];
+        assert_eq!(
+            end_reached_action(
+                &pipeline,
+                &empty_run_state(),
+                &HashMap::new(),
+                &HashMap::new()
+            ),
+            Some(SchedulerAction::Halt {
+                message: "nothing to do".into()
+            })
+        );
+    }
+
+    #[test]
+    fn start_to_end_waits_while_a_started_node_is_alive() {
+        let pipeline = start_end_pipeline(
+            vec![make_node("a", &["task"], &["out"])],
+            vec![make_edge("start", "user_prompt", "a", "task")],
+        );
+        let mut state = empty_run_state();
+        state.nodes.insert("a".into(), running_node("a"));
+        assert_eq!(
+            end_reached_action(&pipeline, &state, &HashMap::new(), &HashMap::new()),
+            None
+        );
+        state.nodes.insert("a".into(), completed_node("a"));
+        assert_eq!(
+            end_reached_action(&pipeline, &state, &HashMap::new(), &HashMap::new()),
+            Some(SchedulerAction::Complete)
+        );
+    }
+
+    #[test]
+    fn a_pipeline_without_start_to_end_is_unchanged() {
+        let mut pipeline = start_end_pipeline(
+            vec![make_node("a", &["task"], &["out"])],
+            vec![make_edge("start", "user_prompt", "a", "task")],
+        );
+        pipeline.edges = vec![
+            make_edge("start", "user_prompt", "a", "task"),
+            make_edge("a", "out", "end", "result"),
+        ];
+        let mut state = empty_run_state();
+        assert_eq!(
+            end_reached_action(&pipeline, &state, &HashMap::new(), &HashMap::new()),
+            None,
+            "End is not reached before `a` settles"
+        );
+        state.nodes.insert("a".into(), completed_node("a"));
+        assert_eq!(
+            end_reached_action(&pipeline, &state, &HashMap::new(), &HashMap::new()),
+            Some(SchedulerAction::Complete)
+        );
+    }
+
+    #[test]
+    fn start_to_end_stays_open_while_a_launched_node_did_not_end_well() {
+        let pipeline = start_end_pipeline(
+            vec![make_node("a", &["task"], &["out"])],
+            vec![make_edge("start", "user_prompt", "a", "task")],
+        );
+        let mut state = empty_run_state();
+        state.nodes.insert(
+            "a".into(),
+            NodeState {
+                status: NodeStatus::Stopped,
+                ..completed_node("a")
+            },
+        );
+        assert_eq!(
+            end_reached_action(&pipeline, &state, &HashMap::new(), &HashMap::new()),
+            None
+        );
+    }
 }

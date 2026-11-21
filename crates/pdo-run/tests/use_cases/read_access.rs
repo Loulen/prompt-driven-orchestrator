@@ -145,3 +145,25 @@ async fn the_reapable_runs_keep_only_the_readable_ones() {
     let kept = json(w.runs.list_reapable(&actor, query).await).await;
     assert_eq!(ids(&kept), ["r1"]);
 }
+
+#[tokio::test]
+async fn the_list_comes_newest_created_first_not_by_run_id() {
+    let w = world();
+    // Same started_at: the append order decides, not the run_id.
+    for run_id in ["r-b", "r-a", "r-c"] {
+        seed_in(&w, run_id, w.repo.path(), None, None).await;
+    }
+    let list = json(
+        w.runs
+            .list_runs(&Actor::LocalOperator, AttributeFilter::default())
+            .await,
+    )
+    .await;
+    let order: Vec<&str> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|run| run["run_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(order, ["r-c", "r-a", "r-b"]);
+}

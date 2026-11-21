@@ -26,7 +26,7 @@ export function combineStatsRows(body: {
   absorbent: { key: string; name: string; scope?: string };
   members: { key: string; name: string; scope?: string }[];
 }): Promise<StatsAbsorptionList> {
-  return request<StatsAbsorptionList>("POST", "/stats/absorptions", { body });
+  return request<StatsAbsorptionList>("POST", "/stats/absorptions", { body, label: "Combining stats rows" });
 }
 
 /** Take one member of any dimension out of its absorption — the ✕ of the
@@ -39,5 +39,6 @@ export function uncombineStatsMember(
 ): Promise<StatsAbsorptionList> {
   return request<StatsAbsorptionList>("DELETE", "/stats/absorptions/member", {
     query: { dimension, ...(scope ? { scope } : {}), member },
+    label: "Separating stats row",
   });
 }

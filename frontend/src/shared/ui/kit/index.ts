@@ -8,6 +8,8 @@ export { Kbd, Tooltip } from "./tip";
 export type { KbdProps, TooltipProps } from "./tip";
 export { Button, Checkbox, Field, IconButton, Segmented, Switch, TextArea, TextInput } from "./controls";
 export { SplitButton } from "./splitButton";
+export { usePending } from "./pending";
+export type { Pending } from "./pending";
 export type { SplitButtonProps } from "./splitButton";
 export type {
   ButtonProps,

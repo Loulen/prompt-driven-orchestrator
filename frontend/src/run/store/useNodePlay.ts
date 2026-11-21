@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { askAuthorization } from "../../shared/authorization/api";
 import { toast } from "../../shared/ui/toast";
+import { errorAlreadyShown } from "../../shared/http/operations";
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
 import { retryNode, startNode } from "../api/nodes";
 import type { GestureConfirmation } from "../model/nodeGestureConfirmation";
@@ -68,6 +69,8 @@ export function useNodePlay(runId: string | null, candidates: PlayCandidate[]) {
   );
 
   const refused = useCallback((kind: PlayKind, e: unknown) => {
+    // Its operation already said it (the HTTP client's toast).
+    if (errorAlreadyShown(e)) return;
     const message = e instanceof Error ? e.message : String(e);
     toast(`${kind === "start" ? "Start" : "Retry"} refused — ${message}`, "error");
   }, []);

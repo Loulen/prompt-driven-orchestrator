@@ -69,6 +69,8 @@ export function requestDisplays(actors: Actor[]): Promise<void> {
     try {
       const answer = await request<ActorsDisplayResponse>("POST", "/actors/display", {
         body: { actors: batch },
+        label: "POST /actors/display",
+        silent: true,
       });
       useActorsStore.getState().remember(batch, answer.displays);
     } catch {

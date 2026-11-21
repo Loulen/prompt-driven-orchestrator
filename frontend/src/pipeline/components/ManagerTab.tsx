@@ -80,10 +80,10 @@ export function ManagerTab({
                   size="sm"
                   tone="danger"
                   onClick={() => void stop()}
-                  disabled={stopping}
+                  pending={stopping && "Stopping…"}
                   data-testid="manager-stop-confirm"
                 >
-                  {stopping ? "Stopping…" : "Stop"}
+                  Stop
                 </Button>
                 <Button size="sm" onClick={() => setConfirmingStop(false)} data-testid="manager-stop-cancel">
                   Cancel

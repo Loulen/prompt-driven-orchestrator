@@ -14,6 +14,7 @@ import ListEmpty from "../../shared/ui/leftList/ListEmpty";
 import TriggerRow from "./triggersList/TriggerRow";
 import ConfirmDeleteModal from "../../shared/ui/ConfirmDeleteModal";
 import { toast } from "../../shared/ui/toast";
+import { errorAlreadyShown } from "../../shared/http/operations";
 import TriggersBulk, { type TriggerBulkKind } from "./triggersList/TriggersBulk";
 import TriggersListHeader from "./triggersList/TriggersListHeader";
 import { useTriggerListRefusals } from "../store/useTriggerRefusals";
@@ -109,14 +110,11 @@ export default function TriggersListPanel({
   // bulk delete is (CORE-232).
   const [deleting, setDeleting] = useState<Trigger | null>(null);
 
+  // Runs under its confirmation, which waits for it: closed on success, the
+  // daemon's message kept on screen on a failure.
   async function handleDelete(t: Trigger) {
-    setDeleting(null);
-    try {
-      await deleteTrigger(t.id);
-      onTriggersChanged();
-    } catch (e) {
-      toast(`Delete ${t.name}: ${e instanceof Error ? e.message : String(e)}`, "error");
-    }
+    await deleteTrigger(t.id);
+    onTriggersChanged();
   }
 
   async function handleToggle(t: Trigger) {
@@ -124,7 +122,7 @@ export default function TriggersListPanel({
       await updateTrigger(t.id, { enabled: !t.enabled });
       onTriggersChanged();
     } catch (e) {
-      toast(`${t.enabled ? "Disable" : "Enable"} ${t.name}: ${e instanceof Error ? e.message : String(e)}`, "error");
+      if (!errorAlreadyShown(e)) toast(`${t.enabled ? "Disable" : "Enable"} ${t.name}: ${e instanceof Error ? e.message : String(e)}`, "error");
     }
   }
 
@@ -281,7 +279,7 @@ export default function TriggersListPanel({
         name={deleting?.name ?? ""}
         detail="Its schedule and fire history go"
         onClose={() => setDeleting(null)}
-        onConfirm={() => deleting && void handleDelete(deleting)}
+        onConfirm={() => (deleting ? handleDelete(deleting) : undefined)}
       />
     </div>
   );

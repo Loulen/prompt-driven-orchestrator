@@ -3,6 +3,7 @@ import { RUN_INTENT, type OpenIntent } from "../run/components/NewRunModal";
 import type { Trigger } from "../shared/generated/Trigger";
 import { useEditStore } from "../pipeline/store/editStore";
 import { showToast } from "../shared/ui/toast";
+import { errorAlreadyShown } from "../shared/http/operations";
 import { registerNewRunOpener } from "../shared/extensions/newRun";
 
 /** What selecting a Trigger clears and opens. */
@@ -85,7 +86,8 @@ export function useLaunchActions({
         const { fireTrigger } = await import("../trigger/api/triggers");
         await fireTrigger(t.id);
       } catch (e) {
-        showToast({ kind: "error", title: "Run now", message: e instanceof Error ? e.message : String(e) });
+        // Its operation already said it (the HTTP client's toast).
+        if (!errorAlreadyShown(e)) showToast({ kind: "error", title: "Run now", message: e instanceof Error ? e.message : String(e) });
       }
       handleSelectTrigger(t.id);
     },

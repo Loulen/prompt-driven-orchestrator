@@ -98,12 +98,12 @@ export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
     }
 
     // FormData → no manual Content-Type, so the browser sets the boundary.
-    return request<CreateRunResponse>("POST", "/runs", { body: form, label: "POST /runs" });
+    return request<CreateRunResponse>("POST", "/runs", { body: form, label: "Launching run", done: "Run launched" });
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { images: _omitted, files: _omittedFiles, ...jsonBody } = req;
-  return request<CreateRunResponse>("POST", "/runs", { body: jsonBody, label: "POST /runs" });
+  return request<CreateRunResponse>("POST", "/runs", { body: jsonBody, label: "Launching run", done: "Run launched" });
 }
 
 /** The body of a mid-run repo-list edit (#465 slice 2). `add` entries mirror the
@@ -143,7 +143,7 @@ export async function editRunRepos(
   const resp = await request<Response>(
     "PATCH",
     `/runs/${encodeURIComponent(runId)}/repos`,
-    { body, responseMode: "raw", label: `PATCH /runs/${runId}/repos` },
+    { body, responseMode: "raw", label: "Updating run repositories" },
   );
   const parsed: unknown = await resp.json().catch(() => null);
   if (resp.ok) {

@@ -24,28 +24,19 @@ export function useRunRowActions(onSelectRun: (runId: string) => void) {
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
 
-  async function handleCleanup(runId: string) {
-    try {
-      await cleanupRun(runId);
-    } catch (e) {
-      // event-driven refresh will pick up state change; a refusal is said
-      toastRefusal(e);
-    }
-    setConfirmCleanup(null);
+  // The archive and the forget run under their confirmation, which waits for
+  // them: it closes on success (the daemon's events re-drive the list) and
+  // keeps a failure on screen, the daemon's message in its banner.
+  function handleCleanup(runId: string): Promise<void> {
+    return cleanupRun(runId);
   }
 
-  async function handleForget(runId: string) {
-    try {
-      await forgetRun(runId);
-    } catch (e) {
-      // event-driven refresh will pick up state change; a refusal is said
-      toastRefusal(e);
-    }
-    setConfirmForget(null);
+  function handleForget(runId: string): Promise<void> {
+    return forgetRun(runId);
   }
 
-  // #110 — Pause/Resume are cheap, reversible, fire-and-forget (silent catch like
-  // handleCleanup); the daemon's WS events re-drive the list state.
+  // #110 — Pause/Resume are cheap, reversible, fire-and-forget (a refusal is
+  // said in a toast); the daemon's WS events re-drive the list state.
   async function handlePause(runId: string) {
     try {
       await pauseRun(runId);
@@ -68,15 +59,10 @@ export function useRunRowActions(onSelectRun: (runId: string) => void) {
   // The daemon replies 201 with the offspring run_id; selecting it fires an
   // independent fetch-by-id (App's handleSelectRun) — safe before the WS refresh
   // lands the new row in `runs`.
-  async function handleRetryAll(runId: string) {
-    try {
-      const { run_id } = await retryAll(runId);
-      onSelectRun(run_id);
-    } catch (e) {
-      // event-driven refresh will pick up state change; a refusal is said
-      toastRefusal(e);
-    }
-    setConfirmRetryAll(null);
+  // It runs under its confirmation, which closes on success and says a failure.
+  async function handleRetryAll(runId: string): Promise<void> {
+    const { run_id } = await retryAll(runId);
+    onSelectRun(run_id);
   }
 
   function startRename(run: RunListEntry) {

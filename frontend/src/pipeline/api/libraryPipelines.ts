@@ -53,7 +53,7 @@ export function saveLibraryPipeline(
         ...(options.id ? { id: options.id } : {}),
         ...(options.scope ? { scope: options.scope } : {}),
       },
-      label: "POST /library/pipelines",
+      label: "Saving library pipeline",
     },
   );
 }
@@ -68,6 +68,7 @@ export function duplicateLibraryPipeline(
   return request<{ id: string; scope: LibraryPipelineScope; entry: LibraryPipelineEntry | null }>(
     "POST",
     `/library/pipelines/${encodeURIComponent(id)}/duplicate`,
+    { label: "Duplicating library pipeline" },
   );
 }
 
@@ -75,7 +76,7 @@ export function deleteLibraryPipeline(id: string): Promise<void> {
   return request<void>(
     "DELETE",
     `/library/pipelines/${encodeURIComponent(id)}`,
-    { responseMode: "void", label: `DELETE /library/pipelines/${id}` },
+    { responseMode: "void", label: "Deleting library pipeline" },
   );
 }
 
@@ -88,6 +89,6 @@ export function promotePipeline(pipelineId: string): Promise<PromoteResult> {
   return request<PromoteResult>(
     "POST",
     `/pipelines/${encodeURIComponent(pipelineId)}/promote`,
-    { label: `POST /pipelines/${pipelineId}/promote` },
+    { label: "Promoting pipeline" },
   );
 }

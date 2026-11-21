@@ -10,7 +10,7 @@ export function fetchAgentProfiles(): Promise<{ profiles: AgentProfile[] }> {
 export function createAgentProfile(
   profile: AgentProfileInput,
 ): Promise<AgentProfile> {
-  return request("POST", "/settings/agent-profiles", { body: profile });
+  return request("POST", "/settings/agent-profiles", { body: profile, label: "Creating agent profile" });
 }
 
 export function updateAgentProfile(
@@ -19,12 +19,14 @@ export function updateAgentProfile(
 ): Promise<AgentProfile> {
   return request("PUT", `/settings/agent-profiles/${encodeURIComponent(id)}`, {
     body: profile,
+    label: "Saving agent profile",
   });
 }
 
 export function deleteAgentProfile(id: string): Promise<void> {
   return request("DELETE", `/settings/agent-profiles/${encodeURIComponent(id)}`, {
     responseMode: "void",
+    label: "Deleting agent profile",
   });
 }
 

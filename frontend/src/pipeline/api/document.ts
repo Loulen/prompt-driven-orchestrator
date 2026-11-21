@@ -59,6 +59,6 @@ export function importPipelineDocument(
 ): Promise<ImportPipelineDocumentResult> {
   return request("POST", "/pipelines/import", {
     body: skillsSidecar ? { document, skills_sidecar: skillsSidecar } : { document },
-    label: "POST /pipelines/import",
+    label: "Importing pipeline",
   });
 }

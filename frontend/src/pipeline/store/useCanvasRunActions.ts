@@ -57,16 +57,12 @@ export function useCanvasRunActions(activeRunState: RunState | null, onSelectRun
     }
   }, [activeRunState]);
 
+  // Runs under its confirmation, which closes on success (its `onCancel`) and
+  // keeps a refusal on screen.
   const handleRetryAll = useCallback(async () => {
     if (!activeRunState) return;
-    setConfirmRetryAll(false);
-    try {
-      const { run_id } = await retryAll(activeRunState.run_id);
-      onSelectRun?.(run_id);
-    } catch (e) {
-      // Silent — mirrors the left-panel Retry-all; a refusal is said.
-      toastRefusal(e);
-    }
+    const { run_id } = await retryAll(activeRunState.run_id);
+    onSelectRun?.(run_id);
   }, [activeRunState, onSelectRun]);
 
   const { open: openShell } = runShell;

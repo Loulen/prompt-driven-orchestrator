@@ -17,7 +17,7 @@ export function openLibraryAssistant(): Promise<{
   return request<{ session: string; created: boolean }>(
     "POST",
     "/sessions/libassist",
-    { label: "open assistant" },
+    { label: "Opening assistant" },
   );
 }
 
@@ -37,7 +37,7 @@ export function closeLibraryAssistant(
   return request<{ ok: boolean; reaped: boolean }>(
     "DELETE",
     "/sessions/libassist",
-    { label: "close assistant", keepalive: opts.keepalive },
+    { label: "Closing assistant", keepalive: opts.keepalive },
   );
 }
 
@@ -54,5 +54,6 @@ export function putLibassistFocus(pipelineId: string | null): Promise<unknown> {
   return request("PUT", "/sessions/libassist/focus", {
     body: { pipeline_id: pipelineId },
     label: "declare assistant focus",
+    silent: true,
   });
 }

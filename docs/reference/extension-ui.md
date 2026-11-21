@@ -1198,7 +1198,7 @@ taking `size`, `strokeWidth` and `className`.
 
 | Export | What it draws |
 | --- | --- |
-| `Button` | A text button, hairline: `tone` `primary` (the accent, the one main action), `ghost`, `danger`; `size` `sm` (20 px); an `icon`; `disabledReason` (0.23) |
+| `Button` | A text button, hairline: `tone` `primary` (the accent, the one main action), `ghost`, `danger`; `size` `sm` (20 px); an `icon`; `disabledReason` (0.23); `pending`, busy while its operation runs ([Operations in progress](#operations-in-progress)) |
 | `IconButton` | An icon-only button, its `label` and `kbd` in a tooltip; `pressed`, a `badge` count; `disabledReason` (0.23) |
 | `Tooltip` | Wraps one control: « Name (shortcut) », one `description` line at most. Shows once the pointer moves on the control (not when a surface opens under a still pointer) or on a keyboard focus (not on the focus a menu gives back after Escape or a pick) |
 | `Kbd` | A key or a chord |
@@ -1209,8 +1209,8 @@ taking `size`, `strokeWidth` and `className`.
 | `Switch`, `Checkbox` | On/off, the accent when on; a box with its text, `mixed` |
 | `Popover` | A non-modal panel under its `trigger`; Escape and a click outside close it |
 | `Menu` | A menu under its `trigger`: check column, icon, label, shortcut; separators, labels, submenus, `danger`; an entry's `disabledReason` greys it and the menu says the sentence once, at its foot, with a lock (0.23) |
-| `Modal` | A modal dialog: title bar, body, footer (`actions`, `footerNote`); Escape closes, Ctrl+Enter runs `onSubmit` |
-| `ConfirmDialog` | A confirmation: the action and its object, the consequence, the mono target; Enter confirms |
+| `Modal` | A modal dialog: title bar, body, footer (`actions`, `footerNote`); Escape closes, Ctrl+Enter runs `onSubmit`; `locked` while its action runs |
+| `ConfirmDialog` | A confirmation: the action and its object, the consequence, the mono target; Enter confirms. An `onConfirm` that hands back a promise is waited for ([A confirmation that waits](#a-confirmation-that-waits)) |
 | `toast(text, kind?, options?)` | A toast in the core's stack: `info`, `success`, `warning`, `error`, a `title`, one action |
 | `Tabs` | A tab strip, the live tab underlined in the accent, a count |
 | `Section` | A section: caps head with a chevron and a count, actions on hover; folds |
@@ -1386,6 +1386,99 @@ It draws no person on a Run (since 0.12): an extension does, at `run/item/people
 
 Over HTTP: `GET /actors/me` (`{actor, display}`) and `POST /actors/display` (`{actors: [Actor]}`
 → `{displays: [ActorDisplay | null]}`, in order).
+
+## Operations in progress
+
+Every mutation the core's interface sends to the daemon (POST, PUT, PATCH, DELETE) is an
+**Opération en cours** until it settles: its button turns busy, the daemon's indicator of the
+status bar counts it once it lasts 300 ms (its name, or the list with durations, on hover), and
+its outcome shows in a toast, a failure always, a success past 2 s. An extension's interface
+sends its mutations with its own client: it names them with `trackOperation` of
+`@pdo/extension-ui`, and they show in the same indicator and toasts.
+
+```ts
+import { Button, trackOperation, usePending } from "@pdo/extension-ui";
+
+/** A `fetch` resolves on a 4xx: reject it, for the toast to say the failure. */
+async function ok(resp: Response): Promise<Response> {
+  if (!resp.ok) throw new Error((await resp.json().catch(() => null))?.error ?? `${resp.status}`);
+  return resp;
+}
+
+function MoveButton({ note }: { note: string }) {
+  const { pending, run } = usePending();
+  return (
+    <Button
+      tone="primary"
+      pending={pending && "Moving…"}
+      onClick={() =>
+        void run(() =>
+          trackOperation("Moving note", fetch(`/ext/test/notes/${note}/move`, { method: "POST" }).then(ok), {
+            done: "Note moved",
+            icon: "/ext/test/icon.svg",
+          }),
+        ).catch(() => {})
+      }
+    >
+      Move
+    </Button>
+  );
+}
+```
+
+- **`trackOperation(label, work, options?)`**: `label` is short, in the present tense (« Moving
+  note »). `work` is a promise, or a function that starts one; the result comes back, a rejection
+  passes through unchanged after its toast (the error's `message`, after « Moving note failed »).
+  `done` is the success toast's sentence, in the past tense (default « Done: Moving note »);
+  `icon` an SVG URL drawn in its row of the list (a spinner otherwise). A `fetch` that resolves on
+  a `4xx` is no failure: reject it yourself (`ok` above) for the toast to say it. A rejection
+  that is not an object (a bare string) cannot be marked as said: reject with an `Error`.
+- **`usePending()`**: `{ pending, run }`. `run(work)` starts the work and stays `pending` until it
+  settles; a second call while pending does nothing.
+- **`Button`'s `pending`**: `true`, or the text in the present tense to show in place of its own;
+  a spinner replaces its icon, it is inert (`aria-disabled`, `data-pending="busy"`) and keeps the
+  focus.
+- Reads stay silent: name only what changes something.
+
+### A confirmation that waits
+
+A `ConfirmDialog` whose `onConfirm` hands back a promise waits for it. While it runs, the button
+spins with `pendingLabel` (« Archiving… ») and the dialog is locked: Cancel and the close control
+are greyed, Escape and a click on the backdrop do nothing. A success closes it (it calls
+`onClose`). A failure keeps it open: a failed `Banner` at its top, `failedTitle` (« Archiving
+failed ») and the error's `message`, and the button turns « Retry »; Cancel works again. The
+operations the promise starts at once, before its first `await`, still show in the status bar; their
+failure is said in the dialog only, not in a toast as well. Let the promise reject on a failure:
+one that catches it and resolves closes the dialog, and the failure is then said in a toast.
+
+```ts
+import { ConfirmDialog, trackOperation } from "@pdo/extension-ui";
+
+/** A `fetch` resolves on a 4xx: reject it, with the daemon's message, for the dialog to say it. */
+async function ok(resp: Response): Promise<Response> {
+  if (!resp.ok) throw new Error((await resp.json().catch(() => null))?.error ?? `${resp.status}`);
+  return resp;
+}
+
+function ArchiveNote({ note, onClose }: { note: string; onClose: () => void }) {
+  return (
+    <ConfirmDialog
+      title="Archive this note?"
+      target={note}
+      actionLabel="Archive"
+      pendingLabel="Archiving…"
+      danger
+      onConfirm={() =>
+        trackOperation("Archiving note", fetch(`/ext/test/notes/${note}/archive`, { method: "POST" }).then(ok))
+      }
+      onClose={onClose}
+    />
+  );
+}
+```
+
+`confirmDisabled` keeps the confirmation from being given (a name still to type, in a field passed as
+`children`, marked `data-autofocus` to take the focus).
 
 ## WebSockets
 

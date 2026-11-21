@@ -20,6 +20,7 @@ import { request } from "../../shared/http/client";
  */
 export function syncCostPrices(): Promise<SyncCostPricesReport> {
   return request<SyncCostPricesReport>("POST", "/settings/cost-prices/sync", {
-    label: "POST /settings/cost-prices/sync",
+    label: "Syncing cost prices",
+    done: "Cost prices synced",
   });
 }

@@ -1,3 +1,4 @@
+import { errorAlreadyShown } from "../../shared/http/operations";
 import { toast } from "../../shared/ui/kit";
 
 /** Restores the version `number` into the draft, and says so: one change Undo takes back. */
@@ -10,6 +11,6 @@ export async function restoreIntoDraft(
     await restoreVersion(pipelineId, number);
     toast(`v${number} restored into the draft`, "success");
   } catch (e) {
-    toast(e instanceof Error ? e.message : String(e), "error");
+    if (!errorAlreadyShown(e)) toast(e instanceof Error ? e.message : String(e), "error");
   }
 }

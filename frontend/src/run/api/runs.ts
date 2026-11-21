@@ -27,7 +27,7 @@ export function forgetRun(runId: string): Promise<void> {
   return request<void>(
     "DELETE",
     `/runs/${encodeURIComponent(runId)}`,
-    { responseMode: "void", label: `DELETE /runs/${runId}` },
+    { responseMode: "void", label: "Forgetting run" },
   );
 }
 

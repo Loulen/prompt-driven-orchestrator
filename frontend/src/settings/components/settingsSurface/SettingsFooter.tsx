@@ -53,12 +53,13 @@ export default function SettingsFooter({
         ref={saveButtonRef}
         tone="primary"
         onClick={() => void form.handleSave()}
-        disabled={!saveRefused && (saveState.status === "saving" || !loaded || (!isDirty && !missingDefaultProfile))}
+        disabled={!saveRefused && saveState.status !== "saving" && (!loaded || (!isDirty && !missingDefaultProfile))}
+        pending={saveState.status === "saving" && "Saving…"}
         disabledReason={saveRefused}
         title={saveRefused ? undefined : "Save (Ctrl+S)"}
         data-testid="settings-save"
       >
-        {saveState.status === "saving" ? "Saving…" : "Save"}
+        Save
         <Kbd>Ctrl S</Kbd>
       </Button>
     </footer>

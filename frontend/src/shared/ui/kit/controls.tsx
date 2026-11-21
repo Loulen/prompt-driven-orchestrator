@@ -4,7 +4,7 @@
  * (`kit.*` choices); styles in kit.css, tokens only.
  */
 import * as React from "react";
-import { CircleX } from "lucide-react";
+import { CircleX, LoaderCircle } from "lucide-react";
 import { Tooltip } from "./tip";
 import type { Icon } from "./tones";
 import { cx } from "./util";
@@ -24,6 +24,13 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
    * refuse.
    */
   disabledReason?: string;
+  /**
+   * Its operation is running (`usePending`): a spinner in place of the icon,
+   * this text in the present tense in place of its own (« Approving… ») when
+   * it is a string, and inert (`aria-disabled`, `data-pending="busy"`) so it
+   * is not sent twice. It keeps its node, and the focus.
+   */
+  pending?: boolean | string;
 }
 
 /**
@@ -51,9 +58,11 @@ function greyedFor<E extends HTMLElement>(
 
 /** A text button: hairline, no fill. */
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { icon: Icon, tone = "default", size = "md", className, children, type = "button", disabledReason, onClick, onKeyDown, ...rest },
+  { icon: Icon, tone = "default", size = "md", className, children, type = "button", disabledReason, pending, onClick, onKeyDown, ...rest },
   ref,
 ) {
+  const busy = !disabledReason && !!pending;
+  const Lead = busy ? LoaderCircle : Icon;
   const button = (
     <button
       ref={ref}
@@ -67,10 +76,14 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
         className,
       )}
       {...rest}
-      {...greyedFor<HTMLButtonElement>(disabledReason, { onClick, onKeyDown })}
+      {...(busy
+        ? { "data-pending": "busy", "aria-busy": true, ...greyedFor<HTMLButtonElement>("busy", { onClick, onKeyDown }) }
+        : greyedFor<HTMLButtonElement>(disabledReason, { onClick, onKeyDown }))}
     >
-      {Icon && <Icon size={size === "sm" ? 12 : 14} strokeWidth={1.5} aria-hidden />}
-      {children}
+      {Lead && (
+        <Lead size={size === "sm" ? 12 : 14} strokeWidth={1.5} aria-hidden className={busy ? "d-spin" : undefined} />
+      )}
+      {busy && typeof pending === "string" ? pending : children}
     </button>
   );
   return disabledReason ? <Tooltip label={disabledReason}>{button}</Tooltip> : button;

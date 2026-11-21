@@ -97,9 +97,10 @@ export default function PersistedProvisioningEditor({
             size="sm"
             tone="primary"
             onClick={save}
-            disabled={!valid || saving || (scope === "project" && !projectId)}
+            disabled={!saving && (!valid || (scope === "project" && !projectId))}
+            pending={saving && "Saving…"}
           >
-            {saving ? "Saving…" : "Save provisioning"}
+            Save provisioning
           </Button>
         </div>
       }

@@ -190,6 +190,12 @@
     opacity: 1;
     cursor: not-allowed;
   }
+  /* Busy: its operation is running (a spinner, the present tense). Inert but
+     not greyed: the lighter ruby above for a primary, full ink otherwise. */
+  .d-btn[data-pending="busy"] {
+    opacity: 1;
+    cursor: progress;
+  }
   .d-split--primary .d-split__chev:hover:not(:disabled):not([aria-disabled="true"]),
   .d-split--primary .d-split__chev[aria-expanded="true"] {
     background: color-mix(in oklch, var(--primary) 88%, var(--text));
@@ -1384,5 +1390,25 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  /* The body's own fields: laid out as if the fieldset were not there. */
+  .d-confirm__fields {
+    display: contents;
+  }
+  /* Several targets (the loops an edge closes), wrapped. */
+  .d-confirm__targets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--g-2);
+    min-width: 0;
+  }
+  /* The line above a confirmation to type: « Type abc1234 to confirm ». */
+  .d-confirm__hint {
+    display: flex;
+    align-items: center;
+    gap: var(--g-2);
+    margin: var(--g-2) 0 0;
+    color: var(--text-2);
+    font-size: var(--fs-sm);
   }
 }

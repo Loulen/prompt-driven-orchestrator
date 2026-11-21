@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Button, Modal } from "./kit";
+import { ConfirmDialog } from "./kit";
 
 interface Props {
   open: boolean;
@@ -9,7 +9,7 @@ interface Props {
    * cascade checkbox was ticked (#227). Existing zero-arg handlers stay
    * assignable; callers that don't pass `cascadeLabel` always receive `false`.
    */
-  onConfirm: (cascade: boolean) => void;
+  onConfirm: (cascade: boolean) => void | Promise<unknown>;
   name: string;
   kind?: string;
   /** The consequence, in five words at most. */
@@ -23,10 +23,12 @@ interface Props {
 }
 
 /**
- * The confirmation of a deletion: the title names the action and the kind of
- * thing, then the consequence in a few words, the target in mono, and Cancel /
- * Delete. Enter (outside a text field) or Ctrl+Enter deletes, Escape and the
- * backdrop cancel.
+ * The confirmation of a deletion, on the kit's `ConfirmDialog`: the title
+ * names the action and the kind of thing, then the consequence in a few words,
+ * the target in mono, and Cancel / Delete. Enter (outside a text field) or
+ * Ctrl+Enter deletes, Escape and the backdrop cancel. An `onConfirm` that
+ * hands back a promise is waited for: the dialog locked, closed on success,
+ * the daemon's message kept on a failure.
  */
 export default function ConfirmDeleteModal({
   open,
@@ -45,48 +47,30 @@ export default function ConfirmDeleteModal({
   if (!open) return null;
 
   return (
-    <Modal
-      size="s"
+    <ConfirmDialog
       title={`Delete this ${kind}?`}
+      consequence={detail ?? "Removes its YAML and prompts"}
+      target={name}
+      actionLabel="Delete"
+      pendingLabel="Deleting…"
+      danger
+      onConfirm={() => onConfirm(cascade)}
       onClose={onClose}
-      onSubmit={() => onConfirm(cascade)}
       // The dialog box: the *First pipeline* tour re-aims its last step onto
       // this rectangle so the projecteur's hole lands on Cancel/Delete (#825).
       data-testid="confirm-delete-modal"
-      actions={
-        <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button tone="danger" onClick={() => onConfirm(cascade)} data-autofocus="">
-            Delete
-          </Button>
-        </>
-      }
     >
-      <div
-        className="d-confirm"
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) {
-            e.preventDefault();
-            onConfirm(cascade);
-          }
-        }}
-      >
-        <p className="d-confirm__line">{detail ?? "Removes its YAML and prompts"}</p>
-        <code className="d-code d-confirm__target" title={name}>
-          {name}
-        </code>
-        {cascadeLabel && (
-          <label className="d-check">
-            <input
-              type="checkbox"
-              data-testid="delete-cascade-checkbox"
-              checked={cascade}
-              onChange={(e) => setCascade(e.target.checked)}
-            />
-            {cascadeLabel}
-          </label>
-        )}
-      </div>
-    </Modal>
+      {cascadeLabel && (
+        <label className="d-check">
+          <input
+            type="checkbox"
+            data-testid="delete-cascade-checkbox"
+            checked={cascade}
+            onChange={(e) => setCascade(e.target.checked)}
+          />
+          {cascadeLabel}
+        </label>
+      )}
+    </ConfirmDialog>
   );
 }

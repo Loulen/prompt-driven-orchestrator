@@ -32,6 +32,7 @@ export function askAuthorization(operations: OperationQuestion[]): Promise<Decis
   return request<{ decisions: Decision[] }>("POST", "/authorize", {
     body: { operations },
     label: "POST /authorize",
+    silent: true,
   }).then((answer) => answer.decisions);
 }
 

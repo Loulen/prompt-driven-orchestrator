@@ -64,7 +64,7 @@ export function createRepo(
       files,
       ...(projectId ? { project_id: projectId } : {}),
     },
-    label: "POST /repos/create",
+    label: "Creating repository",
   });
 }
 
@@ -99,7 +99,7 @@ export function fetchRemotes(repoPath: string): Promise<BranchList> {
   return request<BranchList>(
     "POST",
     `/repos/fetch?path=${encodeURIComponent(repoPath)}`,
-    { label: "POST /repos/fetch" },
+    { label: "Fetching remotes", silent: true },
   );
 }
 
@@ -123,7 +123,7 @@ export async function fastForwardBranch(
     resp = await request<Response>(
       "POST",
       `/repos/fast-forward?path=${encodeURIComponent(repoPath)}`,
-      { body: { branch }, responseMode: "raw", label: "POST /repos/fast-forward" },
+      { body: { branch }, responseMode: "raw", label: "Fast-forwarding branch" },
     );
   } catch (e) {
     return { kind: "error", message: e instanceof Error ? e.message : String(e) };
@@ -185,7 +185,7 @@ export function startClone(body: {
   path?: string;
   project_id?: string;
 }): Promise<CloneJob> {
-  return request<CloneJob>("POST", "/repos/clones", { body, label: "POST /repos/clones" });
+  return request<CloneJob>("POST", "/repos/clones", { body, label: "Cloning repository" });
 }
 
 /** The clones running, and the last ones finished, newest first. */
@@ -202,6 +202,6 @@ export function fetchClone(id: string): Promise<CloneJob> {
 /** Stop a running clone: nothing it wrote stays. */
 export function cancelClone(id: string): Promise<CloneJob> {
   return request<CloneJob>("DELETE", `/repos/clones/${encodeURIComponent(id)}`, {
-    label: "DELETE /repos/clones",
+    label: "Cancelling clone",
   });
 }

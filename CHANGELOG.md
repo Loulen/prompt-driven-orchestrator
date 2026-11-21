@@ -55,6 +55,29 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   under Classic without copying its values. The served logos (`/shared/brand/mark.svg`,
   `lockup.svg`) paint their accent with it instead of `--primary`: a page that recoloured an
   inlined logo through `--primary` no longer does.
+## Unreleased
+
+- Every change you send to the daemon now shows while it runs. Its button turns busy (a spinner,
+  "Approving…", "Launching…", "Saving…") and takes no second click. The status bar's daemon
+  icon, now right of the sessions counter, joins the connection and the work in flight: a grey
+  check when connected and idle, a turning ruby ring with the number of operations past 300 ms
+  (their name, or their list with durations, on hover or focus), a red cross when the connection
+  is lost. A failure always shows a toast with the daemon's message; a success shows one only when
+  it took more than 2 s. Reads and refreshes stay silent.
+- Seam for extensions: `@pdo/extension-ui` exports `trackOperation(label, work, { done, icon })`,
+  so the mutations an extension sends with its own client show in the same indicator and toasts,
+  and `usePending()`, which turns a `Button` busy through its new `pending` prop.
+- A confirmation now waits for its action: archiving a Run, forgetting one, deleting a Pipeline
+  or a Trigger. While the daemon works, its button spins ("Archiving…") and the window is locked:
+  Cancel, its cross, Escape and a click outside do nothing. It closes once the action succeeds. A
+  failure keeps it open, with the daemon's message in a banner at its top and the button turned
+  "Retry"; the failure shows there only, not in a toast as well. The archive confirmation takes
+  the kit's layout: the consequence on one line, the Run id in mono, and for a Run still live the
+  id's suffix to type. Destroying a loop by deleting its last edge asks in the same window.
+- Seam for extensions: `ConfirmDialog` of `@pdo/extension-ui` waits for an `onConfirm` that hands
+  back a promise (`pendingLabel`, `failedTitle`, `retryLabel`, `confirmDisabled`), and `Modal`
+  takes `locked` while its action runs.
+
 ## 2.80.4
 
 - A Run whose Start is wired straight to End ends as soon as it starts: with no node to launch, it

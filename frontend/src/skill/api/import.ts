@@ -13,11 +13,11 @@ import type { SkillScanResult } from "../model/skill";
  * caller so the clone can be cancelled and then reused by `importSkills`.
  */
 export function scanSkillSource(scanId: string, source: string): Promise<SkillScanResult> {
-  return request("POST", "/settings/skills/scan", { body: { scan_id: scanId, source } });
+  return request("POST", "/settings/skills/scan", { body: { scan_id: scanId, source }, label: "Scanning skill source" });
 }
 
 export function cancelSkillScan(scanId: string): Promise<{ cancelled: boolean }> {
-  return request("POST", `/settings/skills/scan/${encodeURIComponent(scanId)}/cancel`);
+  return request("POST", `/settings/skills/scan/${encodeURIComponent(scanId)}/cancel`, { label: "Cancelling scan" });
 }
 
 export function importSkills(body: {
@@ -26,7 +26,7 @@ export function importSkills(body: {
   folder?: { id?: string | null; name?: string | null; parent_id?: string | null };
   items: SkillImportItem[];
 }): Promise<SkillImportReport> {
-  return request("POST", "/settings/skills/import", { body });
+  return request("POST", "/settings/skills/import", { body, label: "Importing skills", done: "Skills imported" });
 }
 
 export function fetchRecentSkillSources(): Promise<{ sources: RecentSkillSource[] }> {
@@ -37,6 +37,7 @@ export function fetchRecentSkillSources(): Promise<{ sources: RecentSkillSource[
 export function rescanSkillFolder(folderId: string, scanId: string): Promise<SkillRescanReport> {
   return request("POST", `/settings/skill-folders/${encodeURIComponent(folderId)}/rescan`, {
     body: { scan_id: scanId },
+    label: "Rescanning skill folder",
   });
 }
 
@@ -46,5 +47,6 @@ export function updateSkillFolderFromSource(
 ): Promise<SkillImportReport> {
   return request("POST", `/settings/skill-folders/${encodeURIComponent(folderId)}/update`, {
     body,
+    label: "Updating skill folder",
   });
 }

@@ -8,5 +8,5 @@ export function fetchTelemetryStatus(): Promise<TelemetryStatus> {
 
 /** Export now, a test span included; `409` while the export is off. */
 export function sendTestExport(): Promise<TelemetryStatus> {
-  return request<TelemetryStatus>("POST", "/telemetry/test-export");
+  return request<TelemetryStatus>("POST", "/telemetry/test-export", { label: "Testing telemetry export" });
 }

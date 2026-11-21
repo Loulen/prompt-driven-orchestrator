@@ -3,6 +3,7 @@ import { RotateCcw, Square } from "lucide-react";
 import { Button, toast } from "../../../shared/ui/kit";
 import type { HostedSession } from "../../model/hostedSession";
 import { useHostedSession } from "../../store/useHostedSession";
+import { errorAlreadyShown } from "../../../shared/http/operations";
 import "./hostedSession.css";
 
 /**
@@ -33,7 +34,7 @@ export default function SessionActions({ session: id, children }: { session: str
       .catch((e: unknown) => {
         const message = e instanceof Error ? e.message : String(e);
         if (current.current === of) setError(message);
-        toast(message, "error", { title });
+        if (!errorAlreadyShown(e)) toast(message, "error", { title });
       })
       .finally(() => setBusy(false));
   };

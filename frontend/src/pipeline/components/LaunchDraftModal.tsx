@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Play, X } from "lucide-react";
 import { changesLabel, versionLabel, type DraftLaunch } from "../model/versions";
+import { useBackdropDismiss } from "../../shared/ui/kit/backdropDismiss";
 
 export type LaunchChoice = "save" | "last";
 
@@ -50,14 +51,12 @@ export default function LaunchDraftModal({
     },
   ];
 
+  const backdrop = useBackdropDismiss(onCancel, true, { stopPropagation: true });
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-scrim"
       data-testid="launch-draft-backdrop"
-      onClick={(e) => {
-        e.stopPropagation();
-        onCancel();
-      }}
+      {...backdrop}
     >
       <div
         role="dialog"

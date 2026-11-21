@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { useBackdropDismiss } from "../../shared/ui/kit/backdropDismiss";
 
 /**
  * ADR-0085: « Finish editing » with unsaved edits. Three ways out: keep
@@ -23,11 +24,12 @@ export default function FinishEditingConfirmModal({
     return () => document.removeEventListener("keydown", handleKey);
   }, [onCancel]);
 
+  const backdrop = useBackdropDismiss(onCancel);
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       data-testid="finish-editing-backdrop"
-      onClick={onCancel}
+      {...backdrop}
     >
       <div
         role="dialog"

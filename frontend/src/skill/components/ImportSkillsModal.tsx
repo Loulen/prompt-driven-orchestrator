@@ -7,6 +7,7 @@ import ImportSourceField from "./ImportSourceField";
 import ImportScanStates from "./ImportScanStates";
 import ImportCandidates from "./ImportCandidates";
 import ImportSidebar from "./ImportSidebar";
+import { useBackdropDismiss } from "../../shared/ui/kit/backdropDismiss";
 
 interface Props {
   folders: SkillFolder[];
@@ -44,13 +45,11 @@ export default function ImportSkillsModal({
   const { step, setText, browsing, setBrowsing, setScanError, inputRef, confirmDiscard, setConfirmDiscard } = imp;
   const { parsed, startScan, summary, canImport, submit, requestClose } = imp;
 
+  const backdrop = useBackdropDismiss(requestClose, true, { stopPropagation: true });
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-scrim"
-      onClick={(event) => {
-        event.stopPropagation();
-        requestClose();
-      }}
+      {...backdrop}
       data-testid="import-skills-backdrop"
     >
       <div

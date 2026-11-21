@@ -647,6 +647,10 @@
   .ln-agent__pop {
     width: 320px;
   }
+  .ln-agent__lead {
+    display: inline-flex;
+    color: var(--text-2);
+  }
   .ln-agent__back {
     gap: var(--g-2);
     border-bottom: 1px solid var(--line-soft);

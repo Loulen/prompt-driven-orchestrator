@@ -23,6 +23,7 @@ use pdo_run::adapters::cli::{
 };
 
 use pdo_session::adapters::cli::run_session;
+use pdo_session::adapters::cli::support::run_support;
 use pdo_settings::adapters::cli::run_settings;
 use pdo_skill::adapters::cli::run_skill;
 use pdo_stats::adapters::cli::run_stats;
@@ -189,6 +190,7 @@ where
         Commands::Node { action } => exit_code(run_node(action)),
         Commands::Pipeline { action } => exit_code(run_pipeline(action)),
         Commands::Session { action } => exit_code(run_session(action)),
+        Commands::Support { action } => exit_code(run_support(action)),
         Commands::Settings { action } => exit_code(run_settings(*action)),
         Commands::Stats { action } => exit_code(run_stats(*action)),
         Commands::Skill { action } => exit_code(run_skill(*action)),

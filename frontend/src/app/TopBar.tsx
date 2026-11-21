@@ -14,6 +14,7 @@ import { useRunCreationRightsStore } from "../run/store/runCreationRightsStore";
 import CommandField from "./palette/CommandField";
 import CommandPalette from "./palette/CommandPalette";
 import BugReportHost from "../platform/components/bugReport/BugReportHost";
+import SupportAgent from "../session/components/support/SupportAgent";
 
 /** What `topbar/account` adds to the base context: no item. */
 const ACCOUNT_ITEM: Omit<DecorationContext, "location" | "run" | "project"> = { entity: null };
@@ -96,6 +97,7 @@ export default function TopBar({
       <ExtensionPageHost />
       <CommandPalette />
       <BugReportHost />
+      <SupportAgent />
     </>
   );
 }

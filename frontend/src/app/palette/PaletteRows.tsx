@@ -10,6 +10,7 @@
 import type { ReactNode } from "react";
 import { Check, ChevronDown, CircleAlert, LoaderCircle, Lock, RotateCcw } from "lucide-react";
 import ExtensionIcon from "../../shared/extensions/ExtensionIcon";
+import HarnessLogo from "../../harness/components/HarnessLogo";
 import { usePageCounter } from "../../shared/extensions/pageCounter";
 import { Avatar, Kbd, StatusIcon } from "../../shared/ui/kit";
 import { rowDomId, type Lead, type PaletteItem, type ResultItem, type Row, type Section } from "./paletteModel";
@@ -76,6 +77,12 @@ export function LeadMark({ lead, size = 14 }: { lead: Lead | null; size?: number
           <Avatar name={lead.avatar.name} actor={lead.avatar.actor} src={lead.avatar.avatar_url} size={16} />
         </span>
       );
+    case "harness":
+      return (
+        <span className="sh-pal__ico">
+          <HarnessLogo harness={lead.harness} size={size} />
+        </span>
+      );
   }
 }
 
@@ -140,6 +147,7 @@ function ItemRow({ item, hits, ...p }: Omit<RowProps, "row"> & { item: PaletteIt
       )}
       <span className="sh-pal__fill" />
       {item.counter && item.extension && <ActionCount extension={item.extension.id} path={item.counter} />}
+      {item.hint && <span className="sh-pal__meta">{item.hint}</span>}
       {item.disabledReason ? (
         <span className="sh-pal__meta sh-pal__why" title={item.disabledReason} data-testid="palette-refused">
           <Lock size={12} strokeWidth={1.5} aria-hidden />

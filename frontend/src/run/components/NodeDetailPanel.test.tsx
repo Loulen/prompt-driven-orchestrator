@@ -183,9 +183,9 @@ function makeNode(overrides?: Partial<NodeState>): NodeState {
   describe("frozen harness (#616)", () => {
     it("shows the node's frozen harness next to the id when present", () => {
       render(<NodeDetailPanel node={makeNode({ harness: "copilot" })} runId="run-1" />);
-      // The harness's initial, its name in the tooltip.
+      // The harness's logo, its name in the tooltip.
       const chip = screen.getByTestId("node-frozen-harness");
-      expect(chip).toHaveTextContent("G");
+      expect(chip.querySelector('[data-harness-logo="copilot"]')).not.toBeNull();
       expect(chip).toHaveAccessibleName("copilot · frozen at spawn");
     });
 

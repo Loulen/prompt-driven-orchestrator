@@ -120,6 +120,11 @@ pub struct FakeTmux {
     /// Runs once, inside the next `new_session`, before the session exists.
     #[allow(clippy::type_complexity)]
     pub on_next_spawn: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// When each session last wrote in its window.
+    pub outputs: Mutex<std::collections::HashMap<String, std::time::SystemTime>>,
+    /// Runs once, inside the next `list_pdo_sessions`, after the list is taken.
+    #[allow(clippy::type_complexity)]
+    pub on_next_list: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl FakeTmux {
@@ -188,14 +193,24 @@ impl Tmux for FakeTmux {
         Some(!self.sessions.lock().unwrap().is_empty())
     }
 
+    fn last_output_at(&self, name: &str) -> Option<std::time::SystemTime> {
+        self.outputs.lock().unwrap().get(name).copied()
+    }
+
     fn list_pdo_sessions(&self) -> HashSet<String> {
-        self.sessions
+        let listed = self
+            .sessions
             .lock()
             .unwrap()
             .keys()
             .filter(|n| n.starts_with("pdo-"))
             .cloned()
-            .collect()
+            .collect();
+        let hook = self.on_next_list.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook();
+        }
+        listed
     }
 
     fn is_attached(&self, name: &str) -> bool {

@@ -142,7 +142,7 @@ impl SweepOrphans {
             let mut focus_age = None;
             let mut recorded = false;
             match &parsed {
-                None => {}
+                None | Some(ParsedSession::Support) => {}
                 // A Session hébergée lives by its record alone.
                 Some(ParsedSession::Hosted) => {
                     recorded = self

@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from "react";
-import { Bookmark, Check, ChevronDown, ChevronLeft, GitFork, SlidersHorizontal, TriangleAlert } from "lucide-react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
+import { Check, ChevronDown, ChevronLeft, SlidersHorizontal, TriangleAlert } from "lucide-react";
 import type { AgentChoice } from "../../shared/generated/AgentChoice";
 import type { AgentCombination } from "../model/settings";
 import type { AgentProfile } from "../../shared/generated/AgentProfile";
@@ -8,6 +8,7 @@ import { findHarnessOption, effortOffer } from "../../harness/model/catalog";
 import HarnessSelect from "../../harness/components/HarnessSelect";
 import ModelPicker from "../../harness/components/ModelPicker";
 import EffortPicker from "../../harness/components/EffortPicker";
+import HarnessLogo from "../../harness/components/HarnessLogo";
 import { AnchoredPanel } from "../../shared/ui/kit/layer";
 import { Button } from "../../shared/ui/kit";
 import { combinationLabel, resolveAgentChoice } from "../model/agentProfiles";
@@ -57,11 +58,6 @@ export default function AgentControl({
     : choice?.mode === "profile" ? resolved.profile?.name ?? "Profile"
     : choice?.mode === "custom" ? "Custom"
     : "Inherit";
-  const Icon =
-    broken ? TriangleAlert
-    : choice?.mode === "profile" ? Bookmark
-    : choice?.mode === "custom" ? SlidersHorizontal
-    : GitFork;
   const harnessOption = findHarnessOption(catalog, custom.harness);
   // #798: the custom pane's effort offer is read against the model THIS pane has
   // selected (seeded from the choice when editing an existing custom, else from
@@ -101,7 +97,11 @@ export default function AgentControl({
         onClick={() => (open ? close() : setOpen(true))}
         className="d-sel ln-agent__field"
       >
-        <Icon className="d-sel__lead" size={13} strokeWidth={1.5} aria-hidden />
+        {broken ? (
+          <TriangleAlert className="d-sel__lead" size={13} strokeWidth={1.5} aria-hidden />
+        ) : (
+          <HarnessLogo className="d-sel__lead" harness={resolved.combination.harness} size={13} />
+        )}
         <span className="d-sel__val">{modeLabel}</span>
         <span className="ln-sel__count ln-agent__sum">{summary}</span>
         <ChevronDown className="d-sel__chev" size={12} strokeWidth={1.5} aria-hidden />
@@ -167,6 +167,7 @@ export default function AgentControl({
               {allowInherit && (
                 <ChoiceRow
                   testId={`${testId}-choice-inherit`}
+                  lead={<HarnessLogo harness={inherited.harness} size={13} />}
                   name="Inherit"
                   summary={combinationLabel(inherited)}
                   selected={!choice || choice.mode === "inherit"}
@@ -184,6 +185,7 @@ export default function AgentControl({
                   // than the (renameable) name — a guided tour has to be able to
                   // aim at « Default », and the reserved id is the fixed part.
                   testId={`${testId}-choice-${profile.id}`}
+                  lead={<HarnessLogo harness={profile.harness} size={13} />}
                   name={profile.name}
                   summary={combinationLabel(profile)}
                   selected={choice?.mode === "profile" && choice.profile_id === profile.id}
@@ -196,6 +198,7 @@ export default function AgentControl({
               <div className="d-pop__sep" />
               <ChoiceRow
                 testId={`${testId}-choice-custom`}
+                lead={<SlidersHorizontal size={13} strokeWidth={1.5} aria-hidden />}
                 name="Custom…"
                 summary=""
                 selected={choice?.mode === "custom"}
@@ -217,12 +220,15 @@ function ChoiceRow({
   summary,
   selected,
   onClick,
+  lead,
   testId,
 }: {
   name: string;
   summary: string;
   selected: boolean;
   onClick: () => void;
+  /** The harness's logo, or the choice's icon. */
+  lead?: ReactNode;
   testId?: string;
 }) {
   return (
@@ -235,6 +241,7 @@ function ChoiceRow({
       title={summary ? `${name} · ${summary} (— = the harness default)` : name}
     >
       <span className="d-pop__mark">{selected && <Check size={12} strokeWidth={2} aria-hidden />}</span>
+      {lead && <span className="d-pop__ic ln-agent__lead">{lead}</span>}
       <span className="d-pop__label">{name}</span>
       {summary && <span className="d-pop__hint">{summary}</span>}
     </button>

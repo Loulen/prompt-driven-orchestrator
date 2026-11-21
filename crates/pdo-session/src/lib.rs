@@ -19,6 +19,9 @@
 //!   hold outside any Run (ADR-0092), recorded across restarts: relaunched,
 //!   configured, typed into, forgotten, their declared wait and their
 //!   Artefacts live.
+//! - **Agent de support**: one interactive agent per Actor, outside any Run,
+//!   with the rights of its Actor, opened on a choice of agent and asked
+//!   questions while it lives.
 //!
 //! Hexagonal inside: `domain/` holds the pure rules, `application/` the ports
 //! (tmux behind the one [`Tmux`](application::ports::Tmux) port) and one use case
@@ -35,6 +38,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use pdo_kernel::event_bus::EventBus;
 use pdo_kernel::extension_host::ExtensionHost;
 
 use application::assistant::{
@@ -42,7 +46,7 @@ use application::assistant::{
 };
 use application::attach::AttachTerminal;
 use application::declared_wait::{DeclareWait, LiftWait, TypedInput};
-use application::hosted::{Hosted, HostedPorts, HostedRegistry};
+use application::hosted::{Hosted, HostedPorts, WithHosted};
 use application::open_shell::OpenShell;
 use application::ports::{
     AssistantHarness, DaemonGauges, NodePanes, NodeWaits, RunProjects, RunShells, SessionOwners,
@@ -52,6 +56,9 @@ use application::read_pane::ReadPane;
 use application::session_ledger::SessionLedger;
 use application::shared_terminal::SharedTerminalRegistry;
 use application::status::ReadStatus;
+use application::support::{
+    CoreRepository, Support, SupportAgents, SupportLaunch, SupportSkills, SupportSources,
+};
 use application::sweep::{ReaperGauge, SweepOrphans};
 use application::terminal::Terminals;
 use application::terminal_text::SendTerminalText;
@@ -82,6 +89,16 @@ pub struct SessionPorts {
     /// Where the Sessions hébergées are recorded, resolve their folder and
     /// harness, and take their slot of the Cap (ADR-0092).
     pub hosted: HostedPorts,
+    /// Which agent a choice resolves to, for the Agents de support.
+    pub support: Arc<dyn SupportAgents>,
+    /// The kernel's bus, where the Agents de support tell what changed of
+    /// them (hence `/ws`).
+    pub events: Arc<dyn EventBus>,
+    /// The skills the Agents de support receive.
+    pub support_skills: Arc<dyn SupportSkills>,
+    /// The public repository of the core, the Agents de support read it at
+    /// the instance's tag.
+    pub core_repository: Arc<dyn CoreRepository>,
 }
 
 /// The daemon's knobs the context reads.
@@ -93,6 +110,11 @@ pub struct SessionOptions {
     pub tmux_cmd_override: Option<String>,
     /// Extra WebSocket origins (`PDO_ALLOWED_WS_ORIGINS`), parsed at boot.
     pub allowed_ws_origins: Vec<String>,
+    /// The state folder of the Agents de support: one folder per Actor.
+    pub support_root: PathBuf,
+    /// Where the clones of the core the Agents de support read are kept, one
+    /// per tag.
+    pub core_source_root: PathBuf,
 }
 
 /// The context, assembled: its use cases over its ports.
@@ -115,6 +137,7 @@ pub struct Session {
     declare_focus: DeclareFocus,
     save_focused: SaveFocused,
     hosted: Arc<Hosted>,
+    support: Support,
     /// How often the PTY bridge beats a terminal socket, in ms: the
     /// [`TERMINAL_BEAT_INTERVAL`](domain::pty_protocol::TERMINAL_BEAT_INTERVAL),
     /// shortened by tests.
@@ -136,6 +159,10 @@ impl Session {
             extensions,
             projects,
             hosted,
+            support,
+            events,
+            support_skills,
+            core_repository,
         } = ports;
         let typed = Arc::new(TypedInput::default());
         let shared_terminals = Arc::new(SharedTerminalRegistry::default());
@@ -226,7 +253,25 @@ impl Session {
                 extensions.clone(),
             ),
             declare_focus: DeclareFocus::new(focus.clone(), templates.clone(), extensions.clone()),
-            save_focused: SaveFocused::new(focus.clone(), templates, extensions),
+            save_focused: SaveFocused::new(focus.clone(), templates, extensions.clone()),
+            support: Support::new(
+                tmux.clone(),
+                support,
+                extensions,
+                SupportLaunch {
+                    root: options.support_root.clone(),
+                    daemon_port: options.daemon_port,
+                    tmux_cmd_override: options.tmux_cmd_override.clone(),
+                },
+            )
+            .with_ledger(ledger.clone())
+            .with_events(events)
+            .with_sources(Arc::new(SupportSources::new(
+                support_skills,
+                core_repository,
+                options.core_source_root.clone(),
+                pdo_platform::domain::release_channel::CORE_VERSION,
+            ))),
             hosted,
             tmux,
             focus,
@@ -333,24 +378,9 @@ impl Session {
     pub fn hosted(&self) -> &Arc<Hosted> {
         &self.hosted
     }
-}
 
-/// The Projets of the Runs, and those of the Sessions hébergées by their
-/// record.
-struct WithHosted {
-    runs: Arc<dyn RunProjects>,
-    hosted: Arc<HostedRegistry>,
-}
-
-impl RunProjects for WithHosted {
-    fn projects_of_run<'a>(
-        &'a self,
-        run_id: &'a str,
-    ) -> application::ports::BoxFuture<'a, Vec<String>> {
-        self.runs.projects_of_run(run_id)
-    }
-
-    fn projects_of_hosted(&self, session: &str) -> Vec<String> {
-        self.hosted.projects_of(session)
+    /// The Agents de support, one per Actor.
+    pub fn support(&self) -> &Support {
+        &self.support
     }
 }

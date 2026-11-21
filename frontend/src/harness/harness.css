@@ -13,3 +13,27 @@
   --harness-copilot: rgb(11 92 196);
   --harness-claude: rgb(162 68 9);
 }
+/* The colours a first-party mark is published in (`HarnessLogo`), in either mode. */
+:root {
+  --harness-mark-claude: rgb(217 119 87);
+}
+
+/* The logo of a harness (`HarnessLogo`): a first-party mark, or its initial. */
+.h-logo {
+  display: inline-block;
+  flex: none;
+  vertical-align: middle;
+}
+.h-logo--initial {
+  display: inline-grid;
+  place-items: center;
+  width: var(--h-logo-size);
+  height: var(--h-logo-size);
+  border-radius: var(--radius-ui);
+  /* The series colours are light in the dark mode, dark in the light one: the ground's colour reads on them. */
+  color: var(--color-paper);
+  font-size: calc(var(--h-logo-size) * 0.62);
+  font-family: var(--font-code);
+  font-weight: var(--w-strong);
+  line-height: 1;
+}

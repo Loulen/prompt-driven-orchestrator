@@ -3,6 +3,8 @@
 //! other commands are the gestures of a Session hébergée's detail (ADR-0092):
 //! read it and its events, terminate, relaunch, configure.
 
+pub mod support;
+
 use anyhow::Result;
 use clap::Subcommand;
 use pdo_platform::adapters::cli::daemon::{print_json, segment, Daemon};

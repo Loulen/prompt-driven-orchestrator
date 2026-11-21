@@ -75,11 +75,29 @@ pub fn libassist_session_name() -> &'static str {
 pub fn libassist_session_name_of(actor: &Actor) -> String {
     match actor {
         Actor::LocalOperator => LIBASSIST_SESSION_NAME.to_string(),
-        other => {
-            let key = serde_json::to_string(other).unwrap_or_default();
-            format!("pdo-libassist-a{:016x}", fnv1a(key.as_bytes()))
-        }
+        other => format!("pdo-libassist-{}", actor_digest(other)),
     }
+}
+
+/// The prefix of every Agent de support's name: one session per Actor, outside
+/// any Run.
+pub const SUPPORT_SESSION_PREFIX: &str = "pdo-support-";
+
+/// The Agent de support of `actor`: one per Actor, so `POST /sessions/support`
+/// finds the one already open, and two Actors never share a conversation. The
+/// local operator's ends with `operator`; any other Actor's with a stable
+/// digest of the Actor, which tmux accepts whatever the extension's ids hold.
+pub fn support_session_name_of(actor: &Actor) -> String {
+    match actor {
+        Actor::LocalOperator => format!("{SUPPORT_SESSION_PREFIX}operator"),
+        other => format!("{SUPPORT_SESSION_PREFIX}{}", actor_digest(other)),
+    }
+}
+
+/// `a` then a stable digest of `actor`, 16 hex digits.
+fn actor_digest(actor: &Actor) -> String {
+    let key = serde_json::to_string(actor).unwrap_or_default();
+    format!("a{:016x}", fnv1a(key.as_bytes()))
 }
 
 /// The prefix of every Session hébergée's name (ADR-0092): the sweep keeps a
@@ -119,6 +137,7 @@ pub fn session_ref(name: &str) -> Option<SessionRef> {
         ParsedSession::Shell { run_id } => SessionRef::new(name, SessionKind::Shell).in_run(run_id),
         ParsedSession::LibAssist => SessionRef::new(name, SessionKind::LibraryAssistant),
         ParsedSession::Hosted => SessionRef::new(name, SessionKind::Hosted),
+        ParsedSession::Support => SessionRef::new(name, SessionKind::SupportAgent),
     })
 }
 
@@ -150,6 +169,9 @@ pub enum ParsedSession {
     /// A Session hébergée (ADR-0092, [`hosted_session_name`]). Owns no Run:
     /// its record, not its name, says whether it should be alive.
     Hosted,
+    /// An Agent de support ([`support_session_name_of`]). Owns no Run: its
+    /// Actor closes it.
+    Support,
 }
 
 impl ParsedSession {
@@ -159,7 +181,7 @@ impl ParsedSession {
             ParsedSession::NodeRun { run_id, .. }
             | ParsedSession::Manager { run_id }
             | ParsedSession::Shell { run_id } => Some(run_id),
-            ParsedSession::LibAssist | ParsedSession::Hosted => None,
+            ParsedSession::LibAssist | ParsedSession::Hosted | ParsedSession::Support => None,
         }
     }
 }
@@ -208,6 +230,15 @@ pub fn parse_session_name(name: &str) -> Option<ParsedSession> {
     if let Some(suffix) = rest.strip_prefix("hosted-") {
         if !suffix.is_empty() {
             return Some(ParsedSession::Hosted);
+        }
+        return None;
+    }
+
+    // An Agent de support, parsed before the `-iter-` split like the other
+    // names without a Run. Its suffix must be non-empty.
+    if let Some(suffix) = rest.strip_prefix("support-") {
+        if !suffix.is_empty() {
+            return Some(ParsedSession::Support);
         }
         return None;
     }
@@ -466,6 +497,31 @@ mod tests {
         assert_eq!(
             session_ref(&name),
             Some(SessionRef::new(&name, SessionKind::Hosted))
+        );
+    }
+
+    #[test]
+    fn each_actor_has_its_support_agent_which_reads_back_without_a_run() {
+        let operator = support_session_name_of(&Actor::LocalOperator);
+        assert_eq!(operator, "pdo-support-operator");
+        let alice = Actor::Identified {
+            namespace: "test".into(),
+            id: "alice".into(),
+        };
+        let bob = Actor::Identified {
+            namespace: "test".into(),
+            id: "bob".into(),
+        };
+        let name = support_session_name_of(&alice);
+        assert!(name.starts_with(SUPPORT_SESSION_PREFIX), "{name}");
+        assert_eq!(name, support_session_name_of(&alice), "stable");
+        assert_ne!(name, support_session_name_of(&bob));
+        assert_eq!(parse_session_name(&name), Some(ParsedSession::Support));
+        assert_eq!(ParsedSession::Support.run_id(), None);
+        assert_eq!(parse_session_name("pdo-support-"), None);
+        assert_eq!(
+            session_ref(&operator),
+            Some(SessionRef::new(&operator, SessionKind::SupportAgent))
         );
     }
 

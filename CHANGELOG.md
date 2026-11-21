@@ -133,6 +133,39 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - `GET /settings` states the daemon's system in `host_os` (`Linux 6.8.0 (x86_64)`).
 - Kit (`@pdo/extension-ui`): `Select` takes `invalid` (the failed edge, `aria-invalid`), and a
   `Tabs` item takes `mark`, a short word after its label (`edited`).
+## Unreleased
+
+- **The support agent knows the extensions and reads the core's code.** Its folder receives the
+  skills PDO manages, its own and those the extensions bring, as a Run's worktree does: an
+  extension's skill is how the agent learns to use it, even closed source. It reads the core's code
+  at the exact version of the instance: `pdo support source` (`POST /sessions/support/source`)
+  clones the public repository at the instance's tag under `~/.pdo/core-source/` the first time,
+  then reuses it; a version without a public tag is never cloned, and the agent is told.
+  `PDO_CORE_SOURCE_URL` points the clone at a mirror.
+- **Support agent.** Ctrl+K has a Support group: "Open support agent…", or "Ask the support
+  agent: <your text>". The "Open support agent" window picks the agent (an agentic profile, or
+  Custom: harness, model, effort; only harnesses installed on this machine) with an optional
+  question; your last choice is preselected and Enter opens it. The agent opens in the enlarged
+  terminal, with your rights, outside any Run; Minimize or Escape hides it and it goes on, End
+  session ends it. With an agent open, "Ask the open agent" sends the question straight into it,
+  and choosing another agent asks before it closes the open one. It survives a page reload. Routes
+  `GET`/`POST`/`DELETE /sessions/support` and `POST /sessions/support/ask`; command
+  `pdo support open|ask|status|close`.
+- **Support agent in the status bar, and its idle timeout.** The right end of the status bar holds
+  the support agent's entry: the logo of its harness while one lives (a click brings its terminal
+  back, an amber dot says it answered since you minimized it), "?" otherwise (a click opens the
+  "Open support agent" window). With no input for the "Support agent idle timeout" (Settings ›
+  General › Runtime limits, 1800 s by default, its own setting), every tab asks "Still there?"
+  with a 60 s countdown: Keep (the default, and Escape) keeps it, Close now ends it, no answer
+  closes it and a toast says so. New: route `POST /sessions/support/keep`, command
+  `pdo support keep`, setting `support_idle_timeout_secs` (env `PDO_SUPPORT_IDLE_TIMEOUT_SECS`),
+  `/ws` message `support_agent_changed`; `GET /sessions/support` adds `last_input_at`,
+  `last_output_at` and `still_there`.
+- Harnesses show their logo (Claude, GitHub Copilot, opencode, pi; the initial on the harness's
+  colour for any other): in the agent picker of New run, of a node and of Settings, and in the
+  node header, where it replaces the harness's letter.
+- Extension API: `SessionKind::SupportAgent`, the kind of the support agent's session in the launch
+  hooks and the session events.
 
 ## 2.80.4
 

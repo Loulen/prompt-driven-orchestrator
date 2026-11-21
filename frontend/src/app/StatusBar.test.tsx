@@ -124,4 +124,16 @@ describe("StatusBar — icons and numbers only", () => {
     fireEvent.pointerMove(counter);
     expect(await screen.findByTestId("tooltip-content")).toHaveTextContent("Sessions");
   });
+
+  it("ends on the support agent's entry, after the version, with its one-line tooltip", async () => {
+    renderStatus("connected");
+    const bar = screen.getByTestId("statusbar");
+    const entry = screen.getByTestId("support-agent-entry");
+    expect(bar.lastElementChild).toContainElement(entry);
+    expect(entry).toHaveClass("sh-sb__item");
+    fireEvent.pointerEnter(entry);
+    fireEvent.pointerMove(entry);
+    expect(await screen.findByTestId("tooltip-content")).toHaveTextContent(/^Ask the support agent$/);
+  });
 });
+

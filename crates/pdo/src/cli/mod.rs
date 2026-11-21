@@ -22,6 +22,7 @@ use pdo_platform::adapters::cli::{
 };
 use pdo_review::adapters::cli::ReviewAction;
 use pdo_run::adapters::cli::{NodeAction, RunAction};
+use pdo_session::adapters::cli::support::SupportAction;
 use pdo_session::adapters::cli::SessionAction;
 use pdo_settings::adapters::cli::SettingsAction;
 use pdo_skill::adapters::cli::SkillAction;
@@ -198,6 +199,13 @@ pub enum Commands {
     Session {
         #[command(subcommand)]
         action: SessionAction,
+    },
+    /// Your support agent: an agent the core holds for you outside any Run,
+    /// with your rights. Open it on a profile or a harness, ask it, read it,
+    /// close it. Exits 4 when you ask with none open.
+    Support {
+        #[command(subcommand)]
+        action: SupportAction,
     },
     /// The nodes of a Run: retry, skip, restart, start, stop, kill, recover,
     /// done, release, extend, attach files; their prompt, inputs and outputs,

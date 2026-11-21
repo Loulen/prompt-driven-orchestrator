@@ -100,6 +100,28 @@ pub(super) fn session_closed_at(socket: &str, session_name: &str) -> Option<std:
     Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
 }
 
+/// When the session's window last had output (`#{window_activity}`, seconds
+/// since the epoch): tmux updates it on every write of the pane, whatever the
+/// `monitor-activity` option says.
+pub(super) fn last_output_at(socket: &str, session_name: &str) -> Option<std::time::SystemTime> {
+    let output = tmux(socket)
+        .args([
+            "display-message",
+            "-p",
+            "-t",
+            session_name,
+            "#{window_activity}",
+        ])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    let secs: u64 = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .ok()?;
+    Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+}
+
 /// Capture the visible pane content (with ANSI escapes) for a session.
 /// Returns `None` if the session doesn't exist or capture fails.
 pub(super) fn capture(socket: &str, session_name: &str) -> Option<String> {

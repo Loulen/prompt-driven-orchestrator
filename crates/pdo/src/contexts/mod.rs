@@ -57,6 +57,9 @@ pub struct ContextResources {
     /// `$HOME`; `None` when neither is set.
     pub home_root: Option<PathBuf>,
     pub update_source_url: Option<String>,
+    /// Where the Agent de support clones the core's code from; `None` → the
+    /// public repository.
+    pub core_source_url: Option<String>,
     /// The distribution's release channel; `None` → the vanilla one.
     pub release_channel: Option<UpdateChannel>,
     /// The Marque the SPA is served under.
@@ -144,6 +147,7 @@ pub(crate) fn wire_over(
         &late_runs,
         &late_platform,
         &late_pipelines,
+        &skills,
         host.clone(),
     );
     let run = run::run(run::RunWiring {
@@ -297,6 +301,7 @@ pub(crate) mod testing {
                 public_url_default: "http://localhost:5272".into(),
                 home_root: None,
                 update_source_url: None,
+                core_source_url: None,
                 release_channel: None,
                 brand: crate::Brand::default(),
                 update_executor_override: None,

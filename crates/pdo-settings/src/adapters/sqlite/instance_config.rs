@@ -14,6 +14,7 @@ fn row_to_config(row: &sqlx::sqlite::SqliteRow) -> InstanceConfig {
         session_cap: row.get("session_cap"),
         reaper_ttl_secs: row.get("reaper_ttl_secs"),
         libassist_idle_ttl_secs: row.get("libassist_idle_ttl_secs"),
+        support_idle_timeout_secs: row.get("support_idle_timeout_secs"),
         guard_timeout_secs: row.get("guard_timeout_secs"),
         default_model: row.get("default_model"),
         default_sandbox: row.get("default_sandbox"),
@@ -94,6 +95,7 @@ fn assignments(edit: UpdateInstanceConfig) -> Vec<(&'static str, Bound)> {
     int("session_cap", edit.session_cap);
     int("reaper_ttl_secs", edit.reaper_ttl_secs);
     int("libassist_idle_ttl_secs", edit.libassist_idle_ttl_secs);
+    int("support_idle_timeout_secs", edit.support_idle_timeout_secs);
     int("guard_timeout_secs", edit.guard_timeout_secs);
     let texts = [
         ("default_model", edit.default_model),

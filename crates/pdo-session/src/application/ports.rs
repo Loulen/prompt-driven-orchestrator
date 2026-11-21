@@ -61,6 +61,13 @@ pub trait Tmux: Send + Sync {
         None
     }
 
+    /// When the session last wrote in its window (tmux's `window_activity`,
+    /// to the second): the moment an agent last answered. `None` for a session
+    /// gone, or tmux unreachable.
+    fn last_output_at(&self, _name: &str) -> Option<std::time::SystemTime> {
+        None
+    }
+
     /// Whether the socket's server is alive at all (#234): `None` when the probe
     /// itself could not run, so absence is never read as a real "server gone".
     fn server_alive(&self) -> Option<bool>;

@@ -15,6 +15,8 @@ export function useAgentProfiles(enabled = true) {
   const [error, setError] = useState<string | null>(null);
   // CORE-248: the sentence when the caller may not read the profiles.
   const [refused, setRefused] = useState<string | null>(null);
+  /** The first read answered (profiles, or an error). */
+  const [loaded, setLoaded] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!enabled) return;
@@ -45,12 +47,14 @@ export function useAgentProfiles(enabled = true) {
           setProfiles(result.profiles);
           setError(null);
           setRefused(null);
+          setLoaded(true);
         }
       })
       .catch((cause) => {
         if (!cancelled) {
           setError(cause instanceof Error ? cause.message : "Failed to load agent profiles");
           setRefused(refusalSentence(cause));
+          setLoaded(true);
         }
       });
     window.addEventListener(AGENT_PROFILES_CHANGED, refresh);
@@ -60,5 +64,5 @@ export function useAgentProfiles(enabled = true) {
     };
   }, [enabled, refresh]);
 
-  return { profiles, error, refused, refresh };
+  return { profiles, error, refused, refresh, loaded };
 }

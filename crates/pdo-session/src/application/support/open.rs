@@ -10,8 +10,9 @@ use super::{Support, SupportError};
 use crate::domain::launch::{build_support_script, SupportTail};
 use crate::domain::names::support_session_name_of;
 use crate::domain::support::{
-    support_dir, support_primer, support_primer_path, SupportAgent, SupportRecord,
-    SUPPORT_AGENT_PROMPT,
+    first_message, question_text, support_dir, support_instructions_import_path,
+    support_instructions_path, support_question_path, SupportAgent, SupportRecord,
+    SUPERSEDED_PRIMER, SUPPORT_AGENT_PROMPT, SUPPORT_INSTRUCTIONS_IMPORT,
 };
 
 /// What opening answers: the session, and the agent it runs.
@@ -26,8 +27,9 @@ impl Support {
     /// first message: the Operation `session` × `create` on its session. One
     /// per Actor: with one open already, refused, unless `replace`, which
     /// closes it once the new choice resolved. The choice resolves to an installed harness or is
-    /// refused with its reason. Its folder is prepared (the primer: what the
-    /// extensions add, the embedded prompt, the question), its launch hooks
+    /// refused with its reason. Its folder is prepared (its instructions, what
+    /// the extensions add then the embedded prompt, in the files its harness
+    /// loads at start; the question, its first message), its launch hooks
     /// asked with `actor` as who starts it (their variables, its token among
     /// them, go into its environment), and the choice is remembered as the
     /// Actor's last.
@@ -65,10 +67,11 @@ impl Support {
         let contribution = self
             .host
             .session_launch(&SessionLaunch::new(session_ref.clone()).started_by(actor.clone()));
-        let primer = contribution.above(support_primer(SUPPORT_AGENT_PROMPT, question));
-        let primer_path = support_primer_path(&dir);
-        std::fs::write(&primer_path, primer)
-            .map_err(|e| SupportError::Folder(format!("failed to write the primer: {e}")))?;
+        let first_message = write_folder(
+            &dir,
+            &contribution.above(SUPPORT_AGENT_PROMPT.to_string()),
+            question,
+        )?;
         let env: Vec<(String, String)> = contribution.env.into_iter().collect();
         let script = build_support_script(
             &session,
@@ -76,7 +79,7 @@ impl Support {
             &self.tmux.session_path(),
             SupportTail {
                 harness: &resolved.harness,
-                primer: &primer_path,
+                first_message: first_message.as_deref(),
                 model: resolved.model.as_deref(),
                 effort: resolved.effort.as_deref(),
             },
@@ -109,5 +112,37 @@ impl Support {
             tracing::warn!("Support agent {session}: its record was not written: {e}");
         }
         Ok(SupportOpened { session, agent })
+    }
+}
+
+/// Write the folder of an agent: its `instructions` (and the import claude
+/// reads), and its first `question`, whose file it returns; without one, a
+/// question left by an earlier opening is removed, as is the primer of an
+/// earlier version.
+fn write_folder(
+    dir: &std::path::Path,
+    instructions: &str,
+    question: Option<&str>,
+) -> Result<Option<std::path::PathBuf>, SupportError> {
+    let write = |path: &std::path::Path, text: &str| {
+        std::fs::write(path, text)
+            .map_err(|e| SupportError::Folder(format!("failed to write {}: {e}", path.display())))
+    };
+    let _ = std::fs::remove_file(dir.join(SUPERSEDED_PRIMER));
+    write(&support_instructions_path(dir), instructions)?;
+    write(
+        &support_instructions_import_path(dir),
+        SUPPORT_INSTRUCTIONS_IMPORT,
+    )?;
+    let path = support_question_path(dir);
+    match question.and_then(question_text) {
+        Some(question) => {
+            write(&path, &first_message(question))?;
+            Ok(Some(path))
+        }
+        None => {
+            let _ = std::fs::remove_file(&path);
+            Ok(None)
+        }
     }
 }

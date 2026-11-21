@@ -11,9 +11,9 @@ use super::wrap::{extension_exports, host_daemon_url};
 /// What the agent of an Agent de support launches with.
 pub struct SupportTail<'a> {
     pub harness: &'a pdo_harness::registry::HarnessDescriptor,
-    /// The file the agent reads first: the embedded prompt, then the first
-    /// question.
-    pub primer: &'a Path,
+    /// The file holding its first message (the person's first question);
+    /// `None`: the agent opens on an empty input.
+    pub first_message: Option<&'a Path>,
     pub model: Option<&'a str>,
     pub effort: Option<&'a str>,
 }
@@ -36,7 +36,7 @@ pub fn build_support_script(
         Some(cmd) => cmd.to_string(),
         None => build_agent_tail(
             tail.harness,
-            Some(tail.primer),
+            tail.first_message,
             tail.model,
             tail.effort,
             None,
@@ -87,7 +87,7 @@ mod tests {
             "/usr/bin:/bin",
             SupportTail {
                 harness: &claude,
-                primer: Path::new("/state/support-agent.md"),
+                first_message: Some(Path::new("/state/question.md")),
                 model: Some("opus"),
                 effort: Some("high"),
             },
@@ -108,7 +108,33 @@ mod tests {
         );
         assert!(script.contains("--model 'opus'"), "{script}");
         assert!(script.contains("--effort 'high'"), "{script}");
-        assert!(script.contains("/state/support-agent.md"), "{script}");
+        assert!(
+            script.ends_with("\"$(cat '/state/question.md')\""),
+            "the question is the first message: {script}"
+        );
+    }
+
+    #[test]
+    fn without_a_question_the_agent_opens_on_an_empty_input() {
+        let claude = pdo_harness::registry::claude();
+        let script = build_support_script(
+            "pdo-support-operator",
+            6172,
+            "",
+            SupportTail {
+                harness: &claude,
+                first_message: None,
+                model: None,
+                effort: None,
+            },
+            None,
+            &[],
+        );
+        assert!(!script.contains("$(cat"), "{script}");
+        assert!(
+            script.ends_with("--dangerously-skip-permissions"),
+            "{script}"
+        );
     }
 
     #[test]
@@ -120,7 +146,7 @@ mod tests {
             "",
             SupportTail {
                 harness: &claude,
-                primer: Path::new("/p.md"),
+                first_message: None,
                 model: None,
                 effort: None,
             },

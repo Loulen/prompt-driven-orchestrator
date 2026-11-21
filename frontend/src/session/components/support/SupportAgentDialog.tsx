@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { CircleHelp } from "lucide-react";
+import { CircleHelp, TriangleAlert } from "lucide-react";
 import type { AgentChoice } from "../../../shared/generated/AgentChoice";
 import { Banner, Button, TextArea } from "../../../shared/ui/kit";
 import { Modal } from "../../../shared/ui/kit/Modal";
@@ -78,16 +78,17 @@ export default function SupportAgentDialog({ question: initialQuestion }: { ques
         </>
       }
     >
-      {status?.alive && (
-        <Banner
-          tone="awaiting"
-          title={`${openName} is open`}
-          text={`Opening ${choiceLabel(choice, allProfiles)} ends its conversation.`}
-        />
-      )}
-      <div className="d-field">
-        <span className="d-field__label">Agent</span>
-        <div className="d-field__ctl">
+      <div className="sa-form">
+        {status?.alive && (
+          <Banner
+            tone="awaiting"
+            icon={TriangleAlert}
+            title={`${openName} is open`}
+            text={`Opening ${choiceLabel(choice, allProfiles)} ends its conversation.`}
+          />
+        )}
+        <div className="sa-form__field">
+          <span className="sa-form__label">Agent</span>
           {!loaded ? (
             <span className="sa-none">Loading the agents…</span>
           ) : choice ? (
@@ -106,12 +107,10 @@ export default function SupportAgentDialog({ question: initialQuestion }: { ques
             <span className="sa-none">No harness is installed on this machine.</span>
           )}
         </div>
-      </div>
-      <div className="d-field">
-        <label className="d-field__label" htmlFor="support-agent-question">
-          Question
-        </label>
-        <div className="d-field__ctl">
+        <div className="sa-form__field">
+          <label className="sa-form__label" htmlFor="support-agent-question">
+            Question
+          </label>
           <TextArea
             id="support-agent-question"
             data-autofocus

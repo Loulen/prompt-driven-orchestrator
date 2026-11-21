@@ -136,20 +136,13 @@ async fn an_actor_opens_asks_and_closes_its_own_support_agent() {
         .find(|l| l["hook"] == "session_env" && l["launch"]["session"]["id"] == session)
         .unwrap();
     assert_eq!(launch["launch"]["session"]["kind"], "support_agent");
-    // Its folder holds the embedded prompt, then the first question.
-    let primer = std::fs::read_to_string(
-        daemon
-            .repo_root()
-            .join("home/.pdo/support")
-            .join(&session)
-            .join("support-agent.md"),
-    )
-    .unwrap();
-    assert!(primer.contains("pdo help"), "{primer}");
-    assert!(
-        primer.trim_end().ends_with("which Runs failed?"),
-        "{primer}"
-    );
+    // Its folder holds the embedded prompt, as its instructions, and the
+    // first question.
+    let dir = daemon.repo_root().join("home/.pdo/support").join(&session);
+    let instructions = std::fs::read_to_string(dir.join("AGENTS.md")).unwrap();
+    assert!(instructions.contains("pdo help"), "{instructions}");
+    let question = std::fs::read_to_string(dir.join("question.md")).unwrap();
+    assert_eq!(question.trim_end(), "which Runs failed?");
 
     // One per Actor: a second open is refused while it lives.
     let (status, again) = call_as(

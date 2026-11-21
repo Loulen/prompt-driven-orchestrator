@@ -1,7 +1,9 @@
 //! The Agent de support: an interactive agent the core holds outside any Run,
-//! one per Actor, with the rights of its Actor. What it reads first (the
-//! embedded prompt, then the person's first question), where its folder is, and
-//! what that folder remembers across a restart of the daemon.
+//! one per Actor, with the rights of its Actor. What it reads (its
+//! instructions, the embedded prompt, in the files its harness loads from its
+//! working folder; then the person's first question as its first message),
+//! where its folder is, and what that folder remembers across a restart of the
+//! daemon.
 
 use std::path::{Path, PathBuf};
 
@@ -40,14 +42,31 @@ pub struct SupportRecord {
 }
 
 /// The working folder of the Agent de support `session`, under `root` (the
-/// daemon's state folder): its cwd, its primer, its record.
+/// daemon's state folder): its cwd, its instructions, its record.
 pub fn support_dir(root: &Path, session: &str) -> PathBuf {
     root.join(session)
 }
 
-/// The primer of the agent working in `dir`.
-pub fn support_primer_path(dir: &Path) -> PathBuf {
-    dir.join("support-agent.md")
+/// The instructions of the agent working in `dir`: `AGENTS.md`, the file the
+/// harnesses load from their working folder at start, so the embedded prompt
+/// is never typed into the conversation.
+pub fn support_instructions_path(dir: &Path) -> PathBuf {
+    dir.join("AGENTS.md")
+}
+
+/// The file claude loads from its working folder instead of `AGENTS.md`; it
+/// holds [`SUPPORT_INSTRUCTIONS_IMPORT`].
+pub fn support_instructions_import_path(dir: &Path) -> PathBuf {
+    dir.join("CLAUDE.md")
+}
+
+/// What [`support_instructions_import_path`] holds: an import of `AGENTS.md`,
+/// so the instructions are written once.
+pub const SUPPORT_INSTRUCTIONS_IMPORT: &str = "@AGENTS.md\n";
+
+/// The first question of the agent working in `dir`, its first message.
+pub fn support_question_path(dir: &Path) -> PathBuf {
+    dir.join("question.md")
 }
 
 /// The record of the agent working in `dir`.
@@ -55,16 +74,16 @@ pub fn support_record_path(dir: &Path) -> PathBuf {
     dir.join(".support.json")
 }
 
-/// What the agent reads first: `prompt` (the embedded one), then the person's
-/// first `question`, or, without one, the instruction to wait for it.
-pub fn support_primer(prompt: &str, question: Option<&str>) -> String {
-    let opening = match question.map(str::trim).filter(|q| !q.is_empty()) {
-        Some(question) => format!("## The person's first question\n\n{question}\n"),
-        None => "## Start\n\nGreet the person in one short line, then wait for their question.\n"
-            .to_string(),
-    };
-    format!("{}\n\n{opening}", prompt.trim_end())
+/// The first message of an agent asked `question`, as its file holds it: one
+/// that starts with `-` gets a space in front, so the harness never reads it as
+/// one of its options (`--help` would print its help and end the session).
+pub fn first_message(question: &str) -> String {
+    let lead = if question.starts_with('-') { " " } else { "" };
+    format!("{lead}{question}\n")
 }
+
+/// The primer an earlier version wrote in the folder; nothing reads it now.
+pub const SUPERSEDED_PRIMER: &str = "support-agent.md";
 
 /// A question as it is typed into a live agent: trimmed; `None` when empty.
 pub fn question_text(question: &str) -> Option<&str> {
@@ -85,21 +104,23 @@ mod tests {
     }
 
     #[test]
-    fn the_first_question_closes_the_primer() {
-        let primer = support_primer("ROLE\n", Some("  which Runs failed?  "));
-        assert!(primer.starts_with("ROLE\n\n"), "{primer}");
-        assert!(primer.ends_with("## The person's first question\n\nwhich Runs failed?\n"));
-        let waiting = support_primer("ROLE", Some("   "));
-        assert!(waiting.contains("wait for their question"), "{waiting}");
-        assert!(support_primer("ROLE", None).contains("## Start"));
+    fn the_folder_holds_the_instructions_the_question_and_the_record() {
+        let dir = support_dir(Path::new("/state/support"), "pdo-support-operator");
+        assert_eq!(dir, Path::new("/state/support/pdo-support-operator"));
+        assert_eq!(support_instructions_path(&dir), dir.join("AGENTS.md"));
+        assert_eq!(
+            support_instructions_import_path(&dir),
+            dir.join("CLAUDE.md")
+        );
+        assert_eq!(SUPPORT_INSTRUCTIONS_IMPORT, "@AGENTS.md\n");
+        assert_eq!(support_question_path(&dir), dir.join("question.md"));
+        assert_eq!(support_record_path(&dir), dir.join(".support.json"));
     }
 
     #[test]
-    fn the_folder_holds_the_primer_and_the_record() {
-        let dir = support_dir(Path::new("/state/support"), "pdo-support-operator");
-        assert_eq!(dir, Path::new("/state/support/pdo-support-operator"));
-        assert_eq!(support_primer_path(&dir), dir.join("support-agent.md"));
-        assert_eq!(support_record_path(&dir), dir.join(".support.json"));
+    fn a_first_message_is_never_read_as_an_option() {
+        assert_eq!(first_message("which Runs failed?"), "which Runs failed?\n");
+        assert_eq!(first_message("--help me"), " --help me\n");
     }
 
     #[test]

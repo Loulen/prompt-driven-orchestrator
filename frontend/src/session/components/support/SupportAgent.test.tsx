@@ -79,6 +79,18 @@ describe("the support agent's window", () => {
     expect(screen.queryByTestId("support-agent-dialog")).toBeNull();
   });
 
+  it("puts each label above its field", async () => {
+    api.fetchSupportAgent.mockResolvedValue(closed);
+    render(<SupportAgent />);
+    act(() => useSupportAgent.getState().showDialog());
+    const dialog = await screen.findByTestId("support-agent-dialog");
+    const choice = await within(dialog).findByTestId("support-agent-choice");
+    const fields = dialog.querySelectorAll(".sa-form__field");
+    expect([...fields].map((f) => f.firstElementChild?.textContent)).toEqual(["Agent", "Question"]);
+    expect(fields[0]).toContainElement(choice);
+    expect(fields[1]).toContainElement(within(dialog).getByTestId("support-agent-question"));
+  });
+
   it("says Open without a question, and Enter in the question opens", async () => {
     api.fetchSupportAgent.mockResolvedValue(closed);
     api.openSupportAgent.mockResolvedValue(live);
@@ -115,8 +127,10 @@ describe("the support agent's window", () => {
     await waitFor(() => expect(useSupportAgent.getState().status).toEqual(live));
     act(() => useSupportAgent.getState().showDialog("how do I create a Trigger?"));
     const dialog = await screen.findByTestId("support-agent-dialog");
-    expect(dialog).toHaveTextContent("claude is open");
-    expect(dialog).toHaveTextContent("ends its conversation");
+    const warning = within(dialog).getByRole("status");
+    expect(warning).toHaveTextContent("claude is open");
+    expect(warning).toHaveTextContent("Opening Deep ends its conversation.");
+    expect(warning.querySelector("svg.lucide-triangle-alert")).not.toBeNull();
     expect(within(dialog).getByTestId("support-agent-submit")).toHaveTextContent("Close claude and open");
     fireEvent.click(within(dialog).getByTestId("support-agent-ask-open"));
     await waitFor(() => expect(api.askSupportAgent).toHaveBeenCalledWith("how do I create a Trigger?"));

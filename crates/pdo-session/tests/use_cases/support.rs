@@ -127,10 +127,34 @@ async fn the_agent_opens_in_its_folder_with_the_prompt_the_question_and_the_acto
     );
     assert!(script.contains("--model 'opus'"), "{script}");
     assert!(script.contains("--effort 'high'"), "{script}");
-    let primer = std::fs::read_to_string(cwd.join("support-agent.md")).unwrap();
-    assert!(primer.starts_with("EXTENSION TEXT\n\n"), "{primer}");
-    assert!(primer.contains("pdo help"), "the embedded prompt: {primer}");
-    assert!(primer.ends_with("which Runs failed?\n"), "{primer}");
+    // Its instructions are in the files the harness loads; only the question
+    // is its first message.
+    let instructions = std::fs::read_to_string(cwd.join("AGENTS.md")).unwrap();
+    assert!(
+        instructions.starts_with("EXTENSION TEXT\n\n"),
+        "{instructions}"
+    );
+    assert!(
+        instructions.contains("pdo help"),
+        "the embedded prompt: {instructions}"
+    );
+    assert!(
+        !instructions.contains("which Runs failed?"),
+        "{instructions}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(cwd.join("CLAUDE.md")).unwrap(),
+        "@AGENTS.md\n"
+    );
+    let question = cwd.join("question.md");
+    assert_eq!(
+        std::fs::read_to_string(&question).unwrap(),
+        "which Runs failed?\n"
+    );
+    assert!(
+        script.ends_with(&format!("\"$(cat '{}')\"", question.display())),
+        "{script}"
+    );
 
     let launch = &host.launches.lock().unwrap()[0];
     assert_eq!(
@@ -142,6 +166,31 @@ async fn the_agent_opens_in_its_folder_with_the_prompt_the_question_and_the_acto
     assert_eq!(asked[0].resource, ResourceKind::Session);
     assert_eq!(asked[0].verb, Verb::Create);
     assert_eq!(asked[0].target.as_deref(), Some(session.as_str()));
+}
+
+#[tokio::test]
+async fn without_a_question_the_agent_opens_on_an_empty_input() {
+    let root = tempfile::tempdir().unwrap();
+    let tmux = Arc::new(FakeTmux::default());
+    let uc = support(root.path(), tmux.clone(), Host::allowing(), None);
+    uc.open(&alice(), &deep(), Some("which Runs failed?"), false)
+        .await
+        .unwrap();
+    let dir = root.path().join(support_session_name_of(&alice()));
+    std::fs::write(dir.join("support-agent.md"), "an earlier version's primer").unwrap();
+    uc.open(&alice(), &deep(), Some("  "), true).await.unwrap();
+
+    let (_, cwd, script) = tmux.created.lock().unwrap()[1].clone();
+    assert!(!script.contains("$(cat"), "no first message: {script}");
+    assert!(
+        !cwd.join("question.md").exists(),
+        "the earlier question is not asked again"
+    );
+    assert!(cwd.join("AGENTS.md").exists());
+    assert!(
+        !cwd.join("support-agent.md").exists(),
+        "the primer of an earlier version is gone"
+    );
 }
 
 #[tokio::test]

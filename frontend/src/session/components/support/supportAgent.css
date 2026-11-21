@@ -20,3 +20,29 @@
   font-size: var(--fs-sm);
   color: var(--text-3);
 }
+/* The « Open support agent » window: each label above its field, the field
+   across the window's width (the agent's panel opens as wide, under it). */
+.sa-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--g-6);
+  min-width: 0;
+}
+.sa-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--g-4);
+  min-width: 0;
+  font-size: var(--fs-sm);
+}
+.sa-form__label {
+  color: var(--text-2);
+}
+/* The warning says it whole: it wraps rather than cut the agent's name. */
+.sa-form .d-banner {
+  padding-block: var(--g-2);
+}
+.sa-form .d-banner__text {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}

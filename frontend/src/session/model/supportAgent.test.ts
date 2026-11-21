@@ -42,7 +42,7 @@ describe("support agent choices", () => {
     expect(choiceLabel({ mode: "profile", profile_id: "deep" }, profiles)).toBe("Deep");
     expect(choiceLabel({ mode: "custom", harness: "pi" }, profiles)).toBe("pi");
     expect(choiceCombination({ mode: "profile", profile_id: "deep" }, profiles)).toEqual({ harness: "claude", model: "opus", effort: null });
-    expect(agentTag({ harness: "claude", model: null })).toBe("claude");
+    expect(agentTag({ harness: "claude", model: null })).toBe("claude · default model");
     expect(agentTag({ harness: "claude", model: "opus" })).toBe("claude · opus");
   });
 });

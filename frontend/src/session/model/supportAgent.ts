@@ -64,7 +64,8 @@ export function choiceLabel(choice: AgentChoice | null, profiles: AgentProfile[]
   return "this agent";
 }
 
-/** An open agent, in short: `claude · opus`, the model left out when unset. */
+/** An open agent, in short: `claude · opus`; with no model set, the harness
+ *  runs its own default one: `claude · default model`. */
 export function agentTag(agent: Pick<SupportAgentView, "harness" | "model">): string {
-  return [agent.harness, agent.model].filter(Boolean).join(" · ");
+  return `${agent.harness} · ${agent.model || "default model"}`;
 }

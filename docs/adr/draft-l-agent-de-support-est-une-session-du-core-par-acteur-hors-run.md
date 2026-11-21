@@ -29,9 +29,12 @@ installées peuvent être closed source : leur code n'est pas là pour qu'un age
    machine ; sinon le refus dit pourquoi. Sans modèle, le défaut de l'instance pour ce harnais
    s'applique. Le dernier choix de l'Acteur est retenu dans son dossier.
 4. **Il lit un prompt court embarqué dans le binaire** (une page au plus : son rôle, la
-   confirmation avant toute mutation, où chercher), puis la première question. Sa documentation
-   est la CLI du core et des Extensions (`pdo help`, `pdo ext <id> help`) : aucune base
-   documentaire n'est rédigée pour lui.
+   confirmation avant toute mutation, où chercher), écrit comme ses instructions dans son
+   dossier : `AGENTS.md`, que les harnais chargent au démarrage, et `CLAUDE.md`, qui l'importe
+   (`@AGENTS.md`) pour claude. Seule la première question est son premier message : la
+   conversation commence par elle, le prompt n'y est pas recopié. Sa documentation est la CLI
+   du core et des Extensions (`pdo help`, `pdo ext <id> help`) : aucune base documentaire n'est
+   rédigée pour lui.
 5. **Il travaille dans un dossier par Acteur sous le répertoire d'état de PDO**
    (`~/.pdo/support/<session>/`), que le core prépare à l'ouverture. Le balayage ne le tue pas :
    il s'arrête quand son Acteur le ferme.
@@ -45,6 +48,15 @@ installées peuvent être closed source : leur code n'est pas là pour qu'un age
   d'agent le voit passer, avec l'Acteur qui l'ouvre.
 - Une session que personne ne ferme reste vivante ; le délai d'inactivité est l'affaire d'un
   ticket suivant de la story.
+- claude, copilot et pi chargent ces fichiers depuis un dossier hors dépôt git (vérifié le
+  2026-11-21) ; opencode les lit selon sa documentation, sans vérification. Un harnais déclaré par
+  l'utilisateur qui ne charge ni `AGENTS.md` ni `CLAUDE.md` démarre sans ses instructions.
+- Une question qui commence par `-` reçoit une espace en tête : le harnais ne la lit pas comme
+  une de ses options.
+- L'agent tourne avec la ligne de lancement de son harnais, celle des Nodes : pour claude,
+  `--dangerously-skip-permissions`. La confirmation avant toute mutation ne repose que sur ses
+  instructions ; rien ne l'impose techniquement. À revoir si un agent conversationnel doit
+  demander la permission de chaque commande.
 
 ## Alternatives écartées
 

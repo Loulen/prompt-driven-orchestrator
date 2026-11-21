@@ -11,3 +11,4 @@ pub mod reaper;
 pub mod settings;
 pub mod shared_terminal;
 pub mod support;
+pub mod support_idle;

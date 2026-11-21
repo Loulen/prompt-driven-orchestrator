@@ -160,6 +160,7 @@ async fn an_instance_setting_is_set_as_settings_saves_it_and_refused_as_it_refus
         "review_agent_can_resolve",
         "session_cap",
         "skills",
+        "support_idle_timeout_secs",
         "telemetry_include_actor",
         "telemetry_otlp",
         "telemetry_otlp_endpoint",

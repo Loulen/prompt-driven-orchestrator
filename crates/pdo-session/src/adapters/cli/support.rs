@@ -43,6 +43,12 @@ pub enum SupportAction {
         #[arg(long)]
         json: bool,
     },
+    /// Keep your support agent: answer « Still there? », its idle clock
+    /// starts over.
+    Keep {
+        #[arg(long)]
+        json: bool,
+    },
     /// Close your support agent.
     Close {
         #[arg(long)]
@@ -92,6 +98,10 @@ pub fn run_support(action: SupportAction) -> Result<()> {
             } else {
                 println!("{}", status_line(&status));
             }
+        }
+        SupportAction::Keep { json } => {
+            let status = daemon.post("/sessions/support/keep", None)?.ok()?.json()?;
+            report(&status, json, "kept");
         }
         SupportAction::Close { json } => {
             let status = daemon.delete("/sessions/support", None)?.ok()?.json()?;

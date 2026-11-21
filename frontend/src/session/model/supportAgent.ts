@@ -4,6 +4,7 @@
 import type { AgentChoice } from "../../shared/generated/AgentChoice";
 import type { AgentProfile } from "../../shared/generated/AgentProfile";
 import type { SupportAgentView } from "../../shared/generated/SupportAgentView";
+import type { SupportStatusResponse } from "../../shared/generated/SupportStatusResponse";
 import type { HarnessCatalog } from "../../harness/model/catalog";
 import type { AgentCombination } from "../../settings/model/settings";
 import { DEFAULT_PROFILE_ID } from "../../settings/model/agentProfiles";
@@ -68,4 +69,60 @@ export function choiceLabel(choice: AgentChoice | null, profiles: AgentProfile[]
  *  runs its own default one: `claude · default model`. */
 export function agentTag(agent: Pick<SupportAgentView, "harness" | "model">): string {
   return `${agent.harness} · ${agent.model || "default model"}`;
+}
+
+/** Where this browser keeps the last answer it saw of the open agent. */
+const SEEN_ANSWER_KEY = "pdo.supportAgent.seenAnswer";
+
+/** What the last answer seen belongs to: one opening of one agent; `null`
+ *  when no agent lives. */
+export function answerSeenKey(status: Pick<SupportStatusResponse, "session" | "alive" | "agent">): string | null {
+  return status.alive && status.agent ? `${status.session}@${status.agent.opened_at}` : null;
+}
+
+/** The last answer this browser saw of the agent `key` names, when its
+ *  terminal was minimized; `null` when it never was (another opening, a
+ *  storage that cannot be read). */
+export function readSeenAnswer(key: string | null): string | null {
+  if (!key) return null;
+  try {
+    const stored = JSON.parse(localStorage.getItem(SEEN_ANSWER_KEY) ?? "null") as { key?: string; seen?: string } | null;
+    return stored?.key === key && typeof stored.seen === "string" ? stored.seen : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Keep `seen` as the last answer this browser saw of the agent `key` names:
+ *  a reload, or another tab, reads it back. */
+export function writeSeenAnswer(key: string | null, seen: string): void {
+  if (!key) return;
+  try {
+    localStorage.setItem(SEEN_ANSWER_KEY, JSON.stringify({ key, seen }));
+  } catch {
+    // No storage: the dot lives as long as the page.
+  }
+}
+
+/** Whether the live agent wrote after `seen`, the answer seen when its
+ *  terminal was last minimized. Never minimized: no dot. */
+export function hasNewAnswer(
+  status: Pick<SupportStatusResponse, "alive" | "last_output_at"> | null,
+  seen: string | null,
+): boolean {
+  if (!status?.alive || seen === null || !status.last_output_at) return false;
+  return status.last_output_at > seen;
+}
+
+/** A delay without input, said short: `30 min`, `90 s`. */
+export function idleDelay(secs: number): string {
+  return secs >= 60 && secs % 60 === 0 ? `${secs / 60} min` : `${secs} s`;
+}
+
+/** The countdown of « Still there? », in seconds under its minute: `0:60`,
+ *  `0:09`, never below `0:00`. */
+export function countdown(ms: number): string {
+  const secs = Math.max(0, Math.ceil(ms / 1000));
+  if (secs <= 60) return `0:${String(secs).padStart(2, "0")}`;
+  return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
 }

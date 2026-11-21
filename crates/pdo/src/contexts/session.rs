@@ -65,6 +65,7 @@ pub(super) fn session(
                 runs: runs.clone(),
                 db: r.db.clone(),
             }),
+            events: r.bus.clone(),
         },
         SessionOptions {
             daemon_port: r.port,

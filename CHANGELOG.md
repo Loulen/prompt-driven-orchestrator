@@ -25,6 +25,16 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   and choosing another agent asks before it closes the open one. It survives a page reload. Routes
   `GET`/`POST`/`DELETE /sessions/support` and `POST /sessions/support/ask`; command
   `pdo support open|ask|status|close`.
+- **Support agent in the status bar, and its idle timeout.** The right end of the status bar holds
+  the support agent's entry: the logo of its harness while one lives (a click brings its terminal
+  back, an amber dot says it answered since you minimized it), "?" otherwise (a click opens the
+  "Open support agent" window). With no input for the "Support agent idle timeout" (Settings ›
+  General › Runtime limits, 1800 s by default, its own setting), every tab asks "Still there?"
+  with a 60 s countdown: Keep (the default, and Escape) keeps it, Close now ends it, no answer
+  closes it and a toast says so. New: route `POST /sessions/support/keep`, command
+  `pdo support keep`, setting `support_idle_timeout_secs` (env `PDO_SUPPORT_IDLE_TIMEOUT_SECS`),
+  `/ws` message `support_agent_changed`; `GET /sessions/support` adds `last_input_at`,
+  `last_output_at` and `still_there`.
 - Harnesses show their logo (Claude, GitHub Copilot, opencode, pi; the initial on the harness's
   colour for any other): in the agent picker of New run, of a node and of Settings, and in the
   node header, where it replaces the harness's letter.

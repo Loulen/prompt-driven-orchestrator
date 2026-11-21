@@ -17,6 +17,8 @@ export interface DraftValues extends TelemetryDraft {
   capStr: string;
   ttlStr: string;
   guardStr: string;
+  /** The support agent's idle timeout (s), as typed; `""` when the daemon has none. */
+  supportIdleStr: string;
   /** #779: the per-run attachment budget (MB), as typed. */
   attachmentsStr: string;
   model: string | null;
@@ -42,6 +44,7 @@ export function seedFrom(settings: InstanceSettings): DraftValues {
     capStr: String(settings.session_cap.effective),
     ttlStr: String(settings.reaper_ttl_secs.effective),
     guardStr: String(settings.guard_timeout_secs.effective),
+    supportIdleStr: settings.support_idle_timeout_secs ? String(settings.support_idle_timeout_secs.effective) : "",
     attachmentsStr: String(settings.max_attachments_mb.effective),
     model: settings.default_model.effective,
     defaultHarness: settings.default_harness.effective ?? "",
@@ -119,6 +122,12 @@ export function computeDirty(values: DraftValues, settings: InstanceSettings): S
   if (numericDirty(values.ttlStr, settings.reaper_ttl_secs.effective)) dirty.add("reaper-ttl");
   if (numericDirty(values.guardStr, settings.guard_timeout_secs.effective)) {
     dirty.add("guard-timeout");
+  }
+  if (
+    settings.support_idle_timeout_secs &&
+    numericDirty(values.supportIdleStr, settings.support_idle_timeout_secs.effective)
+  ) {
+    dirty.add("support-idle-timeout");
   }
   if (numericDirty(values.attachmentsStr, settings.max_attachments_mb.effective)) {
     dirty.add("max-attachments-mb");
@@ -213,6 +222,20 @@ export function buildPatch(
     }
   } else if (guard !== settings.guard_timeout_secs.effective) {
     patch.guard_timeout_secs = guard;
+  }
+
+  // The support agent's idle timeout, on a daemon that has it: ≥ 1 s.
+  const supportIdle = settings.support_idle_timeout_secs;
+  if (supportIdle) {
+    const idleT = values.supportIdleStr.trim();
+    const idle = Number(idleT);
+    if (idleT === "" || !Number.isInteger(idle) || idle < 1) {
+      if (idleT !== "" || dirty.has("support-idle-timeout")) {
+        return { error: "Support agent idle timeout must be a whole number ≥ 1 second." };
+      }
+    } else if (idle !== supportIdle.effective) {
+      patch.support_idle_timeout_secs = idle;
+    }
   }
 
   // #779: the attachment budget — the daemon refuses outside 1–4096 MB.

@@ -30,7 +30,9 @@ use crate::Session;
 pub use assistant::LibassistResponse;
 pub use pane::PaneResponse;
 pub use sessions::{AttachResponse, ShellResponse};
-pub use support::{AskSupportRequest, OpenSupportRequest, SupportAgentView, SupportStatusResponse};
+pub use support::{
+    AskSupportRequest, OpenSupportRequest, StillThereView, SupportAgentView, SupportStatusResponse,
+};
 pub use terminal_text::TerminalTextResponse;
 pub use terminal_zoom::TerminalZoomResponse;
 
@@ -99,7 +101,8 @@ pub fn router(session: Arc<Session>) -> Router {
         .route("/sessions/libassist/draft", get(assistant::draft))
         // The Agent de support of the caller, one per Actor: no id in the
         // path. `POST` opens it (refused while one lives, unless `replace`),
-        // `GET` reads it, `DELETE` closes it, `ask` types a question into it.
+        // `GET` reads it, `DELETE` closes it, `ask` types a question into it,
+        // `keep` answers « Still there? ».
         .route(
             "/sessions/support",
             get(support::status)
@@ -107,6 +110,7 @@ pub fn router(session: Arc<Session>) -> Router {
                 .delete(support::close),
         )
         .route("/sessions/support/ask", post(support::ask))
+        .route("/sessions/support/keep", post(support::keep))
         .with_state(session)
 }
 

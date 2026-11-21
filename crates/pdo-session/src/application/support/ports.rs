@@ -1,10 +1,15 @@
 //! What the Agent de support needs from the outside world: which agent a
-//! choice resolves to on this machine.
+//! choice resolves to on this machine, the instance's idle timeout, and the
+//! time.
 
+use std::time::Duration;
+
+use chrono::{DateTime, Utc};
 use pdo_harness::domain::agent_choice::AgentChoice;
 use pdo_harness::registry::HarnessDescriptor;
 
 use crate::application::ports::BoxFuture;
+use crate::domain::settings::DEFAULT_SUPPORT_IDLE_TIMEOUT;
 
 /// The agent a choice resolves to: its harness (installed), its model and
 /// effort, and the name the choice goes by.
@@ -60,4 +65,25 @@ pub trait SupportAgents: Send + Sync {
         &'a self,
         choice: &'a AgentChoice,
     ) -> BoxFuture<'a, Result<ResolvedAgent, ChoiceRefusal>>;
+
+    /// How long an agent goes without input before it asks « Still there? »:
+    /// the instance's setting, read at every tick of the watch so a change
+    /// applies without a restart. The default one by default.
+    fn idle_timeout(&self) -> BoxFuture<'_, Duration> {
+        Box::pin(async { DEFAULT_SUPPORT_IDLE_TIMEOUT })
+    }
+}
+
+/// The time, as the idle watch reads it: the system's, or a test's.
+pub trait SupportClock: Send + Sync {
+    fn now(&self) -> DateTime<Utc>;
+}
+
+/// The system's clock.
+pub struct SystemClock;
+
+impl SupportClock for SystemClock {
+    fn now(&self) -> DateTime<Utc> {
+        Utc::now()
+    }
 }

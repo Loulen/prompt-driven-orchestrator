@@ -196,6 +196,13 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
       env: null,
       default: 60,
     },
+    support_idle_timeout_secs: {
+      effective: 1800,
+      source: "default",
+      stored: null,
+      env: null,
+      default: 1800,
+    },
     max_attachments_mb: {
       effective: 50,
       source: "default",
@@ -544,6 +551,23 @@ describe("SettingsSurface", () => {
       (screen.getByTestId("setting-max-attachments-mb") as HTMLInputElement)
         .value,
     ).toBe("50");
+  });
+
+  it("puts the support agent's idle timeout in the runtime limits, after the guard timeout, and saves it", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    updateSettingsMock.mockResolvedValue(
+      sample({ support_idle_timeout_secs: { effective: 60, source: "stored", stored: 60, env: null, default: 1800 } }),
+    );
+    render(<SettingsSurface open onClose={() => {}} />);
+    const idle = (await screen.findByTestId("setting-support-idle-timeout")) as HTMLInputElement;
+    expect(idle.value).toBe("1800");
+    const row = screen.getByTestId("setting-row-support-idle-timeout");
+    expect(row).toHaveTextContent("Support agent idle timeout");
+    const order = [...document.querySelectorAll('[data-testid^="setting-row-"]')].map((r) => r.getAttribute("data-testid"));
+    expect(order.indexOf("setting-row-support-idle-timeout")).toBe(order.indexOf("setting-row-guard-timeout") + 1);
+    fireEvent.change(idle, { target: { value: "60" } });
+    fireEvent.click(screen.getByTestId("settings-save"));
+    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledWith({ support_idle_timeout_secs: 60 }));
   });
 
   it("follows a write made elsewhere on the fields it is not editing; an edit in progress stays (CORE-232)", async () => {

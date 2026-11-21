@@ -12,9 +12,12 @@ use serde::Serialize;
 
 use super::env::{
     default_harness_with, default_model_with, env_default_harness, env_default_model,
-    env_libassist_idle_ttl_secs, env_reaper_ttl_secs, libassist_idle_ttl_with, reaper_ttl_with,
+    env_libassist_idle_ttl_secs, env_reaper_ttl_secs, env_support_idle_timeout_secs,
+    libassist_idle_ttl_with, reaper_ttl_with, support_idle_timeout_with,
 };
-use crate::domain::settings::{DEFAULT_LIBASSIST_IDLE_TTL, DEFAULT_REAPER_TTL};
+use crate::domain::settings::{
+    DEFAULT_LIBASSIST_IDLE_TTL, DEFAULT_REAPER_TTL, DEFAULT_SUPPORT_IDLE_TIMEOUT,
+};
 
 /// A TTL in seconds. A stored value below `1` is disclosed but never wins (a
 /// zero TTL would reap a session the instant it completes).
@@ -48,6 +51,17 @@ pub fn libassist_idle_ttl_secs(stored: Option<i64>) -> Number {
         env_libassist_idle_ttl_secs(),
         libassist_idle_ttl_with(stored.map(|n| n as u64)).as_secs(),
         DEFAULT_LIBASSIST_IDLE_TTL.as_secs(),
+    )
+}
+
+/// How long an Agent de support goes without input before it asks « Still
+/// there? ». Its own knob, distinct from [`libassist_idle_ttl_secs`].
+pub fn support_idle_timeout_secs(stored: Option<i64>) -> Number {
+    ttl(
+        stored,
+        env_support_idle_timeout_secs(),
+        support_idle_timeout_with(stored.map(|n| n as u64)).as_secs(),
+        DEFAULT_SUPPORT_IDLE_TIMEOUT.as_secs(),
     )
 }
 

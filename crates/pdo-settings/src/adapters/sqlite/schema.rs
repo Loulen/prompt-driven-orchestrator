@@ -55,6 +55,8 @@ const ADDED_COLUMNS: &[(&str, &str)] = &[
     ("public_url", "TEXT"),
     // CORE-97: where a repository given by its URL is cloned; NULL → ~/pdo/repos.
     ("clones_folder", "TEXT"),
+    // The Agents de support's idle timeout; NULL keeps the env tier, then 1800 s.
+    ("support_idle_timeout_secs", "INTEGER"),
 ];
 
 /// Create the tables if absent, seed the all-NULL singleton row and the

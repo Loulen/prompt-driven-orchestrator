@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
   openSupportAgent: vi.fn(),
   askSupportAgent: vi.fn(),
   closeSupportAgent: vi.fn(),
+  keepSupportAgent: vi.fn(),
 }));
 vi.mock("../../api/support", () => api);
 vi.mock("../../../settings/api/agentProfiles", async (importOriginal) => ({
@@ -32,6 +33,7 @@ vi.mock("../SessionTerminal", () => ({
 }));
 
 import SupportAgent from "./SupportAgent";
+import { OVERDUE_MS } from "./SupportStillThere";
 import { useSupportAgent } from "../../store/supportAgentStore";
 
 const profile = (id: string, name: string, harness: string, model?: string): AgentProfile =>
@@ -43,7 +45,15 @@ const SETTINGS = {
   harness_descriptors: { path: null, names: [], harnesses: [harness("claude", true), harness("copilot", false)], rejected: [], reason: null },
 };
 
-const closed: SupportStatusResponse = { session: "pdo-support-operator", alive: false, agent: null, last_choice: { mode: "profile", profile_id: "deep" } };
+const closed: SupportStatusResponse = {
+  session: "pdo-support-operator",
+  alive: false,
+  agent: null,
+  last_choice: { mode: "profile", profile_id: "deep" },
+  last_input_at: null,
+  last_output_at: null,
+  still_there: null,
+};
 const live: SupportStatusResponse = {
   ...closed,
   alive: true,
@@ -52,7 +62,7 @@ const live: SupportStatusResponse = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  useSupportAgent.setState({ status: null, dialog: null, expanded: false, pending: false });
+  useSupportAgent.setState({ status: null, dialog: null, expanded: false, pending: false, stillThere: null, seenAnswer: null, collapsedAt: 0 });
 });
 
 describe("the support agent's window", () => {
@@ -170,3 +180,74 @@ describe("the support agent's enlarged terminal", () => {
     await waitFor(() => expect(screen.queryByTestId("support-agent-terminal")).toBeNull());
   });
 });
+
+describe("« Still there? »", () => {
+  const ask = () =>
+    act(() =>
+      useSupportAgent.getState().changed(live.session, { change: "idle", closes_at: "", closes_in_secs: 60, idle_timeout_secs: 1800 }),
+    );
+
+  it("says how long it had no input and counts down; Keep, focused, keeps it", async () => {
+    api.fetchSupportAgent.mockResolvedValue(live);
+    api.keepSupportAgent.mockResolvedValue(live);
+    render(<SupportAgent />);
+    await waitFor(() => expect(useSupportAgent.getState().status).toEqual(live));
+    ask();
+    const dialog = await screen.findByTestId("support-still-there");
+    expect(dialog).toHaveAccessibleName("Still there?");
+    expect(dialog).toHaveTextContent("The claude support agent has had no input for 30 min.");
+    expect(within(dialog).getByTestId("support-still-there-countdown")).toHaveTextContent("0:60");
+    expect(dialog.querySelector("svg.lucide-clock")).not.toBeNull();
+    const keep = within(dialog).getByTestId("support-still-there-keep");
+    expect(keep).toHaveFocus();
+    fireEvent.click(keep);
+    await waitFor(() => expect(api.keepSupportAgent).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByTestId("support-still-there")).toBeNull());
+  });
+
+  it("Escape is Keep", async () => {
+    api.fetchSupportAgent.mockResolvedValue(live);
+    api.keepSupportAgent.mockResolvedValue(live);
+    render(<SupportAgent />);
+    await waitFor(() => expect(useSupportAgent.getState().status).toEqual(live));
+    ask();
+    fireEvent.keyDown(await screen.findByTestId("support-still-there"), { key: "Escape" });
+    await waitFor(() => expect(api.keepSupportAgent).toHaveBeenCalled());
+    expect(api.closeSupportAgent).not.toHaveBeenCalled();
+  });
+
+  it("Close now ends the agent", async () => {
+    api.fetchSupportAgent.mockResolvedValue(live);
+    api.closeSupportAgent.mockResolvedValue(closed);
+    render(<SupportAgent />);
+    await waitFor(() => expect(useSupportAgent.getState().status).toEqual(live));
+    ask();
+    fireEvent.click(await screen.findByTestId("support-still-there-close"));
+    await waitFor(() => expect(api.closeSupportAgent).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByTestId("support-still-there")).toBeNull());
+  });
+
+  it("an answer in another tab closes it here", async () => {
+    api.fetchSupportAgent.mockResolvedValue(live);
+    render(<SupportAgent />);
+    await waitFor(() => expect(useSupportAgent.getState().status).toEqual(live));
+    ask();
+    await screen.findByTestId("support-still-there");
+    act(() => useSupportAgent.getState().changed(live.session, { change: "active" }));
+    await waitFor(() => expect(screen.queryByTestId("support-still-there")).toBeNull());
+    expect(api.keepSupportAgent).not.toHaveBeenCalled();
+  });
+
+  it("reads the agent again when the countdown ended long ago and nothing came", async () => {
+    api.fetchSupportAgent.mockResolvedValue(live);
+    render(<SupportAgent />);
+    await waitFor(() => expect(useSupportAgent.getState().status).toEqual(live));
+    api.fetchSupportAgent.mockClear();
+    act(() =>
+      useSupportAgent.setState({ stillThere: { closesAt: Date.now() - OVERDUE_MS - 1_000, idleTimeoutSecs: 1800 } }),
+    );
+    await waitFor(() => expect(api.fetchSupportAgent).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByTestId("support-still-there")).toBeNull());
+  });
+});
+

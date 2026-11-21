@@ -111,6 +111,8 @@ impl Support {
         if let Err(e) = self.write_record(&session, &record) {
             tracing::warn!("Support agent {session}: its record was not written: {e}");
         }
+        // Once the record names the agent: a tab told it opened reads it whole.
+        self.start_clock(&session);
         Ok(SupportOpened { session, agent })
     }
 }

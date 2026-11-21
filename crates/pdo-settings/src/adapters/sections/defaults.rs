@@ -68,6 +68,12 @@ impl SettingsSection for SessionDefaults {
                     json(session::libassist_idle_ttl_secs(c.libassist_idle_ttl_secs)),
                 ),
                 (
+                    "support_idle_timeout_secs",
+                    json(session::support_idle_timeout_secs(
+                        c.support_idle_timeout_secs,
+                    )),
+                ),
+                (
                     "default_model",
                     json(session::default_model(c.default_model.as_deref())),
                 ),

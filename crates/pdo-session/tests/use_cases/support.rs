@@ -19,7 +19,7 @@ use crate::fakes::{FakeTmux, Host};
 /// Resolves the profile `deep` to `claude · opus · high`, a custom
 /// combination on `claude` as given, and refuses the rest as a real
 /// resolution would: `copilot` is not installed, any other name unknown.
-struct Agents;
+pub(crate) struct Agents;
 
 impl SupportAgents for Agents {
     fn resolve<'a>(
@@ -63,7 +63,12 @@ impl SupportAgents for Agents {
     }
 }
 
-fn support(root: &Path, tmux: Arc<FakeTmux>, host: Arc<Host>, seam: Option<&str>) -> Support {
+pub(crate) fn support(
+    root: &Path,
+    tmux: Arc<FakeTmux>,
+    host: Arc<Host>,
+    seam: Option<&str>,
+) -> Support {
     Support::new(
         tmux,
         Arc::new(Agents),
@@ -76,7 +81,7 @@ fn support(root: &Path, tmux: Arc<FakeTmux>, host: Arc<Host>, seam: Option<&str>
     )
 }
 
-fn deep() -> AgentChoice {
+pub(crate) fn deep() -> AgentChoice {
     AgentChoice::Profile {
         profile_id: "deep".into(),
     }
@@ -90,7 +95,7 @@ fn custom(harness: &str) -> AgentChoice {
     }
 }
 
-fn alice() -> Actor {
+pub(crate) fn alice() -> Actor {
     Actor::Identified {
         namespace: "test".into(),
         id: "alice".into(),

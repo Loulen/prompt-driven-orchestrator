@@ -28,6 +28,8 @@ impl Support {
         if !self.tmux.paste_without_enter(&session, question) || !self.tmux.press_enter(&session) {
             return Err(SupportError::NotDelivered);
         }
+        // A question is its person's input: the agent's clock starts over.
+        self.input(&session);
         Ok(session)
     }
 }

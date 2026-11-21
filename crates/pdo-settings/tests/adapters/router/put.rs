@@ -305,6 +305,21 @@ async fn put_settings_rejects_cap_below_one() {
 }
 
 #[tokio::test]
+async fn the_support_idle_timeout_is_its_own_knob_with_a_default_of_30_min() {
+    let state = test_state().await;
+    let view = get_settings_json(&state).await;
+    assert_eq!(view["support_idle_timeout_secs"]["default"], 1800);
+    let (status, view) = put_settings_resp(&state, r#"{"support_idle_timeout_secs": 60}"#).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(view["support_idle_timeout_secs"]["stored"], 60);
+    assert_eq!(view["support_idle_timeout_secs"]["source"], "stored");
+    assert_eq!(view["support_idle_timeout_secs"]["effective"], 60);
+    assert!(view["libassist_idle_ttl_secs"]["stored"].is_null());
+    let (refused, _) = put_settings_resp(&state, r#"{"support_idle_timeout_secs": 0}"#).await;
+    assert_eq!(refused, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn put_settings_rejects_ttl_below_one() {
     let state = test_state().await;
     let (status, _) = put_settings_resp(&state, r#"{"reaper_ttl_secs": 0}"#).await;

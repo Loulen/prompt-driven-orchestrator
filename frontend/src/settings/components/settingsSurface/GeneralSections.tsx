@@ -83,6 +83,19 @@ export function SessionsSection({
         envIsMs
         max={600}
       />
+      {settings.support_idle_timeout_secs && (
+        <NumberRow
+          id="support-idle-timeout"
+          label="Support agent idle timeout"
+          help="Seconds without input before the support agent asks “Still there?”; with no answer, it closes 60 s later"
+          value={values.supportIdleStr}
+          onChange={(v) => setField("supportIdleStr", v)}
+          dirty={dirty.has("support-idle-timeout")}
+          field={settings.support_idle_timeout_secs}
+          envVar="PDO_SUPPORT_IDLE_TIMEOUT_SECS"
+          unit=" s"
+        />
+      )}
       {/* #779: one budget for images + files per Run. Bounds the multipart body of
           POST /runs; the New run dialog reads the same value for its client-side gate. */}
       <NumberRow

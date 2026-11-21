@@ -46,8 +46,12 @@ installées peuvent être closed source : leur code n'est pas là pour qu'un age
   agrandi, avec « End session ».
 - L'API d'Extension gagne `SessionKind::SupportAgent` : une Extension qui contribue aux sessions
   d'agent le voit passer, avec l'Acteur qui l'ouvre.
-- Une session que personne ne ferme reste vivante ; le délai d'inactivité est l'affaire d'un
-  ticket suivant de la story.
+- Un agent sans saisie de son Acteur se ferme : au terme du délai d'inactivité de l'instance
+  (« Support agent idle timeout », 1800 s par défaut), le daemon publie
+  `support_agent_changed` sur `/ws` et chaque onglet de l'Acteur demande « Still there? » ;
+  « Keep » (`POST /sessions/support/keep`, `pdo support keep`) ou toute saisie relance le délai ;
+  sans réponse en 60 s, le daemon ferme la session, même sans onglet ouvert. Le délai se mesure en
+  mémoire du daemon : un redémarrage le fait repartir de zéro, jamais plus court.
 - claude, copilot et pi chargent ces fichiers depuis un dossier hors dépôt git (vérifié le
   2026-11-21) ; opencode les lit selon sa documentation, sans vérification. Un harnais déclaré par
   l'utilisateur qui ne charge ni `AGENTS.md` ni `CLAUDE.md` démarre sans ses instructions.

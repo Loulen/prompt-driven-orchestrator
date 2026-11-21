@@ -1,7 +1,19 @@
 import { describe, expect, it } from "vitest";
 import type { AgentProfile } from "../../shared/generated/AgentProfile";
 import type { HarnessCatalog, HarnessOption } from "../../harness/model/catalog";
-import { agentTag, choiceCombination, choiceLabel, initialChoice, installedCatalog, isRunnable, runnableProfiles } from "./supportAgent";
+import {
+  agentTag,
+  answerSeenKey,
+  choiceCombination,
+  choiceLabel,
+  countdown,
+  hasNewAnswer,
+  idleDelay,
+  initialChoice,
+  installedCatalog,
+  isRunnable,
+  runnableProfiles,
+} from "./supportAgent";
 
 const harness = (name: string, installed: boolean): HarnessOption => ({
   name,
@@ -44,5 +56,39 @@ describe("support agent choices", () => {
     expect(choiceCombination({ mode: "profile", profile_id: "deep" }, profiles)).toEqual({ harness: "claude", model: "opus", effort: null });
     expect(agentTag({ harness: "claude", model: null })).toBe("claude · default model");
     expect(agentTag({ harness: "claude", model: "opus" })).toBe("claude · opus");
+  });
+});
+
+describe("the support agent's idleness and answers", () => {
+  it("says the idle delay in minutes when whole, else in seconds", () => {
+    expect(idleDelay(1800)).toBe("30 min");
+    expect(idleDelay(60)).toBe("1 min");
+    expect(idleDelay(90)).toBe("90 s");
+    expect(idleDelay(1)).toBe("1 s");
+  });
+
+  it("counts down from 0:60 and never below 0:00", () => {
+    expect(countdown(60_000)).toBe("0:60");
+    expect(countdown(59_001)).toBe("0:60");
+    expect(countdown(59_000)).toBe("0:59");
+    expect(countdown(9_000)).toBe("0:09");
+    expect(countdown(-5_000)).toBe("0:00");
+    expect(countdown(90_000)).toBe("1:30");
+  });
+
+  it("an answer is new when written after the one seen at the minimize", () => {
+    const status = { alive: true, last_output_at: "2027-01-15T08:00:10.000Z" };
+    expect(hasNewAnswer(status, "2027-01-15T08:00:05.000Z")).toBe(true);
+    expect(hasNewAnswer(status, "2027-01-15T08:00:10.000Z")).toBe(false);
+    expect(hasNewAnswer(status, ""), "nothing written when minimized").toBe(true);
+    expect(hasNewAnswer(status, null), "never minimized here").toBe(false);
+    expect(hasNewAnswer({ ...status, alive: false }, "")).toBe(false);
+    expect(hasNewAnswer({ alive: true, last_output_at: null }, "")).toBe(false);
+  });
+
+  it("ties what was seen to one opening of one agent", () => {
+    const agent = { choice: { mode: "custom" as const, harness: "claude" }, label: "Custom", harness: "claude", model: null, effort: null, opened_at: "T1" };
+    expect(answerSeenKey({ session: "pdo-support-operator", alive: true, agent })).toBe("pdo-support-operator@T1");
+    expect(answerSeenKey({ session: "pdo-support-operator", alive: false, agent: null })).toBeNull();
   });
 });

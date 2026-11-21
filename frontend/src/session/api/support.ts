@@ -30,3 +30,8 @@ export function askSupportAgent(question: string): Promise<SupportStatusResponse
 export function closeSupportAgent(): Promise<SupportStatusResponse> {
   return request<SupportStatusResponse>("DELETE", "/sessions/support", { label: "End session" });
 }
+
+/** « Keep »: the agent stays, its idle clock starts over. */
+export function keepSupportAgent(): Promise<SupportStatusResponse> {
+  return request<SupportStatusResponse>("POST", "/sessions/support/keep", { label: "Keep" });
+}

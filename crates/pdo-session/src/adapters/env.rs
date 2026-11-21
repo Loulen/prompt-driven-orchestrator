@@ -6,11 +6,12 @@ use std::time::Duration;
 
 use pdo_kernel::env::{
     DEFAULT_HARNESS_ENV, DEFAULT_MODEL_ENV, LIBASSIST_IDLE_TTL_SECS_ENV, REAPER_INTERVAL_SECS_ENV,
-    REAPER_TTL_SECS_ENV,
+    REAPER_TTL_SECS_ENV, SUPPORT_IDLE_TIMEOUT_SECS_ENV,
 };
 
 use crate::domain::settings::{
     DEFAULT_LIBASSIST_IDLE_TTL, DEFAULT_REAPER_INTERVAL, DEFAULT_REAPER_TTL,
+    DEFAULT_SUPPORT_IDLE_TIMEOUT,
 };
 
 /// Env var that EXTENDS the WebSocket Origin allowlist with operator-supplied
@@ -82,6 +83,25 @@ pub fn libassist_idle_ttl() -> Duration {
 /// [`libassist_idle_ttl_with`].
 pub fn env_libassist_idle_ttl_secs() -> Option<u64> {
     std::env::var(LIBASSIST_IDLE_TTL_SECS_ENV)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+}
+
+/// Resolve the Agent de support's idle timeout, `stored → env → default`:
+/// the same three tiers, the same `>= 1` floor and the same
+/// read-it-at-every-tick discipline as [`reaper_ttl_with`].
+pub fn support_idle_timeout_with(stored_secs: Option<u64>) -> Duration {
+    stored_secs
+        .filter(|&n| n >= 1)
+        .or_else(env_support_idle_timeout_secs)
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_SUPPORT_IDLE_TIMEOUT)
+}
+
+/// The idle timeout (seconds) contributed by [`SUPPORT_IDLE_TIMEOUT_SECS_ENV`]
+/// alone, or `None` when unset or unparseable.
+pub fn env_support_idle_timeout_secs() -> Option<u64> {
+    std::env::var(SUPPORT_IDLE_TIMEOUT_SECS_ENV)
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
 }
@@ -223,5 +243,31 @@ mod tests {
         std::env::remove_var(LIBASSIST_IDLE_TTL_SECS_ENV);
         assert_eq!(libassist_idle_ttl_with(None), DEFAULT_LIBASSIST_IDLE_TTL);
         assert_eq!(libassist_idle_ttl_with(Some(90)), Duration::from_secs(90));
+    }
+
+    #[test]
+    fn support_idle_timeout_default_and_from_env() {
+        // One test: the env var is process-global.
+        std::env::remove_var(SUPPORT_IDLE_TIMEOUT_SECS_ENV);
+        assert_eq!(
+            support_idle_timeout_with(None),
+            DEFAULT_SUPPORT_IDLE_TIMEOUT
+        );
+        assert_eq!(DEFAULT_SUPPORT_IDLE_TIMEOUT, Duration::from_secs(1800));
+
+        std::env::set_var(SUPPORT_IDLE_TIMEOUT_SECS_ENV, "60");
+        assert_eq!(support_idle_timeout_with(None), Duration::from_secs(60));
+        assert_eq!(
+            support_idle_timeout_with(Some(300)),
+            Duration::from_secs(300),
+            "stored wins over env"
+        );
+        assert_eq!(support_idle_timeout_with(Some(0)), Duration::from_secs(60));
+
+        std::env::remove_var(SUPPORT_IDLE_TIMEOUT_SECS_ENV);
+        assert_eq!(
+            support_idle_timeout_with(Some(0)),
+            DEFAULT_SUPPORT_IDLE_TIMEOUT
+        );
     }
 }

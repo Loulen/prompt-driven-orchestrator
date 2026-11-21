@@ -9,6 +9,9 @@ const live: SupportStatusResponse = {
   alive: true,
   agent: { choice: { mode: "profile", profile_id: "default" }, label: "Default", harness: "claude", model: "opus", effort: null, opened_at: "" },
   last_choice: null,
+  last_input_at: null,
+  last_output_at: null,
+  still_there: null,
 };
 const closed: SupportStatusResponse = { ...live, alive: false, agent: null };
 

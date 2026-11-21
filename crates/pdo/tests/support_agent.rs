@@ -334,6 +334,8 @@ async fn the_cli_opens_reads_asks_and_closes_the_support_agent() {
     )
     .await;
     assert_eq!(asked.json()["alive"], true);
+    let kept = pdo(&daemon, &["support", "keep", "--json"]).await;
+    assert_eq!(kept.json()["still_there"], Value::Null);
     assert_eq!(
         pdo(&daemon, &["support", "close"]).await.ok(),
         "closed: pdo-support-operator\tclosed\n"
@@ -342,4 +344,120 @@ async fn the_cli_opens_reads_asks_and_closes_the_support_agent() {
         pdo(&daemon, &["support", "status", "--json"]).await.json()["last_choice"],
         json!({ "mode": "custom", "harness": "fake", "model": "m1" })
     );
+}
+
+/// The `support_agent_changed` messages of `/ws` until one says `change`.
+async fn change_until<S>(ws: &mut S, change: &str, within: Duration) -> Value
+where
+    S: futures_util::Stream<
+            Item = Result<
+                tokio_tungstenite::tungstenite::protocol::Message,
+                tokio_tungstenite::tungstenite::Error,
+            >,
+        > + Unpin,
+{
+    use futures_util::StreamExt;
+    let deadline = Instant::now() + within;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        assert!(!left.is_zero(), "no `{change}` on /ws");
+        let Ok(Some(Ok(message))) = tokio::time::timeout(left, ws.next()).await else {
+            continue;
+        };
+        let Ok(text) = message.into_text() else {
+            continue;
+        };
+        let Ok(message) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        if message["type"] == "support_agent_changed" && message["support"]["change"] == change {
+            return message;
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_idle_agent_asks_still_there_on_ws_and_keep_answers_it() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let envs = tempfile::tempdir().unwrap();
+    let (daemon, _control) = daemon(envs.path()).await;
+    let (status, settings) = call_as(
+        &daemon,
+        reqwest::Method::PUT,
+        "/settings",
+        "alice",
+        Some(json!({ "support_idle_timeout_secs": 1 })),
+    )
+    .await;
+    assert_eq!(status, 200, "{settings}");
+    let mut request = format!("ws://{}/ws", daemon.addr)
+        .into_client_request()
+        .unwrap();
+    request
+        .headers_mut()
+        .insert(ACTOR_HEADER, "alice".parse().unwrap());
+    let (mut ws, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+
+    let (status, opened) = call_as(
+        &daemon,
+        reqwest::Method::POST,
+        "/sessions/support",
+        "alice",
+        Some(json!({ "choice": fake() })),
+    )
+    .await;
+    assert_eq!(status, 201, "{opened}");
+    let session = opened["session"].as_str().unwrap().to_string();
+    change_until(&mut ws, "opened", Duration::from_secs(5)).await;
+
+    let idle = change_until(&mut ws, "idle", Duration::from_secs(15)).await;
+    assert_eq!(idle["support_session"], session.as_str());
+    assert_eq!(idle["support"]["idle_timeout_secs"], 1);
+    assert!(idle.get("read_guard").is_none(), "the guard stays home");
+    let (_, asked) = call_as(
+        &daemon,
+        reqwest::Method::GET,
+        "/sessions/support",
+        "alice",
+        None,
+    )
+    .await;
+    assert_eq!(
+        asked["still_there"]["closes_at"],
+        idle["support"]["closes_at"]
+    );
+
+    let (status, kept) = call_as(
+        &daemon,
+        reqwest::Method::POST,
+        "/sessions/support/keep",
+        "alice",
+        None,
+    )
+    .await;
+    assert_eq!(status, 200, "{kept}");
+    assert_eq!(kept["alive"], true);
+    assert_eq!(kept["still_there"], Value::Null);
+    change_until(&mut ws, "active", Duration::from_secs(5)).await;
+
+    // With no agent, Keep has nothing to keep.
+    call_as(
+        &daemon,
+        reqwest::Method::DELETE,
+        "/sessions/support",
+        "alice",
+        None,
+    )
+    .await;
+    change_until(&mut ws, "closed", Duration::from_secs(5)).await;
+    let (status, none) = call_as(
+        &daemon,
+        reqwest::Method::POST,
+        "/sessions/support/keep",
+        "alice",
+        None,
+    )
+    .await;
+    assert_eq!(status, 404, "{none}");
+    assert_eq!(none["error"], "no_support_agent");
 }

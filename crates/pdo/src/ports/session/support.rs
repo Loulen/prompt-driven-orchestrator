@@ -1,7 +1,9 @@
 //! The port of the Agent de support that reads the other contexts: which
 //! agent a choice resolves to, over the agentic profiles (settings), the
 //! harness registry and the binary probe (harness), and the instance's
-//! default models (the Runs').
+//! default models (the Runs'); the instance's idle timeout (settings).
+
+use std::time::Duration;
 
 use pdo_harness::domain::agent_choice::AgentChoice;
 use pdo_run::Runs;
@@ -79,6 +81,19 @@ impl SupportAgents for SupportSide {
                 effort: filled(effort),
                 label,
             })
+        })
+    }
+
+    /// `stored → env → default`, read at every tick: a failed read falls to
+    /// the env and default tiers.
+    fn idle_timeout(&self) -> BoxFuture<'_, Duration> {
+        Box::pin(async move {
+            let stored = pdo_settings::adapters::sqlite::instance_config::get(&self.db)
+                .await
+                .ok()
+                .and_then(|c| c.support_idle_timeout_secs)
+                .map(|n| n.max(0) as u64);
+            pdo_session::adapters::env::support_idle_timeout_with(stored)
         })
     }
 }

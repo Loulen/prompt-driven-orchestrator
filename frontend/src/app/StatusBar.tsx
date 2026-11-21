@@ -7,6 +7,7 @@ import SessionCounter from "../run/components/SessionCounter";
 import ServiceHealthIndicator from "../platform/components/ServiceHealthIndicator";
 import VersionBadge from "../platform/components/VersionBadge";
 import ExtensionDecorations from "../shared/extensions/ExtensionDecorations";
+import SupportAgentEntry from "../session/components/support/SupportAgentEntry";
 import type { DecorationContext } from "../shared/extensions/contract";
 import { Tooltip } from "../shared/ui/kit";
 
@@ -21,8 +22,8 @@ const DAEMON: Record<ConnectionStatus, { icon: LucideIcon; label: string }> = {
 
 /** The status bar, 22 px, icons and numbers only (their names in the tooltips):
  *  the daemon connection and the live sessions on the left; the extensions'
- *  `statusbar` decorations, the service health and the installed version on
- *  the right. */
+ *  `statusbar` decorations, the service health, the installed version and, at
+ *  the right end, the support agent's entry on the right. */
 export default function StatusBar({
   status,
   sessions,
@@ -71,6 +72,7 @@ export default function StatusBar({
       {version && (
         <VersionBadge version={version} label={versionLabel} update={update} onClick={onOpenVersion} />
       )}
+      <SupportAgentEntry />
     </footer>
   );
 }

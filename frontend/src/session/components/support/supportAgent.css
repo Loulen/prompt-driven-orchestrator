@@ -46,3 +46,38 @@
   overflow-wrap: anywhere;
   white-space: normal;
 }
+/* The entry at the right end of the status bar: the harness's logo or « ? »,
+   an amber dot at its top right when the agent answered since it was minimized. */
+.sa-entry {
+  position: relative;
+}
+.sa-entry__dot {
+  position: absolute;
+  top: 3px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-st-await);
+  box-shadow: 0 0 0 1.5px var(--surface-2);
+}
+/* « Still there? »: the sentence, then the countdown. */
+.sa-still {
+  display: flex;
+  flex-direction: column;
+  gap: var(--g-3);
+}
+.sa-still__lead {
+  margin: 0;
+  color: var(--text);
+}
+.sa-still__note {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+.sa-still__count {
+  font-family: var(--font-code);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-st-await);
+}

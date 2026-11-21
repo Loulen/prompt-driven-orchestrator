@@ -74,6 +74,10 @@ impl Tmux for TmuxCli {
         lifecycle::session_closed_at(&self.socket, name)
     }
 
+    fn last_output_at(&self, name: &str) -> Option<std::time::SystemTime> {
+        lifecycle::last_output_at(&self.socket, name)
+    }
+
     fn server_alive(&self) -> Option<bool> {
         lifecycle::server_alive(&self.socket)
     }

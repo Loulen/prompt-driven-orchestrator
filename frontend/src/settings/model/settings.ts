@@ -81,6 +81,10 @@ export interface InstanceSettings {
   session_cap: SettingField;
   reaper_ttl_secs: SettingField;
   guard_timeout_secs: SettingField;
+  /** How long a support agent goes without input before it asks « Still there? », in
+   *  seconds (`stored → env PDO_SUPPORT_IDLE_TIMEOUT_SECS → default 1800`). Absent from
+   *  an older daemon. */
+  support_idle_timeout_secs?: SettingField;
   /** #779: images + files budget per Run, in MB (`stored → env → default 50`). Bounds the
    *  multipart body of `POST /runs` and drives the « New run » modal's client-side gate. */
   max_attachments_mb: SettingField;

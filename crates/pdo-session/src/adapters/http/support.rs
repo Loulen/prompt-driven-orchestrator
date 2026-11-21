@@ -11,7 +11,7 @@ use pdo_kernel::Actor;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::application::support::{ChoiceRefusal, SupportError, SupportStatus};
+use crate::application::support::{ChoiceRefusal, StillThere, SupportError, SupportStatus};
 use crate::domain::support::SupportAgent;
 use crate::Session;
 
@@ -54,6 +54,36 @@ pub struct SupportStatusResponse {
     pub agent: Option<SupportAgentView>,
     /// The choice the caller last opened one with.
     pub last_choice: Option<AgentChoice>,
+    /// The caller's last input into it (RFC 3339), while it lives.
+    pub last_input_at: Option<String>,
+    /// When it last wrote in its terminal (RFC 3339), while it lives: a new
+    /// answer for a tab that does not show it.
+    pub last_output_at: Option<String>,
+    /// « Still there? », while it is asked.
+    pub still_there: Option<StillThereView>,
+}
+
+/// « Still there? », asked: the agent closes at `closes_at` without an
+/// answer.
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct StillThereView {
+    /// RFC 3339.
+    pub closes_at: String,
+    /// The seconds left now: what a countdown reads, whatever its clock says.
+    pub closes_in_secs: u32,
+    /// The idle timeout it was asked after.
+    pub idle_timeout_secs: u32,
+}
+
+impl From<StillThere> for StillThereView {
+    fn from(still: StillThere) -> Self {
+        Self {
+            closes_at: still.closes_at,
+            closes_in_secs: still.closes_in_secs,
+            idle_timeout_secs: still.idle_timeout_secs,
+        }
+    }
 }
 
 impl From<SupportStatus> for SupportStatusResponse {
@@ -63,6 +93,9 @@ impl From<SupportStatus> for SupportStatusResponse {
             alive: status.alive,
             agent: status.agent.map(Into::into),
             last_choice: status.last_choice,
+            last_input_at: status.last_input_at,
+            last_output_at: status.last_output_at,
+            still_there: status.still_there.map(Into::into),
         }
     }
 }
@@ -131,6 +164,18 @@ pub(super) async fn ask(
 ) -> Response {
     let support = session.support();
     match support.ask(&actor, &req.question) {
+        Ok(_) => Json(SupportStatusResponse::from(support.status(&actor))).into_response(),
+        Err(e) => refused(e),
+    }
+}
+
+/// `POST /sessions/support/keep`: « Keep », the caller's agent stays.
+pub(super) async fn keep(
+    State(session): State<Arc<Session>>,
+    Extension(actor): Extension<Actor>,
+) -> Response {
+    let support = session.support();
+    match support.keep(&actor) {
         Ok(_) => Json(SupportStatusResponse::from(support.status(&actor))).into_response(),
         Err(e) => refused(e),
     }

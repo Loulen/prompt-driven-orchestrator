@@ -20,7 +20,12 @@ export type UpdateSettingsRequest = { session_cap?: number | null, reaper_ttl_se
  * Set the shared library assistant's idle TTL in seconds (#594). Set-only,
  * like the other numeric knobs.
  */
-libassist_idle_ttl_secs?: number | null, guard_timeout_secs?: number | null, default_model?: string | null, 
+libassist_idle_ttl_secs?: number | null, 
+/**
+ * Set the Agents de support's idle timeout in seconds. Set-only, like the
+ * other numeric knobs.
+ */
+support_idle_timeout_secs?: number | null, guard_timeout_secs?: number | null, default_model?: string | null, 
 /**
  * Set the instance-wide default sandbox mode (#410). `Some("")` clears it back to
  * unset (same `""`-sentinel as `default_model`); `None` leaves it untouched.

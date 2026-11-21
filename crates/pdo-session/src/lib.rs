@@ -38,6 +38,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use pdo_kernel::event_bus::EventBus;
 use pdo_kernel::extension_host::ExtensionHost;
 
 use application::assistant::{
@@ -88,6 +89,9 @@ pub struct SessionPorts {
     pub hosted: HostedPorts,
     /// Which agent a choice resolves to, for the Agents de support.
     pub support: Arc<dyn SupportAgents>,
+    /// The kernel's bus, where the Agents de support tell what changed of
+    /// them (hence `/ws`).
+    pub events: Arc<dyn EventBus>,
 }
 
 /// The daemon's knobs the context reads.
@@ -146,6 +150,7 @@ impl Session {
             projects,
             hosted,
             support,
+            events,
         } = ports;
         let typed = Arc::new(TypedInput::default());
         let shared_terminals = Arc::new(SharedTerminalRegistry::default());
@@ -247,7 +252,8 @@ impl Session {
                     tmux_cmd_override: options.tmux_cmd_override.clone(),
                 },
             )
-            .with_ledger(ledger.clone()),
+            .with_ledger(ledger.clone())
+            .with_events(events),
             hosted,
             tmux,
             focus,

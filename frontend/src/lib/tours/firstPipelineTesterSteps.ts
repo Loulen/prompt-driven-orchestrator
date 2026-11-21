@@ -7,6 +7,7 @@
  */
 
 import type { TourObservation, TourStep } from "../tourDef";
+import { workspaceButton } from "../nodeIsolation";
 import {
   ADD_MENU_NODE,
   DELETE_CONFIRM,
@@ -100,8 +101,8 @@ export const TESTER_STEPS: TourStep[] = [
   },
   {
     id: "tester-worktree",
-    title: "Leave it in an isolated worktree",
-    body: "An isolated worktree gives this node its own copy of the repo, so the tester reads the change instead of sitting in the middle of it. That is already the default for a new agent — compare it with the implementer you just moved.",
+    title: "Give it an isolated worktree",
+    body: `Pick ${workspaceButton(true)}, under Worktree. An isolated worktree gives this node its own copy of the repo, so the tester reads the change instead of sitting in the middle of it. Isolation is a choice you make per node: the implementer kept the Run's worktree.`,
     target: () => ['[data-testid="workspace-isolated"]'],
     waitingFor: "the Workspace choice",
     done: (o) => agent(o.app, 1)?.isolated_worktree === true,

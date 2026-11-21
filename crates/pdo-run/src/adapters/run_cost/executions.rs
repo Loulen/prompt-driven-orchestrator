@@ -66,10 +66,11 @@ pub fn collect_executions(
             let isolated = node
                 .get("isolated_worktree")
                 .and_then(serde_json::Value::as_bool)
-                .unwrap_or(matches!(
-                    node.get("node_type").and_then(serde_json::Value::as_str),
-                    Some("agent")
-                ));
+                .unwrap_or_else(|| {
+                    node.get("node_type")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(pdo_pipeline::domain::pipeline::NodeType::default_isolation_of)
+                });
             Some((id, isolated))
         })
         .collect();

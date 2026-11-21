@@ -58,7 +58,7 @@ fn the_library_states_each_entrys_isolation() {
         .pipelines
         .save_to_library(&operator(), entry("Silent", NodeType::Agent, None))
         .unwrap();
-    assert_eq!(agent.isolated_worktree, Some(true));
+    assert_eq!(agent.isolated_worktree, Some(false));
     let script = world
         .pipelines
         .save_to_library(&operator(), entry("Script", NodeType::Script, None))
@@ -75,6 +75,6 @@ fn the_library_states_each_entrys_isolation() {
             .library_entry("Silent")
             .unwrap()
             .isolated_worktree,
-        Some(true)
+        Some(false)
     );
 }

@@ -89,13 +89,12 @@ beforeEach(() => {
 });
 
 /**
- * #653 / ADR-0060 — the editor's initial values. Isolated is the safe placement
- * for an Agent, so it is the default; a Script stays out of a sub-worktree so
- * lightweight runtime and artifact work stays lightweight. Both are written
- * down at creation, never left implicit.
+ * #653 / ADR-0060, amended by ADR draft-l-isolation-est-un-opt-in — the
+ * editor's initial values. Isolation is an opt-in: an Agent and a Script both
+ * start in the Run worktree, written down at creation, never left implicit.
  */
 describe("EditCanvas — new-node isolation defaults (#653)", () => {
-  it("creates an Agent isolated, and says so on the node", async () => {
+  it("creates an Agent in the Run worktree, and says so on the node", async () => {
     renderCanvas();
     fireEvent.click(screen.getByTestId("toolbar-add"));
     fireEvent.click(await screen.findByTestId("add-menu-node"));
@@ -103,7 +102,7 @@ describe("EditCanvas — new-node isolation defaults (#653)", () => {
     const nodes = useEditStore.getState().openTabs[0].pipeline.nodes;
     expect(nodes).toHaveLength(1);
     expect(nodes[0].type).toBe("agent");
-    expect(nodes[0].isolated_worktree).toBe(true);
+    expect(nodes[0].isolated_worktree).toBe(false);
   });
 
   it("creates a Script in the Run worktree, and says so on the node", async () => {

@@ -62,8 +62,8 @@ Features validated while crossing the editing screens:
    « Duplicate ») → a row `<name> (copy)` appears, and the copy **opens on the canvas** in its own
    tab `<id>-copy.yaml`. Continue the journey on that copy.
 3. **Add a node**: the toolbar's `+` (« Add ») › « Node » → a new agent card appears: a header with
-   its type icon and name, a meta grid with its agent, its worktree (a fork icon and `isolated`, the cell's
-   tooltip « Worktree: isolated ») and one line per output (`out`). The card carries no id text. Select it → the **node inspector** shows its id, its prompt
+   its type icon and name, a meta grid with its agent, its worktree (a fork icon and `run`: a new node shares the Run's worktree, the cell's
+   tooltip « Worktree: run ») and one line per output (`out`). The card carries no id text. Select it → the **node inspector** shows its id, its prompt
    editor, its Outputs and its Inputs (« Not wired »).
 4. **Draw an edge**: press **anywhere on the source card's border** (there is no output dot — the
    whole rim is the drag source) and drag. The preview grows **on the wiring grid**, one orthogonal

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   WORKSPACE_CHOICES,
   carriesIsolation,
+  defaultIsolation,
   isNodeIsolated,
   nodeIsolation,
   resolveIsolation,
@@ -25,9 +26,17 @@ function node(type: NodeType, isolated?: boolean): EditorNodeDef {
 }
 
 describe("nodeIsolation (#653 / ADR-0060)", () => {
-  it("defaults an Agent to isolated and a Script to the Run worktree", () => {
-    expect(nodeIsolation(node("agent"))).toBe(true);
+  it("defaults an Agent and a Script to the Run worktree (isolation is opt-in)", () => {
+    expect(nodeIsolation(node("agent"))).toBe(false);
     expect(nodeIsolation(node("script"))).toBe(false);
+  });
+
+  it("names the default once, per type", () => {
+    expect(defaultIsolation("agent")).toBe(false);
+    expect(defaultIsolation("script")).toBe(false);
+    for (const type of ["start", "end", "switch", "loop"] as const) {
+      expect(defaultIsolation(type)).toBeNull();
+    }
   });
 
   it("reads an explicit value over the default, both ways", () => {
@@ -46,7 +55,8 @@ describe("nodeIsolation (#653 / ADR-0060)", () => {
 
   it("reports the canvas marker from the document's isolation", () => {
     expect(isNodeIsolated(node("start"))).toBe(false);
-    expect(isNodeIsolated(node("agent"))).toBe(true);
+    expect(isNodeIsolated(node("agent"))).toBe(false);
+    expect(isNodeIsolated(node("agent", true))).toBe(true);
     expect(isNodeIsolated(node("agent", false))).toBe(false);
   });
 
@@ -58,8 +68,9 @@ describe("nodeIsolation (#653 / ADR-0060)", () => {
 
 describe("resolveIsolation — the library's door (#655)", () => {
   it("reads a stated value, else the type default", () => {
-    expect(resolveIsolation("agent", undefined)).toBe(true);
-    expect(resolveIsolation("agent", null)).toBe(true);
+    expect(resolveIsolation("agent", undefined)).toBe(false);
+    expect(resolveIsolation("agent", null)).toBe(false);
+    expect(resolveIsolation("agent", true)).toBe(true);
     expect(resolveIsolation("agent", false)).toBe(false);
     expect(resolveIsolation("script", undefined)).toBe(false);
     expect(resolveIsolation("script", true)).toBe(true);

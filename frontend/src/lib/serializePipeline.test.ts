@@ -1158,7 +1158,7 @@ describe("isolated_worktree emission (#653)", () => {
 
   it("writes the line for an agent that never stated it — at the default", () => {
     const yaml = serializePipeline(pipelineWith(agent()));
-    expect(yaml).toContain("isolated_worktree: true");
+    expect(yaml).toContain("isolated_worktree: false");
   });
 
   it("writes the line for a script that never stated it — at the default", () => {

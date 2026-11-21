@@ -48,7 +48,7 @@ nodes:
   - id: implement                 # stable slug, unique in the pipeline
     name: implementer             # display label
     type: agent
-    isolated_worktree: true
+    isolated_worktree: false
     inputs:                       # emergent for work nodes — usually omit; named by edges
       - { name: in }
     outputs:                      # a port has no side nor `repeated`: both belong to the edge
@@ -76,11 +76,12 @@ nodes:
 **Where a node works** (`isolated_worktree:`, ADR-0060). Every `agent` and every
 `script` states it, always — write the line even when it equals the default:
 
-- `true` — the NodeRun gets a sub-worktree of its own. The default for an
-  `agent`, and what parallel branches need to avoid sharing an uncommitted tree.
 - `false` — the NodeRun works directly in the Run's shared worktree. The default
-  for a `script`, and the right choice for a sequential pipeline that does not
-  need a fork per role.
+  for an `agent` and a `script`, and the right choice for a sequential pipeline
+  that does not need a fork per role.
+- `true` — the NodeRun gets a sub-worktree of its own. An explicit opt-in, for
+  parallel branches that must not share an uncommitted tree, or a node whose
+  commits must be attributed to it alone.
 
 `start`/`end` carry none. There is no `doc-only` or `code-mutating` — a node's type names its
 execution role, never a guess about what it will touch.

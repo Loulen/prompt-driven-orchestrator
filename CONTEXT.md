@@ -43,7 +43,7 @@ Distinct de :
 
 ### Isolation de Node
 
-L'**isolation de Node** choisit où un NodeRun travaille : dans un sous-worktree propre, ou directement dans le worktree partagé du Run. Un Node `agent` est isolé par défaut ; partager le worktree du Run est un opt-out explicite de l'auteur du Pipeline. Un Node `script` partage le worktree du Run par défaut et peut opter pour l'isolation. Le choix reste écrit dans les deux cas : le Document de pipeline dit toujours où le Node travaille, sans le déduire de son type ou de son livrable attendu.
+L'**isolation de Node** choisit où un NodeRun travaille : dans un sous-worktree propre, ou directement dans le worktree partagé du Run. Un Node partage le worktree du Run par défaut ; l'isolation est un choix explicite de l'auteur (ADR draft-l-isolation-est-un-opt-in, qui amende ADR-0060). Ce défaut vaut pour un `agent` comme pour un `script` : l'isolation par Run suffit le plus souvent, et un sous-worktree par Node duplique le dépôt. L'auteur coche l'isolation pour un Node qui tourne en parallèle d'un autre ou dont l'attribution des commits doit être fiable. Le choix reste écrit dans les deux cas : le Document de pipeline dit toujours où le Node travaille, sans le déduire de son type ou de son livrable attendu.
 
 Un Node isolé peut travailler en parallèle sans partager son arbre de travail. Un Node non isolé évite le coût d'un sous-worktree ; s'il s'exécute en même temps qu'un autre Node non isolé, l'auteur accepte qu'ils partagent leurs modifications. PDO ne sérialise pas ce choix à sa place. À la complétion, PDO commite tout changement que Git n'ignore pas, hors les fichiers qu'il a lui-même posés (`.pdo/artifacts/`, `.pdo/prompts/`, le provisionnement) ; le dépôt cible porte la responsabilité d'ignorer les autres fichiers qu'il ne veut pas versionner. Deux Runs ne partagent jamais leur worktree, même lorsqu'ils exécutent la même Pipeline (ADR-0060).
 
@@ -101,7 +101,7 @@ _Éviter_ : « profil » seul (ambigu avec le profil de staging), « preset », 
 
 ### Node `script` — exécution déterministe (ADR-0017)
 
-Un node **`script`** exécute le bash de l'auteur au lieu de lancer Claude, dans une **session tmux** attachable comme tout NodeRun (ADR-0005) : exit 0 ⇒ `completed`, non-zéro ou timeout ⇒ `failed`. Il partage le worktree du Run par défaut et porte le même choix d'isolation qu'un `agent` (cf. *Isolation de Node*).
+Un node **`script`** exécute le bash de l'auteur au lieu de lancer Claude, dans une **session tmux** attachable comme tout NodeRun (ADR-0005) : exit 0 ⇒ `completed`, non-zéro ou timeout ⇒ `failed`. Il partage le worktree du Run par défaut, comme un `agent`, et porte le même choix d'isolation (cf. *Isolation de Node*).
 
 - **I/O par variables d'environnement** (`PDO_INPUT_<PORT>`, `PDO_OUTPUT_<PORT>`, `PDO_ARTIFACTS_DIR`, `PDO_VAR_<NAME>`…) : un script ne lit pas le préambule prose. Un tour de collection reçoit son item dans `PDO_ITEM` et le nombre de tours dans `PDO_ITEM_TOTAL` (son rang est `PDO_NODE_ITER`), ce qu'un agent lit sous « Collection Context ». Il écrit lui-même ses outputs ; la validation d'outputs s'applique en **fail-fast** (pas de retry interactif — la session a quitté). Contrat de refus → ADR-0035.
 - **Corps** stocké dans le slot prompt du node. Un corps vide fait échouer le lancement (fail-loud).

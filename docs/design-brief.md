@@ -201,7 +201,7 @@ The right panel adapts to the selection:
 **If a Node is selected:**
 - Section "Identity": id (auto-generated, editable), Name (display name).
 - Section "Type": a static label (`agent`, or `script` for deterministic bash) — the type names the execution role and is not a toggle.
-- Section "Workspace": a radio pair between `Isolated worktree` ("a sub-worktree of the Node's own") and `Run worktree` ("shared with the whole Run"), with the resolved working directory printed underneath in monospace. Isolated is the default for an `agent`, the Run worktree for a `script`. Absent on Start/End.
+- Section "Workspace": a radio pair between `Isolated worktree` ("a sub-worktree of the Node's own") and `Run worktree` ("shared with the whole Run"), with the resolved working directory printed underneath in monospace. The Run worktree is the default for an `agent` and a `script`; Isolated is an opt-in. Absent on Start/End.
 - Section "Behavior": toggle `interactive` (with help text: "When true, this node pauses after spawning and waits for the user to interact via terminal and click 'Mark complete' in run mode.").
 - Section "Prompt": a large textarea (≥10 rows, monospace, markdown) bound to the node's external prompt file (e.g. `prompts/<node-id>.md`). Auto-saved.
 - Section "Inputs": list of input ports. Each row: port name (editable), `repeated` toggle (with tooltip: "When true, this port reads all artifacts matching `iter-*/<port>.md` instead of just the latest."). "+ Add input port" button.

@@ -13,12 +13,14 @@ import type { EditorNodeDef } from "../pipeline/model/pipeline";
  */
 
 /**
- * The isolation a type carries when the document says nothing. `null` means the
- * type carries no isolation at all: structural nodes never run in a worktree of
- * their own.
+ * The isolation a type carries when the document says nothing, the client's
+ * mirror of the daemon's `NodeType::default_isolation`. Isolation is an opt-in:
+ * an `agent` and a `script` share the Run worktree until the author asks for a
+ * sub-worktree. `null` means the type carries no isolation at all: structural
+ * nodes never run in a worktree of their own.
  */
 const DEFAULT_ISOLATION: Record<NodeType, boolean | null> = {
-  agent: true,
+  agent: false,
   script: false,
   // Legacy structural types, soft-warned by the daemon: no worktree either.
   switch: null,
@@ -27,9 +29,17 @@ const DEFAULT_ISOLATION: Record<NodeType, boolean | null> = {
   end: null,
 };
 
+/**
+ * The isolation a new node of this type starts with, and the one a silent
+ * document falls back to. `null` for a type that carries none.
+ */
+export function defaultIsolation(type: NodeType): boolean | null {
+  return DEFAULT_ISOLATION[type];
+}
+
 /** Whether the inspector offers this type a Workspace choice at all. */
 export function carriesIsolation(type: NodeType): boolean {
-  return DEFAULT_ISOLATION[type] !== null;
+  return defaultIsolation(type) !== null;
 }
 
 /**

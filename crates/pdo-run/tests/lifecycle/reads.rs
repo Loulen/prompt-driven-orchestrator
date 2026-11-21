@@ -124,6 +124,39 @@ async fn websocket_receives_events() {
     }
 }
 
+/// Isolation opt-in (ADR draft-l-isolation-est-un-opt-in): a snapshot whose
+/// `agent` states no isolation reads as shared, the type's default, like the
+/// spawn does.
+#[tokio::test]
+async fn a_silent_agent_in_the_run_snapshot_reads_as_shared() {
+    let state = test_state().await;
+    let run_id = "test-silent-agent";
+    let run_started = event_log::Event {
+        id: None,
+        run_id: run_id.into(),
+        ts: pdo_kernel::clock::now_iso(),
+        kind: event_log::EventKind::RunStarted,
+        node_id: None,
+        iter: None,
+        payload: Some(serde_json::json!({
+            "pipeline_name": "silent",
+            "input": "test",
+            "node_defs": [
+                { "id": "agent-1", "node_type": "agent", "inputs": [], "outputs": [] },
+                { "id": "script-1", "node_type": "script", "inputs": [], "outputs": [] }
+            ],
+            "edges": []
+        })),
+    };
+    append_event(&state, &run_started).await.unwrap();
+
+    let events = load_events(&state.db, run_id).await.unwrap();
+    let run_state = event_log::project(&events).unwrap();
+    assert!(!snapshot_isolation(&run_state, "agent-1"));
+    assert!(!snapshot_isolation(&run_state, "script-1"));
+    assert!(!node_run_isolation(&events, &run_state, "agent-1", 1));
+}
+
 #[tokio::test]
 async fn node_def_isolation_projects_from_the_run_snapshot() {
     let state = test_state().await;

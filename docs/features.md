@@ -254,12 +254,13 @@ Decisions: [ADR-0062](adr/0062-les-skills-sont-livres-dans-le-worktree-jamais-co
 ### Isolated worktrees
 
 Every run gets its own git worktree and branch, and two runs never share one. Each node picks where
-it works: an `agent` node works in its own sub-worktree by default, merged back into the run's branch
-when it completes, or it opts into the run's shared worktree (Workspace: isolated / shared).
+it works: a node works in the run's shared worktree by default, or it opts into a sub-worktree of
+its own, merged back into the run's branch when it completes (Workspace: shared / isolated).
 Provisioning (files to copy, commands to run) is declared once and frozen per run.
 
 Decisions: [ADR-0036](adr/0036-merge-back-resolved-in-the-node-favour.md),
 [ADR-0060](adr/0060-l-isolation-est-un-choix-du-node.md),
+[ADR draft-l-isolation-est-un-opt-in](adr/draft-l-isolation-est-un-opt-in.md),
 [ADR-0061](adr/0061-le-provisionnement-de-worktree-est-declaratif-additif-et-gele-par-run.md).
 
 ### Live sessions

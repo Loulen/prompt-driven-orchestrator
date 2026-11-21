@@ -3,6 +3,7 @@
 //! `model`/`effort` fold.
 
 use super::diagnostic::{Diagnostic, ParseError, Severity};
+use super::node::NodeType;
 
 /// The node `type` strings the parser accepts verbatim. Anything else is coerced
 /// to `agent` with a warning (see `normalize_node_value`); `for-each`/`foreach`
@@ -14,7 +15,7 @@ use super::diagnostic::{Diagnostic, ParseError, Severity};
 /// diagnostic for a retired type is a compatibility branch by another name.
 ///
 /// ADR-0082: `merge` is GONE the same way. A legacy `type: merge` becomes an
-/// isolated `agent` with the ordinary warning — its `branches` / `merged` ports
+/// `agent` (with the type's default isolation) and the ordinary warning — its `branches` / `merged` ports
 /// survive untouched, and convergence is the generic rule of every node.
 pub const VALID_NODE_TYPES: &[&str] = &[
     "agent", "start", "end", "switch", "loop",
@@ -277,7 +278,8 @@ pub const SKILLS_KEY: &str = "skills";
 ///
 /// This is what makes "the Document always states the choice" true without
 /// asking every author to type the line: an `agent` with no `isolated_worktree`
-/// parses as isolated and *re-serializes* saying so. A type that carries no
+/// parses as shared and *re-serializes* saying so. The value is
+/// [`NodeType::default_isolation`], never a copy of it. A type that carries no
 /// isolation (`start`, `end`, `switch`, `loop`) has any stray key dropped rather
 /// than round-tripped — a line nobody may edit would only invite someone to
 /// edit it.
@@ -285,14 +287,11 @@ pub const SKILLS_KEY: &str = "skills";
 /// Runs after the type normalization above, so it reads the coerced type.
 fn stamp_isolation_default(node_map: &mut serde_yaml::Mapping) {
     let key = serde_yaml::Value::String(ISOLATED_WORKTREE_KEY.into());
-    let default = match node_map
+    let default = node_map
         .get(serde_yaml::Value::String("type".into()))
-        .and_then(|v| v.as_str())
-    {
-        Some("agent") => Some(true),
-        Some("script") => Some(false),
-        _ => None,
-    };
+        .and_then(|t| t.as_str())
+        .and_then(NodeType::from_wire)
+        .and_then(|t| t.default_isolation());
     match default {
         Some(value) => {
             if !node_map.get(&key).map(|v| v.is_bool()).unwrap_or(false) {

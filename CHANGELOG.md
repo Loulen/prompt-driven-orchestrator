@@ -14,11 +14,12 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.85.0
 
 - Alone on a terminal, its bar no longer reads "You pilot", only `attached · live`: the chip
   appears with the first other browser watching ("You pilot | 1 watching") and leaves with the
   last one.
+
 ## 2.84.0
 
 - The canvas toolbar's Library and Script node icons moved into the `+` menu, which now reads

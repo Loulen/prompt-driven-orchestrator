@@ -10,16 +10,9 @@ import { CircleHelp } from "lucide-react";
 import type { SupportStatusResponse } from "../../shared/generated/SupportStatusResponse";
 import { agentTag } from "../../session/model/supportAgent";
 import { useSupportAgent } from "../../session/store/supportAgentStore";
-import type { BuildInput, Lead, PaletteItem, Row } from "./paletteModel";
+import type { BuildInput, Lead, PaletteItem } from "./paletteModel";
 
 const HELP: Lead = { kind: "icon", icon: CircleHelp };
-
-/** The row that types the query into the open agent at once. */
-const ASK_OPEN = "support:ask-open";
-
-/** Whether Enter may run `row` before the arrows point at it: never the row
- *  that types the query into the open agent, which sends it without a window. */
-export const isDefaultRow = (row: Row) => !(row.kind === "item" && row.item.id === ASK_OPEN);
 
 export interface SupportGestures {
   showDialog: (question?: string) => void;

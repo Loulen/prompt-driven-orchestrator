@@ -20,10 +20,10 @@ vi.mock("../../../settings/api/settings", async (importOriginal) => ({
 }));
 // The terminal itself is the core's, tested on its own: here, its bar's gestures.
 vi.mock("../SessionTerminal", () => ({
-  default: (p: { session: string; toolbarIdentity: React.ReactNode; toolbarActions: React.ReactNode; onExpand: () => void }) => (
+  default: (p: { session: string; toolbarIdentity: React.ReactNode; toolbarEnd: React.ReactNode; onExpand: () => void }) => (
     <div data-testid="session-terminal" data-session={p.session}>
       {p.toolbarIdentity}
-      {p.toolbarActions}
+      {p.toolbarEnd}
       <button type="button" onClick={p.onExpand}>
         Collapse terminal
       </button>

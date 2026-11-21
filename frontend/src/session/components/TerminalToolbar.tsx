@@ -37,6 +37,9 @@ interface Props {
   /** #44: extra gestures at the right of the toolbar, before Copy, followed by
    *  a separator. */
   actions?: ReactNode;
+  /** The last gesture of the toolbar, after every tool and a separator
+   *  (the support agent's « End session »). */
+  end?: ReactNode;
   /** Import files from this machine into the node. Absent: no Import button. */
   onImport?: () => void;
   /** Why the node cannot receive files now: the button is off and says it. */
@@ -144,6 +147,7 @@ export default function TerminalToolbar({
   onTakeControl,
   identity,
   actions,
+  end,
   onImport,
   importDisabledReason,
 }: Props) {
@@ -226,6 +230,12 @@ export default function TerminalToolbar({
             would be an action that can only fail. */}
         {onDetach && (
           <IconButton icon={ExternalLink} size="sm" label="Detach to OS terminal" data-testid="term-detach" onClick={onDetach} />
+        )}
+        {end && (
+          <>
+            <span className="ri-term-bar__sep" aria-hidden />
+            {end}
+          </>
         )}
       </span>
     </div>

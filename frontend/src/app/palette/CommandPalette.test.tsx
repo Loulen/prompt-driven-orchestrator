@@ -183,6 +183,28 @@ describe("CommandPalette", () => {
     expect(rows[0]).toHaveAttribute("aria-selected", "true");
   });
 
+  it("with a support agent open and nothing else matching, Enter asks it the query at once", async () => {
+    const live = {
+      session: "pdo-support-operator",
+      alive: true,
+      agent: { choice: { mode: "profile", profile_id: "default" }, label: "Default", harness: "claude", model: null, effort: null, opened_at: "" },
+      last_choice: null,
+    };
+    await load([], { "/sessions/support": live, "/sessions/support/ask": live });
+    renderPalette();
+    fireEvent.click(screen.getByTestId("command-field"));
+    const input = screen.getByTestId("command-palette-input");
+    fireEvent.change(input, { target: { value: "how many Pipelines?" } });
+    const group = await screen.findByTestId("palette-group-support");
+    const [askOpen] = within(group).getAllByTestId("palette-row");
+    expect(askOpen).toHaveTextContent("Ask the open agent: how many Pipelines?");
+    expect(askOpen).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith("/sessions/support/ask", expect.objectContaining({ method: "POST" })),
+    );
+  });
+
   it("lists an extension's global Actions under its name, the refused one greyed with why, and runs the others", async () => {
     await load([NOTES]);
     renderPalette();

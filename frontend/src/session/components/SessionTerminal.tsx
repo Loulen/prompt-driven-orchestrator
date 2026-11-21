@@ -16,6 +16,9 @@ export interface SessionTerminalProps {
   toolbarIdentity?: ReactNode;
   /** At the right of the toolbar, before Copy. */
   toolbarActions?: ReactNode;
+  /** At the very end of the toolbar, after a separator. The core's own (the
+   *  support agent's « End session »): not in the extensions' contract. */
+  toolbarEnd?: ReactNode;
   /** Shows the « collapse » button instead of « expand ». */
   expanded?: boolean;
   /** Adds the expand button to the toolbar. */

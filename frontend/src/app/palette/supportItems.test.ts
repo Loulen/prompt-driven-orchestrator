@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SupportStatusResponse } from "../../shared/generated/SupportStatusResponse";
 import { buildSections } from "./paletteModel";
 import { GROUP_ICONS } from "./paletteItems";
-import { isDefaultRow, supportItems } from "./supportItems";
+import { supportItems } from "./supportItems";
 
 const live: SupportStatusResponse = {
   session: "pdo-support-operator",
@@ -42,12 +42,6 @@ describe("the Support group of the palette", () => {
     expect(g.showDialog).not.toHaveBeenCalled();
     asking[1].run();
     expect(g.showDialog).toHaveBeenCalledWith("how many Pipelines?");
-  });
-
-  it("never lets Enter type the query into the open agent before the arrows point at it", () => {
-    const [askOpen, askAnother] = supportItems("run 1234", live, gestures());
-    expect(isDefaultRow({ kind: "item", key: askOpen.id, item: askOpen, hits: [] })).toBe(false);
-    expect(isDefaultRow({ kind: "item", key: askAnother.id, item: askAnother, hits: [] })).toBe(true);
   });
 
   it("closes the list, after the results, and never under `>`", () => {

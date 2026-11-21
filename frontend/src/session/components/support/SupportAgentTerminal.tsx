@@ -62,7 +62,7 @@ export default function SupportAgentTerminal({ session, agent }: { session: stri
               {agent && <span className="sa-ident__tag">{agentTag(agent)}</span>}
             </span>
           }
-          toolbarActions={
+          toolbarEnd={
             <Button
               tone="ghost"
               size="sm"

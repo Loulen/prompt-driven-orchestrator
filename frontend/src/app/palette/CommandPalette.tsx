@@ -28,7 +28,7 @@ import { GroupHeader, PaletteRow } from "./PaletteRows";
 import { readRecent, rememberPick } from "./recent";
 import { usePalette } from "./paletteStore";
 import { useSelectionMissingOutputs } from "./useSelectionMissingOutputs";
-import { isDefaultRow, useSupportGroup } from "./supportItems";
+import { useSupportGroup } from "./supportItems";
 
 /**
  * The command palette under the top bar (Ctrl+K, or the command field):
@@ -195,7 +195,7 @@ function PaletteBox() {
   const input = { items, selection, recent, extensions: groups, query, icons: GROUP_ICONS, support };
   const sections = buildSections({ ...input, expanded: opened });
   const rows = flatRows(sections);
-  const active = rows.find((r) => r.key === (pointed.query === query ? pointed.key : null)) ?? rows.find(isDefaultRow) ?? null;
+  const active = rows.find((r) => r.key === (pointed.query === query ? pointed.key : null)) ?? rows[0] ?? null;
   const point = (key: string) => setPointed({ query, key });
 
   const box = useRef<HTMLDivElement>(null);

@@ -110,8 +110,9 @@ Features validated while crossing the run screens:
 4. Select the running node → the right panel shows a **live terminal** (its bar names the node's
    session, a real `claude` session, wrapping without horizontal scroll) and, in its **I/O** tab, the folded
    « Prompt » section holding the prompt preamble (`## Inputs` / `## Outputs`). Approve ▾ is inert
-   until the node has written its outputs. The terminal's bar reads **« You pilot »**: the first
-   browser to attach drives the session, and the Run's log keeps that as one `node_taken_over`
+   until the node has written its outputs. The terminal's bar shows no role chip, only
+   `attached · live` (alone, nobody else watches: CORE-223). The first browser to attach still
+   drives the session, and the Run's log keeps that as one `node_taken_over`
    (`source: pty`) — expected without a keystroke (CONTEXT.md « Prise de main »). Only a
    `node_typed` with no keystroke is a finding.
 5. Data routes downstream: conditional edges fire to all matching targets, the loop region iterates
@@ -178,8 +179,9 @@ Features validated while crossing the run screens:
     it: the thread folds and keeps its line number. Last, open one output card of the Run and
     download it (the arrow): the file is the artifact the markdown modal showed in step 7.
 18. **Two browsers on a waiting node.** Launch a one-node pipeline whose **interactive** node asks a
-    question with `pdo wait-user`. Its terminal shows **You pilot**. Open the same node in a second
-    browser (another profile): it reads **Watching** with **Take control**; its typing does nothing.
+    question with `pdo wait-user`. Its terminal shows no role chip (`attached · live`). Open the
+    same node in a second browser (another profile): the first now reads **You pilot │ 1 watching**,
+    the second **Watching** with **Take control**; its typing does nothing.
     Press **Take control** there: the first browser turns spectator. Back in the pilot, press a bare
     **Enter** in the terminal: the question stays on the banner. Click the terminal's import icon,
     pick a file, **Import**, then **Copy & send to terminal**: the sentence naming

@@ -64,7 +64,8 @@ export default function ExtensionPageHost() {
 
   // A page of the Settings shows in the Settings surface, on its rail entry.
   if (!open || open.location === "settings/page") return null;
-  const pages = elementsAt<PageProps>(extensions, open.location);
+  // Only a page shows full-window: a panel or an action of the location never does.
+  const pages = elementsAt<PageProps>(extensions, open.location).filter((p) => p.contribution.type === "page");
   const active = pages.find((p) => p.key === open.key);
   if (!active) return null;
   return <ExtensionPage key={active.key} open={open} active={active} pages={pages} />;

@@ -106,6 +106,10 @@ async fn a_config_that_declares_acogni_driver_is_acogni_driver() {
     let (_, _, mark) = get(&base, "/shared/brand/mark.svg").await;
     let (_, _, vanilla_mark) = get(&vanilla_base, "/shared/brand/mark.svg").await;
     assert_ne!(mark, vanilla_mark);
+    // Their accent reads the brand token, ruby under every Theme (CORE-154).
+    for svg in [&mark, &vanilla_mark] {
+        assert!(svg.contains("var(--brand-accent, #911a46)"), "{svg}");
+    }
 }
 
 #[tokio::test]

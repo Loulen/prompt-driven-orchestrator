@@ -492,6 +492,23 @@
 .cv-menu__item > svg { flex: none; color: var(--text-2); }
 .cv-menu__item[data-highlighted] { background: var(--hover); }
 .cv-menu__item[data-variant="destructive"], .cv-menu__item[data-variant="destructive"] > svg { color: var(--color-st-failed); }
+/* CORE-194: the Library side submenu of the `+` menu — a fixed header and
+   filter over a list that scrolls on its own, sized as the former popover. */
+.cv-menu--library {
+  width: 280px;
+  max-height: min(var(--available-height, 100vh), calc(60vh / var(--app-zoom, 1)));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+.cv-menu--library__list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.cv-menu__item--library { height: 40px; gap: var(--g-3); white-space: normal; }
+.cv-menu__trash { flex: none; visibility: hidden; }
+/* The highlight alone: Base UI moves it under the pointer, and a row reached by
+   the keyboard while the mouse rests on another must not show two trashes. */
+.cv-menu__item--library[data-highlighted] .cv-menu__trash { visibility: visible; }
+.cv-menu__trash:hover, .cv-menu__trash:hover svg { color: var(--color-st-failed); }
 
 /* F1-5: a box-select (Shift + drag) selects cards, never the page's text
    (boxSelectTextGuard). `!important` beats the panes' own `user-select: text`. */

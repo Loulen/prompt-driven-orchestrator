@@ -8,6 +8,7 @@ use pdo_extension_api::{
     SessionRef,
 };
 use pdo_kernel::authorization::authorize;
+use pdo_kernel::extension_host::NodeContribution;
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use tracing::info;
 
@@ -80,11 +81,12 @@ impl Hosted {
                 actor.clone(),
             );
             tokio::task::spawn_blocking(move || {
+                let contribution = hosted.contribution(&record, &session_ref, &actor);
                 let agent = harness.as_ref().map(|harness| Agent {
                     harness,
                     resume: false,
                 });
-                hosted.launch(&record, &session_ref, &actor, agent)
+                hosted.launch(&record, &contribution, agent)
             })
             .await
             .unwrap_or_else(|e| Err(anyhow::anyhow!("the launch panicked: {e}")))
@@ -193,21 +195,31 @@ impl Hosted {
         })
     }
 
-    /// Ask the extensions for the launch, write the primer into the state
-    /// folder (never into the session's folder), and create the tmux session:
-    /// a shell, or an `agent` that starts its conversation or resumes it.
-    pub(super) fn launch(
+    /// What the extensions add to the launch of `record` started by `actor`:
+    /// asked once per launch, blocking (the extensions' hooks).
+    pub(super) fn contribution(
         &self,
         record: &HostedRecord,
         session_ref: &SessionRef,
         actor: &Actor,
-        agent: Option<Agent<'_>>,
-    ) -> anyhow::Result<()> {
-        let contribution = self.host.session_launch(
+    ) -> NodeContribution {
+        self.host.session_launch(
             &SessionLaunch::new(session_ref.clone())
                 .started_by(actor.clone())
                 .in_projects(record.projects()),
-        );
+        )
+    }
+
+    /// Launch `record` with what the extensions add (`contribution`): write
+    /// the primer into the state folder (never into the session's folder),
+    /// and create the tmux session: a shell, or an `agent` that starts its
+    /// conversation or resumes it.
+    pub(super) fn launch(
+        &self,
+        record: &HostedRecord,
+        contribution: &NodeContribution,
+        agent: Option<Agent<'_>>,
+    ) -> anyhow::Result<()> {
         let env: Vec<(String, String)> = contribution.env.clone().into_iter().collect();
         let state_dir = self.registry.store().state_dir(record.id());
         let live = live_dir(&state_dir);

@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { ArrowUpRight, Download, FileText, Files, Images } from "lucide-react";
+import { ArrowUpRight, Download, FileText } from "lucide-react";
+import { PORT_ICON } from "./portIcon";
 import { IconButton, Section, Tooltip } from "../../../shared/ui/kit";
 import type { LiveArtifactIO } from "../../../shared/generated/LiveArtifactIO";
 import type { FileInfo } from "../../api/nodes";
@@ -12,12 +13,13 @@ import { openFromAnywhere } from "./openFromAnywhere";
 
 /**
  * ADR-0089: the live artifacts of the iteration on screen, polled with the I/O
- * while the node works, one row each under the Outputs, a live dot before it —
+ * while the node works, one card each under the Outputs — the same card as an
+ * Output (CORE-178), without a verdict edge — a live dot before it,
  * declared ones first (« not produced » until the agent publishes them), then
  * the ones it published freely. The frontmatter reads as in the viewer (a
  * value copies, a cut one unfolds); a field that misses the declared schema is
  * amber, its rule on hover. Nothing here is a verdict: a live artifact is never
- * checked. A produced row opens from anywhere on it.
+ * checked. A produced card opens from anywhere on it.
  */
 export default function LiveSection({
   live,
@@ -101,7 +103,7 @@ function LiveRow({
         data-live={artifact.name}
         data-produced="false"
         data-pending
-        className="ri-port"
+        className="ri-port ri-port--card"
         title={`${artifact.name} · not produced`}
       >
         <div className="ri-port__line">
@@ -115,19 +117,20 @@ function LiveRow({
     );
   }
 
-  const Icon = isFolder ? (images.length > 0 ? Images : Files) : FileText;
+  // The same icon as an output of that type.
+  const Icon = PORT_ICON[artifact.port_type] ?? FileText;
   return (
     <div
       data-testid="live-row"
       data-live={artifact.name}
       data-produced="true"
       data-open
-      className="ri-port"
+      className="ri-port ri-port--card"
       onClick={openFromAnywhere(onOpen)}
     >
       <div className="ri-port__line">
         <span className="ri-dot" data-live aria-label="live" role="img" />
-        <Icon size={14} strokeWidth={1.5} className="ri-port__ic" aria-hidden />
+        <Icon size={14} strokeWidth={1.5} className="ri-port__ic" aria-label={artifact.port_type} role="img" />
         <button
           type="button"
           onClick={onOpen}
@@ -137,6 +140,12 @@ function LiveRow({
         >
           {artifact.name}
         </button>
+        {/* As on an output: every type but markdown names itself next to the name. */}
+        {artifact.port_type !== "markdown" && (
+          <span className="d-chip d-chip--mono" data-testid="live-type-badge">
+            {artifact.port_type}
+          </span>
+        )}
         {!artifact.declared && (
           <span className="d-chip d-chip--mono" title="Published by the node without being declared" data-testid="live-free-badge">
             free
@@ -165,7 +174,7 @@ function LiveRow({
       </div>
 
       {(frontmatter || artifact.schema_warnings.length > 0) && (
-        <div className="ri-port__sub">
+        <div className="ri-port__fm">
           <FrontmatterView
             values={frontmatter ?? {}}
             warnings={artifact.schema_warnings}

@@ -38,7 +38,7 @@ pub use git::{actor_in_sentence, GitCredentials, ProvidedFor, CORE_GIT_VARIABLES
 use host_of::{panic_message, ExtensionHostOf};
 pub use hosted::HostedSessions;
 pub use identity::Identification;
-pub use launch::{is_env_name, NodeContribution, TriggerSuspension};
+pub use launch::{is_env_name, NodeContribution, TriggerSuspension, CLAUDE_CONFIG_DIR};
 pub use neutral::NoExtensions;
 pub use node_write::NodeWrites;
 /// What a network git operation is, as the extensions see it.

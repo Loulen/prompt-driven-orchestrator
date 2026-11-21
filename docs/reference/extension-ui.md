@@ -132,7 +132,10 @@ selected Run, or when its repository belongs to no Projet.
   interface PanelProps { extension: ExtensionRef; context: LocationContext; close(): void }
   ```
 
-  `close()` closes it, before following a link it offers, say.
+  `close()` closes it, before following a link it offers, say. A deep link never opens a panel:
+  `#/ext/<id>/topbar/end/<path>` opens the extension's first page there, whatever the order of
+  its contributions, and toward an extension with only a panel or actions at `topbar/end` it shows
+  the « no page » error toast ([Deep links](#deep-links)).
 - **Counter** (since 0.19, on a panel and an action since 0.20): a page, a panel or an action
   may declare where the counter of its icon is read
   (`UiContribution::with_counter("/ext/<id>/counter")`, on the wire `counter`). The core reads it
@@ -838,8 +841,9 @@ Settings (`settings/page`) the header keeps the Settings' title: `setTitle` does
 
 ## Deep links
 
-`#/ext/<extension>/<location>/<path>` opens the extension's first page at `<location>` (in
-declaration order, whatever its `when`) and hands `<path>` to it as `context.path`.
+`#/ext/<extension>/<location>/<path>` opens the extension's first **page** at `<location>` (in
+declaration order, whatever its `when`; a panel or an action declared there, even before the page,
+is never opened by a link) and hands `<path>` to it as `context.path`.
 
 - Opening a page from its entry writes its deep link to the address bar; `navigate(path)` writes
   the new one; closing the page leaves it. « Back » and « Forward » follow.
@@ -1112,6 +1116,7 @@ copies it.
 | `--text`, `--text-2`, `--text-3` | Primary, secondary and muted ink; every one holds 4.5:1 on every surface |
 | `--line`, `--line-soft`, `--line-strong` | Hairlines |
 | `--primary`, `--primary-hi`, `--primary-ink` | The accent of the one primary action of a view and of the selection (ruby under Acogni, emerald under Classic), its hover, the ink on it |
+| `--brand-accent` (since 0.28) | The Marque's accent: the Acogni ruby of the mode, under every Theme. Paint a logo with it, never an action: the action is `--primary` |
 | `--selected-edge`, `--focus-ring`, `--scrim`, `--shadow`, `--dim`, `--dim-soft` | The selection's edge, the focus ring, a dialog's backdrop, a floating layer's shadow, a tour's dim |
 | `--color-st-running`, `-await`, `-done`, `-blocked`, `-failed`, `-skipped` | The six status colours (a status is shown as colour and icon) |
 | `--fs-2xs` … `--fs-xl`, `--lh-ui`, `--w-regular`, `--w-medium`, `--w-strong` | The type scale, 10 to 16 px, 13 px for the body text; line height; weights |
@@ -1143,15 +1148,16 @@ mounted page) takes the logos from the binary rather than embedding its own copy
 
 | Address | What it is |
 | --- | --- |
-| `/shared/brand/mark.svg` | The mark, square. Ink in `currentColor`, accent in `var(--primary)` (ruby when absent) |
+| `/shared/brand/mark.svg` | The mark, square. Ink in `currentColor`, accent in `var(--brand-accent)` (ruby when absent) |
 | `/shared/brand/lockup.svg` | The mark with the name: PDO's mark and « PDO » in `--font-code`; Acogni Driver's wordmark, rule and tag |
 | `/shared/brand/favicon.svg` | The mark in fixed colours that follow `prefers-color-scheme`, for `<link rel="icon">` and `<img>`; `/shared/favicon.svg` answers the same |
 
 `mark.svg` and `lockup.svg` take the colour of the page once inlined (fetch the file, insert its
-text): through an `<img>` an SVG reads neither `currentColor` nor the tokens. Put them in an
-element with the class `acogni-brand` to keep their accent ruby under the Classic Theme too, as the
-interface does. `document.documentElement.dataset.brand` is not set on such a page; the interface's
-own carries `pdo` or `acogni-driver`.
+text): through an `<img>` an SVG reads neither `currentColor` nor the tokens. Their accent reads
+`--brand-accent` from `/shared/tokens.css`, so it stays the Acogni ruby of the mode under the
+Classic Theme too, with no class or rule of the page's own. Before 0.28 it read `--primary`, and
+turned emerald under Classic. `document.documentElement.dataset.brand` is not set on such a page;
+the interface's own carries `pdo` or `acogni-driver`.
 
 The interface is drawn at the **UI scale** (Settings › Interface, 100, 110 or 120 %, 120 by
 default), a CSS `zoom` on its root. A length in pixels needs nothing. A position computed from
@@ -1209,7 +1215,7 @@ taking `size`, `strokeWidth` and `className`.
 | `Tabs` | A tab strip, the live tab underlined in the accent, a count |
 | `Section` | A section: caps head with a chevron and a count, actions on hover; folds |
 | `KeyValue` | A read-only property grid |
-| `Banner` | A tinted line at the top of a pane: status icon, fact, detail, actions; an `icon` in the tone's colour instead of the status icon (a lock on a read-only state, since 0.20) |
+| `Banner` | A tinted line at the top of a pane: status icon, fact, detail, actions; an `icon` in the tone's colour instead of the status icon (a lock on a read-only state, since 0.20); `wrap` (0.29): title and text wrap onto several lines, at body weight, the text under the title, instead of ending in an ellipsis, actions on the right |
 | `EmptyState` | An icon, two to four words, one action; loading and error alike |
 | `Chip` | A neutral chip, a status `tone` as its icon; removable |
 | `StatusIcon` | A Run's or a node's status as the core draws it, or a `tone` with its name (and, since 0.20, a fixed `shape`: `todo`, `doing`, `review`, `done`) |

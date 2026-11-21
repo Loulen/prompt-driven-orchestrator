@@ -6,7 +6,7 @@
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
 import type { PipelineValidation } from "../../shared/generated/PipelineValidation";
 import type { PipelineVersionRef } from "../../shared/generated/PipelineVersionRef";
-import { ApiError, request } from "../../shared/http/client";
+import { ApiError, apiErrorMessage, request } from "../../shared/http/client";
 import type { PipelineDetail } from "../model/pipeline";
 import { foldPipelineDetail } from "../model/pipelineDetail";
 import type { SaveAs } from "./versions";
@@ -123,5 +123,12 @@ export async function deletePipeline(id: string, scope?: string): Promise<void> 
     const body = await resp.json();
     throw new ApiError(body.error ?? "Pipeline has active runs", { status: 409, body });
   }
-  if (!resp.ok) throw new ApiError(`DELETE /pipelines/${id} failed: ${resp.status}`, { status: resp.status });
+  if (!resp.ok) {
+    // The daemon's message, for the confirmation that says it.
+    const body: unknown = await resp.json().catch(() => null);
+    throw new ApiError(apiErrorMessage(body, `DELETE /pipelines/${id} failed: ${resp.status}`), {
+      status: resp.status,
+      body,
+    });
+  }
 }

@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent, within } from "@testing-library/react";
 import CleanupConfirmModal from "./CleanupConfirmModal";
+
+const archived = () => vi.fn(() => Promise.resolve());
 
 // A realistic run id: `slice(-7)` === "abc1234".
 const RUN_ID = "20260622-091516-abc1234";
@@ -8,26 +10,29 @@ const SHORT_ID = "abc1234";
 
 describe("CleanupConfirmModal", () => {
   describe("live run (gated)", () => {
-    it("renders the 'hasn't finished' consequence copy and the expected short id", () => {
+    it("says the run has not completed, kills its sessions, and shows the short id to type", () => {
       render(
         <CleanupConfirmModal
           runId={RUN_ID}
           isLive
-          onConfirm={vi.fn()}
+          onConfirm={archived()}
           onCancel={vi.fn()}
         />,
       );
-      expect(screen.getByText(/hasn't finished/)).toBeInTheDocument();
+      const dialog = screen.getByRole("dialog", { name: "Archive this run before it completes?" });
+      expect(dialog).toHaveTextContent("Kills its active sessions");
+      expect(within(dialog).getByText(RUN_ID)).toHaveClass("d-confirm__target");
       // The expected short id is shown inline so the friction is derivable on screen.
-      expect(screen.getByText(SHORT_ID)).toBeInTheDocument();
+      expect(within(dialog).getByText(SHORT_ID)).toBeInTheDocument();
       // #315/ADR-0020: the copy must NOT claim completed outputs are lost — they
       // are preserved and stay viewable read-only after archiving.
-      expect(screen.getByText(/completed outputs are kept/i)).toBeInTheDocument();
       expect(screen.queryByText(/outputs are lost/i)).toBeNull();
+      // The typed confirmation takes the focus.
+      expect(screen.getByTestId("cleanup-confirm-input")).toHaveFocus();
     });
 
     it("disables the confirm button on mount and a stray click does not archive", () => {
-      const onConfirm = vi.fn();
+      const onConfirm = archived();
       render(
         <CleanupConfirmModal
           runId={RUN_ID}
@@ -43,7 +48,7 @@ describe("CleanupConfirmModal", () => {
     });
 
     it("keeps the button disabled for the wrong text, enables it for the short id", () => {
-      const onConfirm = vi.fn();
+      const onConfirm = archived();
       render(
         <CleanupConfirmModal
           runId={RUN_ID}
@@ -67,7 +72,7 @@ describe("CleanupConfirmModal", () => {
     });
 
     it("submits on Enter only once the short id is typed", () => {
-      const onConfirm = vi.fn();
+      const onConfirm = archived();
       render(
         <CleanupConfirmModal
           runId={RUN_ID}
@@ -89,7 +94,7 @@ describe("CleanupConfirmModal", () => {
 
   describe("terminal run (light)", () => {
     it("renders the light copy with no typed gate and confirms on a single click", () => {
-      const onConfirm = vi.fn();
+      const onConfirm = archived();
       render(
         <CleanupConfirmModal
           runId={RUN_ID}
@@ -98,8 +103,10 @@ describe("CleanupConfirmModal", () => {
         />,
       );
       // #315/ADR-0020: the terminal-run copy states worktrees are removed but the
-      // run's completed outputs are kept (viewable read-only) — never "lost".
-      expect(screen.getByText(/completed outputs\s+are kept/i)).toBeInTheDocument();
+      // run's outputs are kept (viewable read-only) — never "lost".
+      expect(screen.getByRole("dialog", { name: "Archive this run?" })).toHaveTextContent(
+        "Removes its worktrees, keeps its outputs",
+      );
       expect(screen.queryByText(/artifacts.*lost|outputs.*lost/i)).toBeNull();
       // No typed-confirmation input on the terminal branch.
       expect(screen.queryByTestId("cleanup-confirm-input")).toBeNull();
@@ -112,7 +119,7 @@ describe("CleanupConfirmModal", () => {
   });
 
   it("calls onCancel from the cancel button and never confirms on render", () => {
-    const onConfirm = vi.fn();
+    const onConfirm = archived();
     const onCancel = vi.fn();
     render(
       <CleanupConfirmModal
@@ -131,7 +138,7 @@ describe("CleanupConfirmModal", () => {
     render(
       <CleanupConfirmModal
         runId="run-abcdef1"
-        onConfirm={() => {}}
+        onConfirm={archived()}
         onCancel={() => {}}
         cascade={{ finished: 2, live: 1 }}
       />,
@@ -145,11 +152,37 @@ describe("CleanupConfirmModal", () => {
     render(
       <CleanupConfirmModal
         runId="run-abcdef1"
-        onConfirm={() => {}}
+        onConfirm={archived()}
         onCancel={() => {}}
         cascade={{ finished: 0, live: 0 }}
       />,
     );
     expect(screen.queryByTestId("cleanup-cascade")).not.toBeInTheDocument();
+  });
+
+  describe("while the daemon archives", () => {
+    it("the button spins, Escape does nothing, and the dialog closes once the run is archived", async () => {
+      let done!: () => void;
+      const onConfirm = vi.fn(() => new Promise<void>((res) => (done = res)));
+      const onCancel = vi.fn();
+      render(<CleanupConfirmModal runId={RUN_ID} onConfirm={onConfirm} onCancel={onCancel} />);
+      fireEvent.click(screen.getByTestId("cleanup-confirm-button"));
+      expect(screen.getByTestId("cleanup-confirm-button")).toHaveTextContent("Archiving…");
+      fireEvent.keyDown(screen.getByTestId("cleanup-confirm-modal"), { key: "Escape" });
+      expect(onCancel).not.toHaveBeenCalled();
+      await act(async () => done());
+      expect(onCancel).toHaveBeenCalledOnce();
+    });
+
+    it("a refusal keeps the dialog open with the daemon's message, and Retry", async () => {
+      const onConfirm = vi.fn(() => Promise.reject(new Error("1 child run is still live")));
+      const onCancel = vi.fn();
+      render(<CleanupConfirmModal runId={RUN_ID} onConfirm={onConfirm} onCancel={onCancel} />);
+      await act(async () => fireEvent.click(screen.getByTestId("cleanup-confirm-button")));
+      expect(onCancel).not.toHaveBeenCalled();
+      expect(screen.getByRole("alert")).toHaveTextContent("Archiving failed");
+      expect(screen.getByRole("alert")).toHaveTextContent("1 child run is still live");
+      expect(screen.getByTestId("cleanup-confirm-button")).toHaveTextContent("Retry");
+    });
   });
 });

@@ -88,6 +88,66 @@ function messageOf(error: unknown, label: string): string {
   return raw.startsWith(prefix) ? raw.slice(prefix.length) : raw;
 }
 
+/** The ids of the operations begun inside the innermost {@link failuresSaidByCaller}. */
+let collecting: number[] | null = null;
+/** The operations whose failure their caller says itself: no toast. */
+const saidByCaller = new Set<number>();
+/** The toast of a failure held until its caller's promise settles. */
+const heldFailures = new Map<number, () => void>();
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return typeof (value as { then?: unknown } | null)?.then === "function";
+}
+
+/**
+ * Run `start` for a caller that awaits what it hands back and says its failure
+ * itself, in its own surface (a confirmation keeps the daemon's message in its
+ * banner). When `start` hands back a promise, the operations it began at once
+ * (its requests sent before its first `await`) still show in the status bar,
+ * and their success past 2 s in a toast, but a failure is not toasted again,
+ * only marked as said ({@link errorAlreadyShown}), as long as the promise
+ * rejects: one that resolves (its caller caught the failure and said nothing)
+ * lets the held toast show. When it hands back anything else, nobody awaits
+ * it: its operations say their outcome as usual. Hands back what `start`
+ * hands back, a promise that settles the same way when it is one.
+ */
+export function failuresSaidByCaller<T>(start: () => T): T {
+  const outer = collecting;
+  const begun: number[] = [];
+  collecting = begun;
+  let result: T;
+  try {
+    result = start();
+  } finally {
+    collecting = outer;
+  }
+  if (!isPromiseLike(result)) {
+    outer?.push(...begun);
+    return result;
+  }
+  for (const id of begun) saidByCaller.add(id);
+  // The caller says a failure only when its promise rejects: one that resolves
+  // after catching the failure itself said nothing, so the held toast shows.
+  const settle = (said: boolean) => {
+    for (const id of begun) {
+      saidByCaller.delete(id);
+      const toast = heldFailures.get(id);
+      heldFailures.delete(id);
+      if (toast && !said) toast();
+    }
+  };
+  return Promise.resolve(result).then(
+    (value) => {
+      settle(false);
+      return value;
+    },
+    (error: unknown) => {
+      settle(true);
+      throw error;
+    },
+  ) as T;
+}
+
 /**
  * Record the start of an operation named `label`; call the function it
  * returns once it ends, with its error if it failed (`quiet`: a failure its
@@ -98,6 +158,7 @@ export function beginOperation(
   options: TrackOptions = {},
 ): (error?: unknown, quiet?: boolean) => void {
   const id = nextId++;
+  collecting?.push(id);
   const startedAt = Date.now();
   useOperationsStore.setState((s) => ({
     operations: [...s.operations, { id, label, startedAt, visible: false, icon: options.icon }],
@@ -118,11 +179,15 @@ export function beginOperation(
     clearTimeout(timers.get(id));
     timers.delete(id);
     useOperationsStore.setState((s) => ({ operations: s.operations.filter((o) => o.id !== id) }));
+    const failureSaidByCaller = saidByCaller.has(id);
     const elapsed = Date.now() - startedAt;
     if (quiet) return;
     if (error !== undefined) {
       if (typeof error === "object" && error !== null) shown.add(error);
-      showToast({ kind: "error", title: `${bare(label)} failed`, message: messageOf(error, bare(label)) });
+      const say = () =>
+        showToast({ kind: "error", title: `${bare(label)} failed`, message: messageOf(error, bare(label)) });
+      if (failureSaidByCaller) heldFailures.set(id, say);
+      else say();
     } else if (elapsed > SUCCESS_TOAST_AFTER_MS) {
       showToast({ kind: "success", message: `${options.done ?? `Done: ${bare(label)}`} (${seconds(elapsed)})` });
     }
@@ -159,5 +224,7 @@ export function useOperations(): Operation[] {
 export function resetOperations(): void {
   for (const t of timers.values()) clearTimeout(t);
   timers.clear();
+  saidByCaller.clear();
+  heldFailures.clear();
   useOperationsStore.setState({ operations: [] });
 }

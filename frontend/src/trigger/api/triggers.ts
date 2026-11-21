@@ -3,7 +3,7 @@ import type { TriggerListEntry } from "../../shared/generated/TriggerListEntry";
 import type { TriggerFire } from "../../shared/generated/TriggerFire";
 import type { AgentChoice } from "../../shared/generated/AgentChoice";
 import type { SkillRef } from "../../shared/generated/SkillRef";
-import { ApiError, request } from "../../shared/http/client";
+import { ApiError, apiErrorMessage, request } from "../../shared/http/client";
 import type { TargetRepoInput } from "../../run/api/createRun";
 
 export interface CreateTriggerRequest {
@@ -107,7 +107,12 @@ export async function deleteTrigger(triggerId: string): Promise<void> {
     { responseMode: "raw", label: "Deleting trigger" },
   );
   if (!resp.ok && resp.status !== 404) {
-    throw new ApiError(`DELETE /triggers/${triggerId} failed: ${resp.status}`, { status: resp.status });
+    // The daemon's message, for the confirmation that says it.
+    const body: unknown = await resp.json().catch(() => null);
+    throw new ApiError(apiErrorMessage(body, `DELETE /triggers/${triggerId} failed: ${resp.status}`), {
+      status: resp.status,
+      body,
+    });
   }
 }
 

@@ -110,14 +110,11 @@ export default function TriggersListPanel({
   // bulk delete is (CORE-232).
   const [deleting, setDeleting] = useState<Trigger | null>(null);
 
+  // Runs under its confirmation, which waits for it: closed on success, the
+  // daemon's message kept on screen on a failure.
   async function handleDelete(t: Trigger) {
-    setDeleting(null);
-    try {
-      await deleteTrigger(t.id);
-      onTriggersChanged();
-    } catch (e) {
-      if (!errorAlreadyShown(e)) toast(`Delete ${t.name}: ${e instanceof Error ? e.message : String(e)}`, "error");
-    }
+    await deleteTrigger(t.id);
+    onTriggersChanged();
   }
 
   async function handleToggle(t: Trigger) {
@@ -282,7 +279,7 @@ export default function TriggersListPanel({
         name={deleting?.name ?? ""}
         detail="Its schedule and fire history go"
         onClose={() => setDeleting(null)}
-        onConfirm={() => deleting && void handleDelete(deleting)}
+        onConfirm={() => (deleting ? handleDelete(deleting) : undefined)}
       />
     </div>
   );

@@ -38,6 +38,7 @@ export default function RunsModals({ pane, runs }: Props) {
 
       {confirmForget && (
         <ForgetRunModal
+          runId={confirmForget}
           onConfirm={() => handleForget(confirmForget)}
           onCancel={() => setConfirmForget(null)}
         />

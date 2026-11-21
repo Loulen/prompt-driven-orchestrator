@@ -108,16 +108,13 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
     setPipelineRenameValue("");
   }
 
+  // Runs under its confirmation, which waits for it: closed on success, the
+  // daemon's refusal (a 409 while Runs use it) kept on screen.
   async function handleConfirmDelete() {
     if (!deleteTarget) return;
-    try {
-      await removePipeline(deleteTarget.id);
-      await loadPipelines();
-    } catch {
-      // ignore (e.g. 409 active runs)
-    } finally {
-      setDeleteTarget(null);
-    }
+    await removePipeline(deleteTarget.id);
+    // The refresh that follows is no part of the deletion: its failure is not one.
+    await loadPipelines().catch(() => {});
   }
 
   // #224/#371 — duplicate a library template. One shared seam for both Copy

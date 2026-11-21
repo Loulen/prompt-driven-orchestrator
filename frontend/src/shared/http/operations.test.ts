@@ -6,6 +6,7 @@ import { request } from "./client";
 import {
   beginOperation,
   errorAlreadyShown,
+  failuresSaidByCaller,
   fallbackLabel,
   resetOperations,
   trackOperation,
@@ -214,3 +215,59 @@ describe("the HTTP client", () => {
     expect(toasts()).toHaveLength(0);
   });
 });
+
+describe("a caller that says the failure itself", () => {
+  it("awaits what it started: the operation shows, its failure is no toast but marked as said", async () => {
+    const boom = new Error("worktree is locked");
+    const work = deferred<void>();
+    const outcome = failuresSaidByCaller(() => trackOperation("Archiving run", work.promise));
+    expect(ops().map((o) => o.label)).toEqual(["Archiving run"]);
+    work.reject(boom);
+    await expect(outcome).rejects.toBe(boom);
+    expect(ops()).toHaveLength(0);
+    expect(toasts()).toHaveLength(0);
+    expect(errorAlreadyShown(boom)).toBe(true);
+  });
+
+  it("still says a success past 2 s", async () => {
+    const work = deferred<void>();
+    const outcome = failuresSaidByCaller(() => trackOperation("Archiving run", work.promise, { done: "Run archived" }));
+    vi.advanceTimersByTime(2500);
+    work.resolve();
+    await outcome;
+    expect(toasts()[0]).toMatchObject({ kind: "success", message: "Run archived (3 s)" });
+  });
+
+  it("hands back nothing to await: the failure is toasted as usual", async () => {
+    const boom = new Error("worktree is locked");
+    const work = deferred<void>();
+    let started: Promise<void> | undefined;
+    failuresSaidByCaller(() => {
+      started = trackOperation("Archiving run", work.promise);
+    });
+    work.reject(boom);
+    await started!.catch(() => {});
+    expect(toasts()[0]).toMatchObject({ kind: "error", title: "Archiving run failed", message: "worktree is locked" });
+  });
+
+  it("an operation begun outside it keeps its toast", async () => {
+    const outside = deferred<void>();
+    const before = trackOperation("Saving pipeline", outside.promise);
+    const inside = deferred<void>();
+    const awaited = failuresSaidByCaller(() => trackOperation("Archiving run", inside.promise));
+    outside.reject(new Error("invalid"));
+    inside.reject(new Error("locked"));
+    await before.catch(() => {});
+    await awaited.catch(() => {});
+    expect(toasts().map((t) => t.title)).toEqual(["Saving pipeline failed"]);
+  });
+
+  it("a caller that catches the failure and resolves said nothing: the held toast shows", async () => {
+    const work = deferred<void>();
+    const outcome = failuresSaidByCaller(() => trackOperation("Retrying run", work.promise).catch(() => undefined));
+    work.reject(new Error("run is live"));
+    await outcome;
+    expect(toasts()[0]).toMatchObject({ kind: "error", title: "Retrying run failed", message: "run is live" });
+  });
+});
+

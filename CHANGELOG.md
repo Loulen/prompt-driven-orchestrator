@@ -26,6 +26,16 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - Seam for extensions: `@pdo/extension-ui` exports `trackOperation(label, work, { done, icon })`,
   so the mutations an extension sends with its own client show in the same indicator and toasts,
   and `usePending()`, which turns a `Button` busy through its new `pending` prop.
+- A confirmation now waits for its action: archiving a Run, forgetting one, deleting a Pipeline
+  or a Trigger. While the daemon works, its button spins ("Archiving…") and the window is locked:
+  Cancel, its cross, Escape and a click outside do nothing. It closes once the action succeeds. A
+  failure keeps it open, with the daemon's message in a banner at its top and the button turned
+  "Retry"; the failure shows there only, not in a toast as well. The archive confirmation takes
+  the kit's layout: the consequence on one line, the Run id in mono, and for a Run still live the
+  id's suffix to type. Destroying a loop by deleting its last edge asks in the same window.
+- Seam for extensions: `ConfirmDialog` of `@pdo/extension-ui` waits for an `onConfirm` that hands
+  back a promise (`pendingLabel`, `failedTitle`, `retryLabel`, `confirmDisabled`), and `Modal`
+  takes `locked` while its action runs.
 
 ## 2.80.4
 

@@ -1207,8 +1207,8 @@ taking `size`, `strokeWidth` and `className`.
 | `Switch`, `Checkbox` | On/off, the accent when on; a box with its text, `mixed` |
 | `Popover` | A non-modal panel under its `trigger`; Escape and a click outside close it |
 | `Menu` | A menu under its `trigger`: check column, icon, label, shortcut; separators, labels, submenus, `danger`; an entry's `disabledReason` greys it and the menu says the sentence once, at its foot, with a lock (0.23) |
-| `Modal` | A modal dialog: title bar, body, footer (`actions`, `footerNote`); Escape closes, Ctrl+Enter runs `onSubmit` |
-| `ConfirmDialog` | A confirmation: the action and its object, the consequence, the mono target; Enter confirms |
+| `Modal` | A modal dialog: title bar, body, footer (`actions`, `footerNote`); Escape closes, Ctrl+Enter runs `onSubmit`; `locked` while its action runs |
+| `ConfirmDialog` | A confirmation: the action and its object, the consequence, the mono target; Enter confirms. An `onConfirm` that hands back a promise is waited for ([A confirmation that waits](#a-confirmation-that-waits)) |
 | `toast(text, kind?, options?)` | A toast in the core's stack: `info`, `success`, `warning`, `error`, a `title`, one action |
 | `Tabs` | A tab strip, the live tab underlined in the accent, a count |
 | `Section` | A section: caps head with a chevron and a count, actions on hover; folds |
@@ -1437,6 +1437,46 @@ function MoveButton({ note }: { note: string }) {
   a spinner replaces its icon, it is inert (`aria-disabled`, `data-pending="busy"`) and keeps the
   focus.
 - Reads stay silent: name only what changes something.
+
+### A confirmation that waits
+
+A `ConfirmDialog` whose `onConfirm` hands back a promise waits for it. While it runs, the button
+spins with `pendingLabel` (« Archiving… ») and the dialog is locked: Cancel and the close control
+are greyed, Escape and a click on the backdrop do nothing. A success closes it (it calls
+`onClose`). A failure keeps it open: a failed `Banner` at its top, `failedTitle` (« Archiving
+failed ») and the error's `message`, and the button turns « Retry »; Cancel works again. The
+operations the promise starts at once, before its first `await`, still show in the status bar; their
+failure is said in the dialog only, not in a toast as well. Let the promise reject on a failure:
+one that catches it and resolves closes the dialog, and the failure is then said in a toast.
+
+```ts
+import { ConfirmDialog, trackOperation } from "@pdo/extension-ui";
+
+/** A `fetch` resolves on a 4xx: reject it, with the daemon's message, for the dialog to say it. */
+async function ok(resp: Response): Promise<Response> {
+  if (!resp.ok) throw new Error((await resp.json().catch(() => null))?.error ?? `${resp.status}`);
+  return resp;
+}
+
+function ArchiveNote({ note, onClose }: { note: string; onClose: () => void }) {
+  return (
+    <ConfirmDialog
+      title="Archive this note?"
+      target={note}
+      actionLabel="Archive"
+      pendingLabel="Archiving…"
+      danger
+      onConfirm={() =>
+        trackOperation("Archiving note", fetch(`/ext/test/notes/${note}/archive`, { method: "POST" }).then(ok))
+      }
+      onClose={onClose}
+    />
+  );
+}
+```
+
+`confirmDisabled` keeps the confirmation from being given (a name still to type, in a field passed as
+`children`, marked `data-autofocus` to take the focus).
 
 ## WebSockets
 

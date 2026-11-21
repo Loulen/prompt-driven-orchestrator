@@ -430,6 +430,11 @@ export interface ModalProps {
   onClose: () => void;
   /** false: no close control, Escape and the backdrop do nothing. */
   dismissable?: boolean;
+  /**
+   * Its action is running: the close control stays, greyed with this sentence
+   * in its tooltip, and Escape and the backdrop do nothing until it is lifted.
+   */
+  locked?: string;
   /** s 380, m 500, l 680 px wide. */
   size?: "s" | "m" | "l";
   /** Run by Ctrl+Enter. */
@@ -449,11 +454,37 @@ export interface ConfirmDialogProps {
   actionLabel: string;
   cancelLabel?: string;
   danger?: boolean;
-  onConfirm: () => void;
+  /**
+   * The confirmation. Hand back a promise (the mutation) for the dialog to
+   * wait for it: the button busy (`pendingLabel`), the dialog locked (Cancel,
+   * the close control, Escape and the backdrop do nothing); a success closes
+   * it (`onClose`), a failure keeps it open, the error's `message` in a
+   * banner and the button turned « Retry ». The operations it starts at once
+   * (`trackOperation`) still show in the status bar; their failure is not
+   * toasted again. Hand back nothing to close it yourself.
+   */
+  onConfirm: () => void | Promise<unknown>;
+  /** Cancel, and the close of a confirmation that succeeded. */
   onClose: () => void;
+  /** The button's text while the promise runs: « Archiving… ». Default « <actionLabel>… ». */
+  pendingLabel?: string;
+  /** The failure banner's title: « Archiving failed ». Default: after `pendingLabel`. */
+  failedTitle?: string;
+  /** The button's text after a failure. Default « Retry ». */
+  retryLabel?: string;
+  /** The confirmation cannot be given yet (a name to type): the button is disabled, Enter does nothing. */
+  confirmDisabled?: boolean;
+  /** More of the body, under the target; `data-autofocus` on a field gives it the focus. */
   children?: ReactNode;
+  "data-testid"?: string;
+  confirmTestId?: string;
+  cancelTestId?: string;
 }
-/** A confirmation: Enter or Ctrl+Enter confirms, Escape cancels. */
+/**
+ * A confirmation: Enter or Ctrl+Enter confirms, Escape cancels. An
+ * `onConfirm` that hands back a promise is waited for, locked, and its
+ * failure kept on screen.
+ */
 export function ConfirmDialog(props: ConfirmDialogProps): ReactNode;
 
 /** How `trackOperation` says an operation's outcome and draws its row. */

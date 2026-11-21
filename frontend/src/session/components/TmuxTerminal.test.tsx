@@ -1343,6 +1343,24 @@ describe("TmuxTerminal", () => {
       expect(container.dataset.role).toBe("solo");
     });
 
+    it("names the pilot only while another browser watches (CORE-223)", async () => {
+      const { ws } = await mountLive();
+      roleFrame(ws, { role: "solo" });
+      expect(screen.getByTestId("term-mode")).toHaveTextContent(/^attached · live$/);
+      expect(screen.queryByText("You pilot")).toBeNull();
+
+      roleFrame(ws, { role: "pilot", spectators: 1 });
+      const chip = screen.getByTestId("term-mode");
+      expect(chip).toHaveAttribute("data-role", "pilot");
+      expect(chip).toHaveTextContent("You pilot");
+      expect(chip).toHaveTextContent("1 watching");
+
+      roleFrame(ws, { role: "solo" });
+      expect(screen.getByTestId("term-mode")).not.toHaveAttribute("data-role");
+      expect(screen.getByTestId("term-mode")).toHaveTextContent(/^attached · live$/);
+      expect(screen.queryByText("You pilot")).toBeNull();
+    });
+
     it("a pilot with spectators sees an eye and their number", async () => {
       const { ws } = await mountLive();
       roleFrame(ws, { role: "pilot", spectators: 1 });

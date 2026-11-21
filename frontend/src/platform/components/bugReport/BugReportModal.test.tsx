@@ -4,7 +4,10 @@ import type { RunState } from "../../../shared/generated/RunState";
 import { pickOption, selectedLabel, selectTrigger } from "../../../test/kitSelect";
 import { RUN_MISSING, RUN_UNREADABLE } from "../../model/bugReport";
 import { fetchRun } from "../../../run/api/runs";
-import BugReportModal from "./BugReportModal";
+import { resetToasts, useToasts } from "../../../shared/ui/toast";
+import { fetchBugReportDestinations, rememberBugReportDestination, sendBugReport } from "../../api/bugReport";
+import type { BugReportDestinations } from "../../../shared/generated/BugReportDestinations";
+import BugReportModal, { NOT_SENT } from "./BugReportModal";
 
 const RUN = {
   run_id: "20261120-100000-abcd",
@@ -78,17 +81,37 @@ vi.mock("../../../settings/api/settings", () => ({
   })),
 }));
 
+vi.mock("../../api/bugReport", () => ({
+  fetchBugReportDestinations: vi.fn(async () => ({ destinations: [], last: null })),
+  sendBugReport: vi.fn(async () => ({ reference: "BUG-1", link: "/ext/test/bug-reports/1" })),
+  rememberBugReportDestination: vi.fn(async () => undefined),
+}));
+
+/** What the test extension offers: an inbox that takes the prompts, a board that refuses them. */
+const OFFERED: BugReportDestinations = {
+  destinations: [
+    { id: "test/inbox", label: "Test inbox", accepts_prompts: true, icon: null, extension: "test", extension_name: "Test extension" },
+    { id: "test/board", label: "Test board", accepts_prompts: false, icon: null, extension: "test", extension_name: "Test extension" },
+  ],
+  last: null,
+};
+
 const PREFILL = { runId: "20261120-100000-abcd", pipeline: "ship" };
 
 let opened: string[] = [];
 beforeEach(() => {
   opened = [];
+  vi.mocked(sendBugReport).mockClear();
+  vi.mocked(rememberBugReportDestination).mockClear();
   vi.spyOn(window, "open").mockImplementation((url) => {
     opened.push(String(url));
     return null;
   });
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  resetToasts();
+});
 
 /** The window, once its menus and details are read. */
 async function renderPrefilled(onClose = vi.fn()) {
@@ -256,5 +279,161 @@ describe("BugReportModal", () => {
     await renderPrefilled();
     expect(selectedLabel(screen.getByTestId("bug-report-destination"))).toBe("PDO issues (GitHub)");
     expect(send()).toHaveTextContent("Open GitHub issue");
+  });
+
+  describe("Send to", () => {
+    const destination = () => screen.getByTestId("bug-report-destination");
+    /** The trigger's label, without the letter an extension's icon shows until it loads. */
+    const destinationLabel = () => selectTrigger(destination()).getAttribute("title");
+    const offer = (last: string | null = null) =>
+      vi.mocked(fetchBugReportDestinations).mockResolvedValueOnce({ ...OFFERED, last });
+    const toInbox = async () => {
+      await waitFor(() => expect(within(destination()).getByRole("button")).toBeInTheDocument());
+      pickOption(destination(), "Test inbox");
+    };
+
+    it("lists the core's issues first, then each extension's destinations under its name", async () => {
+      offer("test/board");
+      await renderPrefilled();
+      await waitFor(() => expect(destinationLabel()).toBe("Test board"));
+      fireEvent.click(selectTrigger(destination()));
+      const list = screen.getByRole("listbox", { name: "Send to" });
+      const rows = Array.from(list.querySelectorAll(".d-pop__group, [role=option]")).map((el) =>
+        el.getAttribute("role") === "option"
+          ? [el.querySelector(".d-pop__label")?.textContent, el.querySelector(".d-pop__hint")?.textContent ?? null]
+          : el.textContent,
+      );
+      expect(rows).toEqual([
+        "Core",
+        ["PDO issues (GitHub)", "public"],
+        "Test extension",
+        ["Test inbox", null],
+        ["Test board", "last used"],
+      ]);
+      expect(within(list).getByTestId("github-mark")).toBeInTheDocument();
+      expect(within(list).getAllByTestId("extension-icon-fallback")).toHaveLength(2);
+    });
+
+    it("starts on the core's issues when the last choice is no longer offered", async () => {
+      vi.mocked(fetchBugReportDestinations).mockResolvedValueOnce({ ...OFFERED, last: "gone/away" });
+      await renderPrefilled();
+      expect(selectedLabel(destination())).toBe("PDO issues (GitHub)");
+    });
+
+    it("lets Include prompts be checked toward a destination that accepts them, unchecked by default", async () => {
+      offer();
+      await renderPrefilled();
+      await toInbox();
+      expect(checkbox("Include prompts")).not.toBeDisabled();
+      expect(checkbox("Include prompts")).not.toBeChecked();
+      expect(screen.getByText("Node prompts of the run and pipeline")).toBeInTheDocument();
+      expect(send()).toHaveTextContent("Send to Test inbox");
+      pickOption(destination(), "Test board");
+      expect(checkbox("Include prompts")).toBeDisabled();
+      expect(screen.getByText("This destination does not accept prompts")).toBeInTheDocument();
+    });
+
+    it("keeps the destination of a preview edited before the last choice is read", async () => {
+      let answer: (v: BugReportDestinations) => void = () => {};
+      vi.mocked(fetchBugReportDestinations).mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+      await renderPrefilled();
+      describeBug("x");
+      showPreview();
+      fireEvent.change(await screen.findByTestId("bug-report-preview"), { target: { value: "### Description\nmine" } });
+      await act(async () => answer({ ...OFFERED, last: "test/inbox" }));
+      expect(destinationLabel()).toBe("PDO issues (GitHub)");
+    });
+
+    it("refuses a screenshot over 10 MB before it leaves", async () => {
+      offer();
+      URL.createObjectURL = vi.fn(() => "blob:shot");
+      URL.revokeObjectURL = vi.fn();
+      await renderPrefilled();
+      await toInbox();
+      describeBug("x");
+      const big = new File(["png"], "big.png", { type: "image/png" });
+      Object.defineProperty(big, "size", { value: 11 * 1024 * 1024 });
+      const paste = new Event("paste", { bubbles: true, cancelable: true }) as Event & { clipboardData: unknown };
+      paste.clipboardData = { files: [big], items: [] };
+      act(() => {
+        window.dispatchEvent(paste);
+      });
+      await waitFor(() => expect(send()).not.toHaveAttribute("aria-disabled"));
+      fireEvent.click(send());
+      expect(await screen.findByRole("alert")).toHaveTextContent("The screenshot is over 10 MB");
+      expect(sendBugReport).not.toHaveBeenCalled();
+    });
+
+    it("sends the report, its screenshot and the prompts, locked while it leaves, then a toast links to the item", async () => {
+      offer();
+      URL.createObjectURL = vi.fn(() => "blob:shot");
+      URL.revokeObjectURL = vi.fn();
+      let answer: (v: { reference: string; link: string }) => void = () => {};
+      vi.mocked(sendBugReport).mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+      const onClose = await renderPrefilled();
+      await toInbox();
+      describeBug("The node stays running");
+      fireEvent.click(checkbox("Include prompts"));
+      const paste = new Event("paste", { bubbles: true, cancelable: true }) as Event & { clipboardData: unknown };
+      paste.clipboardData = { files: [new File(["png"], "shot.png", { type: "image/png" })], items: [] };
+      act(() => {
+        window.dispatchEvent(paste);
+      });
+      await waitFor(() => expect(send()).not.toHaveAttribute("aria-disabled"));
+      fireEvent.click(send());
+
+      await waitFor(() => expect(sendBugReport).toHaveBeenCalled());
+      const body = vi.mocked(sendBugReport).mock.calls[0][0];
+      expect(body.destination).toBe("test/inbox");
+      expect(body.fields.description).toBe("The node stays running");
+      expect(body.fields.prompts).toContain("SECRET PROMPT");
+      expect(body.text).toContain("### Prompts");
+      expect(body.screenshot).toEqual({ media_type: "image/png", data: "cG5n" });
+      expect(opened).toEqual([]);
+
+      // Locked: Sending…, no Cancel, no close, no Escape.
+      expect(send()).toHaveTextContent("Sending…");
+      expect(send()).toHaveAttribute("data-pending");
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+      expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+      fireEvent.keyDown(screen.getByTestId("bug-report"), { key: "Escape" });
+      expect(onClose).not.toHaveBeenCalled();
+
+      await act(async () => answer({ reference: "BUG-1", link: "/ext/test/bug-reports/1" }));
+      expect(onClose).toHaveBeenCalled();
+      const [toast] = useToasts.getState().toasts;
+      expect(toast.message).toBe("Bug report sent: BUG-1");
+      expect(toast.kind).toBe("success");
+      toast.action?.run();
+      expect(opened).toEqual(["/ext/test/bug-reports/1"]);
+    });
+
+    it("keeps the window open with the destination's refusal in a Banner", async () => {
+      offer();
+      vi.mocked(sendBugReport).mockRejectedValueOnce(new Error("the inbox is full"));
+      const onClose = await renderPrefilled();
+      await toInbox();
+      describeBug("x");
+      await waitFor(() => expect(send()).not.toHaveAttribute("aria-disabled"));
+      fireEvent.click(send());
+      const banner = await screen.findByRole("alert");
+      expect(banner).toHaveTextContent(NOT_SENT);
+      expect(banner).toHaveTextContent("the inbox is full");
+      expect(onClose).not.toHaveBeenCalled();
+      expect(send()).toHaveTextContent("Send to Test inbox");
+    });
+
+    it("remembers the core's issues as the last choice once the browser opened them", async () => {
+      offer("test/inbox");
+      await renderPrefilled();
+      await waitFor(() => expect(destinationLabel()).toBe("Test inbox"));
+      pickOption(destination(), "PDO issues (GitHub)");
+      describeBug("x");
+      await waitFor(() => expect(send()).not.toHaveAttribute("aria-disabled"));
+      fireEvent.click(send());
+      expect(opened).toHaveLength(1);
+      expect(rememberBugReportDestination).toHaveBeenCalledWith("github");
+      expect(sendBugReport).not.toHaveBeenCalled();
+    });
   });
 });

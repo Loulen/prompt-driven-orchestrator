@@ -13,6 +13,7 @@ use pdo_platform::adapters::host_installation::HostInstallation;
 use pdo_platform::adapters::page_files::LocalPageFiles;
 use pdo_platform::adapters::service_health_probe;
 use pdo_platform::adapters::sqlite_audit_log::SqliteAuditLog;
+use pdo_platform::adapters::sqlite_bug_report_choices::SqliteBugReportChoices;
 use pdo_platform::adapters::sqlite_page_mounts::SqlitePageMounts;
 use pdo_platform::application::update_context::UpdateOptions;
 use pdo_platform::domain::release_channel::UpdateChannel;
@@ -45,6 +46,7 @@ pub(super) fn platform(
                 .with_config_home(r.sandbox_home_override.as_ref().map(|h| h.join(".config"))),
         ),
         update_executor: Arc::new(DetachedExecutor::new(r.update_executor_override.clone())),
+        bug_report_choices: Arc::new(SqliteBugReportChoices::new(r.db.clone())),
         extensions: host,
     };
     let update = UpdateOptions {

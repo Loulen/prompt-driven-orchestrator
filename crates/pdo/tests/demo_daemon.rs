@@ -45,6 +45,11 @@
 //!   preamble (`Ligne de fixture`); none by default (`PUT /ext/test/launch
 //!   {"preamble": …}`).
 //!
+//! Its Destinations de bug report (API 0.28): « Test inbox » (accepts the
+//! prompts) and « Test board »; a report sent there is readable at `GET
+//! /ext/test/bug-reports/<n>` (the link of its toast), `PUT
+//! /ext/test/bug-reports/refusal {"reason": …}` has the next ones refused.
+//!
 //! Its Sessions hébergées (API 0.19): `POST /ext/test/sessions {"key", "kind":
 //! "agent"|"shell", "folder"?: {"kind": "path", "path"}|{"kind": "home"}|
 //! {"kind": "project_repo"}, "project"?, "config"?: {"harness", "model",

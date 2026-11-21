@@ -24,6 +24,10 @@ export interface BugReportDestination {
   hint?: string;
   /** The primary button's label: where the report goes. */
   sendLabel: string;
+  /** An extension's: the SVG of its row, which the extension serves (`null`: the label's first letter). */
+  icon?: string | null;
+  /** An extension's: its id. The core's has none. */
+  extension?: string;
 }
 
 /** The core's destination: a new issue of its public repository, opened prefilled in the browser. */

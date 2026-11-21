@@ -6,8 +6,10 @@ import { fetchSettings } from "../../../settings/api/settings";
 import type { PipelineListEntry } from "../../../shared/generated/PipelineListEntry";
 import type { RunListEntry } from "../../../shared/generated/RunListEntry";
 import { CORE_NAME } from "../../../shared/ui/brand/brand";
+import { fetchBugReportDestinations } from "../../api/bugReport";
 import { fetchUpdateStatus } from "../../api/update";
-import type { InstanceFacts } from "../../model/bugReport";
+import type { BugReportDestination, InstanceFacts } from "../../model/bugReport";
+import { destinationsOf } from "../../model/bugReportDestinations";
 import type { PipelineFacts, RunFacts } from "../../model/bugReportDetails";
 import type { UpdateStatus } from "../../model/update";
 import { installedVersionLabel, isDistribution } from "../../model/updateStatus";
@@ -107,3 +109,26 @@ export const useRunFacts = (runId: string | null) => useRead(runId, readRun);
 
 /** The joined Pipeline's structure and prompts, read when one is chosen. */
 export const usePipelineFacts = (pipelineId: string | null) => useRead(pipelineId, readPipeline);
+
+/**
+ * « Send to »: the core's destination, then those the extensions offer the
+ * caller, and its last choice, read once the window opens. Until read, or
+ * when the read fails, the core's alone.
+ */
+export function useDestinations(): { destinations: BugReportDestination[]; last: string | null } {
+  const [answer, setAnswer] = useState<{ destinations: BugReportDestination[]; last: string | null }>(() => ({
+    destinations: destinationsOf(null),
+    last: null,
+  }));
+  useEffect(() => {
+    let live = true;
+    fetchBugReportDestinations().then(
+      (read) => live && setAnswer({ destinations: destinationsOf(read), last: read.last }),
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
+  return answer;
+}

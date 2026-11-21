@@ -16,5 +16,6 @@ pub mod instance_defaults;
 pub mod page_files;
 pub mod service_health_probe;
 pub mod sqlite_audit_log;
+pub mod sqlite_bug_report_choices;
 pub mod sqlite_page_mounts;
 pub mod update_schedule;

@@ -12,7 +12,9 @@ use pdo_extension_api::Extension;
 use pdo_kernel::extension_host::Extensions;
 use pdo_pipeline::adapters::cli::run_pipeline;
 use pdo_platform::adapters::cli::daemon::exit_code;
-use pdo_platform::adapters::cli::{run_audit, run_page, run_service, run_update, ServiceAction};
+use pdo_platform::adapters::cli::{
+    run_audit, run_bug_report, run_page, run_service, run_update, ServiceAction,
+};
 use pdo_review::adapters::cli::run_review;
 use pdo_run::adapters::cli::{
     refused_in_hosted_session, run_complete, run_fail, run_node, run_reap, run_run_create,
@@ -192,6 +194,8 @@ where
         Commands::Skill { action } => exit_code(run_skill(*action)),
         Commands::Update { action } => exit_code(run_update(action)),
         Commands::Audit(args) => exit_code(run_audit(args)),
+        // `bug-report send` shares the `4` of `run status`: no such destination.
+        Commands::BugReport { action } => exit_code(run_bug_report(action)),
         Commands::Whoami { json } => exit_code(run_whoami(json)),
     }
 }

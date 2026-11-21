@@ -1,28 +1,33 @@
 import { useMemo, useState } from "react";
-import { Bug, CircleDot, ExternalLink } from "lucide-react";
-import { Button, ConfirmDialog, Modal, Select, Tabs, TextArea } from "../../../shared/ui/kit";
+import { Bug, ExternalLink, LoaderCircle, Send } from "lucide-react";
+import { Banner, Button, ConfirmDialog, Modal, Select, Tabs, TextArea, type Icon } from "../../../shared/ui/kit";
 import type { PipelineListEntry } from "../../../shared/generated/PipelineListEntry";
 import {
   DESCRIPTION_MISSING,
-  GITHUB_DESTINATION,
   PIPELINE_UNREADABLE,
   RUN_UNREADABLE,
   blockers,
   parseReport,
   reportFields,
   reportMarkdown,
-  type BugReportDestination,
 } from "../../model/bugReport";
+import { initialDestination, opensInBrowser } from "../../model/bugReportDestinations";
+import { rememberBugReportDestination } from "../../api/bugReport";
 import type { BugReportPrefill } from "../../store/bugReport";
 import { usePastedImage } from "./capture";
 import ReportTab, { type ReportForm } from "./ReportTab";
-import { sendToGithub } from "./sendReport";
-import { useChoices, useInstanceFacts, usePipelineFacts, useRunFacts } from "./useBugReportData";
+import { useDestinationIcons } from "./useDestinationIcons";
+import { sendToExtension, sendToGithub, toastSent } from "./sendReport";
+import { useChoices, useDestinations, useInstanceFacts, usePipelineFacts, useRunFacts } from "./useBugReportData";
 import "./bugReport.css";
 
 type Tab = "report" | "preview";
 
 export const READING_DETAILS = "Reading the details to join…";
+export const NOT_SENT = "The bug report was not sent";
+
+/** The primary button's spinner while the report leaves. */
+const Spinning: Icon = (props) => <LoaderCircle {...props} className="d-spin" />;
 
 /** The Pipeline a name designates: by its id, else by its name. */
 function pipelineNamed(pipelines: PipelineListEntry[], name: string | null | undefined): string | null {
@@ -39,23 +44,26 @@ function pipelineNamed(pipelines: PipelineListEntry[], name: string | null | und
  * edited, its tab says so and a change of the form asks before overwriting it.
  * A checked box without its choice, or no description, holds the primary
  * button, its tooltip saying why. Ctrl+Enter sends from either tab.
+ *
+ * « Send to » (CONTEXT.md « Destination de bug report »): the core's issues
+ * first, then the extensions' destinations under their names, starting on the
+ * caller's last choice. Toward an extension, the window stays locked while the
+ * report leaves, then closes on a toast linking to what the destination
+ * created; a failure stays in the window, in a Banner.
  */
-export default function BugReportModal({
-  prefill,
-  onClose,
-  destinations = [GITHUB_DESTINATION],
-}: {
-  prefill: BugReportPrefill;
-  onClose: () => void;
-  /** Where the report may go, the core's first. */
-  destinations?: BugReportDestination[];
-}) {
+export default function BugReportModal({ prefill, onClose }: { prefill: BugReportPrefill; onClose: () => void }) {
   const facts = useInstanceFacts();
   const { runs, pipelines, pipelinesRead } = useChoices();
   const [now] = useState(() => Date.now());
   const [tab, setTab] = useState<Tab>("report");
-  const [destinationId, setDestinationId] = useState(destinations[0].id);
+  const { destinations, last } = useDestinations();
+  // The last choice until the user picks one.
+  const [picked, setPicked] = useState<string | null>(null);
+  const destinationId = picked ?? initialDestination(destinations, last);
   const destination = destinations.find((d) => d.id === destinationId) ?? destinations[0];
+  const icons = useDestinationIcons(destinations);
+  const [sending, setSending] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
   const [capture, setCapture] = useState<Blob | null>(null);
   usePastedImage(setCapture);
 
@@ -127,9 +135,26 @@ export default function BugReportModal({
     missing.run ?? missing.pipeline ?? (noDescription ? DESCRIPTION_MISSING : undefined) ?? (reading ? READING_DETAILS : undefined);
 
   const send = () => {
-    if (refusal) return;
-    sendToGithub(edited !== null ? parseReport(edited) : fields, capture);
-    onClose();
+    if (refusal || sending) return;
+    const outgoing = edited !== null ? parseReport(edited) : fields;
+    if (opensInBrowser(destination)) {
+      sendToGithub(outgoing, capture);
+      void rememberBugReportDestination(destination.id).catch(() => {});
+      onClose();
+      return;
+    }
+    setSending(true);
+    setFailure(null);
+    sendToExtension(destination, edited ?? generated, outgoing, capture).then(
+      (sent) => {
+        onClose();
+        toastSent(sent);
+      },
+      (e: unknown) => {
+        setSending(false);
+        setFailure(e instanceof Error ? e.message : String(e));
+      },
+    );
   };
 
   const destinationOptions = destinations.map((d) => ({
@@ -137,7 +162,7 @@ export default function BugReportModal({
     label: d.label,
     group: d.group,
     hint: d.hint,
-    icon: CircleDot,
+    icon: icons.get(d.id),
   }));
 
   return (
@@ -146,6 +171,8 @@ export default function BugReportModal({
       title="Report a bug"
       icon={<Bug size={14} strokeWidth={1.5} aria-hidden />}
       onClose={onClose}
+      // Locked while the report leaves: no Cancel, no close, no Escape.
+      dismissable={!sending}
       onSubmit={send}
       data-testid="bug-report"
       footerNote={
@@ -156,15 +183,31 @@ export default function BugReportModal({
             size="sm"
             value={destination.id}
             options={destinationOptions}
-            onChange={(id) => guard(() => setDestinationId(id))}
+            onChange={(id) =>
+              guard(() => {
+                setPicked(id);
+                setFailure(null);
+              })
+            }
+            disabled={sending}
           />
         </span>
       }
       actions={
         <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button tone="primary" icon={ExternalLink} disabledReason={refusal} onClick={send} data-testid="bug-report-send">
-            {destination.sendLabel}
+          <Button onClick={onClose} disabled={sending}>
+            Cancel
+          </Button>
+          <Button
+            tone="primary"
+            icon={sending ? Spinning : opensInBrowser(destination) ? ExternalLink : Send}
+            disabledReason={sending ? undefined : refusal}
+            disabled={sending}
+            data-pending={sending ? "" : undefined}
+            onClick={send}
+            data-testid="bug-report-send"
+          >
+            {sending ? "Sending…" : destination.sendLabel}
           </Button>
         </>
       }
@@ -199,7 +242,11 @@ export default function BugReportModal({
               className="br-preview"
               aria-label="Preview"
               value={edited ?? generated}
-              onChange={(e) => setEdited(e.target.value)}
+              onChange={(e) => {
+                // An edited preview keeps its destination: the last choice read late no longer moves it.
+                if (picked === null) setPicked(destinationId);
+                setEdited(e.target.value);
+              }}
               data-testid="bug-report-preview"
             />
             <div className="br-preview__foot">
@@ -210,6 +257,7 @@ export default function BugReportModal({
             </div>
           </>
         )}
+        {failure && <Banner tone="failed" title={NOT_SENT} text={failure} />}
       </div>
       {pending && (
         <ConfirmDialog

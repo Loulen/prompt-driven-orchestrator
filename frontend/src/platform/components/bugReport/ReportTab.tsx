@@ -133,7 +133,11 @@ export default function ReportTab({
           </Checkbox>
         </span>
         <span className="br-joins__note">
-          {promptsRefused ? "Not sent to a public tracker" : "The prompts of the pipeline above"}
+          {!promptsRefused
+            ? "Node prompts of the run and pipeline"
+            : destination.extension
+              ? "This destination does not accept prompts"
+              : "Not sent to a public tracker"}
         </span>
       </div>
     </>

@@ -17,7 +17,9 @@ use std::net::IpAddr;
 
 use clap::{Parser, Subcommand};
 use pdo_pipeline::adapters::cli::PipelineAction;
-use pdo_platform::adapters::cli::{AuditArgs, PageAction, ServiceAction, UpdateAction};
+use pdo_platform::adapters::cli::{
+    AuditArgs, BugReportAction, PageAction, ServiceAction, UpdateAction,
+};
 use pdo_review::adapters::cli::ReviewAction;
 use pdo_run::adapters::cli::{NodeAction, RunAction};
 use pdo_session::adapters::cli::SessionAction;
@@ -240,6 +242,12 @@ pub enum Commands {
     },
     /// The journal of the mutations made outside a Run, newest first.
     Audit(AuditArgs),
+    /// The Destinations de bug report the extensions offer: list them, send
+    /// a report to one, remember your last choice.
+    BugReport {
+        #[command(subcommand)]
+        action: BugReportAction,
+    },
     /// The Actor the daemon names you: the local operator, the agent of your
     /// node session, or the one your `PDO_TOKEN` establishes.
     Whoami {

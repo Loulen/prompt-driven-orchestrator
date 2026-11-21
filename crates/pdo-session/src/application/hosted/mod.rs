@@ -13,6 +13,7 @@ mod lifecycle;
 mod live;
 mod open;
 pub mod ports;
+mod projects;
 mod registry;
 mod relaunch;
 mod wait;
@@ -30,6 +31,7 @@ pub use open::OPEN;
 pub use ports::{
     AdmissionSlot, HostedHarness, HostedPlaces, HostedStore, NotAdmitted, SessionAdmission,
 };
+pub(crate) use projects::WithHosted;
 pub use registry::HostedRegistry;
 pub use relaunch::{CONFIGURE, RELAUNCH};
 pub use wait::{HostedWaitError, WAIT_USER};

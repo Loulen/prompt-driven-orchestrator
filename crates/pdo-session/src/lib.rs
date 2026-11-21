@@ -46,7 +46,7 @@ use application::assistant::{
 };
 use application::attach::AttachTerminal;
 use application::declared_wait::{DeclareWait, LiftWait, TypedInput};
-use application::hosted::{Hosted, HostedPorts, HostedRegistry};
+use application::hosted::{Hosted, HostedPorts, WithHosted};
 use application::open_shell::OpenShell;
 use application::ports::{
     AssistantHarness, DaemonGauges, NodePanes, NodeWaits, RunProjects, RunShells, SessionOwners,
@@ -382,25 +382,5 @@ impl Session {
     /// The Agents de support, one per Actor.
     pub fn support(&self) -> &Support {
         &self.support
-    }
-}
-
-/// The Projets of the Runs, and those of the Sessions hébergées by their
-/// record.
-struct WithHosted {
-    runs: Arc<dyn RunProjects>,
-    hosted: Arc<HostedRegistry>,
-}
-
-impl RunProjects for WithHosted {
-    fn projects_of_run<'a>(
-        &'a self,
-        run_id: &'a str,
-    ) -> application::ports::BoxFuture<'a, Vec<String>> {
-        self.runs.projects_of_run(run_id)
-    }
-
-    fn projects_of_hosted(&self, session: &str) -> Vec<String> {
-        self.hosted.projects_of(session)
     }
 }

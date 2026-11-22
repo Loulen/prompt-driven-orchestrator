@@ -246,6 +246,7 @@ mod tests {
             snapshot: None,
             ready_marker: j.ready_marker_path(5172),
             verify_timeout_secs: 90,
+            release_token_for_command_only: false,
         };
         std::fs::create_dir_all(j.dir()).unwrap();
         let script = render_update_script(&plan);

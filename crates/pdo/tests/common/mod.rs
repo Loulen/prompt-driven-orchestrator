@@ -1266,6 +1266,19 @@ pub fn lock_update_check_unset() -> EnvVarGuard {
     )
 }
 
+static GITHUB_TOKEN_LOCK: Mutex<()> = Mutex::new(());
+
+/// Set (`None`: unset) the operator's `PDO_GITHUB_TOKEN` for the lifetime of
+/// the returned guard, excluding any other test that also wants it.
+#[must_use = "the identifier is restored as soon as the guard is dropped"]
+pub fn lock_github_token(value: Option<&str>) -> EnvVarGuard {
+    EnvVarGuard::acquire_value(
+        &GITHUB_TOKEN_LOCK,
+        pdo_platform::adapters::github_releases::GITHUB_TOKEN_ENV,
+        value,
+    )
+}
+
 /// Set `PDO_GUARD_TIMEOUT_MS` for the lifetime of the returned guard, excluding
 /// any other test that also wants it.
 #[must_use = "the timeout override is restored as soon as the guard is dropped"]

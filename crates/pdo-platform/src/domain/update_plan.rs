@@ -25,6 +25,10 @@
 //! 5. otherwise **roll back**: stop the daemon, copy the binary and the databases
 //!    back, restart, wait for it to answer, and record `failed` with the reason.
 //!
+//! The release channel's identifier reaches the update command through the
+//! executor's environment (`PDO_GITHUB_TOKEN`), never through the plan: the
+//! script, and so its log, cannot show it.
+//!
 //! Everything here is a pure function of the plan, so the script is golden-tested.
 
 use std::net::IpAddr;
@@ -71,6 +75,12 @@ pub struct UpdatePlan {
     pub ready_marker: PathBuf,
     /// How long the script waits for the restarted daemon to answer.
     pub verify_timeout_secs: u64,
+    /// The release identifier the executor receives (`PDO_GITHUB_TOKEN`) is
+    /// the binary's own: the script drops it from its environment once the
+    /// update command has run, so neither the restarted daemon nor the
+    /// Retour automatique inherits it. `false`: it is the operator's, which
+    /// the daemon was started with and keeps.
+    pub release_token_for_command_only: bool,
 }
 
 impl UpdatePlan {
@@ -256,6 +266,10 @@ pub fn render_update_script(plan: &UpdatePlan) -> String {
         "sh -c {}\nrc=$?\n",
         sh_quote(plan.upgrade_command())
     ));
+    if plan.release_token_for_command_only {
+        // The release identifier was for the update command alone.
+        s.push_str("unset PDO_GITHUB_TOKEN\n");
+    }
     s.push_str("if [ \"$rc\" -ne 0 ]; then\n");
     s.push_str(
         "  say result \"failed: the update command exited $rc; the running daemon is left untouched\"\n",
@@ -372,6 +386,7 @@ mod tests {
             }),
             ready_marker: PathBuf::from("/home/u/.pdo/update/daemon-5172.json"),
             verify_timeout_secs: 90,
+            release_token_for_command_only: false,
         }
     }
 
@@ -599,5 +614,23 @@ mod tests {
         assert_eq!(sh_quote("a b"), "'a b'");
         assert_eq!(sh_quote("it's"), "'it'\\''s'");
         assert_eq!(sh_quote(""), "''");
+    }
+
+    #[test]
+    fn a_binarys_release_identifier_is_dropped_right_after_the_update_command() {
+        let mut plan = plan(InstallMethod::Declared, Supervision::None);
+        let without = render_update_script(&plan);
+        assert!(
+            !without.contains("PDO_GITHUB_TOKEN"),
+            "the operator's identifier stays with the restarted daemon"
+        );
+        plan.release_token_for_command_only = true;
+        let s = render_update_script(&plan);
+        let command = s.find("sh -c acme-upgrade\nrc=$?\n").unwrap();
+        let unset = s.find("\nunset PDO_GITHUB_TOKEN\n").unwrap();
+        let rc_check = s.find("if [ \"$rc\" -ne 0 ]; then").unwrap();
+        let restart = s.find("stop_pid 4242\n").unwrap();
+        assert!(command < unset && unset < rc_check && unset < restart);
+        assert_eq!(s.matches("PDO_GITHUB_TOKEN").count(), 1, "{s}");
     }
 }

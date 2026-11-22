@@ -58,7 +58,13 @@ impl GetChangelog {
             Some((for_latest, rels)) if for_latest == latest => Ok(rels),
             _ => {
                 let url = releases_list_url(&source_url);
-                let fetched = self.update.ports.source.releases(&url).await;
+                let token = self.update.channel().release_token();
+                let fetched = self
+                    .update
+                    .ports
+                    .source
+                    .releases(&url, token.as_deref())
+                    .await;
                 if let Ok(rels) = &fetched {
                     *self.update.releases.lock().await = Some((latest.clone(), rels.clone()));
                 }

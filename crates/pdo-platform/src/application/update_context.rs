@@ -153,7 +153,9 @@ impl UpdateContext {
         let Ok(_guard) = self.check_lock.try_lock() else {
             return Err(IN_FLIGHT.to_string());
         };
-        let outcome = self.ports.source.latest(&url).await;
+        // Asked at every check: the identifier may change during the daemon's life.
+        let token = self.options.channel.release_token();
+        let outcome = self.ports.source.latest(&url, token.as_deref()).await;
         let mut memo = self.cache.lock().await;
         // The last good version of another source is not kept beside this one.
         let mut cache = memo.clone().filter(|c| c.is_for(&url)).unwrap_or_default();

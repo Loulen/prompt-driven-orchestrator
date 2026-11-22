@@ -140,12 +140,21 @@ pub trait PublicUrlSetting: Send + Sync {
     fn resolve(&self) -> BoxFuture<'_, String>;
 }
 
-/// The release source.
+/// The release source. `token`: the release channel's identifier, presented
+/// as a `Bearer`; `None`: no authentication.
 pub trait ReleaseSource: Send + Sync {
     /// The latest published version at `url`.
-    fn latest<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<String, String>>;
+    fn latest<'a>(
+        &'a self,
+        url: &'a str,
+        token: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<String, String>>;
     /// The published releases listed at `url`.
-    fn releases<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Vec<Release>, String>>;
+    fn releases<'a>(
+        &'a self,
+        url: &'a str,
+        token: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<Vec<Release>, String>>;
 }
 
 /// The update journal: the check cache, the last attempt, the scripts and logs.
@@ -196,7 +205,15 @@ pub trait RunningExecutor: Send {
 
 /// What runs an update plan, detached from the daemon.
 pub trait UpdateExecutor: Send + Sync {
-    fn spawn(&self, plan: &UpdatePlan, script: &Path) -> Result<Box<dyn RunningExecutor>, String>;
+    /// `release_token`: the release channel's identifier, handed to the
+    /// executor's environment under `PDO_GITHUB_TOKEN` (`None`: removed from
+    /// it). It never travels in the plan, so never in the script nor its log.
+    fn spawn(
+        &self,
+        plan: &UpdatePlan,
+        script: &Path,
+        release_token: Option<&str>,
+    ) -> Result<Box<dyn RunningExecutor>, String>;
 }
 
 /// How this binary was installed and is supervised.

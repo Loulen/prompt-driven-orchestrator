@@ -15,8 +15,9 @@ use pdo_platform::adapters::service_health_probe;
 use pdo_platform::adapters::sqlite_audit_log::SqliteAuditLog;
 use pdo_platform::adapters::sqlite_bug_report_choices::SqliteBugReportChoices;
 use pdo_platform::adapters::sqlite_page_mounts::SqlitePageMounts;
+use pdo_platform::adapters::sqlite_update_snapshot::SqliteUpdateSnapshot;
 use pdo_platform::application::update_context::UpdateOptions;
-use pdo_platform::domain::release_channel::UpdateChannel;
+use pdo_platform::domain::release_channel::{UpdateChannel, Upgrade};
 use pdo_platform::{Platform, PlatformPorts};
 use pdo_run::Runs;
 use pdo_settings::adapters::contexts::{PublicUrlOfPlatform, UpdateCheckOfPlatform};
@@ -49,20 +50,39 @@ pub(super) fn platform(
                 .with_config_home(r.sandbox_home_override.as_ref().map(|h| h.join(".config"))),
         ),
         update_executor: Arc::new(DetachedExecutor::new(r.update_executor_override.clone())),
+        // The core's database and every database under the extensions' data
+        // folder: what the Retour automatique puts back.
+        update_snapshot: Arc::new(SqliteUpdateSnapshot::new(
+            vec![r.repo_root.join(".pdo").join("pdo.db")],
+            vec![crate::serve::extensions_data_root_of(
+                r.home_root.as_deref(),
+                &r.repo_root,
+            )],
+        )),
         bug_report_choices: Arc::new(SqliteBugReportChoices::new(r.db.clone())),
         extensions: host,
     };
+    let mut channel = r
+        .release_channel
+        .clone()
+        .unwrap_or_else(UpdateChannel::vanilla);
+    // The test seams of an Update (unset in production).
+    let seams = &r.update_seams;
+    if let Some(command) = &seams.upgrade_command {
+        channel.upgrade = Upgrade::Declared(Some(command.clone()));
+    }
+    if let Some(version) = &seams.installed_version {
+        channel.installed_version = version.clone();
+    }
     let update = UpdateOptions {
         // The vanilla binary's defaults are explicit: `UpdateChannel::vanilla()`.
-        channel: r
-            .release_channel
-            .clone()
-            .unwrap_or_else(UpdateChannel::vanilla),
+        channel,
         // `PDO_UPDATE_SOURCE_URL` wins over the channel's source (test seam).
         source_url: r.update_source_url.clone(),
         port: r.port,
         working_dir: r.repo_root.clone(),
         relaunch_command: r.relaunch_command.clone(),
+        verify_timeout_secs: seams.verify_timeout_secs,
     };
     // Observed once at boot, so the polled `GET /sessions` never shells out.
     let health = service_health_probe::observe(r.service_health_override);

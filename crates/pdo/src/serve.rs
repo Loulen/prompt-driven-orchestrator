@@ -279,10 +279,17 @@ fn identify_layer(extensions: Extensions, inner: Option<RouterLayer>) -> RouterL
 /// home override in the tests), or under the daemon's own `.pdo/` without a
 /// home.
 fn extensions_data_root(resources: &ContextResources) -> PathBuf {
-    resources
-        .home_root
-        .clone()
-        .unwrap_or_else(|| resources.repo_root.clone())
+    extensions_data_root_of(resources.home_root.as_deref(), &resources.repo_root)
+}
+
+/// The extensions' data folder: `.pdo/extensions` under the home, else under
+/// the repo root.
+pub(crate) fn extensions_data_root_of(
+    home_root: Option<&std::path::Path>,
+    repo_root: &std::path::Path,
+) -> PathBuf {
+    home_root
+        .unwrap_or(repo_root)
         .join(".pdo")
         .join("extensions")
 }

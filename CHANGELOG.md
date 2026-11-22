@@ -14,6 +14,24 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- An update that breaks the instance now undoes itself. Before the update command runs, the daemon
+  keeps a snapshot of its databases (its own and those of its extensions, consistent despite the
+  WAL) and of the binary in place. The attempt is `succeeded` only once the restarted daemon answers
+  in another version, within 90 s; otherwise the executor stops it, puts the binary and the
+  databases back, restarts and records the attempt `failed`, rolled back, with its reason. A
+  failed update command still leaves the running daemon untouched and restores nothing.
+- The update's waiting screen lists its steps (snapshot, command, restart) and, when the new version
+  does not answer, the restore, then ends on "Update failed · back on vY" with the reason, "Open
+  the log" and "Close". Settings › Version & update shows such an attempt as "rolled back"
+  with its short reason; `pdo update status` ends with the last attempt and why it failed.
+- The attempt record (`GET /update`'s `last_attempt`) gains `to_version`, `reason`, `rolled_back`
+  and `verify_timeout_secs`. A daemon writes its readiness marker
+  (`~/.pdo/update/daemon-<port>.json`) once it serves. Test seams: `PDO_UPDATE_UPGRADE_COMMAND`
+  (the command an Update runs), `PDO_UPDATE_VERIFY_TIMEOUT` (seconds) and
+  `PDO_UPDATE_INSTALLED_VERSION` (the version the daemon declares).
+
 ## 2.88.0
 
 - Every change you send to the daemon now shows while it runs. Its button turns busy (a spinner,

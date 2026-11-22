@@ -3,6 +3,11 @@
 //! channel declares no upgrade command (#24), or when an attempt is running;
 //! never refused for active Runs (the daemon restarts, tmux sessions survive —
 //! `KillMode=process`).
+//!
+//! Before it spawns the executor, the daemon takes the snapshot of the Retour
+//! automatique (its databases and the binary in place): an Update whose
+//! snapshot cannot be taken does not start, since a broken version could then
+//! not be undone.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -101,6 +106,21 @@ impl ApplyUpdate {
             .installation
             .invoked_exe()
             .unwrap_or_else(|| PathBuf::from("pdo"));
+        self.update.ensure_loaded().await;
+        let to_version = self
+            .update
+            .cached()
+            .await
+            .and_then(|c| c.latest_version)
+            .filter(|v| *v != channel.installed_version);
+        let snapshot = match ports.snapshot.take(&journal.snapshot_dir(), &exe).await {
+            Ok(snapshot) => snapshot,
+            Err(e) => {
+                let error = format!("the snapshot before the update failed: {e}");
+                tracing::error!("update {attempt_id}: {error}");
+                return Err(ApplyError::Failed { error, attempt_id });
+            }
+        };
         let relaunch = options
             .relaunch_command
             .clone()
@@ -119,6 +139,10 @@ impl ApplyUpdate {
             log_path: journal.log_path(&attempt_id),
             attempt_path: journal.attempt_path(),
             from_version: channel.installed_version.clone(),
+            to_version,
+            snapshot: Some(snapshot),
+            ready_marker: journal.ready_marker_path(options.port),
+            verify_timeout_secs: options.verify_timeout_secs(),
         };
         let mut attempt = UpdateAttempt {
             schema: ATTEMPT_SCHEMA.to_string(),
@@ -132,6 +156,10 @@ impl ApplyUpdate {
             supervision,
             log_path: plan.log_path.clone(),
             from_version: plan.from_version.clone(),
+            to_version: plan.to_version.clone(),
+            reason: None,
+            rolled_back: false,
+            verify_timeout_secs: Some(plan.verify_timeout_secs),
         };
         let spawned = journal
             .write_script(&attempt_id, &render_update_script(&plan))
@@ -161,6 +189,7 @@ impl ApplyUpdate {
                 tracing::error!("update {attempt_id}: {e}");
                 attempt.status = AttemptStatus::Failed;
                 attempt.finished_at = Some(pdo_kernel::clock::now_iso());
+                attempt.reason = Some(e.clone());
                 let _ = journal.write_attempt(&attempt);
                 journal.append_log(&attempt_id, &format!("== pdo update {attempt_id}: {e}"));
                 Err(ApplyError::Failed {

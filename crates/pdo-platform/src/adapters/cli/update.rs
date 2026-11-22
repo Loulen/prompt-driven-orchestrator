@@ -128,7 +128,29 @@ pub(super) fn status_text(status: &Value) -> String {
     if let Some(error) = status["last_error"].as_str() {
         out.push_str(&format!("last error: {error}\n"));
     }
+    out.push_str(&last_attempt_text(&status["last_attempt"]));
     out
+}
+
+/// The last attempt in one line, with why it failed and whether the Retour
+/// automatique put the previous version back; empty without an attempt.
+fn last_attempt_text(attempt: &Value) -> String {
+    let Some(id) = attempt["attempt_id"].as_str() else {
+        return String::new();
+    };
+    let rolled_back = if attempt["rolled_back"] == true {
+        " (rolled back)"
+    } else {
+        ""
+    };
+    let mut line = format!(
+        "last update {}{rolled_back} · {id}",
+        text(&attempt["status"])
+    );
+    if let Some(reason) = attempt["reason"].as_str() {
+        line.push_str(&format!(" · {reason}"));
+    }
+    format!("{line}\nlog: pdo update log {id}\n")
 }
 
 /// The changelog's markdown, after why it is the embedded one when the
@@ -193,6 +215,25 @@ mod tests {
              checked - · check off\n\
              Update check is off.\n"
         );
+    }
+
+    #[test]
+    fn a_rolled_back_attempt_says_why_and_where_its_log_is() {
+        let status = json!({
+            "installed_version": "2.75.0", "latest_version": "2.76.0", "newer_available": true,
+            "checked_at": "2026-11-09T02:00:00Z", "check_enabled": true,
+            "can_apply": true, "apply_blocked_reason": null, "last_error": null,
+            "last_attempt": {
+                "attempt_id": "20261122-093002-abc123", "status": "failed", "rolled_back": true,
+                "reason": "v2.76.0 did not answer within 90 s after the restart. \
+                           The previous version and its data were restored.",
+            },
+        });
+        assert!(status_text(&status).ends_with(
+            "last update failed (rolled back) · 20261122-093002-abc123 · v2.76.0 did not answer \
+             within 90 s after the restart. The previous version and its data were restored.\n\
+             log: pdo update log 20261122-093002-abc123\n"
+        ));
     }
 
     #[test]

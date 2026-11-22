@@ -17,6 +17,7 @@ use crate::domain::release::Release;
 use crate::domain::service_unit::PortState;
 use crate::domain::update_check::UpdateCache;
 use crate::domain::update_plan::UpdatePlan;
+use crate::domain::update_snapshot::{ReadyMarker, UpdateSnapshot};
 
 /// The future a port returns: boxed, so the port stays object-safe.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -165,6 +166,24 @@ pub trait UpdateJournal: Send + Sync {
     fn append_log(&self, attempt_id: &str, line: &str);
     /// An attempt's log; `Ok(None)` when there is none.
     fn read_log(&self, attempt_id: &str) -> Result<Option<String>, String>;
+    /// Where the snapshot of the Retour automatique is kept (one at a time).
+    fn snapshot_dir(&self) -> PathBuf;
+    /// Where the daemon listening on `port` writes its readiness marker.
+    fn ready_marker_path(&self, port: u16) -> PathBuf;
+    /// Write the readiness marker of the daemon listening on `port`.
+    fn write_ready_marker(&self, port: u16, marker: &ReadyMarker) -> Result<(), String>;
+}
+
+/// What keeps the databases and the binary before an Update, for the Retour
+/// automatique.
+pub trait UpdateSnapshotter: Send + Sync {
+    /// Replace the snapshot in `dir` with a consistent copy of every database
+    /// and a copy of the binary at `exe`.
+    fn take<'a>(
+        &'a self,
+        dir: &'a Path,
+        exe: &'a Path,
+    ) -> BoxFuture<'a, Result<UpdateSnapshot, String>>;
 }
 
 /// An executor that was spawned and runs on its own.

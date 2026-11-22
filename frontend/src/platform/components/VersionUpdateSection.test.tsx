@@ -192,4 +192,38 @@ describe("Settings › Version & update — a distribution's release channel (#2
     renderSection();
     expect(await screen.findByTestId("setting-version-uptodate")).toHaveTextContent("up to date");
   });
+
+  it("a rolled back update: failed row, « rolled back » chip, the short reason, the log (CORE-314)", async () => {
+    const reason =
+      "v0.4.0 did not answer within 90 s after the restart. The previous version and its data were restored.";
+    fetchUpdateStatusMock.mockResolvedValue(
+      distribution({
+        last_attempt: {
+          schema: "update-attempt-v1",
+          attempt_id: "20261122-093002-abc123",
+          status: "failed",
+          started_at: "2026-11-22T09:30:02Z",
+          finished_at: "2026-11-22T09:32:16Z",
+          exit_code: 1,
+          method: "declared",
+          command: "acme-upgrade",
+          supervision: "systemd",
+          log_path: "/home/u/.pdo/update/20261122-093002-abc123.log",
+          from_version: "0.3.0",
+          to_version: "0.4.0",
+          reason,
+          rolled_back: true,
+          verify_timeout_secs: 90,
+        },
+      }),
+    );
+    renderSection();
+    const row = await screen.findByTestId("setting-version-last-attempt-row");
+    expect(screen.getByTestId("setting-version-last-attempt-status")).toHaveTextContent(/^rolled back$/);
+    expect(screen.getByTestId("setting-version-last-attempt-detail")).toHaveTextContent("· did not answer within 90 s");
+    expect(within(row).getByTitle(reason)).toBeInTheDocument();
+    expect(screen.getByTestId("setting-version-attempt-log-toggle")).toHaveTextContent("View log");
+    // No extra insert below the row (design of 2026-11-22).
+    expect(screen.queryByText(/Update stays offered/)).not.toBeInTheDocument();
+  });
 });

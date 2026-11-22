@@ -68,6 +68,7 @@ pub struct ContextResources {
     pub install_method_override: Option<InstallMethod>,
     pub supervision_override: Option<Supervision>,
     pub relaunch_command: Option<Vec<String>>,
+    pub update_seams: crate::daemon::config::UpdateSeams,
     pub service_health_override: Option<ServiceHealthOverride>,
     /// Replaces the harness tail of a session (the per-daemon test seam).
     pub tmux_cmd_override: Option<String>,
@@ -308,6 +309,7 @@ pub(crate) mod testing {
                 install_method_override: None,
                 supervision_override: None,
                 relaunch_command: None,
+                update_seams: Default::default(),
                 service_health_override: options.service_health,
                 // Self-destructing no-op: should a test reach the spawn path, the
                 // node session runs `true` and exits immediately — never real claude.

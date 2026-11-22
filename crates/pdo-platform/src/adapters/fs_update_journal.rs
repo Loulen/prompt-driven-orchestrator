@@ -9,6 +9,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use crate::application::ports::UpdateJournal;
 use crate::domain::attempt::{UpdateAttempt, ATTEMPT_SCHEMA};
 use crate::domain::update_check::{UpdateCache, CACHE_SCHEMA};
+use crate::domain::update_snapshot::ReadyMarker;
 
 pub struct FsUpdateJournal {
     /// `None` when there is no home directory: nothing can be journaled.
@@ -118,6 +119,22 @@ impl UpdateJournal for FsUpdateJournal {
             Err(e) => Err(e.to_string()),
         }
     }
+
+    fn snapshot_dir(&self) -> PathBuf {
+        self.dir().join("snapshot")
+    }
+
+    fn ready_marker_path(&self, port: u16) -> PathBuf {
+        self.dir().join(format!("daemon-{port}.json"))
+    }
+
+    fn write_ready_marker(&self, port: u16, marker: &ReadyMarker) -> Result<(), String> {
+        let path = self.ready_marker_path(port);
+        std::fs::create_dir_all(self.dir()).map_err(|e| e.to_string())?;
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, format!("{}\n", marker.to_line())).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -175,6 +192,10 @@ mod tests {
             supervision: Supervision::None,
             log_path: j.log_path("x"),
             from_version: "1.60.0".into(),
+            to_version: Some("1.61.0".into()),
+            reason: Some("v1.61.0 did not answer within 90 s after the restart.".into()),
+            rolled_back: true,
+            verify_timeout_secs: Some(90),
         }
     }
 
@@ -205,10 +226,12 @@ mod tests {
     #[test]
     fn the_scripts_record_function_writes_a_readable_attempt() {
         let (dir, j) = journal();
+        // Shell characters in the command land verbatim: never expanded.
+        let command = format!("{HOMEBREW_COMMAND} # \"$HOME\" `id` \\x");
         let plan = UpdatePlan {
             attempt_id: "20260905-120000-abc123".into(),
             method: InstallMethod::Homebrew,
-            upgrade_command: HOMEBREW_COMMAND.into(),
+            upgrade_command: command.clone(),
             supervision: Supervision::None,
             exe: PathBuf::from("/home/linuxbrew/.linuxbrew/bin/pdo"),
             port: 5172,
@@ -219,16 +242,20 @@ mod tests {
             log_path: j.log_path("20260905-120000-abc123"),
             attempt_path: j.attempt_path(),
             from_version: "1.60.0".into(),
+            to_version: Some("1.61.0".into()),
+            snapshot: None,
+            ready_marker: j.ready_marker_path(5172),
+            verify_timeout_secs: 90,
         };
         std::fs::create_dir_all(j.dir()).unwrap();
         let script = render_update_script(&plan);
         // Keep only the preamble + `record`, then call it.
         let head: String = script
             .lines()
-            .take_while(|l| !l.starts_with("echo \"== pdo update"))
+            .take_while(|l| !l.starts_with("say start"))
             .map(|l| format!("{l}\n"))
             .collect();
-        let probe = format!("{head}record failed 7\n");
+        let probe = format!("{head}record failed 7 \"v1.61.0 did not answer within 90 s.\" true\n");
         let out = std::process::Command::new("sh")
             .arg("-c")
             .arg(&probe)
@@ -244,9 +271,46 @@ mod tests {
         assert_eq!(a.status, AttemptStatus::Failed);
         assert_eq!(a.exit_code, Some(7));
         assert_eq!(a.attempt_id, plan.attempt_id);
-        assert_eq!(a.command, HOMEBREW_COMMAND);
+        assert_eq!(a.command, command);
         assert_eq!(a.method, InstallMethod::Homebrew);
         assert_eq!(a.log_path, plan.log_path);
         assert!(a.finished_at.is_some());
+        assert_eq!(
+            a.reason.as_deref(),
+            Some("v1.61.0 did not answer within 90 s.")
+        );
+        assert!(a.rolled_back);
+        assert_eq!(a.to_version.as_deref(), Some("1.61.0"));
+        assert_eq!(a.verify_timeout_secs, Some(90));
+
+        // A success: no reason, not rolled back.
+        let probe = format!("{head}record succeeded 0\n");
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&probe)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let a = j.read_attempt().expect("readable JSON");
+        assert_eq!(a.status, AttemptStatus::Succeeded);
+        assert_eq!(a.reason, None);
+        assert!(!a.rolled_back);
+    }
+
+    #[test]
+    fn the_readiness_marker_is_one_line_per_port() {
+        let (dir, j) = journal();
+        let marker = ReadyMarker {
+            version: "2.0.0".into(),
+            pid: 7,
+        };
+        j.write_ready_marker(5172, &marker).unwrap();
+        let path = dir.path().join(".pdo/update/daemon-5172.json");
+        assert_eq!(j.ready_marker_path(5172), path);
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            "{\"version\":\"2.0.0\",\"pid\":7}\n"
+        );
+        assert_eq!(j.snapshot_dir(), dir.path().join(".pdo/update/snapshot"));
     }
 }

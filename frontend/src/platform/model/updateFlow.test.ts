@@ -5,6 +5,9 @@ import {
   isUpdateInProgress,
   reduceUpdateFlow,
   updateFlowMessage,
+  updateFlowSteps,
+  updateSlowAfterMs,
+  UPDATE_SLOW_AFTER_MS,
   type UpdateFlowState,
 } from "./updateFlow";
 import type { UpdateAttempt } from "../../shared/generated/UpdateAttempt";
@@ -24,14 +27,18 @@ function attempt(overrides: Partial<UpdateAttempt> = {}): UpdateAttempt {
     supervision: "systemd",
     log_path: "/home/u/.pdo/update/a1.log",
     from_version: "1.60.0",
+    to_version: "1.61.0",
+    reason: null,
+    rolled_back: false,
+    verify_timeout_secs: 90,
     ...overrides,
   };
 }
 
-function status(last_attempt: UpdateAttempt | null): UpdateStatus {
+function status(last_attempt: UpdateAttempt | null, installed_version = "1.60.0"): UpdateStatus {
   return {
     channel_name: "PDO",
-    installed_version: "1.60.0",
+    installed_version,
     core_version: "1.60.0",
     latest_version: "1.61.0",
     newer_available: true,
@@ -109,11 +116,25 @@ describe("reduceUpdateFlow", () => {
     expect(s.attempt?.attempt_id).toBe("a1");
   });
 
-  it("a status about another attempt, or a running one, changes nothing", () => {
+  it("a status about another attempt, or a running one, changes no phase", () => {
     const s = applied();
     expect(reduceUpdateFlow(s, { type: "status", status: status(attempt({ attempt_id: "zz", status: "failed" })) })).toBe(s);
-    expect(reduceUpdateFlow(s, { type: "status", status: status(attempt()) })).toBe(s);
     expect(reduceUpdateFlow(s, { type: "status", status: status(null) })).toBe(s);
+    // A running record is read once: the target and the verification's bound.
+    const read = reduceUpdateFlow(s, { type: "status", status: status(attempt()) });
+    expect(read.phase).toBe("applying");
+    expect(read.verifyTimeoutSecs).toBe(90);
+    expect(read.toVersion).toBe("1.61.0");
+    expect(reduceUpdateFlow(read, { type: "status", status: status(attempt()) })).toBe(read);
+  });
+
+  it("a failed command keeps the record's reason when it has one", () => {
+    const s = reduceUpdateFlow(applied(), {
+      type: "status",
+      status: status(attempt({ status: "failed", exit_code: 3, reason: "The update command exited with code 3." })),
+    });
+    expect(s.phase).toBe("failed");
+    expect(s.error).toBe("The update command exited with code 3.");
   });
 
   it("socket noise outside the flow is ignored", () => {
@@ -129,6 +150,67 @@ describe("reduceUpdateFlow", () => {
     expect(s.phase).toBe("failed");
     expect(s.error).toBe("Install method not detected");
     expect(reduceUpdateFlow(s, { type: "dismiss" })).toEqual(IDLE);
+  });
+});
+
+describe("the Retour automatique (CORE-314)", () => {
+  /** Applied, the running record read, then the daemon gone at t=10 s. */
+  function away(): UpdateFlowState {
+    let s = applied();
+    s = reduceUpdateFlow(s, { type: "status", status: status(attempt()) });
+    return reduceUpdateFlow(s, { type: "socket", connected: false, now: 10_000 });
+  }
+
+  it("past the verification bound without an answer, it is rolling back", () => {
+    let s = away();
+    expect(s.phase).toBe("restarting");
+    expect(s.restartedAt).toBe(10_000);
+    s = reduceUpdateFlow(s, { type: "tick", now: 10_000 + 90_000 });
+    expect(s.phase).toBe("restarting");
+    s = reduceUpdateFlow(s, { type: "tick", now: 10_000 + 91_000 });
+    expect(s.phase).toBe("rolling-back");
+    expect(isUpdateInProgress(s)).toBe(true);
+    expect(updateFlowMessage(s)).toBe("Restoring v1.60.0 and its data…");
+  });
+
+  it("the steps: snapshot, command, the silent version, the restore", () => {
+    expect(updateFlowSteps(applied())).toEqual([
+      { label: "Snapshot of the data and the binary", state: "done" },
+      { label: "Running the update command…", state: "active" },
+    ]);
+    const rolling = reduceUpdateFlow(away(), { type: "tick", now: 200_000 });
+    expect(updateFlowSteps(rolling)).toEqual([
+      { label: "Snapshot of the data and the binary", state: "done" },
+      { label: "Update command ran", state: "done" },
+      { label: "v1.61.0 did not answer within 90 s", state: "failed" },
+      { label: "Restoring v1.60.0 and its data…", state: "active" },
+    ]);
+  });
+
+  it("the restored daemon answering in the old version is no verdict while the attempt runs", () => {
+    let s = reduceUpdateFlow(away(), { type: "socket", connected: true });
+    expect(s.phase).toBe("verifying");
+    s = reduceUpdateFlow(s, { type: "status", status: status(attempt()) });
+    s = reduceUpdateFlow(s, { type: "version", version: "1.60.0" });
+    expect(s.phase).toBe("verifying");
+  });
+
+  it("the record rolled back ends the flow on « back on vY » with its reason", () => {
+    const reason =
+      "v1.61.0 did not answer within 90 s after the restart. The previous version and its data were restored.";
+    const rolling = reduceUpdateFlow(away(), { type: "tick", now: 200_000 });
+    const s = reduceUpdateFlow(rolling, {
+      type: "status",
+      status: status(attempt({ status: "failed", exit_code: 1, rolled_back: true, reason })),
+    });
+    expect(s.phase).toBe("rolled-back");
+    expect(s.error).toBe(reason);
+    expect(isUpdateInProgress(s)).toBe(false);
+  });
+
+  it("the slow hint waits for the verification and the restore", () => {
+    expect(updateSlowAfterMs(applied())).toBe(UPDATE_SLOW_AFTER_MS);
+    expect(updateSlowAfterMs(away())).toBe(UPDATE_SLOW_AFTER_MS + 180_000);
   });
 });
 

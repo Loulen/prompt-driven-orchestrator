@@ -34,6 +34,7 @@ use application::place_page_mount::PlacePageMount;
 use application::ports::{
     AuditLog, BugReportChoices, Installation, PageFiles, PageMountRepository, PublicUrlSetting,
     ReleaseSource, Runs, StorageError, UpdateCheckSetting, UpdateExecutor, UpdateJournal,
+    UpdateSnapshotter,
 };
 use application::read_attempt_log::ReadAttemptLog;
 use application::read_pages::ReadPages;
@@ -60,6 +61,8 @@ pub struct PlatformPorts {
     pub update_journal: Arc<dyn UpdateJournal>,
     pub installation: Arc<dyn Installation>,
     pub update_executor: Arc<dyn UpdateExecutor>,
+    /// The snapshot of the Retour automatique (databases + binary).
+    pub update_snapshot: Arc<dyn UpdateSnapshotter>,
     /// The last Destination de bug report of each Actor.
     pub bug_report_choices: Arc<dyn BugReportChoices>,
     pub extensions: Arc<dyn ExtensionHost>,
@@ -79,6 +82,7 @@ pub struct Platform {
     pub(crate) apply_update: ApplyUpdate,
     pub(crate) read_attempt_log: ReadAttemptLog,
     pub(crate) bug_reports: BugReports,
+    update: Arc<UpdateContext>,
     place_page_mount: Arc<PlacePageMount>,
     place_older_pages: PlaceOlderPages,
     page_mounts: Arc<dyn PageMountRepository>,
@@ -105,6 +109,7 @@ impl Platform {
             update_journal,
             installation,
             update_executor,
+            update_snapshot,
             bug_report_choices,
             extensions,
         } = ports;
@@ -118,6 +123,7 @@ impl Platform {
                 journal: update_journal,
                 installation,
                 executor: update_executor,
+                snapshot: update_snapshot,
                 runs: runs.clone(),
             },
             update,
@@ -151,7 +157,8 @@ impl Platform {
             get_update_status: GetUpdateStatus::new(context.clone()),
             get_changelog: GetChangelog::new(context.clone()),
             apply_update: ApplyUpdate::new(context.clone(), extensions),
-            read_attempt_log: ReadAttemptLog::new(context),
+            read_attempt_log: ReadAttemptLog::new(context.clone()),
+            update: context,
             page_mounts,
             audit,
             public_url,
@@ -198,6 +205,13 @@ impl Platform {
     /// The version check, on demand, periodic, or right after it was turned on.
     pub fn check_for_update(&self) -> &CheckForUpdate {
         &self.check_for_update
+    }
+
+    /// Say this daemon serves: its readiness marker, which the executor of an
+    /// Update waits for after the restart (Retour automatique). Called once the
+    /// daemon listens and serves.
+    pub fn announce_ready(&self) {
+        self.update.announce_ready();
     }
 
     /// The instance's Public URL, read fresh (`stored → env → default`).

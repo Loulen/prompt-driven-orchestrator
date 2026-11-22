@@ -198,6 +198,7 @@ async fn a_wiped_bank_folder_is_reseeded_by_the_next_start() {
         install_method_override: None,
         supervision_override: None,
         relaunch_command: None,
+        update_seams: Default::default(),
         allowed_ws_origins: Vec::new(),
         run_trigger_scheduler_loop: false,
         nested_daemon: true,

@@ -272,6 +272,10 @@ describe("Settings › General › Version & update — Update (#699)", () => {
           supervision: "systemd",
           log_path: "/home/user/.pdo/update/20260905-120000-abc123.log",
           from_version: "1.58.0",
+          to_version: null,
+          reason: null,
+          rolled_back: false,
+          verify_timeout_secs: null,
         },
       }),
     );
@@ -307,6 +311,10 @@ describe("Settings › General › Version & update — Update (#699)", () => {
           supervision: "systemd",
           log_path: "/x.log",
           from_version: "1.58.1",
+          to_version: null,
+          reason: null,
+          rolled_back: false,
+          verify_timeout_secs: null,
         },
       }),
     );

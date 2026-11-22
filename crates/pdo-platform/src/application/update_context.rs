@@ -9,11 +9,13 @@ use tokio::sync::Mutex;
 
 use super::ports::{
     Installation, ReleaseSource, Runs, UpdateCheckSetting, UpdateExecutor, UpdateJournal,
+    UpdateSnapshotter,
 };
 use crate::domain::install::InstallMethod;
 use crate::domain::release::Release;
 use crate::domain::release_channel::UpdateChannel;
 use crate::domain::update_check::UpdateCache;
+use crate::domain::update_snapshot::{ReadyMarker, DEFAULT_VERIFY_TIMEOUT_SECS};
 
 /// The ports the update use cases reach the outside through.
 #[derive(Clone)]
@@ -23,6 +25,8 @@ pub struct UpdatePorts {
     pub journal: Arc<dyn UpdateJournal>,
     pub installation: Arc<dyn Installation>,
     pub executor: Arc<dyn UpdateExecutor>,
+    /// Keeps the databases and the binary before an Update (Retour automatique).
+    pub snapshot: Arc<dyn UpdateSnapshotter>,
     pub runs: Arc<dyn Runs>,
 }
 
@@ -43,6 +47,18 @@ pub struct UpdateOptions {
     /// The daemon's own command line for an unsupervised relaunch; `None` →
     /// `<stable exe> daemon --port <port>`.
     pub relaunch_command: Option<Vec<String>>,
+    /// How long the executor waits for the restarted daemon to answer before
+    /// it rolls back; `None` → [`DEFAULT_VERIFY_TIMEOUT_SECS`].
+    pub verify_timeout_secs: Option<u64>,
+}
+
+impl UpdateOptions {
+    /// The verification's bound, in seconds (never zero).
+    pub fn verify_timeout_secs(&self) -> u64 {
+        self.verify_timeout_secs
+            .filter(|s| *s > 0)
+            .unwrap_or(DEFAULT_VERIFY_TIMEOUT_SECS)
+    }
 }
 
 /// The shared state of the update use cases.
@@ -91,6 +107,22 @@ impl UpdateContext {
         self.options
             .channel
             .upgrader(|| self.ports.installation.method())
+    }
+
+    /// Write this daemon's readiness marker: it serves, in the channel's
+    /// version. The executor of an Update waits for it after the restart.
+    pub fn announce_ready(&self) {
+        let journal = &self.ports.journal;
+        if !journal.is_available() {
+            return;
+        }
+        let marker = ReadyMarker {
+            version: self.options.channel.installed_version.clone(),
+            pid: std::process::id(),
+        };
+        if let Err(e) = journal.write_ready_marker(self.options.port, &marker) {
+            tracing::warn!("update: cannot write the readiness marker: {e}");
+        }
     }
 
     /// Load the journal's cache into memory once (a no-op once loaded).

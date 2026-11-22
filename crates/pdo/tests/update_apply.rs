@@ -20,7 +20,10 @@
 //!      is allowed afterwards; the log is served as text;
 //!   5. active Runs never block: the count is reported, apply still answers 202;
 //!   6. **really detached**: a REAL `pdo daemon` binary is SIGKILLed right after
-//!      apply; the fixture finishes on its own and its late line lands in the log.
+//!      apply; the fixture finishes on its own and its late line lands in the log;
+//!   7. **Retour automatique**: a REAL `pdo daemon` whose update command puts a
+//!      binary that does not start (and garbles the database) comes back on its
+//!      own binary and data, the attempt `failed` + rolled back with its reason.
 
 use crate::common::TestDaemon;
 use pdo_platform::domain::install::{InstallMethod, Supervision};
@@ -154,7 +157,7 @@ async fn apply_homebrew_answers_at_once_and_the_fixture_receives_the_brew_comman
         "idempotent service install with the daemon's port:\n{script}"
     );
     assert!(script.contains("systemctl --user restart pdo"));
-    assert!(!script.contains("kill -TERM"));
+    assert!(!script.contains(&format!("stop_pid {}", std::process::id())));
 
     // Served as text for the Settings « View log ».
     let resp = reqwest::get(format!("{}/update/attempts/{id}/log", daemon.url()))
@@ -208,7 +211,7 @@ async fn apply_script_method_unsupervised_relaunches_the_daemon_with_the_same_po
     );
 
     let script = read_script(&daemon, &id);
-    assert!(script.contains(&format!("kill -TERM {}", std::process::id())));
+    assert!(script.contains(&format!("stop_pid {}", std::process::id())));
     assert!(
         script.contains(&format!("daemon --port {port}")),
         "same arguments (port):\n{script}"
@@ -243,13 +246,19 @@ async fn unknown_method_is_refused_with_the_reason_and_the_manual_command() {
         .as_str()
         .unwrap()
         .starts_with("Build from source"));
+    // Only the daemon's readiness marker (written at boot) is there: no
+    // attempt, no script, no log, no snapshot.
+    let journaled: Vec<String> = std::fs::read_dir(daemon.repo_root().join(".pdo/update"))
+        .map(|dir| {
+            dir.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|name| !(name.starts_with("daemon-") && name.ends_with(".json")))
+                .collect()
+        })
+        .unwrap_or_default();
     assert!(
-        !daemon.repo_root().join(".pdo/update").exists()
-            || std::fs::read_dir(daemon.repo_root().join(".pdo/update"))
-                .unwrap()
-                .next()
-                .is_none(),
-        "nothing journaled on a refusal"
+        journaled.is_empty(),
+        "nothing journaled on a refusal: {journaled:?}"
     );
     assert_eq!(
         update_json(&daemon).await["last_attempt"],
@@ -517,4 +526,248 @@ async fn the_executor_survives_the_daemon_death() {
     )
     .unwrap();
     assert_eq!(record["attempt_id"], id);
+}
+
+/// Kill the daemon a readiness marker names, at the end of a test.
+struct KillOnDrop(std::path::PathBuf);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let Ok(text) = std::fs::read_to_string(&self.0) else {
+            return;
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(text.trim()) else {
+            return;
+        };
+        if let Some(pid) = v["pid"].as_u64() {
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .status();
+        }
+    }
+}
+
+/// A REAL `pdo daemon` from a copy of the binary under `home/bin/pdo`,
+/// unsupervised, whose Update runs `upgrade` and waits `verify` seconds.
+struct RealDaemon {
+    home: tempfile::TempDir,
+    bin: std::path::PathBuf,
+    base: String,
+    marker: std::path::PathBuf,
+    first_pid: u32,
+    _cleanup: KillOnDrop,
+}
+
+impl RealDaemon {
+    async fn start(upgrade: impl Fn(&Path, &Path) -> String, verify: u64) -> Self {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin/pdo");
+        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        std::fs::copy(env!("CARGO_BIN_EXE_pdo"), &bin).unwrap();
+        let upgrade = upgrade(home.path(), &bin);
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let marker = home.path().join(format!(".pdo/update/daemon-{port}.json"));
+        let cleanup = KillOnDrop(marker.clone());
+        let mut child = std::process::Command::new(&bin)
+            .args(["daemon", "--port", &port.to_string()])
+            .current_dir(home.path())
+            .env("HOME", home.path())
+            .env("PDO_UPDATE_UPGRADE_COMMAND", &upgrade)
+            .env("PDO_UPDATE_VERIFY_TIMEOUT", verify.to_string())
+            .env("PDO_UPDATE_CHECK", "0")
+            .env("PDO_PRICE_SYNC", "off")
+            .env("PDO_DAEMON_NO_CLEANUP", "1")
+            .env_remove("PDO_NODE_ID")
+            .env_remove("INVOCATION_ID")
+            .env_remove("XPC_SERVICE_NAME")
+            .env_remove("PDO_UPDATE_EXECUTOR")
+            .env_remove("PDO_UPDATE_INSTALLED_VERSION")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn the copied pdo binary");
+        let first_pid = child.id();
+        // Reaped as soon as the executor stops it.
+        std::thread::spawn(move || child.wait());
+        let daemon = Self {
+            home,
+            bin,
+            base: format!("http://127.0.0.1:{port}"),
+            marker,
+            first_pid,
+            _cleanup: cleanup,
+        };
+        let deadline = Instant::now() + Duration::from_secs(90);
+        while daemon.status().await.is_none() {
+            assert!(Instant::now() < deadline, "the real daemon never answered");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        daemon
+    }
+
+    async fn status(&self) -> Option<serde_json::Value> {
+        reqwest::get(format!("{}/update", self.base))
+            .await
+            .ok()?
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+    }
+
+    async fn apply(&self) -> String {
+        let resp = reqwest::Client::new()
+            .post(format!("{}/update/apply", self.base))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 202);
+        resp.json::<serde_json::Value>().await.unwrap()["attempt_id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// Wait for a daemon to answer with the attempt `id` in `status`.
+    async fn wait_attempt(&self, id: &str, status: &str) -> serde_json::Value {
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            if let Some(s) = self.status().await {
+                if s["last_attempt"]["attempt_id"] == id && s["last_attempt"]["status"] == status {
+                    return s;
+                }
+            }
+            let log =
+                std::fs::read_to_string(self.home.path().join(format!(".pdo/update/{id}.log")))
+                    .unwrap_or_default();
+            assert!(
+                Instant::now() < deadline,
+                "the attempt never reached `{status}`:\n{log}"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    fn marker_text(&self) -> String {
+        std::fs::read_to_string(&self.marker).unwrap_or_default()
+    }
+}
+
+/// Write `content` as an executable beside `bin`, then move it over `bin`:
+/// what an installer does (writing into a running binary fails).
+fn replace_binary(bin: &Path, content: &str) -> String {
+    let new = bin.with_extension("new");
+    format!(
+        "printf '%s\\n' {content} > {new} && chmod 755 {new} && mv -f {new} {bin}",
+        content = pdo_platform::domain::update_plan::sh_quote(content),
+        new = new.display(),
+        bin = bin.display()
+    )
+}
+
+/// The Retour automatique end to end, on the REAL binary: an unsupervised
+/// daemon whose update command replaces it with a binary that does not start
+/// and garbles its database. After the (shortened) verification the executor
+/// puts the binary and the database back and relaunches: the daemon answers
+/// again in its own version, its data intact, the attempt `failed` + rolled
+/// back with its reason.
+#[tokio::test]
+async fn a_binary_that_does_not_start_is_rolled_back_with_its_data() {
+    let daemon = RealDaemon::start(
+        |home, bin| {
+            format!(
+                "{} && printf garbage > {}",
+                replace_binary(bin, "#!/bin/sh\nexit 1"),
+                home.join(".pdo/pdo.db").display()
+            )
+        },
+        3,
+    )
+    .await;
+    let before = daemon.status().await.unwrap();
+    assert_eq!(before["install_method"], "declared", "the upgrade seam");
+    assert!(daemon.marker.exists(), "the daemon announced it serves");
+
+    let id = daemon.apply().await;
+    // The daemon goes, the broken binary never answers, the executor rolls
+    // back and relaunches the restored one, which reads the record.
+    let after = daemon.wait_attempt(&id, "failed").await;
+    let attempt = &after["last_attempt"];
+    assert_eq!(attempt["rolled_back"], true, "{attempt}");
+    assert_eq!(attempt["verify_timeout_secs"], 3);
+    let reason = attempt["reason"].as_str().unwrap();
+    assert!(
+        reason.ends_with(
+            "did not answer within 3 s after the restart. \
+             The previous version and its data were restored."
+        ),
+        "{reason}"
+    );
+    assert_eq!(after["installed_version"], before["installed_version"]);
+    let header = std::fs::read(daemon.home.path().join(".pdo/pdo.db")).unwrap();
+    assert!(
+        header.starts_with(b"SQLite format 3"),
+        "the database is back"
+    );
+    assert!(
+        std::fs::read(&daemon.bin).unwrap().len() > 1_000_000,
+        "the real binary is back"
+    );
+    assert!(
+        !daemon
+            .marker_text()
+            .contains(&format!("\"pid\":{}}}", daemon.first_pid)),
+        "a new daemon"
+    );
+    // `pdo update log` serves the journal of the rollback.
+    let log = reqwest::get(format!("{}/update/attempts/{id}/log", daemon.base))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(log.contains("rollback"), "{log}");
+    assert!(log.contains("result   failed (rolled back)"), "{log}");
+}
+
+/// The success path end to end, on the REAL binary: the update command puts
+/// a binary that answers in another version (the real one behind a wrapper
+/// that declares `9.9.9`). The attempt is `succeeded` once it answers, and the
+/// snapshot is gone.
+#[tokio::test]
+async fn a_new_version_that_answers_succeeds_and_drops_the_snapshot() {
+    let daemon = RealDaemon::start(
+        |home, bin| {
+            let real = home.join("pdo-real");
+            std::fs::copy(bin, &real).unwrap();
+            replace_binary(
+                bin,
+                &format!(
+                    "#!/bin/sh\nPDO_UPDATE_INSTALLED_VERSION=9.9.9 exec {} \"$@\"",
+                    real.display()
+                ),
+            )
+        },
+        30,
+    )
+    .await;
+    let before = daemon.status().await.unwrap();
+    assert_ne!(before["installed_version"], "9.9.9");
+
+    let id = daemon.apply().await;
+    let after = daemon.wait_attempt(&id, "succeeded").await;
+    assert_eq!(
+        after["installed_version"], "9.9.9",
+        "the new version answers"
+    );
+    let attempt = &after["last_attempt"];
+    assert_eq!(attempt["rolled_back"], false);
+    assert_eq!(attempt["reason"], serde_json::Value::Null);
+    assert!(daemon.marker_text().contains("\"version\":\"9.9.9\""));
+    assert!(
+        !daemon.home.path().join(".pdo/update/snapshot").exists(),
+        "one snapshot, removed after a success"
+    );
 }

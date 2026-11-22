@@ -14,4 +14,6 @@ pub mod service_health;
 pub mod service_unit;
 pub mod update_check;
 pub mod update_plan;
+pub mod update_rollback;
+pub mod update_snapshot;
 pub mod update_status;

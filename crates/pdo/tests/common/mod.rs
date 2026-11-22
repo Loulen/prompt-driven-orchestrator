@@ -50,6 +50,7 @@ impl TestDaemon {
                 install_method_override: None,
                 supervision_override: None,
                 relaunch_command: None,
+                update_seams: Default::default(),
                 allowed_ws_origins: Vec::new(),
                 run_trigger_scheduler_loop: false,
                 nested_daemon: false,
@@ -149,6 +150,7 @@ impl TestDaemon {
                 install_method_override: None,
                 supervision_override: None,
                 relaunch_command: None,
+                update_seams: Default::default(),
                 allowed_ws_origins: Vec::new(),
                 // #450: tests drive firing via the `run_trigger_tick` seam; the
                 // heartbeat's boot tick would race it.
@@ -308,6 +310,7 @@ impl TestDaemon {
                 install_method_override: None,
                 supervision_override: None,
                 relaunch_command: None,
+                update_seams: Default::default(),
                 allowed_ws_origins: Vec::new(),
                 // #450: tests drive firing via the `run_trigger_tick` seam; the
                 // heartbeat's boot tick would race it.
@@ -370,6 +373,7 @@ impl TestDaemon {
                 install_method_override: None,
                 supervision_override: None,
                 relaunch_command: None,
+                update_seams: Default::default(),
                 allowed_ws_origins: Vec::new(),
                 // #450: tests drive firing via the `run_trigger_tick` seam; the
                 // heartbeat's boot tick would race it.
@@ -435,6 +439,7 @@ impl TestDaemon {
                 install_method_override: None,
                 supervision_override: None,
                 relaunch_command: None,
+                update_seams: Default::default(),
                 allowed_ws_origins: Vec::new(),
                 // #450: tests drive firing via the `run_trigger_tick` seam; the
                 // heartbeat's boot tick would race it.
@@ -489,6 +494,7 @@ impl TestDaemon {
                 install_method_override: None,
                 supervision_override: None,
                 relaunch_command: None,
+                update_seams: Default::default(),
                 allowed_ws_origins: Vec::new(),
                 // #450: tests drive firing via the `run_trigger_tick` seam; the
                 // heartbeat's boot tick would race it.
@@ -552,6 +558,7 @@ impl TestDaemon {
                 install_method_override: None,
                 supervision_override: None,
                 relaunch_command: None,
+                update_seams: Default::default(),
                 allowed_ws_origins: Vec::new(),
                 // #450: deterministic tick seam — no background heartbeat.
                 run_trigger_scheduler_loop: false,
@@ -610,6 +617,7 @@ impl TestDaemon {
                 install_method_override: Some(install_method),
                 supervision_override: Some(supervision),
                 relaunch_command: None,
+                update_seams: Default::default(),
                 allowed_ws_origins: Vec::new(),
                 run_trigger_scheduler_loop: false,
                 nested_daemon: false,
@@ -664,6 +672,7 @@ impl TestDaemon {
                 install_method_override: None,
                 supervision_override: None,
                 relaunch_command: None,
+                update_seams: Default::default(),
                 allowed_ws_origins: Vec::new(),
                 // #450: deterministic tick seam — no background heartbeat.
                 run_trigger_scheduler_loop: false,
@@ -722,6 +731,7 @@ impl TestDaemon {
                 install_method_override: None,
                 supervision_override: None,
                 relaunch_command: None,
+                update_seams: Default::default(),
                 // #450: deterministic tick seam — no background heartbeat.
                 run_trigger_scheduler_loop: false,
                 // See the sibling literals: armed sweeps, per-daemon opt-out.

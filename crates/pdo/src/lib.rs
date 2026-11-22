@@ -34,7 +34,7 @@ pub use brand::Brand;
 #[doc(hidden)]
 pub use daemon::router_layer::RouterLayer;
 #[doc(hidden)]
-pub use daemon::{serve_with_config, DaemonConfig, DaemonHandle, ExtensionHostHandle};
+pub use daemon::{serve_with_config, DaemonConfig, DaemonHandle, ExtensionHostHandle, UpdateSeams};
 #[doc(hidden)]
 pub use entry::{main_from, main_from_config};
 pub use entry::{main_with, main_with_config};

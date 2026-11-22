@@ -21,6 +21,7 @@ use pdo_platform::domain::release::Release;
 use pdo_platform::domain::service_unit::PortState;
 use pdo_platform::domain::update_check::UpdateCache;
 use pdo_platform::domain::update_plan::UpdatePlan;
+use pdo_platform::domain::update_snapshot::{ReadyMarker, SavedFile, UpdateSnapshot};
 
 /// The rule of a [`Host`] that refuses some Operations only.
 type Rule = Box<dyn Fn(&Actor, &Operation) -> bool + Send + Sync>;
@@ -354,6 +355,7 @@ pub struct Journal {
     pub attempt: Mutex<Option<UpdateAttempt>>,
     pub scripts: Mutex<BTreeMap<String, String>>,
     pub logs: Mutex<BTreeMap<String, String>>,
+    pub ready: Mutex<Option<ReadyMarker>>,
 }
 
 impl UpdateJournal for Journal {
@@ -397,6 +399,50 @@ impl UpdateJournal for Journal {
     }
     fn read_log(&self, attempt_id: &str) -> Result<Option<String>, String> {
         Ok(self.logs.lock().unwrap().get(attempt_id).cloned())
+    }
+    fn snapshot_dir(&self) -> PathBuf {
+        PathBuf::from("/home/u/.pdo/update/snapshot")
+    }
+    fn ready_marker_path(&self, port: u16) -> PathBuf {
+        PathBuf::from(format!("/home/u/.pdo/update/daemon-{port}.json"))
+    }
+    fn write_ready_marker(&self, _port: u16, marker: &ReadyMarker) -> Result<(), String> {
+        *self.ready.lock().unwrap() = Some(marker.clone());
+        Ok(())
+    }
+}
+
+/// A snapshotter that keeps nothing on disk: it says what it would keep, or
+/// fails with `error`.
+#[derive(Default)]
+pub struct Snapshotter {
+    pub error: Option<String>,
+    pub taken: Mutex<usize>,
+}
+
+impl UpdateSnapshotter for Snapshotter {
+    fn take<'a>(
+        &'a self,
+        dir: &'a Path,
+        exe: &'a Path,
+    ) -> BoxFuture<'a, Result<UpdateSnapshot, String>> {
+        Box::pin(async move {
+            *self.taken.lock().unwrap() += 1;
+            if let Some(e) = &self.error {
+                return Err(e.clone());
+            }
+            Ok(UpdateSnapshot {
+                dir: dir.to_path_buf(),
+                binary: SavedFile {
+                    original: exe.to_path_buf(),
+                    saved: dir.join("pdo"),
+                },
+                databases: vec![SavedFile {
+                    original: PathBuf::from("/home/u/.pdo/app/.pdo/pdo.db"),
+                    saved: dir.join("db-0-pdo.db"),
+                }],
+            })
+        })
     }
 }
 

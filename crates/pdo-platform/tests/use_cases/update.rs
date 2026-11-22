@@ -17,7 +17,9 @@ use pdo_platform::domain::release::Release;
 use pdo_platform::domain::release_channel::{UpdateChannel, CORE_VERSION as INSTALLED_VERSION};
 use pdo_platform::domain::update_check::UpdateCache;
 
-use crate::fakes::{Executor, FakeRuns, FixedInstallation, Host, Journal, Setting, Source};
+use crate::fakes::{
+    Executor, FakeRuns, FixedInstallation, Host, Journal, Setting, Snapshotter, Source,
+};
 
 /// A version strictly newer than this build.
 fn newer() -> String {
@@ -30,6 +32,7 @@ struct World {
     source: Arc<Source>,
     journal: Arc<Journal>,
     executor: Arc<Executor>,
+    snapshotter: Arc<Snapshotter>,
     host: Arc<Host>,
     context: Arc<UpdateContext>,
 }
@@ -47,6 +50,7 @@ fn world(
         port: 5172,
         working_dir: PathBuf::from("/home/u/.pdo/app"),
         relaunch_command: None,
+        verify_timeout_secs: None,
     };
     world_with(options, enabled, source, journal, method, exit_code)
 }
@@ -61,6 +65,28 @@ fn world_with(
     method: InstallMethod,
     exit_code: Option<i32>,
 ) -> World {
+    world_with_snapshot(
+        options,
+        enabled,
+        source,
+        journal,
+        method,
+        exit_code,
+        Snapshotter::default(),
+    )
+}
+
+/// [`world_with`], with the snapshotter of the Retour automatique.
+fn world_with_snapshot(
+    options: UpdateOptions,
+    enabled: bool,
+    source: Source,
+    journal: Journal,
+    method: InstallMethod,
+    exit_code: Option<i32>,
+    snapshotter: Snapshotter,
+) -> World {
+    let snapshotter = Arc::new(snapshotter);
     let setting = Arc::new(Setting(AtomicBool::new(enabled)));
     let source = Arc::new(source);
     let journal = Arc::new(journal);
@@ -76,6 +102,7 @@ fn world_with(
             journal: journal.clone(),
             installation: Arc::new(FixedInstallation(method, Supervision::None)),
             executor: executor.clone(),
+            snapshot: snapshotter.clone(),
             runs: Arc::new(FakeRuns {
                 live: 2,
                 ..FakeRuns::default()
@@ -88,6 +115,7 @@ fn world_with(
         source,
         journal,
         executor,
+        snapshotter,
         host,
         context,
     }
@@ -378,6 +406,23 @@ async fn an_apply_spawns_the_plan_journals_it_and_records_the_exit() {
         ]
     );
     assert!(w.journal.scripts.lock().unwrap()[&started.attempt_id].starts_with("#!/bin/sh"));
+    // The Retour automatique: the snapshot is taken before the spawn, and the
+    // plan carries it, the readiness marker and the verification's bound.
+    assert_eq!(*w.snapshotter.taken.lock().unwrap(), 1);
+    let snapshot = plans[0].snapshot.as_ref().expect("a snapshot");
+    assert_eq!(snapshot.dir, PathBuf::from("/home/u/.pdo/update/snapshot"));
+    assert_eq!(
+        snapshot.binary.original,
+        PathBuf::from("/home/linuxbrew/.linuxbrew/bin/pdo")
+    );
+    assert_eq!(
+        plans[0].ready_marker,
+        PathBuf::from("/home/u/.pdo/update/daemon-5172.json")
+    );
+    assert_eq!(plans[0].verify_timeout_secs, 90);
+    let running = w.journal.attempt.lock().unwrap().clone().unwrap();
+    assert_eq!(running.verify_timeout_secs, Some(90));
+    assert!(!running.rolled_back);
     // The executor exits at once with 3: the reaper records it off-thread.
     for _ in 0..100 {
         let a = w.journal.attempt.lock().unwrap().clone().unwrap();
@@ -424,6 +469,85 @@ async fn a_running_attempt_closes_the_gate_and_a_spawn_failure_is_journaled() {
 }
 
 #[tokio::test]
+async fn an_update_whose_snapshot_fails_does_not_start() {
+    let options = UpdateOptions {
+        channel: UpdateChannel::vanilla(),
+        source_url: Some("http://127.0.0.1:9/releases/latest".into()),
+        port: 5172,
+        working_dir: PathBuf::from("/home/u/.pdo/app"),
+        relaunch_command: None,
+        verify_timeout_secs: Some(5),
+    };
+    let w = world_with_snapshot(
+        options,
+        true,
+        source_ok("1.0.0"),
+        Journal::default(),
+        InstallMethod::Homebrew,
+        Some(0),
+        Snapshotter {
+            error: Some("disk full".into()),
+            ..Snapshotter::default()
+        },
+    );
+    let err = w.apply().execute(&Actor::LocalOperator).await.unwrap_err();
+    let ApplyError::Failed { error, .. } = err else {
+        panic!("expected a failure, got {err:?}");
+    };
+    assert_eq!(error, "the snapshot before the update failed: disk full");
+    assert!(
+        w.executor.plans.lock().unwrap().is_empty(),
+        "nothing spawned"
+    );
+    assert!(
+        w.journal.attempt.lock().unwrap().is_none(),
+        "nothing journaled"
+    );
+}
+
+#[tokio::test]
+async fn the_daemon_announces_it_serves_in_its_channels_version() {
+    let w = world_with(
+        channel_options(None, Some("acme-upgrade")),
+        true,
+        source_ok("1.0.0"),
+        Journal::default(),
+        InstallMethod::Declared,
+        Some(0),
+    );
+    w.context.announce_ready();
+    let marker = w.journal.ready.lock().unwrap().clone().unwrap();
+    assert_eq!(marker.version, "0.3.0");
+    assert_eq!(marker.pid, std::process::id());
+}
+
+#[tokio::test]
+async fn the_verification_bound_targets_the_newest_known_version() {
+    let newer = newer();
+    let options = UpdateOptions {
+        channel: UpdateChannel::vanilla(),
+        source_url: Some("http://127.0.0.1:9/releases/latest".into()),
+        port: 5172,
+        working_dir: PathBuf::from("/home/u/.pdo/app"),
+        relaunch_command: None,
+        verify_timeout_secs: Some(7),
+    };
+    let w = world_with(
+        options,
+        true,
+        source_ok(&newer),
+        Journal::default(),
+        InstallMethod::Homebrew,
+        Some(0),
+    );
+    w.check().now().await;
+    w.apply().execute(&Actor::LocalOperator).await.unwrap();
+    let plan = w.executor.plans.lock().unwrap()[0].clone();
+    assert_eq!(plan.verify_timeout_secs, 7);
+    assert_eq!(plan.to_version.as_deref(), Some(newer.as_str()));
+}
+
+#[tokio::test]
 async fn attempt_logs_are_read_by_a_safe_id_only() {
     let w = world(
         true,
@@ -451,6 +575,7 @@ fn channel_options(source_url: Option<&str>, upgrade_command: Option<&str>) -> U
         port: 5172,
         working_dir: PathBuf::from("/home/u/.pdo/app"),
         relaunch_command: None,
+        verify_timeout_secs: None,
     }
 }
 

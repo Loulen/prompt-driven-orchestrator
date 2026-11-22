@@ -31,6 +31,14 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   (`~/.pdo/update/daemon-<port>.json`) once it serves. Test seams: `PDO_UPDATE_UPGRADE_COMMAND`
   (the command an Update runs), `PDO_UPDATE_VERIFY_TIMEOUT` (seconds) and
   `PDO_UPDATE_INSTALLED_VERSION` (the version the daemon declares).
+- Seam for distributions (non-breaking addition): `Config::with_release_credential(provide)` lets a
+  binary that declares its release channel supply, at run time, the identifier its version check
+  presents to the release source. `provide` is asked at every check: its answer goes as
+  `Authorization: Bearer` to `latest` and to the release notes, so a new identifier is used from
+  the next check on, without a restart; `None` sends no header. The update command receives the
+  same identifier under `PDO_GITHUB_TOKEN`, for a command that downloads from a private source; the
+  attempt's log, its record and the API never show it, and the daemon the update restarts (or puts
+  back) does not inherit it. Without a provider, the operator's `PDO_GITHUB_TOKEN` keeps that role.
 
 ## 2.88.0
 

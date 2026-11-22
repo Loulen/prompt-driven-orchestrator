@@ -8,7 +8,7 @@ use std::sync::Arc;
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_platform::adapters::detached_executor::DetachedExecutor;
 use pdo_platform::adapters::fs_update_journal::FsUpdateJournal;
-use pdo_platform::adapters::github_releases::GithubReleases;
+use pdo_platform::adapters::github_releases::{operator_credential, GithubReleases};
 use pdo_platform::adapters::host_installation::HostInstallation;
 use pdo_platform::adapters::page_files::LocalPageFiles;
 use pdo_platform::adapters::service_health_probe;
@@ -73,6 +73,11 @@ pub(super) fn platform(
     }
     if let Some(version) = &seams.installed_version {
         channel.installed_version = version.clone();
+    }
+    // Without a provider declared by the binary, the operator's
+    // `PDO_GITHUB_TOKEN` identifies the channel.
+    if channel.credential.is_none() {
+        channel.credential = Some(operator_credential());
     }
     let update = UpdateOptions {
         // The vanilla binary's defaults are explicit: `UpdateChannel::vanilla()`.

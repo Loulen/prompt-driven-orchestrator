@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use axum::Router;
 use pdo_extension_api::Extension;
 use pdo_kernel::extension_host::{ExtensionHost, Extensions, HostServices};
-use pdo_platform::domain::release_channel::UpdateChannel;
+use pdo_platform::domain::release_channel::{ReleaseCredential, UpdateChannel};
 use pdo_run::adapters::extension_runs::ExtensionRuns;
 
 use crate::attributes::SqliteAttributes;
@@ -29,6 +29,7 @@ pub struct Config {
     daemon: DaemonConfig,
     inner_layer: Option<RouterLayer>,
     release_channel: Option<ReleaseChannel>,
+    release_credential: Option<ReleaseCredential>,
     brand: Option<Brand>,
 }
 
@@ -97,6 +98,7 @@ impl Config {
             daemon: daemon_cli_config(bind, port),
             inner_layer: None,
             release_channel: None,
+            release_credential: None,
             brand: None,
         })
     }
@@ -110,6 +112,7 @@ impl Config {
             daemon: DaemonConfig::from_env(),
             inner_layer: None,
             release_channel: None,
+            release_credential: None,
             brand: None,
         }
     }
@@ -119,6 +122,53 @@ impl Config {
     /// source, updated through the install method it detects.
     pub fn with_release_channel(mut self, channel: ReleaseChannel) -> Self {
         self.release_channel = Some(channel);
+        self
+    }
+
+    /// Declare how this binary's release channel identifies itself to its
+    /// release source: `provide` answers the identifier, or `None` for none.
+    ///
+    /// It is asked at every version check, whose requests (`latest` and the
+    /// release notes) present its answer as `Authorization: Bearer <answer>`,
+    /// so a new identifier is used from the next check on, without a restart;
+    /// and at every Update, whose command receives it in its environment under
+    /// `PDO_GITHUB_TOKEN`, for a command that downloads from a private source.
+    /// The identifier never appears in the attempt's log, its record or an API
+    /// response; the command must not print it either. The daemon the Update
+    /// restarts (or the Retour automatique puts back) does not inherit it.
+    ///
+    /// Without this call, the operator's `PDO_GITHUB_TOKEN`, if set, plays that
+    /// role. With it, that variable is no longer read; an answer of `None` (or
+    /// blank) means no `Authorization` header, and no identifier for the
+    /// command. `provide` runs on the daemon's async runtime and must never
+    /// block: answer what is already in memory, kept current elsewhere.
+    ///
+    /// It belongs to the declared channel: without
+    /// [`Config::with_release_channel`], it is ignored (the vanilla source is
+    /// public, and must never receive a binary's identifier).
+    ///
+    /// ```no_run
+    /// # async fn start() -> anyhow::Result<()> {
+    /// use std::sync::{Arc, RwLock};
+    /// // Kept current by whatever renews the identifier.
+    /// let identifier: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
+    /// let current = identifier.clone();
+    /// let config = pdo::Config::from_cli(None, 5172)?
+    ///     .with_release_channel(pdo::ReleaseChannel {
+    ///         name: "acme-pdo".into(),
+    ///         installed_version: "0.3.0".into(),
+    ///         source_url: Some("https://releases.acme.test/acme-pdo/releases/latest".into()),
+    ///         upgrade_command: Some("acme-installer --update".into()),
+    ///     })
+    ///     .with_release_credential(move || current.read().unwrap().clone());
+    /// pdo::serve(config, vec![]).await?.wait().await
+    /// # }
+    /// ```
+    pub fn with_release_credential(
+        mut self,
+        provide: impl Fn() -> Option<String> + Send + Sync + 'static,
+    ) -> Self {
+        self.release_credential = Some(ReleaseCredential::declared(provide));
         self
     }
 
@@ -194,6 +244,7 @@ pub async fn serve(config: Config, extensions: Vec<Box<dyn Extension>>) -> Resul
         mut daemon,
         inner_layer,
         release_channel,
+        release_credential,
         brand,
     } = config;
     if let Some(brand) = brand {
@@ -201,6 +252,13 @@ pub async fn serve(config: Config, extensions: Vec<Box<dyn Extension>>) -> Resul
     }
     if let Some(channel) = release_channel {
         daemon.release_channel = Some(channel.into_update_channel());
+    }
+    match (release_credential, daemon.release_channel.as_mut()) {
+        (Some(credential), Some(channel)) => channel.credential = Some(credential),
+        (Some(_), None) => tracing::warn!(
+            "a release identifier provider is declared without a release channel: ignored"
+        ),
+        (None, _) => {}
     }
     compose(&mut daemon, extensions, inner_layer)?;
     let handle = serve_with_config(addr, repo_root, daemon).await?;

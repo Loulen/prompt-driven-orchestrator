@@ -15,12 +15,16 @@
 //!      receipt that makes the same machine's vanilla daemon offer it;
 //!   3. without a source, nothing is fetched and the read says why, whatever an
 //!      earlier check left in the shared cache;
-//!   4. the operator's `PDO_UPDATE_SOURCE_URL` still wins over the channel's source.
+//!   4. the operator's `PDO_UPDATE_SOURCE_URL` still wins over the channel's source;
+//!   5. the identifier a binary provides (`Config::with_release_credential`) is
+//!      presented as a `Bearer` at every check, a new one from the next check on,
+//!      and handed to the update command, never shown by the log nor the API;
+//!      without a provider, the operator's `PDO_GITHUB_TOKEN` still is.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use pdo::DaemonConfig;
@@ -333,4 +337,215 @@ async fn the_vanilla_binary_is_pdo_at_the_cores_version_checking_the_public_repo
     );
     assert_eq!(body["source"], "GitHub Releases");
     assert_eq!(body["latest_version"], serde_json::Value::Null);
+}
+
+// ---- The release identifier (CORE-313) -------------------------------------
+
+/// A `releases/latest` endpoint publishing `v0.4.0` only to
+/// `Authorization: Bearer <expected>`, `401` otherwise.
+struct Guarded {
+    addr: SocketAddr,
+    expected: Arc<Mutex<String>>,
+    _task: tokio::task::JoinHandle<()>,
+}
+
+impl Guarded {
+    async fn spawn(expected: &str) -> Self {
+        let expected = Arc::new(Mutex::new(expected.to_string()));
+        let wanted = expected.clone();
+        let app = axum::Router::new().route(
+            "/releases/latest",
+            axum::routing::get(move |headers: axum::http::HeaderMap| {
+                let wanted = format!("Bearer {}", wanted.lock().unwrap());
+                async move {
+                    let given = headers
+                        .get("authorization")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or_default();
+                    if given == wanted {
+                        (
+                            axum::http::StatusCode::OK,
+                            r#"{"tag_name":"v0.4.0","prerelease":false}"#,
+                        )
+                    } else {
+                        (axum::http::StatusCode::UNAUTHORIZED, "{}")
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        Self {
+            addr,
+            expected,
+            _task: task,
+        }
+    }
+
+    fn url(&self) -> String {
+        format!("http://{}/releases/latest", self.addr)
+    }
+
+    fn expect(&self, token: &str) {
+        *self.expected.lock().unwrap() = token.to_string();
+    }
+}
+
+/// A daemon whose update executor notes the identifier it received in
+/// `received` (out of the log), and logs the command.
+fn noting(home: &Path, received: &Path) -> DaemonConfig {
+    let mut daemon = quiet(home);
+    let executor = home.join("noting.sh");
+    std::fs::write(
+        &executor,
+        format!(
+            "#!/bin/sh\nprintf '%s' \"${{PDO_GITHUB_TOKEN-unset}}\" > {}\necho \"cmd=$PDO_UPDATE_COMMAND\"\nexit 0\n",
+            received.display()
+        ),
+    )
+    .unwrap();
+    daemon.update_executor_override = Some(format!("sh {}", executor.display()));
+    daemon
+}
+
+#[tokio::test]
+async fn a_provided_identifier_is_presented_at_every_check_and_reaches_the_update_command_only() {
+    let _env = crate::common::lock_update_check_unset();
+    let _token = crate::common::lock_github_token(None);
+    let source = Guarded::spawn("tok-1").await;
+    let root = tempfile::tempdir().unwrap();
+    let received = root.path().join("received");
+    let provided = Arc::new(Mutex::new(Some("tok-1".to_string())));
+    let answer = provided.clone();
+    let repo = root.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let config = Config::new(SocketAddr::from(([127, 0, 0, 1], 0)), &repo)
+        .with_daemon_config(noting(&home(root.path()), &received))
+        .with_release_channel(acme(Some(source.url()), Some("acme-upgrade")))
+        .with_release_credential(move || answer.lock().unwrap().clone());
+    let daemon = serve(config, vec![]).await.unwrap();
+    let base = format!("http://{}", daemon.addr());
+
+    let resp = post(&base, "/update/check").await;
+    assert_eq!(resp.status(), 200, "{:?}", resp.text().await);
+    assert_eq!(update_json(&base).await["latest_version"], "0.4.0");
+
+    // The source now wants another identifier: refused until the binary
+    // provides it, then the next check follows, without a restart.
+    source.expect("tok-2");
+    assert_ne!(post(&base, "/update/check").await.status(), 200);
+    *provided.lock().unwrap() = Some("tok-2".into());
+    let resp = post(&base, "/update/check").await;
+    assert_eq!(resp.status(), 200, "{:?}", resp.text().await);
+
+    let resp = post(&base, "/update/apply").await;
+    assert_eq!(resp.status(), 202);
+    let started = resp.text().await.unwrap();
+    let id = serde_json::from_str::<serde_json::Value>(&started).unwrap()["attempt_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let log_path = home(root.path()).join(format!(".pdo/update/{id}.log"));
+    while !std::fs::read_to_string(&log_path)
+        .unwrap_or_default()
+        .contains("cmd=acme-upgrade")
+    {
+        assert!(Instant::now() < deadline, "the executor never ran");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(std::fs::read_to_string(&received).unwrap(), "tok-2");
+
+    // Neither the API nor the attempt's log nor its record shows it.
+    let log = reqwest::get(format!("{base}/update/attempts/{id}/log"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(log.contains("cmd=acme-upgrade"), "{log}");
+    let status = update_json(&base).await.to_string();
+    let record =
+        std::fs::read_to_string(home(root.path()).join(".pdo/update/last-attempt.json")).unwrap();
+    for shown in [&started, &log, &status, &record] {
+        assert!(!shown.contains("tok-"), "the identifier is shown: {shown}");
+    }
+}
+
+#[tokio::test]
+async fn a_provider_without_an_answer_presents_nothing_and_ignores_the_operators_variable() {
+    let _env = crate::common::lock_update_check_unset();
+    let _token = crate::common::lock_github_token(Some("tok-env"));
+    let source = Guarded::spawn("tok-env").await;
+    let root = tempfile::tempdir().unwrap();
+    let received = root.path().join("received");
+    let repo = root.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let config = Config::new(SocketAddr::from(([127, 0, 0, 1], 0)), &repo)
+        .with_daemon_config(noting(&home(root.path()), &received))
+        .with_release_channel(acme(Some(source.url()), Some("acme-upgrade")))
+        .with_release_credential(|| None);
+    let daemon = serve(config, vec![]).await.unwrap();
+    let base = format!("http://{}", daemon.addr());
+
+    assert_ne!(post(&base, "/update/check").await.status(), 200);
+    let body = update_json(&base).await;
+    assert_eq!(body["latest_version"], serde_json::Value::Null, "{body}");
+    assert_eq!(post(&base, "/update/apply").await.status(), 202);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    // `>` creates the file before `printf` writes it: wait for its content.
+    while std::fs::read_to_string(&received)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        assert!(Instant::now() < deadline, "the executor never ran");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        std::fs::read_to_string(&received).unwrap(),
+        "unset",
+        "no identifier for the command either"
+    );
+}
+
+#[tokio::test]
+async fn without_a_provider_the_operators_variable_identifies_the_channel() {
+    let _env = crate::common::lock_update_check_unset();
+    let _token = crate::common::lock_github_token(Some("tok-env"));
+    let source = Guarded::spawn("tok-env").await;
+    let root = tempfile::tempdir().unwrap();
+    let (_daemon, base) = start(
+        root.path(),
+        quiet(&home(root.path())),
+        Some(acme(Some(source.url()), Some("acme-upgrade"))),
+    )
+    .await;
+    let resp = post(&base, "/update/check").await;
+    assert_eq!(resp.status(), 200, "{:?}", resp.text().await);
+    assert_eq!(update_json(&base).await["latest_version"], "0.4.0");
+}
+
+#[tokio::test]
+async fn a_provider_without_a_declared_channel_is_ignored() {
+    let _env = crate::common::lock_update_check_unset();
+    let _token = crate::common::lock_github_token(None);
+    let source = Guarded::spawn("tok-1").await;
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let mut daemon = quiet(&home(root.path()));
+    // The vanilla channel, pointed at the guarded source by the operator.
+    daemon.update_source_url = Some(source.url());
+    let config = Config::new(SocketAddr::from(([127, 0, 0, 1], 0)), &repo)
+        .with_daemon_config(daemon)
+        .with_release_credential(|| Some("tok-1".into()));
+    let daemon = serve(config, vec![]).await.unwrap();
+    let base = format!("http://{}", daemon.addr());
+    assert_ne!(post(&base, "/update/check").await.status(), 200);
+    let body = update_json(&base).await;
+    assert_eq!(body["channel_name"], "PDO");
+    assert_eq!(body["latest_version"], serde_json::Value::Null, "{body}");
 }

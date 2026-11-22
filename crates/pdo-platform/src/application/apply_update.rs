@@ -143,6 +143,7 @@ impl ApplyUpdate {
             snapshot: Some(snapshot),
             ready_marker: journal.ready_marker_path(options.port),
             verify_timeout_secs: options.verify_timeout_secs(),
+            release_token_for_command_only: channel.credential_is_declared(),
         };
         let mut attempt = UpdateAttempt {
             schema: ATTEMPT_SCHEMA.to_string(),
@@ -165,7 +166,8 @@ impl ApplyUpdate {
             .write_script(&attempt_id, &render_update_script(&plan))
             .and_then(|script| {
                 journal.write_attempt(&attempt)?;
-                ports.executor.spawn(&plan, &script)
+                let token = channel.release_token();
+                ports.executor.spawn(&plan, &script, token.as_deref())
             });
         match spawned {
             Ok(child) => {

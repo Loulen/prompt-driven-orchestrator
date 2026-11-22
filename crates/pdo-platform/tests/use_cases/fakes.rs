@@ -320,6 +320,8 @@ pub struct Source {
     pub releases: Mutex<Result<Vec<Release>, String>>,
     pub latest_calls: AtomicUsize,
     pub releases_calls: AtomicUsize,
+    /// The identifier presented at each call, `latest` and `releases` alike.
+    pub tokens: Mutex<Vec<Option<String>>>,
 }
 
 impl Source {
@@ -329,20 +331,31 @@ impl Source {
             releases: Mutex::new(releases.map_err(str::to_string)),
             latest_calls: AtomicUsize::new(0),
             releases_calls: AtomicUsize::new(0),
+            tokens: Mutex::new(Vec::new()),
         }
     }
 }
 
 impl ReleaseSource for Source {
-    fn latest<'a>(&'a self, _url: &'a str) -> BoxFuture<'a, Result<String, String>> {
+    fn latest<'a>(
+        &'a self,
+        _url: &'a str,
+        token: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<String, String>> {
         Box::pin(async move {
             self.latest_calls.fetch_add(1, Ordering::SeqCst);
+            self.tokens.lock().unwrap().push(token.map(str::to_string));
             self.latest.lock().unwrap().clone()
         })
     }
-    fn releases<'a>(&'a self, _url: &'a str) -> BoxFuture<'a, Result<Vec<Release>, String>> {
+    fn releases<'a>(
+        &'a self,
+        _url: &'a str,
+        token: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<Vec<Release>, String>> {
         Box::pin(async move {
             self.releases_calls.fetch_add(1, Ordering::SeqCst);
+            self.tokens.lock().unwrap().push(token.map(str::to_string));
             self.releases.lock().unwrap().clone()
         })
     }
@@ -450,6 +463,8 @@ impl UpdateSnapshotter for Snapshotter {
 pub struct Executor {
     pub exit_code: Option<i32>,
     pub plans: Mutex<Vec<UpdatePlan>>,
+    /// The release identifier handed with each plan.
+    pub tokens: Mutex<Vec<Option<String>>>,
 }
 
 struct Exited(Option<i32>);
@@ -464,8 +479,17 @@ impl RunningExecutor for Exited {
 }
 
 impl UpdateExecutor for Executor {
-    fn spawn(&self, plan: &UpdatePlan, _script: &Path) -> Result<Box<dyn RunningExecutor>, String> {
+    fn spawn(
+        &self,
+        plan: &UpdatePlan,
+        _script: &Path,
+        release_token: Option<&str>,
+    ) -> Result<Box<dyn RunningExecutor>, String> {
         self.plans.lock().unwrap().push(plan.clone());
+        self.tokens
+            .lock()
+            .unwrap()
+            .push(release_token.map(str::to_string));
         match self.exit_code {
             Some(code) => Ok(Box::new(Exited(Some(code)))),
             None => Err("cannot spawn the update executor: no sh".into()),

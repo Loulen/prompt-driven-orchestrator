@@ -14,7 +14,9 @@ use pdo_platform::domain::attempt::AttemptStatus;
 use pdo_platform::domain::changelog::ChangelogSource;
 use pdo_platform::domain::install::{InstallMethod, Supervision};
 use pdo_platform::domain::release::Release;
-use pdo_platform::domain::release_channel::{UpdateChannel, CORE_VERSION as INSTALLED_VERSION};
+use pdo_platform::domain::release_channel::{
+    ReleaseCredential, UpdateChannel, CORE_VERSION as INSTALLED_VERSION,
+};
 use pdo_platform::domain::update_check::UpdateCache;
 
 use crate::fakes::{
@@ -93,6 +95,7 @@ fn world_with_snapshot(
     let executor = Arc::new(Executor {
         exit_code,
         plans: Mutex::new(Vec::new()),
+        tokens: Mutex::new(Vec::new()),
     });
     let host = Host::allowing();
     let context = UpdateContext::new(
@@ -717,4 +720,128 @@ async fn a_cache_left_by_another_source_is_never_an_answer() {
         w.status().execute().await.latest_version.as_deref(),
         Some("0.4.0")
     );
+}
+
+// ---- The release identifier of a channel (CORE-313) ------------------------
+
+/// A channel whose identifier provider answers what `value` holds at the time.
+fn credential_options(
+    value: &Arc<Mutex<Option<String>>>,
+    credential: fn(Arc<Mutex<Option<String>>>) -> ReleaseCredential,
+) -> UpdateOptions {
+    let mut options = channel_options(
+        Some("http://127.0.0.1:9/releases/latest"),
+        Some("acme-upgrade"),
+    );
+    options.channel.credential = Some(credential(value.clone()));
+    options
+}
+
+fn declared(value: Arc<Mutex<Option<String>>>) -> ReleaseCredential {
+    ReleaseCredential::declared(move || value.lock().unwrap().clone())
+}
+
+fn operator(value: Arc<Mutex<Option<String>>>) -> ReleaseCredential {
+    ReleaseCredential::operator(move || value.lock().unwrap().clone())
+}
+
+#[tokio::test]
+async fn every_check_presents_the_identifier_the_provider_answers_then() {
+    let value = Arc::new(Mutex::new(Some("tok-1".to_string())));
+    let latest = "0.4.0";
+    let w = world_with(
+        credential_options(&value, declared),
+        true,
+        Source::new(Ok(latest), Ok(vec![release(latest, "- a")])),
+        Journal::default(),
+        InstallMethod::Script,
+        Some(0),
+    );
+    w.check().execute(&Actor::LocalOperator).await.unwrap();
+    w.changelog().execute().await;
+    *value.lock().unwrap() = Some("tok-2".into());
+    w.check().execute(&Actor::LocalOperator).await.unwrap();
+    *value.lock().unwrap() = None;
+    w.check().execute(&Actor::LocalOperator).await.unwrap();
+    assert_eq!(
+        *w.source.tokens.lock().unwrap(),
+        vec![
+            Some("tok-1".to_string()),
+            Some("tok-1".to_string()),
+            Some("tok-2".to_string()),
+            None
+        ],
+        "latest, the notes, then each check asks again; nothing: no header"
+    );
+}
+
+#[tokio::test]
+async fn without_a_credential_nothing_is_presented() {
+    let w = world_with(
+        channel_options(
+            Some("http://127.0.0.1:9/releases/latest"),
+            Some("acme-upgrade"),
+        ),
+        true,
+        source_ok("0.4.0"),
+        Journal::default(),
+        InstallMethod::Script,
+        Some(0),
+    );
+    w.check().execute(&Actor::LocalOperator).await.unwrap();
+    w.apply().execute(&Actor::LocalOperator).await.unwrap();
+    assert_eq!(*w.source.tokens.lock().unwrap(), vec![None]);
+    assert_eq!(*w.executor.tokens.lock().unwrap(), vec![None]);
+    assert!(!w.executor.plans.lock().unwrap()[0].release_token_for_command_only);
+}
+
+#[tokio::test]
+async fn the_update_command_receives_the_binarys_identifier_outside_the_plan_and_the_record() {
+    let value = Arc::new(Mutex::new(Some("tok-secret-1".to_string())));
+    let w = world_with(
+        credential_options(&value, declared),
+        true,
+        source_ok("0.4.0"),
+        Journal::default(),
+        InstallMethod::Script,
+        Some(0),
+    );
+    w.check().execute(&Actor::LocalOperator).await.unwrap();
+    *value.lock().unwrap() = Some("tok-secret-2".into());
+    let started = w.apply().execute(&Actor::LocalOperator).await.unwrap();
+    assert_eq!(
+        *w.executor.tokens.lock().unwrap(),
+        vec![Some("tok-secret-2".to_string())],
+        "asked again at apply time"
+    );
+    let plan = w.executor.plans.lock().unwrap()[0].clone();
+    assert!(plan.release_token_for_command_only);
+    let attempt = w.journal.attempt.lock().unwrap().clone();
+    let status = w.status().execute().await;
+    let shown = format!("{plan:?} {started:?} {attempt:?} {status:?}");
+    assert!(!shown.contains("tok-secret"), "{shown}");
+}
+
+#[tokio::test]
+async fn the_operators_identifier_reaches_the_command_and_stays_with_the_daemon() {
+    let value = Arc::new(Mutex::new(Some("tok-op".to_string())));
+    let w = world_with(
+        credential_options(&value, operator),
+        true,
+        source_ok("0.4.0"),
+        Journal::default(),
+        InstallMethod::Script,
+        Some(0),
+    );
+    w.check().execute(&Actor::LocalOperator).await.unwrap();
+    w.apply().execute(&Actor::LocalOperator).await.unwrap();
+    assert_eq!(
+        *w.source.tokens.lock().unwrap(),
+        vec![Some("tok-op".to_string())]
+    );
+    assert_eq!(
+        *w.executor.tokens.lock().unwrap(),
+        vec![Some("tok-op".to_string())]
+    );
+    assert!(!w.executor.plans.lock().unwrap()[0].release_token_for_command_only);
 }

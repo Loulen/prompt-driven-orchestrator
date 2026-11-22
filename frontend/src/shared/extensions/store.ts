@@ -68,6 +68,9 @@ async function loadOne(entry: ExtensionEntry): Promise<LoadedExtension> {
   }
 }
 
+/** Bumped by `resetExtensions`: a load started before a reset writes nothing after it. */
+let generation = 0;
+
 export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
   extensions: [],
   started: false,
@@ -75,6 +78,7 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
   load: async () => {
     if (get().started) return;
     set({ started: true });
+    const own = generation;
     let entries: ExtensionEntry[];
     try {
       entries = await fetchExtensions();
@@ -83,14 +87,17 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
       // No `/ext` (an older daemon, a test double): no extension.
       entries = [];
     }
+    if (own !== generation) return;
     set({ extensions: entries.map((entry) => ({ entry, status: "loading", module: null })) });
     const loaded = await Promise.all(entries.map(loadOne));
+    if (own !== generation) return;
     set({ extensions: loaded, loaded: true });
   },
 }));
 
 /** Forget what was loaded (tests). */
 export function resetExtensions(): void {
+  generation += 1;
   useExtensionsStore.setState({ extensions: [], started: false, loaded: false });
   setBundleLoader();
 }

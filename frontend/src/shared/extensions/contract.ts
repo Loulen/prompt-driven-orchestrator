@@ -213,9 +213,10 @@ export interface TabProps extends ContributionProps<TabContext> {
 
 /**
  * A decoration (`run/item`, `run/item/people`, `trigger/item`, `pipeline/item`,
- * `port/item`, `review/file`, `statusbar`): the item it marks, `null` on the
- * status bar. A decoration sits inside its item (often a button): a clickable
- * one calls `event.stopPropagation()`.
+ * `port/item`, `review/file`, `statusbar`, `app/banner`): the item it marks,
+ * `null` on the status bar and the application banner. A decoration sits
+ * inside its item (often a button): a clickable one calls
+ * `event.stopPropagation()`.
  */
 export interface DecorationContext extends LocationContext {
   entity: EntityContext | null;

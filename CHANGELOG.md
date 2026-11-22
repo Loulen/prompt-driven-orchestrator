@@ -14,6 +14,14 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- Seam for extensions: a new UI location, `app/banner`, the application banner. An extension's
+  component shows as a full-width line under the top bar, on every screen, drawn with the kit's
+  `Banner` (a status icon, a fact, one action), one under the other in the catalogue's order. It
+  decides alone whether to show: rendering nothing takes no room. The person cannot dismiss it.
+  Settings, Stats and the extensions' full-window pages open under it.
+
 ## 2.88.0
 
 - Every change you send to the daemon now shows while it runs. Its button turns busy (a spinner,

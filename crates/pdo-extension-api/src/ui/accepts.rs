@@ -53,7 +53,8 @@ impl UiLocation {
             | UiLocation::PortItem
             | UiLocation::Statusbar
             | UiLocation::RunsEmpty
-            | UiLocation::TopbarAccount => matches!(element, UiElement::Decoration { .. }),
+            | UiLocation::TopbarAccount
+            | UiLocation::AppBanner => matches!(element, UiElement::Decoration { .. }),
             UiLocation::Hosted(_) => true,
             _ if self.is_action_location() => matches!(element, UiElement::Action { .. }),
             _ => false,

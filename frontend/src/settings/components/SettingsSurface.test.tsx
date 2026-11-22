@@ -2559,7 +2559,7 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     const surface = await screen.findByTestId("settings-surface");
     // CORE-183: the window's height less the top bar's, which stays above it.
     expect(surface).toHaveClass(
-      "h-[calc(100dvh/var(--app-zoom,1)_-_var(--h-topbar))]",
+      "h-[calc(100dvh/var(--app-zoom,1)_-_var(--h-topbar)_-_var(--h-appbanner,0px))]",
       "w-[calc(100vw/var(--app-zoom,1))]",
     );
     const rail = screen.getByRole("tablist", { name: "Settings categories" });

@@ -31,6 +31,11 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   (`~/.pdo/update/daemon-<port>.json`) once it serves. Test seams: `PDO_UPDATE_UPGRADE_COMMAND`
   (the command an Update runs), `PDO_UPDATE_VERIFY_TIMEOUT` (seconds) and
   `PDO_UPDATE_INSTALLED_VERSION` (the version the daemon declares).
+- Seam for extensions: a new UI location, `app/banner`, the application banner. An extension's
+  component shows as a full-width line under the top bar, on every screen, drawn with the kit's
+  `Banner` (a status icon, a fact, one action), one under the other in the catalogue's order. It
+  decides alone whether to show: rendering nothing takes no room. The person cannot dismiss it.
+  Settings, Stats and the extensions' full-window pages open under it.
 
 ## 2.88.0
 

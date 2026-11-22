@@ -40,4 +40,11 @@ describe("the extensions store", () => {
     expect(next).not.toHaveBeenCalled();
     expect(useExtensionsStore.getState()).toMatchObject({ extensions: [], started: false, loaded: false });
   });
+
+  it("keeps a load that no reset overtook", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([ENTRY]), { status: 200 })));
+    setBundleLoader(async () => ({}));
+    await useExtensionsStore.getState().load();
+    expect(useExtensionsStore.getState().extensions.map((e) => [e.entry.id, e.status])).toEqual([["test", "ready"]]);
+  });
 });

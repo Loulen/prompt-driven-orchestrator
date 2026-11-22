@@ -1,5 +1,6 @@
 import { Moon, Plus, Sun } from "lucide-react";
 import type { DecorationContext } from "../shared/extensions/contract";
+import ExtensionAppBanner from "../shared/extensions/ExtensionAppBanner";
 import ExtensionBanner from "../shared/extensions/ExtensionBanner";
 import ExtensionDecorations from "../shared/extensions/ExtensionDecorations";
 import ExtensionNavigation from "../shared/extensions/ExtensionNavigation";
@@ -25,7 +26,8 @@ const ACCOUNT_ITEM: Omit<DecorationContext, "location" | "run" | "project"> = { 
  * entries, the command field in the middle, then the right-hand group: the
  * extensions' `topbar/end` icons, New run, Stats, Settings, the Dark mode, and the
  * extensions' `topbar/account` components (an avatar menu, say). Under it, the
- * banner of the extensions whose interface could not be loaded, and the
+ * extensions' application banners (`app/banner`, full width, on every screen),
+ * the banner of the extensions whose interface could not be loaded, and the
  * extension page open (by its entry or its deep link), under the bar like
  * Settings and Stats (CORE-183); over everything, the command palette, and
  * the Bug report window it opens.
@@ -92,6 +94,8 @@ export default function TopBar({
           />
         </div>
       </header>
+      {/* `app/banner`: the extensions' full-width banners, nothing when none shows. */}
+      <ExtensionAppBanner />
       {/* ADR-0081: a UI bundle built for another React is not loaded: the banner says so. */}
       <ExtensionBanner />
       <ExtensionPageHost />

@@ -784,6 +784,35 @@ export function RunsEmptyNote() {
   );
 }
 
+// `app/banner` (0.31): a full-width banner under the top bar, the kit's
+// `Banner` in the awaiting tone with one action, which opens the extension's
+// Settings page. It renders nothing (and the location takes no room) until
+// `PUT /ext/test/banner` shows it; it is read when the interface loads.
+export function AppBanner() {
+  const state = useJson("/ext/test/banner");
+  if (state?.shown !== true) return null;
+  return h(
+    "div",
+    { "data-testid": "test-app-banner" },
+    h(Banner, {
+      tone: "awaiting",
+      title: "Test banner of the core's test extension",
+      text: "An instance-wide notice",
+      actions: h(
+        Button,
+        {
+          size: "sm",
+          "data-testid": "test-app-banner-action",
+          onClick: () => {
+            window.location.hash = "#/ext/test/settings/page/banner";
+          },
+        },
+        "Open test settings",
+      ),
+    }),
+  );
+}
+
 // `run/item/people` (0.12): who has the row's Run open, live, as the kit's
 // stack (0.20): each named as the extensions name its Actor (its kind
 // otherwise), ringed as present, « Viewing now » in its tooltip.

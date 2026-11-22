@@ -5,6 +5,25 @@
  */
 
 @layer components {
+  /* ------------------------------------------- application banner (`app/banner`) */
+  /* full-width lines under the top bar, one per contribution; a contribution that renders
+     nothing leaves an empty row, which takes no room */
+  .sh-appbanner {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    min-width: 0;
+    background: var(--surface-1);
+  }
+  .sh-appbanner__item {
+    min-width: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .sh-appbanner__item:empty,
+  .sh-appbanner:not(:has(> .sh-appbanner__item:not(:empty))) {
+    display: none;
+  }
+
   /* ---------------------------------------------------------------- top bar, 36 px */
   .sh-tb {
     display: flex;

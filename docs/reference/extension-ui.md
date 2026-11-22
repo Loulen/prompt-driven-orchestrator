@@ -159,6 +159,21 @@ selected Run, or when its repository belongs to no Projet.
   `@pdo/extension-ui` ([below](#the-actors-names)).
 - **Since**: 0.8.
 
+### `app/banner`
+
+- **Accepts**: decoration.
+- **Renders**: the application banner, a full-width line **under the top bar**, above every screen
+  of the interface (the Runs, a Run's detail, Settings, Stats, an extension's page: a full-window
+  surface opens under the banner, not over it). One line per contribution, in the catalogue's
+  order, each behind its extension's error boundary (a failing one becomes a `Banner` in the failed
+  tone naming the extension). The component draws itself with the kit's `Banner` of
+  `@pdo/extension-ui` (a status icon, a short fact, the detail, one action) and **decides alone
+  whether to show**: when it renders nothing, its line takes no room and the layout is the one
+  without contribution. The person cannot dismiss it: keep it for a notice about the whole
+  instance, and show it only while it holds.
+- **Context**: `DecorationContext`, `entity` = `null`.
+- **Since**: 0.31.
+
 ### `settings`
 
 - **Accepts**: section.
@@ -374,10 +389,13 @@ unchanged.
 
 A decoration location renders the marks the extensions put on one item, side by side, each behind
 its own error boundary (a failing one becomes a small « ! » whose tooltip names the extension).
+`app/banner` differs: it stacks full-width lines, and a failing one becomes a failed `Banner`
+([above](#appbanner)).
 **Without a contribution nothing is rendered at all**: the item keeps its layout. Several wrap
 rather than push the item's own text out, except on the rows of the left panel's lists, which
 keep one line and end in an ellipsis. The component receives `entity` and `context`:
-`DecorationContext` = `LocationContext` + `entity` (`EntityContext`, `null` on the status bar).
+`DecorationContext` = `LocationContext` + `entity` (`EntityContext`, `null` on the status bar and
+the application banner).
 Its `when` clause sees the entity: `When::has("entity.attributes.test/note")` marks only the items
 that carry the attribute.
 

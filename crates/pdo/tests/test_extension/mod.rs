@@ -69,6 +69,10 @@
 //!   (0.9): `SettingsPage`, which shows its deep link's path.
 //! - `runs/empty` (0.11): `RunsEmptyNote`, a line saying why the Runs list is
 //!   empty, and a Copy button through `copyToClipboard` of `@pdo/extension-ui`.
+//! - `app/banner` (0.31, `banner.rs`): `AppBanner`, a kit `Banner` (tone
+//!   awaiting) under the top bar whose action opens the extension's Settings
+//!   page at `banner`; it renders nothing until `PUT /ext/test/banner`
+//!   (`{"shown": true}`) shows it (read when the interface loads).
 //! - `review/composer` (0.14): `tags`, a source of completion opened by `#`
 //!   (`suggestTags`: `bug`, `perf`, `review-later` and `run-<the Run's id>`),
 //!   whose inserted `#tag` renders as a chip (`TagChip`).
@@ -157,6 +161,7 @@
 //!
 //! [`Host`]: pdo::extension_api::Host
 
+pub mod banner;
 pub mod bug_reports;
 pub mod creation;
 pub mod gate;
@@ -477,6 +482,8 @@ pub struct Control {
     pub inbox: palette::Inbox,
     /// The bug reports it received (API 0.28).
     pub bug_reports: bug_reports::BugReports,
+    /// Whether its application banner shows (API 0.31).
+    pub banner: banner::AppBanner,
 }
 
 impl Default for Control {
@@ -496,6 +503,7 @@ impl Default for Control {
             creation: creation::Creation::default(),
             inbox: palette::Inbox::default(),
             bug_reports: bug_reports::BugReports::default(),
+            banner: banner::AppBanner::default(),
         }
     }
 }
@@ -979,6 +987,14 @@ impl Extension for TestExtension {
                 "runs-empty",
                 "Why empty",
                 "RunsEmptyNote",
+            ))
+            // 0.31: a full-width banner under the top bar, shown only while
+            // `PUT /ext/test/banner` says so (`banner.rs`).
+            .contribute(UiContribution::decoration(
+                UiLocation::AppBanner,
+                "app-banner",
+                "Test banner",
+                "AppBanner",
             ))
             // 0.12: who has the row's Run open.
             .contribute(UiContribution::decoration(

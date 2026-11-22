@@ -54,6 +54,15 @@ pub enum UiLocation {
     /// opening the menu of the signed-in person, say). Since 0.8.
     #[serde(rename = "topbar/account")]
     TopbarAccount,
+    /// The application banner: a full-width line under the top bar, above
+    /// every screen of the interface: the component of a
+    /// [`UiElement::Decoration`] per contribution, rendered as is, one under
+    /// the other in the catalogue's order. The component draws itself (the
+    /// kit's `Banner`) and decides alone whether to show: when it renders
+    /// nothing, the location takes no room. The person cannot dismiss it.
+    /// Since 0.31.
+    #[serde(rename = "app/banner")]
+    AppBanner,
     /// The Extensions page of the Settings: a [`UiElement::Section`] per
     /// contribution. The 0.1 `SettingsPanel` slot.
     #[serde(rename = "settings")]
@@ -256,6 +265,7 @@ impl UiLocation {
         UiLocation::TopbarStart,
         UiLocation::TopbarEnd,
         UiLocation::TopbarAccount,
+        UiLocation::AppBanner,
         UiLocation::Settings,
         UiLocation::RunsFilter,
         UiLocation::RunDetail,
@@ -305,6 +315,7 @@ impl UiLocation {
             UiLocation::TopbarStart => "topbar/start",
             UiLocation::TopbarEnd => "topbar/end",
             UiLocation::TopbarAccount => "topbar/account",
+            UiLocation::AppBanner => "app/banner",
             UiLocation::Settings => "settings",
             UiLocation::RunsFilter => "runs/filter",
             UiLocation::RunDetail => "run/detail",
@@ -438,6 +449,34 @@ mod tests {
         assert!(!UiLocation::RunsEmpty.accepts(&section));
         assert!(!UiLocation::RunsEmpty.accepts(&action));
         assert!(!UiLocation::RunsEmpty.is_action_location());
+    }
+
+    #[test]
+    fn the_application_banner_takes_decorations_only() {
+        assert_eq!(UiLocation::AppBanner.id(), "app/banner");
+        assert!(UiLocation::ALL.contains(&UiLocation::AppBanner));
+        assert_eq!(
+            serde_json::to_value(UiLocation::AppBanner).unwrap(),
+            "app/banner"
+        );
+        let decoration = UiElement::Decoration {
+            component: "D".into(),
+        };
+        let section = UiElement::Section {
+            component: "S".into(),
+        };
+        let action = UiElement::Action {
+            command: "c".into(),
+        };
+        let page = UiElement::Page {
+            component: "P".into(),
+            icon: None,
+        };
+        assert!(UiLocation::AppBanner.accepts(&decoration));
+        assert!(!UiLocation::AppBanner.accepts(&section));
+        assert!(!UiLocation::AppBanner.accepts(&action));
+        assert!(!UiLocation::AppBanner.accepts(&page));
+        assert!(!UiLocation::AppBanner.is_action_location());
     }
 
     #[test]

@@ -23,7 +23,7 @@ use pdo_workspace::adapters::sqlite::SqliteProjects;
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
-pub use config::{DaemonConfig, ExtensionHostHandle};
+pub use config::{DaemonConfig, ExtensionHostHandle, UpdateSeams};
 pub use handle::DaemonHandle;
 
 use crate::contexts::{ContextResources, Contexts};
@@ -105,6 +105,7 @@ pub async fn serve_with_config(
         install_method_override: config.install_method_override,
         supervision_override: config.supervision_override,
         relaunch_command: config.relaunch_command.clone(),
+        update_seams: config.update_seams.clone(),
         service_health_override: config.service_health_override,
         tmux_cmd_override: config.tmux_cmd_override.clone(),
         allowed_ws_origins: config.allowed_ws_origins.clone(),
@@ -206,6 +207,9 @@ pub async fn serve_with_config(
     // Must stay DETACHED and posted AFTER `tokio::spawn(axum::serve(...))`: see
     // `background::start_detached`.
     background::start_detached(&stats, &platform, &settings, config.run_update_check_loop);
+    // The daemon serves: the executor of an Update waits for this marker after
+    // the restart (Retour automatique).
+    platform.announce_ready();
 
     Ok(DaemonHandle {
         addr: bound_addr,

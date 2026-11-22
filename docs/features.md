@@ -314,6 +314,13 @@ with your install method and reloads the page. Settings › General › Version 
 installed and latest versions (read from the public repository's releases), your install method and
 the command it runs. See [cli.md](reference/cli.md).
 
+An update that breaks the instance undoes itself. Before the command runs, PDO keeps a snapshot of
+its databases (its own and its extensions') and of the binary. The update only counts as done once
+the restarted daemon answers in the new version, within 90 s. Otherwise PDO puts the previous binary
+and its data back and restarts it. The waiting screen then says « Update failed · back on vY » with
+the reason, and Version & update shows the attempt as « rolled back », with its log. Anything
+written while the update command ran is lost on a rollback.
+
 Decisions: [ADR-0019](adr/0019-persistent-daemon-service-unit.md).
 
 ## How PDO works

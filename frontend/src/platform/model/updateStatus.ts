@@ -1,4 +1,5 @@
 import type { UpdateStatus } from "./update";
+import type { UpdateAttempt } from "../../shared/generated/UpdateAttempt";
 import { brandName, CORE_NAME } from "../../shared/ui/brand/brand";
 
 /**
@@ -108,3 +109,23 @@ export const SUPERVISION_LABEL: Record<UpdateStatus["supervision"], string> = {
   launchd: "launchd agent",
   none: "manual (no service)",
 };
+
+/** The chip of the last attempt: `rolled back`, `failed (exit 3)`, `succeeded`, `running`. */
+export function attemptChipLabel(a: UpdateAttempt): string {
+  if (a.status === "failed" && a.rolled_back) return "rolled back";
+  if (a.status === "failed" && a.exit_code != null) return `failed (exit ${a.exit_code})`;
+  return a.status;
+}
+
+/**
+ * Why the last attempt failed, short enough for its row: `did not answer within 90 s`
+ * for a version that never came up, else the first sentence of the reason; `null`
+ * without a reason.
+ */
+export function shortAttemptReason(a: UpdateAttempt): string | null {
+  if (!a.reason) return null;
+  const silent = /did not answer within \d+ s/.exec(a.reason);
+  if (silent) return silent[0];
+  const first = a.reason.split(/(?<=\.)\s/)[0] ?? a.reason;
+  return first.replace(/\.$/, "");
+}

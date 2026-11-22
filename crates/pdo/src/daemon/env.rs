@@ -80,6 +80,18 @@ impl DaemonConfig {
             .and_then(|v| pdo_platform::domain::install::InstallMethod::parse(&v)),
             supervision_override: None,
             relaunch_command: None,
+            update_seams: super::config::UpdateSeams {
+                upgrade_command: std::env::var("PDO_UPDATE_UPGRADE_COMMAND")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty()),
+                verify_timeout_secs: std::env::var("PDO_UPDATE_VERIFY_TIMEOUT")
+                    .ok()
+                    .and_then(|s| s.trim().parse().ok())
+                    .filter(|s: &u64| *s > 0),
+                installed_version: std::env::var("PDO_UPDATE_INSTALLED_VERSION")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty()),
+            },
             // No env seam: the loop is core daemon behaviour; only the layer-3
             // test literals opt out.
             run_trigger_scheduler_loop: true,

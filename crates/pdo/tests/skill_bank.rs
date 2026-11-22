@@ -511,6 +511,7 @@ async fn the_bank_survives_a_daemon_restart() {
         install_method_override: None,
         supervision_override: None,
         relaunch_command: None,
+        update_seams: Default::default(),
         allowed_ws_origins: Vec::new(),
         run_trigger_scheduler_loop: false,
         nested_daemon: true,

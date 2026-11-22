@@ -53,6 +53,23 @@ pub struct UpdateAttempt {
     /// daemon came back on the same version » from a real update.
     #[serde(default)]
     pub from_version: String,
+    /// The newest version known when the attempt started, the one it aims at;
+    /// `None` when no check had found one.
+    #[serde(default)]
+    pub to_version: Option<String>,
+    /// Why the attempt failed, in a sentence a human reads (« v2.0.0 did not
+    /// answer within 90 s after the restart. … »); `None` while running, after
+    /// a success, or when only the exit code is known.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// The Retour automatique put the previous binary and its databases back.
+    #[serde(default)]
+    pub rolled_back: bool,
+    /// How long the executor waits for the restarted daemon to answer before
+    /// it rolls back; `None` on a record older than the Retour automatique.
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub verify_timeout_secs: Option<u64>,
 }
 
 impl UpdateAttempt {
@@ -166,6 +183,10 @@ mod tests {
             supervision: Supervision::None,
             log_path: PathBuf::from("/tmp/a1.log"),
             from_version: "1.0.0".into(),
+            to_version: None,
+            reason: None,
+            rolled_back: false,
+            verify_timeout_secs: None,
         }
     }
 
@@ -230,6 +251,17 @@ mod tests {
         assert_eq!(a.status, AttemptStatus::Failed);
         assert_eq!(a.exit_code, Some(3));
         assert_eq!(a.finished_at.as_deref(), Some("t1"));
+    }
+
+    #[test]
+    fn a_record_older_than_the_rollback_reads_with_no_reason() {
+        let old = r#"{"schema":"update-attempt-v1","attempt_id":"a","status":"failed",
+            "started_at":"t","method":"homebrew","command":"c","supervision":"none",
+            "log_path":"/l","from_version":"1.0.0"}"#;
+        let a: UpdateAttempt = serde_json::from_str(old).unwrap();
+        assert_eq!(a.reason, None);
+        assert!(!a.rolled_back);
+        assert_eq!(a.verify_timeout_secs, None);
     }
 
     #[test]

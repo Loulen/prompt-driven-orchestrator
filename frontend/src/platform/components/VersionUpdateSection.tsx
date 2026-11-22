@@ -7,12 +7,14 @@ import {
   SUPERVISION_LABEL,
   absoluteTime,
   announceUpdateStatus,
+  attemptChipLabel,
   canOfferUpdate,
   channelLabel,
   coreLabel,
   installedProductLabel,
   newerAvailable,
   relativeTime,
+  shortAttemptReason,
   updateNotOfferedReason,
   upToDate,
 } from "../model/updateStatus";
@@ -49,6 +51,10 @@ const UPDATE_GESTURES: OperationQuestion[] = [
  *
  * A distribution (#24) shows its own name and version, then the core's; Update is
  * offered only when a newer release is known and the daemon would run it.
+ *
+ * The last attempt's row (#699) says how it ended; after a Retour automatique
+ * (CORE-314) its chip reads « rolled back » and the short reason replaces the
+ * method, the full reason in the tooltip and the log one click away.
  *
  * The title is signed « by Acogni » (CORE-225), and Installed names the product
  * with the mark of the Marque: `PDO 2.76.0`, `Acogni Driver 1.4.0 (core PDO 2.76.0)`.
@@ -346,17 +352,18 @@ export default function VersionUpdateSection({
                       : "awaiting"
                 }
               >
-                <span data-testid="setting-version-last-attempt-status">
-                  {status.last_attempt.status === "failed" && status.last_attempt.exit_code != null
-                    ? `failed (exit ${status.last_attempt.exit_code})`
-                    : status.last_attempt.status}
-                </span>
+                <span data-testid="setting-version-last-attempt-status">{attemptChipLabel(status.last_attempt)}</span>
               </Chip>
-              <span className="set-ellipsis" title={absoluteTime(status.last_attempt.started_at)}>
+              <span
+                className="set-ellipsis"
+                title={status.last_attempt.reason ?? absoluteTime(status.last_attempt.started_at)}
+              >
                 {relativeTime(status.last_attempt.started_at)}
-                <span className="set-faint">
+                <span className="set-faint" data-testid="setting-version-last-attempt-detail">
                   {" "}
-                  · from v{status.last_attempt.from_version} · {INSTALL_METHOD_LABEL[status.last_attempt.method]}
+                  ·{" "}
+                  {shortAttemptReason(status.last_attempt) ??
+                    `from v${status.last_attempt.from_version} · ${INSTALL_METHOD_LABEL[status.last_attempt.method]}`}
                 </span>
               </span>
               <button

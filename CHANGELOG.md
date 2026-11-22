@@ -14,6 +14,110 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- Every change you send to the daemon now shows while it runs. Its button turns busy (a spinner,
+  "Approving…", "Launching…", "Saving…") and takes no second click. The status bar's daemon
+  icon, now right of the sessions counter, joins the connection and the work in flight: a grey
+  check when connected and idle, a turning ruby ring with the number of operations past 300 ms
+  (their name, or their list with durations, on hover or focus), a red cross when the connection
+  is lost. A failure always shows a toast with the daemon's message; a success shows one only when
+  it took more than 2 s. Reads and refreshes stay silent.
+- Seam for extensions: `@pdo/extension-ui` exports `trackOperation(label, work, { done, icon })`,
+  so the mutations an extension sends with its own client show in the same indicator and toasts,
+  and `usePending()`, which turns a `Button` busy through its new `pending` prop.
+- A confirmation now waits for its action: archiving a Run, forgetting one, deleting a Pipeline
+  or a Trigger. While the daemon works, its button spins ("Archiving…") and the window is locked:
+  Cancel, its cross, Escape and a click outside do nothing. It closes once the action succeeds. A
+  failure keeps it open, with the daemon's message in a banner at its top and the button turned
+  "Retry"; the failure shows there only, not in a toast as well. The archive confirmation takes
+  the kit's layout: the consequence on one line, the Run id in mono, and for a Run still live the
+  id's suffix to type. Destroying a loop by deleting its last edge asks in the same window.
+- Seam for extensions: `ConfirmDialog` of `@pdo/extension-ui` waits for an `onConfirm` that hands
+  back a promise (`pendingLabel`, `failedTitle`, `retryLabel`, `confirmDisabled`), and `Modal`
+  takes `locked` while its action runs.
+- A node shares its Run's worktree by default; isolation is an opt-in. A new `agent` added on the
+  canvas starts on Shared in the inspector's Worktree choice and is saved with
+  `isolated_worktree: false`, like a `script`. Tick Isolated for a node that runs in parallel with
+  another one, or whose commits must be attributed to it alone. The node library follows the same
+  default. A NodeRun already started keeps the worktree it started in.
+- The Public URL always has a value: without one set in Settings or in `PDO_PUBLIC_URL`, it is the
+  machine's address, `http://<host name>:<port>` (`http://localhost:<port>` for a daemon bound to
+  the loopback). Agents receive it in `PDO_PUBLIC_URL` and their preamble, and `pdo page mount`,
+  the copied link of a mounted page and the `/metrics` address in Settings › Telemetry use it, so
+  their links open from another machine with nothing to set. Settings › General shows the address
+  an empty field uses as its placeholder, and the setting's tooltip names its source.
+- `GET /settings` discloses `public_url.default`, and `public_url.effective` is never `null`;
+  `POST /pages` always returns `public_url`.
+- **Report a bug**: a new window, opened from Ctrl+K (Support group, "Report a bug…") and from
+  Settings › Diagnostics › Bug report, files a bug of the core on its public GitHub issues. It
+  takes a description and a screenshot (paste it anywhere in the window, or choose a file), joins
+  the details of a Run (statuses, failure reasons, durations) and the structure of a Pipeline,
+  both checked and prefilled from the selection, and always the version, the daemon's OS and the
+  installed harnesses. Prompts never go to the public tracker. The Preview tab shows the markdown
+  that leaves and can be edited. "Open GitHub issue" opens a new issue on the "Bug report"
+  template, its fields prefilled, and copies the screenshot to the clipboard to paste it there.
+- The repository has an issue template, "Bug report" (`.github/ISSUE_TEMPLATE/bug_report.yml`),
+  with the same fields, labelled `needs-triage`.
+- **Report a bug: Send to**. The window's footer chooses where the report goes: "PDO issues
+  (GitHub)" first, then the destinations the extensions offer you, grouped under each extension's
+  name. Toward an extension's destination, "Include prompts" can be checked when it accepts them,
+  and "Send to <destination>" sends the report (text, fields, screenshot, prompts if checked)
+  through the daemon: the window stays locked while it leaves, then closes on a toast naming the
+  item created, with "Open" to follow its link; a refusal stays in the window. The last
+  destination is remembered per Actor and preselected next time.
+- Extension API: an extension declares Destinations de bug report
+  (`Extension::bug_report_destinations`, per Actor: id, label, icon, whether it accepts prompts)
+  and receives the reports sent there (`Extension::receive_bug_report`), answering the reference
+  and the link of what it created (`BugReport`, `BugReportFields`, `Screenshot`,
+  `BugReportSent`). `ExtensionContext` moves to its own module; its path from the crate root is
+  unchanged.
+- Routes and CLI: `GET /bug-report/destinations` (`pdo bug-report destinations`), `POST
+  /bug-report` (`pdo bug-report send <extension>/<id> --description … [--screenshot …]`) and
+  `PUT /bug-report/last` (`pdo bug-report last <destination>`).
+- `GET /settings` states the daemon's system in `host_os` (`Linux 6.8.0 (x86_64)`).
+- Kit (`@pdo/extension-ui`): `Select` takes `invalid` (the failed edge, `aria-invalid`), and a
+  `Tabs` item takes `mark`, a short word after its label (`edited`).
+- **The support agent knows the extensions and reads the core's code.** Its folder receives the
+  skills PDO manages, its own and those the extensions bring, as a Run's worktree does: an
+  extension's skill is how the agent learns to use it, even closed source. It reads the core's code
+  at the exact version of the instance: `pdo support source` (`POST /sessions/support/source`)
+  clones the public repository at the instance's tag under `~/.pdo/core-source/` the first time,
+  then reuses it; a version without a public tag is never cloned, and the agent is told.
+  `PDO_CORE_SOURCE_URL` points the clone at a mirror.
+- **Support agent.** Ctrl+K has a Support group: "Open support agent…", or "Ask the support
+  agent: <your text>". The "Open support agent" window picks the agent (an agentic profile, or
+  Custom: harness, model, effort; only harnesses installed on this machine) with an optional
+  question; your last choice is preselected and Enter opens it. The agent opens in the enlarged
+  terminal, with your rights, outside any Run; Minimize or Escape hides it and it goes on, End
+  session ends it. With an agent open, "Ask the open agent" sends the question straight into it,
+  and choosing another agent asks before it closes the open one. It survives a page reload. Routes
+  `GET`/`POST`/`DELETE /sessions/support` and `POST /sessions/support/ask`; command
+  `pdo support open|ask|status|close`.
+- **Support agent in the status bar, and its idle timeout.** The right end of the status bar holds
+  the support agent's entry: the logo of its harness while one lives (a click brings its terminal
+  back, an amber dot says it answered since you minimized it), "?" otherwise (a click opens the
+  "Open support agent" window). With no input for the "Support agent idle timeout" (Settings ›
+  General › Runtime limits, 1800 s by default, its own setting), every tab asks "Still there?"
+  with a 60 s countdown: Keep (the default, and Escape) keeps it, Close now ends it, no answer
+  closes it and a toast says so. New: route `POST /sessions/support/keep`, command
+  `pdo support keep`, setting `support_idle_timeout_secs` (env `PDO_SUPPORT_IDLE_TIMEOUT_SECS`),
+  `/ws` message `support_agent_changed`; `GET /sessions/support` adds `last_input_at`,
+  `last_output_at` and `still_there`.
+- Harnesses show their logo (Claude, GitHub Copilot, opencode, pi; the initial on the harness's
+  colour for any other): in the agent picker of New run, of a node and of Settings, and in the
+  node header, where it replaces the harness's letter.
+- Extension API: `SessionKind::SupportAgent`, the kind of the support agent's session in the launch
+  hooks and the session events.
+
+### Upgrading
+
+- An `agent` node whose YAML has no `isolated_worktree` line now works in the Run's shared
+  worktree instead of a sub-worktree of its own, in pipelines and in node library entries alike.
+  No migration rewrites them. Add `isolated_worktree: true` to the nodes that need their own
+  worktree, typically agents that run on parallel branches. Pipelines saved from the editor already
+  state the line and keep their meaning.
+
 ## 2.87.1
 
 - A modal no longer closes when a press starts inside it and the release ends over the backdrop,
@@ -76,118 +180,6 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   under Classic without copying its values. The served logos (`/shared/brand/mark.svg`,
   `lockup.svg`) paint their accent with it instead of `--primary`: a page that recoloured an
   inlined logo through `--primary` no longer does.
-## Unreleased
-
-- Every change you send to the daemon now shows while it runs. Its button turns busy (a spinner,
-  "Approving…", "Launching…", "Saving…") and takes no second click. The status bar's daemon
-  icon, now right of the sessions counter, joins the connection and the work in flight: a grey
-  check when connected and idle, a turning ruby ring with the number of operations past 300 ms
-  (their name, or their list with durations, on hover or focus), a red cross when the connection
-  is lost. A failure always shows a toast with the daemon's message; a success shows one only when
-  it took more than 2 s. Reads and refreshes stay silent.
-- Seam for extensions: `@pdo/extension-ui` exports `trackOperation(label, work, { done, icon })`,
-  so the mutations an extension sends with its own client show in the same indicator and toasts,
-  and `usePending()`, which turns a `Button` busy through its new `pending` prop.
-- A confirmation now waits for its action: archiving a Run, forgetting one, deleting a Pipeline
-  or a Trigger. While the daemon works, its button spins ("Archiving…") and the window is locked:
-  Cancel, its cross, Escape and a click outside do nothing. It closes once the action succeeds. A
-  failure keeps it open, with the daemon's message in a banner at its top and the button turned
-  "Retry"; the failure shows there only, not in a toast as well. The archive confirmation takes
-  the kit's layout: the consequence on one line, the Run id in mono, and for a Run still live the
-  id's suffix to type. Destroying a loop by deleting its last edge asks in the same window.
-- Seam for extensions: `ConfirmDialog` of `@pdo/extension-ui` waits for an `onConfirm` that hands
-  back a promise (`pendingLabel`, `failedTitle`, `retryLabel`, `confirmDisabled`), and `Modal`
-  takes `locked` while its action runs.
-## Unreleased
-
-- A node shares its Run's worktree by default; isolation is an opt-in. A new `agent` added on the
-  canvas starts on Shared in the inspector's Worktree choice and is saved with
-  `isolated_worktree: false`, like a `script`. Tick Isolated for a node that runs in parallel with
-  another one, or whose commits must be attributed to it alone. The node library follows the same
-  default. A NodeRun already started keeps the worktree it started in.
-
-### Upgrading
-
-- An `agent` node whose YAML has no `isolated_worktree` line now works in the Run's shared
-  worktree instead of a sub-worktree of its own, in pipelines and in node library entries alike.
-  No migration rewrites them. Add `isolated_worktree: true` to the nodes that need their own
-  worktree, typically agents that run on parallel branches. Pipelines saved from the editor already
-  state the line and keep their meaning.
-## Unreleased
-
-- The Public URL always has a value: without one set in Settings or in `PDO_PUBLIC_URL`, it is the
-  machine's address, `http://<host name>:<port>` (`http://localhost:<port>` for a daemon bound to
-  the loopback). Agents receive it in `PDO_PUBLIC_URL` and their preamble, and `pdo page mount`,
-  the copied link of a mounted page and the `/metrics` address in Settings › Telemetry use it, so
-  their links open from another machine with nothing to set. Settings › General shows the address
-  an empty field uses as its placeholder, and the setting's tooltip names its source.
-- `GET /settings` discloses `public_url.default`, and `public_url.effective` is never `null`;
-  `POST /pages` always returns `public_url`.
-## Unreleased
-
-- **Report a bug**: a new window, opened from Ctrl+K (Support group, "Report a bug…") and from
-  Settings › Diagnostics › Bug report, files a bug of the core on its public GitHub issues. It
-  takes a description and a screenshot (paste it anywhere in the window, or choose a file), joins
-  the details of a Run (statuses, failure reasons, durations) and the structure of a Pipeline,
-  both checked and prefilled from the selection, and always the version, the daemon's OS and the
-  installed harnesses. Prompts never go to the public tracker. The Preview tab shows the markdown
-  that leaves and can be edited. "Open GitHub issue" opens a new issue on the "Bug report"
-  template, its fields prefilled, and copies the screenshot to the clipboard to paste it there.
-- The repository has an issue template, "Bug report" (`.github/ISSUE_TEMPLATE/bug_report.yml`),
-  with the same fields, labelled `needs-triage`.
-- **Report a bug: Send to**. The window's footer chooses where the report goes: "PDO issues
-  (GitHub)" first, then the destinations the extensions offer you, grouped under each extension's
-  name. Toward an extension's destination, "Include prompts" can be checked when it accepts them,
-  and "Send to <destination>" sends the report (text, fields, screenshot, prompts if checked)
-  through the daemon: the window stays locked while it leaves, then closes on a toast naming the
-  item created, with "Open" to follow its link; a refusal stays in the window. The last
-  destination is remembered per Actor and preselected next time.
-- Extension API: an extension declares Destinations de bug report
-  (`Extension::bug_report_destinations`, per Actor: id, label, icon, whether it accepts prompts)
-  and receives the reports sent there (`Extension::receive_bug_report`), answering the reference
-  and the link of what it created (`BugReport`, `BugReportFields`, `Screenshot`,
-  `BugReportSent`). `ExtensionContext` moves to its own module; its path from the crate root is
-  unchanged.
-- Routes and CLI: `GET /bug-report/destinations` (`pdo bug-report destinations`), `POST
-  /bug-report` (`pdo bug-report send <extension>/<id> --description … [--screenshot …]`) and
-  `PUT /bug-report/last` (`pdo bug-report last <destination>`).
-- `GET /settings` states the daemon's system in `host_os` (`Linux 6.8.0 (x86_64)`).
-- Kit (`@pdo/extension-ui`): `Select` takes `invalid` (the failed edge, `aria-invalid`), and a
-  `Tabs` item takes `mark`, a short word after its label (`edited`).
-## Unreleased
-
-- **The support agent knows the extensions and reads the core's code.** Its folder receives the
-  skills PDO manages, its own and those the extensions bring, as a Run's worktree does: an
-  extension's skill is how the agent learns to use it, even closed source. It reads the core's code
-  at the exact version of the instance: `pdo support source` (`POST /sessions/support/source`)
-  clones the public repository at the instance's tag under `~/.pdo/core-source/` the first time,
-  then reuses it; a version without a public tag is never cloned, and the agent is told.
-  `PDO_CORE_SOURCE_URL` points the clone at a mirror.
-- **Support agent.** Ctrl+K has a Support group: "Open support agent…", or "Ask the support
-  agent: <your text>". The "Open support agent" window picks the agent (an agentic profile, or
-  Custom: harness, model, effort; only harnesses installed on this machine) with an optional
-  question; your last choice is preselected and Enter opens it. The agent opens in the enlarged
-  terminal, with your rights, outside any Run; Minimize or Escape hides it and it goes on, End
-  session ends it. With an agent open, "Ask the open agent" sends the question straight into it,
-  and choosing another agent asks before it closes the open one. It survives a page reload. Routes
-  `GET`/`POST`/`DELETE /sessions/support` and `POST /sessions/support/ask`; command
-  `pdo support open|ask|status|close`.
-- **Support agent in the status bar, and its idle timeout.** The right end of the status bar holds
-  the support agent's entry: the logo of its harness while one lives (a click brings its terminal
-  back, an amber dot says it answered since you minimized it), "?" otherwise (a click opens the
-  "Open support agent" window). With no input for the "Support agent idle timeout" (Settings ›
-  General › Runtime limits, 1800 s by default, its own setting), every tab asks "Still there?"
-  with a 60 s countdown: Keep (the default, and Escape) keeps it, Close now ends it, no answer
-  closes it and a toast says so. New: route `POST /sessions/support/keep`, command
-  `pdo support keep`, setting `support_idle_timeout_secs` (env `PDO_SUPPORT_IDLE_TIMEOUT_SECS`),
-  `/ws` message `support_agent_changed`; `GET /sessions/support` adds `last_input_at`,
-  `last_output_at` and `still_there`.
-- Harnesses show their logo (Claude, GitHub Copilot, opencode, pi; the initial on the harness's
-  colour for any other): in the agent picker of New run, of a node and of Settings, and in the
-  node header, where it replaces the harness's letter.
-- Extension API: `SessionKind::SupportAgent`, the kind of the support agent's session in the launch
-  hooks and the session events.
-
 ## 2.80.4
 
 - A Run whose Start is wired straight to End ends as soon as it starts: with no node to launch, it

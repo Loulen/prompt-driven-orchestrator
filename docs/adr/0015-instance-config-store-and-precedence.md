@@ -2,7 +2,7 @@
 
 > **Amendé par ADR-0046** : l'instance n'est plus le tier le plus haut pour tout réglage — le harnais agentique en compte deux au-dessous d'elle (Run, Projet) — et son défaut de modèle devient un défaut **par harnais**. La précédence `stored → env → default` de chaque réglage est inchangée.
 
-> **Amendé par ADR draft-la-public-url-a-un-defaut** : la Public URL a un défaut, l'adresse de la machine ; sa précédence devient `stored → env → default`.
+> **Amendé par ADR-0109** : la Public URL a un défaut, l'adresse de la machine ; sa précédence devient `stored → env → default`.
 
 **La valeur stockée par l'UI gagne sur la variable d'environnement, jamais l'inverse.** Une page de réglages qu'un env écrase silencieusement est un **no-op pour les opérateurs mêmes pour qui elle est construite** (l'install prod exporte typiquement `PDO_SESSION_CAP` via systemd) : ils changent la valeur, rien ne se passe, aucun feedback — pire qu'une absence de page. Les deux ordres gardent la suite de tests verte (aucun test n'écrit de stored), donc **les tests ne départagent pas** : c'est l'intention produit qui tranche. L'env devient un **bootstrap** consulté quand le stored est `NULL` ; le défaut est le plancher. Le risque symétrique — un opérateur qui *épingle* délibérément par env — est désamorcé par la **divulgation** : `GET /settings` renvoie par champ `{ effective, source, stored, env, default }` pour que l'UI **révèle** un env masqué plutôt que de l'ignorer en silence.
 

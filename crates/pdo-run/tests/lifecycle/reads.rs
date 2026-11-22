@@ -124,7 +124,7 @@ async fn websocket_receives_events() {
     }
 }
 
-/// Isolation opt-in (ADR draft-l-isolation-est-un-opt-in): a snapshot whose
+/// Isolation opt-in (ADR-0108): a snapshot whose
 /// `agent` states no isolation reads as shared, the type's default, like the
 /// spawn does.
 #[tokio::test]

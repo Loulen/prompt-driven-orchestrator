@@ -260,7 +260,7 @@ Provisioning (files to copy, commands to run) is declared once and frozen per ru
 
 Decisions: [ADR-0036](adr/0036-merge-back-resolved-in-the-node-favour.md),
 [ADR-0060](adr/0060-l-isolation-est-un-choix-du-node.md),
-[ADR draft-l-isolation-est-un-opt-in](adr/draft-l-isolation-est-un-opt-in.md),
+[ADR-0108](adr/0108-l-isolation-est-un-opt-in.md),
 [ADR-0061](adr/0061-le-provisionnement-de-worktree-est-declaratif-additif-et-gele-par-run.md).
 
 ### Live sessions

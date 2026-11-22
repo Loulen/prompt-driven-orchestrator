@@ -1,6 +1,6 @@
 # L'isolation est un choix du Node
 
-*Amendée par ADR draft-l-isolation-est-un-opt-in : un `agent` partage désormais le worktree du Run
+*Amendée par ADR-0108 : un `agent` partage désormais le worktree du Run
 par défaut, comme un `script` ; l'isolation est un opt-in de l'auteur. Le reste tient.*
 
 Les types `doc-only` et `code-mutating` prétendent décrire l'effet d'un Node alors que leur différence réelle est son répertoire de travail. PDO les remplace par le type `agent`, isolé par défaut dans un sous-worktree. L'auteur peut explicitement le faire travailler dans le worktree partagé du Run. Les Nodes `script` portent le même choix avec le défaut inverse, non isolé. Le Document de pipeline écrit toujours ce choix pour un `agent` ou un `script`, même lorsqu'il égale le défaut. Les Nodes structurels n'en portent aucune (le `merge`, seul type à isolation imposée, est retiré par ADR-0082). Cette rupture ne porte ni alias, ni migrateur, ni diagnostic propre aux anciens types : les pipelines existants seront migrés manuellement et un ancien type échouera comme toute valeur invalide.

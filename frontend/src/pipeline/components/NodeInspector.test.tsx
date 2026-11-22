@@ -1109,7 +1109,7 @@ describe("NodeInspector — Workspace (#653)", () => {
   });
 
   it("preselects Run worktree for an agent that states nothing", () => {
-    // Isolation is an opt-in (ADR draft-l-isolation-est-un-opt-in).
+    // Isolation is an opt-in (ADR-0108).
     seedTabWithReviewer(false);
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
     expect(screen.getByTestId("workspace-shared")).toHaveAttribute("aria-checked", "true");

@@ -111,7 +111,7 @@ export function useCanvasPlacement({
 
     const view = computeDropPosition();
     // A new node shares the Run worktree and states it: isolation is an opt-in
-    // the author makes in the inspector (ADR draft-l-isolation-est-un-opt-in).
+    // the author makes in the inspector (ADR-0108).
     let newNode: EditorNodeDef;
     switch (type) {
       case "script":

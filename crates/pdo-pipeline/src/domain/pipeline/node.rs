@@ -46,7 +46,7 @@ impl NodeType {
     }
 
     /// The isolation this type carries when the document says nothing (#653 /
-    /// ADR-0060, amended by ADR draft-l-isolation-est-un-opt-in): an `agent` and a
+    /// ADR-0060, amended by ADR-0108): an `agent` and a
     /// `script` share the Run worktree, isolation being the author's explicit
     /// choice; every other type carries no isolation setting at all, as
     /// structural nodes never run in a worktree of their own. `None` is what

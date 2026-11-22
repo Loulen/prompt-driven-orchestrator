@@ -881,7 +881,7 @@ async fn spawn_places_an_agent_by_its_isolation_and_freezes_it() {
     }
 }
 
-/// Isolation opt-in (ADR draft-l-isolation-est-un-opt-in): an `agent` whose
+/// Isolation opt-in (ADR-0108): an `agent` whose
 /// document says nothing about isolation works in the Run's worktree. Parsed
 /// from a YAML without the line, it spawns with no sub-worktree, and the start
 /// event freezes `false`.

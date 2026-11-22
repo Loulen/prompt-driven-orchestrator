@@ -89,7 +89,7 @@ beforeEach(() => {
 });
 
 /**
- * #653 / ADR-0060, amended by ADR draft-l-isolation-est-un-opt-in — the
+ * #653 / ADR-0060, amended by ADR-0108 — the
  * editor's initial values. Isolation is an opt-in: an Agent and a Script both
  * start in the Run worktree, written down at creation, never left implicit.
  */

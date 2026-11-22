@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.88.0
 
 - Every change you send to the daemon now shows while it runs. Its button turns busy (a spinner,
   "Approving…", "Launching…", "Saving…") and takes no second click. The status bar's daemon

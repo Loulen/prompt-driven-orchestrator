@@ -8,6 +8,7 @@ import { cx } from "./util";
 import { markFocusGivenBack } from "./focusGivenBack";
 import { Banner } from "./structure";
 import { failuresSaidByCaller } from "../../http/operations";
+import { useBackdropDismiss } from "./backdropDismiss";
 
 export interface ModalProps {
   title: React.ReactNode;
@@ -41,8 +42,8 @@ export interface ModalProps {
  * a 40 px footer. Mount it to open it, unmount it to close it. The focus goes
  * to the control marked `data-autofocus`, else to the dialog, and comes back
  * to what opened it; the rest of the page is inert. Escape and a click on the
- * backdrop close it unless `dismissable={false}` or while `locked`; Ctrl+Enter
- * runs `onSubmit`.
+ * backdrop (press and release both on it) close it unless `dismissable={false}`
+ * or while `locked`; Ctrl+Enter runs `onSubmit`.
  */
 export function Modal({
   title,
@@ -101,6 +102,7 @@ export function Modal({
       opener?.focus?.({ preventScroll: true });
     };
   }, []);
+  const backdrop = useBackdropDismiss<HTMLDialogElement>(() => close.current(), closable);
   const name = titleText ?? (typeof title === "string" ? title : undefined);
   return (
     <dialog
@@ -115,9 +117,7 @@ export function Modal({
         swallowed.current = false;
         if (closable && !taken) close.current();
       }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget && closable) close.current();
-      }}
+      {...backdrop}
       onKeyDown={(e) => {
         if (e.key === "Escape") {
           // jsdom and old engines send no `cancel`: close from here too.

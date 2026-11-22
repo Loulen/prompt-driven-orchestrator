@@ -2,6 +2,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 
 import ImageLightbox from "./ImageLightbox";
+import { clickBackdrop } from "../../test/clickBackdrop";
 
 describe("ImageLightbox", () => {
   it("renders the image at the given index", () => {
@@ -26,8 +27,18 @@ describe("ImageLightbox", () => {
   it("closes when the backdrop is clicked", () => {
     const onClose = vi.fn();
     render(<ImageLightbox images={["/x.png"]} index={0} onClose={onClose} />);
-    fireEvent.click(screen.getByTestId("image-lightbox"));
+    clickBackdrop(screen.getByTestId("image-lightbox"));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays open when a press on the image is released over the backdrop", () => {
+    const onClose = vi.fn();
+    render(<ImageLightbox images={["/x.png"]} index={0} onClose={onClose} />);
+    const backdrop = screen.getByTestId("image-lightbox");
+    fireEvent.pointerDown(screen.getByTestId("lightbox-image"));
+    fireEvent.pointerUp(backdrop);
+    fireEvent.click(backdrop);
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("closes when the image itself is clicked", () => {

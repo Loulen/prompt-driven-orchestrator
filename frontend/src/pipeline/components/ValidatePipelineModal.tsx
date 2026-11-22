@@ -4,6 +4,7 @@ import type { PipelineValidation } from "../../shared/generated/PipelineValidati
 import type { Project } from "../../workspace/model/project";
 import { setPipelineValidation } from "../api/pipelines";
 import { projectIdsOf, validationFromChoice } from "../model/pipelineValidation";
+import { useBackdropDismiss } from "../../shared/ui/kit/backdropDismiss";
 
 /**
  * The Validate modal (CONTEXT.md « Pipeline validé »): Projets to tick, plus « All
@@ -55,6 +56,7 @@ export default function ValidatePipelineModal({
     return () => document.removeEventListener("keydown", handleKey);
   }, [open, onClose]);
 
+  const backdrop = useBackdropDismiss(onClose);
   if (!open) return null;
 
   const toggle = (id: string) =>
@@ -101,7 +103,7 @@ export default function ValidatePipelineModal({
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       data-testid="validate-pipeline-backdrop"
-      onClick={onClose}
+      {...backdrop}
     >
       <div
         role="dialog"

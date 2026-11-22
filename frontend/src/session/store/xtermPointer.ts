@@ -5,12 +5,14 @@ import {
   isMacPlatform,
   swallowsMotionReport,
 } from "../model/terminalClipboard";
+import { ALT_ENTER, newlineKeyAction } from "../model/terminalKeys";
 
 /**
  * The mouse, the clipboard keys and the wheel of a terminal pane, on its
  * `container`: selection owned by the browser even under tmux mouse mode,
  * Ctrl+C / Ctrl+V handed to the browser's copy and paste, the wheel scrolling
- * xterm's own buffer unless tmux tracks the mouse. Returns the cleanup.
+ * xterm's own buffer unless tmux tracks the mouse, Shift+Enter sent as a new
+ * line (Alt+Enter's sequence). Returns the cleanup.
  */
 export function wirePointerAndKeys(term: Terminal, container: HTMLElement): () => void {
   // #772: copy/paste from the pane. tmux mouse mode (enabled by the daemon so
@@ -56,6 +58,18 @@ export function wirePointerAndKeys(term: Terminal, container: HTMLElement): () =
   // copy/paste events xterm already serves — no navigator.clipboard, so this
   // works over plain http on a remote daemon.
   term.attachCustomKeyEventHandler((ev) => {
+    // CORE-284: Shift+Enter inserts a new line instead of submitting. Inject
+    // ESC CR through term.input, so it reaches the socket via the usual onData
+    // path (socket state and canType checks). The keypress must be refused
+    // too: after a refused keydown xterm 6 handles the keypress itself and
+    // would send \r right after the new line.
+    const newline = newlineKeyAction(ev);
+    if (newline === "newline") {
+      ev.preventDefault();
+      term.input(ALT_ENTER);
+      return false;
+    }
+    if (newline === "swallow") return false;
     const action = clipboardKeyAction(ev, {
       hasSelection: term.hasSelection(),
       isMac,

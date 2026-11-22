@@ -378,6 +378,71 @@ describe("TabBar — editor tabs (Workbench)", () => {
     expect(order()).toEqual(["a"]);
   });
 
+  describe("a single close of an unsaved tab confirms (CORE-281)", () => {
+    const liveDraft = {
+      status: "live" as const,
+      synced: true,
+      canWrite: true,
+      connection: null,
+      participants: [],
+      changes: 1,
+      canUndo: false,
+      canRedo: false,
+      undoLabel: null,
+      redoLabel: null,
+      notices: [],
+    };
+
+    it("asks before the cross drops it, and keeps it until confirmed", () => {
+      seed([tab("a"), tab("b", { dirty: true })], "a");
+      render(<TabBar />);
+      fireEvent.click(screen.getByRole("button", { name: "Close b.yaml" }));
+      expect(screen.getByTestId("close-tabs-confirm")).toBeInTheDocument();
+      expect(order()).toEqual(["a", "b"]);
+    });
+
+    it("keeps the tab on Cancel", () => {
+      seed([tab("a"), tab("b", { dirty: true })], "a");
+      render(<TabBar />);
+      fireEvent.click(screen.getByRole("button", { name: "Close b.yaml" }));
+      fireEvent.click(screen.getByTestId("close-tabs-cancel"));
+      expect(screen.queryByTestId("close-tabs-confirm")).not.toBeInTheDocument();
+      expect(order()).toEqual(["a", "b"]);
+    });
+
+    it("closes the tab on « Close tab anyway »", () => {
+      seed([tab("a"), tab("b", { dirty: true })], "a");
+      render(<TabBar />);
+      fireEvent.click(screen.getByRole("button", { name: "Close b.yaml" }));
+      fireEvent.click(screen.getByTestId("close-tabs-confirm"));
+      expect(order()).toEqual(["a"]);
+    });
+
+    it("asks on a middle click too", () => {
+      seed([tab("a"), tab("b", { dirty: true })], "a");
+      render(<TabBar />);
+      fireEvent(tabButton("b"), new MouseEvent("auxclick", { bubbles: true, button: 1 }));
+      expect(screen.getByTestId("close-tabs-confirm")).toBeInTheDocument();
+      expect(order()).toEqual(["a", "b"]);
+    });
+
+    it("closes a synced shared draft at once: it loses nothing (ADR-0088)", () => {
+      seed([tab("a"), tab("b", { dirty: true, draft: liveDraft })], "a");
+      render(<TabBar />);
+      fireEvent.click(screen.getByRole("button", { name: "Close b.yaml" }));
+      expect(screen.queryByTestId("close-tabs-confirm")).not.toBeInTheDocument();
+      expect(order()).toEqual(["a"]);
+    });
+
+    it("asks for a tab whose last save failed", () => {
+      seed([tab("a"), tab("b", { saveError: { message: "boom" } })], "a");
+      render(<TabBar />);
+      fireEvent.click(screen.getByRole("button", { name: "Close b.yaml" }));
+      expect(screen.getByTestId("close-tabs-confirm")).toBeInTheDocument();
+      expect(order()).toEqual(["a", "b"]);
+    });
+  });
+
   it("reorders a tab dragged onto another, before or after it", () => {
     seed([tab("a"), tab("b"), tab("c"), tab("d")], "a");
     render(<TabBar />);

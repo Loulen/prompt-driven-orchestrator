@@ -7,6 +7,7 @@ import FsExplorerModal from "../../workspace/components/FsExplorerModal";
 import SkillFileDropZone, { DropOverlay } from "./SkillFileDropZone";
 import PasteSkillSidebar from "./PasteSkillSidebar";
 import StagedRow from "./StagedFileRow";
+import { useBackdropDismiss } from "../../shared/ui/kit/backdropDismiss";
 
 interface Props {
   folders: SkillFolder[];
@@ -87,13 +88,11 @@ export default function PasteSkillModal({
   const failedCount = staged.filter((file) => file.status.state === "failed").length;
   const uploadingIndex = staged.findIndex((file) => file.status.state === "uploading");
 
+  const backdrop = useBackdropDismiss(requestClose, true, { stopPropagation: true });
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-scrim"
-      onClick={(event) => {
-        event.stopPropagation();
-        requestClose();
-      }}
+      {...backdrop}
       data-testid="paste-skill-backdrop"
     >
       <div

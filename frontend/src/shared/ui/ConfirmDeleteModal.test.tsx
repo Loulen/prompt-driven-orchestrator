@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { act, render, screen, fireEvent } from "@testing-library/react";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
+import { clickBackdrop } from "../../test/clickBackdrop";
 
 describe("ConfirmDeleteModal", () => {
   const baseProps = {
@@ -71,7 +72,7 @@ describe("ConfirmDeleteModal", () => {
     const onClose = vi.fn();
     render(<ConfirmDeleteModal {...baseProps} onClose={onClose} />);
     // The backdrop of a modal <dialog> is the dialog itself.
-    fireEvent.click(screen.getByTestId("confirm-delete-modal"));
+    clickBackdrop(screen.getByTestId("confirm-delete-modal"));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 

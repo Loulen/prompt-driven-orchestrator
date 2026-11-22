@@ -4,6 +4,7 @@ import { exportNodeAsYaml } from "../../lib/exportNodeYaml";
 import { highlightYaml } from "./yamlHighlight";
 import type { EditorNodeDef } from "../model/pipeline";
 import { copyToClipboard } from "../../shared/lib/clipboard";
+import { useBackdropDismiss } from "../../shared/ui/kit/backdropDismiss";
 
 /**
  * Export a single node's definition as YAML (#345). Pure front-end: the YAML is
@@ -58,11 +59,12 @@ export default function ExportNodeYamlModal({
     URL.revokeObjectURL(url);
   }
 
+  const backdrop = useBackdropDismiss(onClose);
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       data-testid="export-node-backdrop"
-      onClick={onClose}
+      {...backdrop}
     >
       <div
         className="flex max-h-[calc(80vh/var(--app-zoom,1))] w-[560px] max-w-[calc(90vw/var(--app-zoom,1))] flex-col rounded-lg border border-line bg-surface-1 shadow-lg text-sm"

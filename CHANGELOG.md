@@ -14,6 +14,27 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## 2.87.1
+
+- A modal no longer closes when a press starts inside it and the release ends over the backdrop,
+  for example a text selection or a textarea resize dragged out of the dialog: it closes only when
+  the press and the release both land on the backdrop. Applies to every modal, including the
+  kit `Modal` used by extensions, which get the fix with no change.
+
+## 2.87.0
+
+- Shift+Enter inserts a new line in the web terminals (node terminal, Manager tab, library
+  assistant, run shell) instead of submitting: it sends Alt+Enter's sequence, which Claude Code
+  reads as a new line. Nothing to set up on the user's machine. In the run shell, Shift+Enter no
+  longer runs the command; Enter does.
+
+## 2.86.0
+
+- Closing a pipeline or Run tab that holds unsaved work, with its × or a middle click, now asks
+  first in the "Discard unsaved changes?" window; Cancel keeps the tab. Reloading or closing the
+  browser tab raises the browser's own alert while such work is open. A clean tab or a synced
+  shared draft still closes at once.
+
 ## 2.85.0
 
 - Alone on a terminal, its bar no longer reads "You pilot", only `attached · live`: the chip

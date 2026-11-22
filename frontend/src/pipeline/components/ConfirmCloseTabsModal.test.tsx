@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 import ConfirmCloseTabsModal from "./ConfirmCloseTabsModal";
 import type { OpenPipeline } from "../store/editState";
 import { INITIAL_DRAFT_STATE } from "../store/draftSession";
+import { clickBackdrop } from "../../test/clickBackdrop";
 
 function tab(id: string, over: Partial<OpenPipeline> = {}): OpenPipeline {
   return {
@@ -69,7 +70,7 @@ describe("ConfirmCloseTabsModal (#342)", () => {
     const onCancel = vi.fn();
     render(<ConfirmCloseTabsModal open tabs={[tab("a", { dirty: true })]} onCancel={onCancel} onConfirm={() => {}} />);
     // The backdrop of a modal <dialog> is the dialog itself.
-    fireEvent.click(screen.getByTestId("close-tabs-backdrop"));
+    clickBackdrop(screen.getByTestId("close-tabs-backdrop"));
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 

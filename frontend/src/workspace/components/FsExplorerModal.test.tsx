@@ -6,6 +6,7 @@ import { useState } from "react";
 import FsExplorerModal from "./FsExplorerModal";
 import type { BrowseResponse } from "../api/browse";
 import { browseFs } from "../api/browse";
+import { clickBackdrop } from "../../test/clickBackdrop";
 
 vi.mock("../../settings/api/settings", () => ({}));
 // The agentic profiles' API answers with the mock of `../../settings/api/settings` too.
@@ -221,7 +222,7 @@ describe("FsExplorerModal — testids, layering, errors", () => {
   it("closes on backdrop click and on Escape", async () => {
     const props = renderModal();
     await screen.findByTestId("fs-browse-modal");
-    fireEvent.click(screen.getByTestId("fs-browse-backdrop"));
+    clickBackdrop(screen.getByTestId("fs-browse-backdrop"));
     expect(props.onClose).toHaveBeenCalledTimes(1);
     fireEvent.keyDown(document, { key: "Escape" });
     expect(props.onClose).toHaveBeenCalledTimes(2);

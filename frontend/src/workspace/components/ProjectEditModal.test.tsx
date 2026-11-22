@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import ProjectEditModal from "./ProjectEditModal";
 import { ApiError } from "../../shared/http/client";
 import type { Project } from "../model/project";
+import { clickBackdrop } from "../../test/clickBackdrop";
 
 const createProject = vi.fn();
 const updateProject = vi.fn();
@@ -375,7 +376,7 @@ describe("ProjectEditModal — bounded to the window (#940)", () => {
     fireEvent.click(screen.getByTestId("project-edit-body"));
     expect(onClose).not.toHaveBeenCalled();
     // A click on the dialog itself, outside its frame, is a click on the backdrop.
-    fireEvent.click(screen.getByTestId("project-edit-modal"));
+    clickBackdrop(screen.getByTestId("project-edit-modal"));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

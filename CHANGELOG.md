@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.89.0
 
 - An update that breaks the instance now undoes itself. Before the update command runs, the daemon
   keeps a snapshot of its databases (its own and those of its extensions, consistent despite the

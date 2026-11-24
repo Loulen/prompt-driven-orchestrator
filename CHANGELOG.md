@@ -14,6 +14,13 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## 2.89.1
+
+- The progress counter of a bulk action keeps the total it started with. During a Cleanup in the
+  Runs tab, archived Runs leave the list while the action runs, and the counter used to lower its
+  total until it read "4/3"; it now reads 0/3, 1/3, 2/3. The fix covers every bulk action
+  (Runs Retry and Pause, Triggers, Pipelines) (CORE-299).
+
 ## 2.89.0
 
 - An update that breaks the instance now undoes itself. Before the update command runs, the daemon

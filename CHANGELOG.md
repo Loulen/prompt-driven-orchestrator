@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.90.1
 
 - The harness reference (`docs/reference/harnesses.md`) gains a section "Where a harness key
   lives": the order in which `claude` and `pi` look for their key, the `!command` form of `pi`, and

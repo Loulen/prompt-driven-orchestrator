@@ -14,6 +14,12 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- The harness reference (`docs/reference/harnesses.md`) gains a section "Where a harness key
+  lives": the order in which `claude` and `pi` look for their key, the `!command` form of `pi`, and
+  how to price a custom model. The *Sandbox staging set* row of `pdo docs support-table` points to it.
+
 ## 2.90.0
 
 - On a Run canvas, the Model cell of a node card (Settings › Appearance › Run canvas) now leads

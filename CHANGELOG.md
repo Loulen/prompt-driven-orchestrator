@@ -14,6 +14,14 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## 2.90.0
+
+- On a Run canvas, the Model cell of a node card (Settings › Appearance › Run canvas) now leads
+  with the logo of the harness the node runs on, for example the Claude logo then `opus`, or the
+  Copilot logo then `gpt-5.6-sol`. A harness without a mark shows its initial square. Script nodes,
+  nodes that inherit the run agent and have not started yet, and the pipeline editor keep the type
+  glyph. The Appearance preview shows the logos too.
+
 ## 2.89.1
 
 - The progress counter of a bulk action keeps the total it started with. During a Cleanup in the

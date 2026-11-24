@@ -343,7 +343,8 @@ export interface EditState {
   /** ADR-0088: the tab whose « Save… » window is open, `null` when none. */
   saveVersionFor: string | null;
   /** Save the tab `id`: a shared draft opens the « Save… » window first. */
-  requestSave: (id: string) => void;
+  /** Save `id`, or open the « Save… » window of a shared draft; resolves once a direct save answers. */
+  requestSave: (id: string) => Promise<unknown> | undefined;
   closeSaveVersion: () => void;
   /** ADR-0088: open the version `number` of `pipelineId` in a read-only tab. */
   openPipelineVersion: (pipelineId: string, number: number) => Promise<void>;

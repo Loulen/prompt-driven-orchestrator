@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import type { ReactFlowInstance } from "@xyflow/react";
 import { useCanvasPlacement } from "./useCanvasPlacement";
-import type { EditorPipelineDef } from "../model/pipeline";
+import type { EditorNodeDef, EditorPipelineDef } from "../model/pipeline";
 import type { NoteDef } from "../../shared/generated/NoteDef";
 import { CARD_HEIGHT, CARD_WIDTH } from "../../lib/nodePlacement";
 
@@ -15,17 +15,18 @@ const BLIND_DROP = { x: 200 - CARD_WIDTH / 2, y: 200 - CARD_HEIGHT / 2 };
 
 function place(pipeline: EditorPipelineDef) {
   const addNoteToStore = vi.fn();
+  const addNodeToStore = vi.fn();
   const { result } = renderHook(() =>
     useCanvasPlacement({
       pipeline,
       reactFlowRef: { current: null },
       reactFlow: {} as ReactFlowInstance,
-      addNodeToStore: vi.fn(),
+      addNodeToStore,
       addNoteToStore,
       setSelection: vi.fn(),
     }),
   );
-  return { result, addNoteToStore };
+  return { result, addNoteToStore, addNodeToStore };
 }
 
 describe("useCanvasPlacement — a new note", () => {
@@ -54,5 +55,19 @@ describe("useCanvasPlacement — a new note", () => {
     const spot = result.current.computeDropPosition();
 
     expect(Math.abs(spot.x - 240) >= CARD_WIDTH || Math.abs(spot.y - 200) >= CARD_HEIGHT).toBe(true);
+  });
+});
+
+describe("useCanvasPlacement — a new node", () => {
+  // Isolation is an opt-in: a node added from the canvas shares the Run
+  // worktree, and states it, whatever its type.
+  it.each(["agent", "script"] as const)("adds a %s that shares the Run worktree", (type) => {
+    const { result, addNodeToStore } = place(pipelineWithNotes([]));
+
+    result.current.handleAddNode(type);
+
+    const added = addNodeToStore.mock.calls[0][0] as EditorNodeDef;
+    expect(added.type).toBe(type);
+    expect(added.isolated_worktree).toBe(false);
   });
 });

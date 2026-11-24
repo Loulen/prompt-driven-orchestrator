@@ -84,6 +84,10 @@ export default defineConfig({
       // (`POST /actors/display`). Same trap: without it the sign-in gate reads
       // the SPA shell and never redirects.
       '/actors': daemonTarget,
+      // The Destinations de bug report (`GET /bug-report/destinations`, `POST
+      // /bug-report`, `PUT /bug-report/last`). Same trap: without it a dev GET
+      // answers the SPA and « Send to » lists the core's issues alone.
+      '/bug-report': daemonTarget,
       // CORE-3: `GET /resources`, the catalogue of the Ressources an extension
       // of rights reads. Same trap: without it a dev GET answers the SPA.
       '/resources': daemonTarget,

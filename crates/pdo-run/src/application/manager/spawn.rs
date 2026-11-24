@@ -66,16 +66,10 @@ pub async fn spawn_manager_session(
         .map(|(_, state)| state);
     let started_by =
         started_by.or_else(|| run_state.as_ref().and_then(|run| run.created_by.clone()));
+    use crate::application::node::extension_launch as ext;
     let extension = match &run_state {
-        Some(run) => {
-            crate::application::node::extension_launch::manager_contribution(
-                state,
-                run,
-                started_by.clone(),
-            )
-            .await
-        }
-        None => Default::default(),
+        Some(run) => ext::manager_contribution(state, run, started_by.clone()).await,
+        None => ext::with_public_url(Default::default(), state).await,
     };
     let full_prompt = extension.above(full_prompt);
     let config = state.settings.defaults().await;

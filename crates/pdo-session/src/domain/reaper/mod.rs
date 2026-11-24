@@ -207,6 +207,8 @@ fn decide_one(
         ParsedSession::Hosted => SweepVerdict::Kill(KillReason::HostedUnregistered {
             session_name: input.session_name.clone(),
         }),
+        // An Agent de support owns no Run and has no TTL: its Actor closes it.
+        ParsedSession::Support => SweepVerdict::Keep,
         ParsedSession::NodeRun {
             run_id,
             node_id,
@@ -399,6 +401,15 @@ mod tests {
             killed.to_string(),
             format!("Orphan sweep: killing hosted session {name} (no live record)")
         );
+    }
+
+    /// An Agent de support owns no Run: neither an absent owner nor a long
+    /// detachment reaps it, only its Actor's close.
+    #[test]
+    fn a_support_agent_is_never_swept() {
+        let name = crate::domain::names::support_session_name_of(&pdo_kernel::Actor::LocalOperator);
+        let decisions = decide_sweep(&[input(&name, None)], TTLS, at("2026-07-31T15:32:19Z"));
+        assert_eq!(decisions[0].verdict, SweepVerdict::Keep);
     }
 
     /// #594 / ADR-0051 §4: presence, not the owning Run, decides the assistant's

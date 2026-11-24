@@ -724,8 +724,8 @@ describe("NodeInspector StarButton — library save is independent of pipeline s
       // #424: effort-aware too; an effort-less node sends null.
       effort: null,
       // #655: isolation-aware too — a node silent about its workspace stars on
-      // its type's resolved default, not on the silence.
-      isolated_worktree: true,
+      // its type's resolved default (the Run worktree), not on the silence.
+      isolated_worktree: false,
       // ADR-0086: and on-demand-aware.
       on_demand: false,
       // ADR-0089: and live-artifact-aware.
@@ -770,17 +770,17 @@ describe("NodeInspector StarButton — library save is independent of pipeline s
 
   it("stars the node's chosen workspace, not its type's default (#655)", () => {
     seedTabWithReviewer(false);
-    useEditStore.getState().openTabs[0].pipeline.nodes[0].isolated_worktree = false;
+    useEditStore.getState().openTabs[0].pipeline.nodes[0].isolated_worktree = true;
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
 
     fireEvent.click(screen.getByTitle("Save to library"));
 
-    expect(mockSave.mock.calls[0][0].isolated_worktree).toBe(false);
+    expect(mockSave.mock.calls[0][0].isolated_worktree).toBe(true);
   });
 
   it("resets the workspace from the library entry (#655)", async () => {
-    // The entry parks the Agent in the Run's worktree; resetting must put the
-    // node back there rather than on the `agent` default.
+    // The entry isolates the Agent; resetting must put the node in its own
+    // sub-worktree rather than on the `agent` default (the Run worktree).
     vi.mocked(instantiateFromLibrary).mockResolvedValueOnce({
       spec: {
         name: "reviewer",
@@ -788,7 +788,7 @@ describe("NodeInspector StarButton — library save is independent of pipeline s
         inputs: [],
         outputs: [],
         interactive: false,
-        isolated_worktree: false,
+        isolated_worktree: true,
       },
       prompt: "Review this code.",
     });
@@ -798,7 +798,7 @@ describe("NodeInspector StarButton — library save is independent of pipeline s
       inputs: [{ name: "in" }],
       outputs: [{ name: "out" }],
       interactive: false,
-      isolated_worktree: false,
+      isolated_worktree: true,
       prompt: "Review this code.",
     };
     seedTabWithReviewer(false, "Review this code.");
@@ -810,7 +810,7 @@ describe("NodeInspector StarButton — library save is independent of pipeline s
     await vi.waitFor(() => {
       expect(
         useEditStore.getState().openTabs[0].pipeline.nodes[0].isolated_worktree,
-      ).toBe(false);
+      ).toBe(true);
     });
   });
 
@@ -1015,6 +1015,7 @@ describe("NodeInspector — the model field does not follow the selection (#617)
 describe("NodeInspector — Workspace (#653)", () => {
   it("keeps provisioning collapsed under isolated Workspace and hides it for shared Workspace", async () => {
     seedTabWithReviewer(false);
+    useEditStore.getState().openTabs[0].pipeline.nodes[0].isolated_worktree = true;
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
 
     // Notion #7: the shared disclosure replaces the « Configure provisioning » toggle.
@@ -1107,11 +1108,12 @@ describe("NodeInspector — Workspace (#653)", () => {
     expect(screen.getByTestId("agent-type-label")).toBeInTheDocument();
   });
 
-  it("preselects Isolated worktree for an agent that states nothing", () => {
+  it("preselects Run worktree for an agent that states nothing", () => {
+    // Isolation is an opt-in (ADR-0108).
     seedTabWithReviewer(false);
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
-    expect(screen.getByTestId("workspace-isolated")).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByTestId("workspace-shared")).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByTestId("workspace-shared")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("workspace-isolated")).toHaveAttribute("aria-checked", "false");
   });
 
   it("preselects Run worktree for a script that states nothing", () => {
@@ -1124,9 +1126,9 @@ describe("NodeInspector — Workspace (#653)", () => {
     seedTabWithReviewer(false);
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
 
-    fireEvent.click(screen.getByTestId("workspace-shared"));
+    fireEvent.click(screen.getByTestId("workspace-isolated"));
     const node = useEditStore.getState().openTabs[0].pipeline.nodes[0];
-    expect(node.isolated_worktree).toBe(false);
+    expect(node.isolated_worktree).toBe(true);
     expect(node.type).toBe("agent");
   });
 
@@ -1135,11 +1137,11 @@ describe("NodeInspector — Workspace (#653)", () => {
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
 
     expect(screen.getByTestId("workspace-path")).toHaveTextContent(
-      ".pdo/runs/<run>/nodes/rv1/iter-<n>",
-    );
-    fireEvent.click(screen.getByTestId("workspace-shared"));
-    expect(screen.getByTestId("workspace-path")).toHaveTextContent(
       ".pdo/runs/<run>/worktree",
+    );
+    fireEvent.click(screen.getByTestId("workspace-isolated"));
+    expect(screen.getByTestId("workspace-path")).toHaveTextContent(
+      ".pdo/runs/<run>/nodes/rv1/iter-<n>",
     );
   });
 
@@ -1147,6 +1149,7 @@ describe("NodeInspector — Workspace (#653)", () => {
     // The document says isolated; the live iteration was spawned shared. Run mode
     // shows where the Node actually works and refuses to move it.
     seedTabWithReviewer(false);
+    useEditStore.getState().openTabs[0].pipeline.nodes[0].isolated_worktree = true;
     renderInspector({
       libraryEntries: [],
       onLibraryChanged: () => {},

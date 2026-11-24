@@ -6,7 +6,8 @@
 // controls with the primitives of the shared design system (ADR-0091), shows a
 // session's terminal with the core's own, composes the detail of a Session
 // hébergée from the core's bricks, opens the core's New Run prefilled, writes
-// the deep links toward a Run and a Node, and never ships its own copy.
+// the deep links toward a Run and a Node, names its mutations in the core's
+// indicator of Opérations en cours, and never ships its own copy.
 const ExtensionUi = globalThis.__PDO_SHARED__.extensionUi;
 export default ExtensionUi;
 export const {
@@ -21,6 +22,8 @@ export const {
   useActorDisplays,
   openProbedSocket,
   copyToClipboard,
+  trackOperation,
+  usePending,
   openNewRun,
   runLink,
   nodeLink,

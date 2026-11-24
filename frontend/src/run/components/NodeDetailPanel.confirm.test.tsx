@@ -9,6 +9,7 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NodeState } from "../../shared/generated/NodeState";
+import { clickBackdrop } from "../../test/clickBackdrop";
 
 globalThis.ResizeObserver = class {
   observe() {}
@@ -139,7 +140,7 @@ describe("the node panel's Stop asks first (CORE-206)", () => {
     fireEvent.keyDown(dialog("Stop node implement?"), { key: "Escape" });
     noDialog();
     await click(screen.getByTestId("stop-btn"));
-    await click(dialog("Stop node implement?"));
+    await act(async () => clickBackdrop(dialog("Stop node implement?")));
     noDialog();
     expect(stopNode).not.toHaveBeenCalled();
     expect(screen.getByTestId("stop-btn")).toBeInTheDocument();

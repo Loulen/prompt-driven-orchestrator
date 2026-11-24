@@ -39,6 +39,7 @@ export type SettingsSectionId =
   | "prometheus-metrics"
   | "identity"
   | "what-is-sent"
+  | "bug-report"
   | "price-table"
   | "harness-descriptors";
 
@@ -64,6 +65,11 @@ export interface SettingsSection {
    * Rendered as the `Your account, saved at once` icon next to the title.
    */
   account?: boolean;
+  /**
+   * The section saves nothing: its rows are gestures (a button that opens a window), never
+   * greyed by the instance form's lock. No badge.
+   */
+  gesture?: boolean;
 }
 
 export interface SettingsCategory {
@@ -242,6 +248,12 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
     label: "Diagnostics",
     sections: [
       {
+        // The Rapport de bug (CONTEXT.md): a button that opens its window, nothing to save.
+        id: "bug-report",
+        label: "Bug report",
+        gesture: true,
+      },
+      {
         id: "price-table",
         label: "Price table",
         readOnly: true,
@@ -264,6 +276,7 @@ export type SettingsFieldId =
   | "session-cap"
   | "reaper-ttl"
   | "guard-timeout"
+  | "support-idle-timeout"
   | "max-attachments-mb"
   | "autocomplete-turn-end"
   | "default-auto-name"
@@ -289,6 +302,7 @@ export const FIELD_SECTION: Record<SettingsFieldId, SettingsSectionId> = {
   "session-cap": "runtime-limits",
   "reaper-ttl": "runtime-limits",
   "guard-timeout": "runtime-limits",
+  "support-idle-timeout": "runtime-limits",
   "max-attachments-mb": "runtime-limits",
   "autocomplete-turn-end": "runs",
   "default-auto-name": "runs",

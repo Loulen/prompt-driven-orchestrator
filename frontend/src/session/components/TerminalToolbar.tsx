@@ -37,6 +37,9 @@ interface Props {
   /** #44: extra gestures at the right of the toolbar, before Copy, followed by
    *  a separator. */
   actions?: ReactNode;
+  /** The last gesture of the toolbar, after every tool and a separator
+   *  (the support agent's « End session »). */
+  end?: ReactNode;
   /** Import files from this machine into the node. Absent: no Import button. */
   onImport?: () => void;
   /** Why the node cannot receive files now: the button is off and says it. */
@@ -47,17 +50,26 @@ interface Props {
 export const COLLAPSE_LABEL = "Collapse terminal";
 export const EXPAND_LABEL = "Expand terminal";
 
-/** The mode the bar names: who drives the session, or why nobody does. */
-function modeOf(connected: boolean, spectating: boolean, statusLabel: string): { icon: LucideIcon; role: "pilot" | "spectator" | null } {
+/**
+ * The mode the bar names: who drives the session, or why nobody does. Alone on
+ * the terminal there is no role (ADR-0075 §1, CORE-223): the pilot is named only
+ * while another poste watches; otherwise the bar shows the connection tag.
+ */
+function modeOf(
+  connected: boolean,
+  spectating: boolean,
+  statusLabel: string,
+  watchers: number,
+): { icon: LucideIcon; role: "pilot" | "spectator" | null } {
   if (spectating) return { icon: Eye, role: "spectator" };
-  if (connected && statusLabel === "attached · live") return { icon: Keyboard, role: "pilot" };
+  if (connected && statusLabel === "attached · live" && watchers > 0) return { icon: Keyboard, role: "pilot" };
   return { icon: connected ? Keyboard : Lock, role: null };
 }
 
 /**
  * Who drives the session, as a chip with a ruby accent: the pilot reads « You
  * pilot » and how many watch; a spectator reads « Watching » and takes control
- * from the chip itself (#867, #870).
+ * from the chip itself (#867, #870). A solo pilot gets no chip (CORE-223).
  */
 function RoleChip({
   role,
@@ -75,18 +87,15 @@ function RoleChip({
       <span className="ri-term-bar__role" data-role="pilot" data-testid="term-mode">
         <span className="ri-term-bar__role-dot" aria-hidden />
         <span>You pilot</span>
-        {/* #867: the pilot knows it is watched. Nothing after the rule when solo. */}
-        {watchers > 0 && (
-          <>
-            <span className="ri-term-bar__role-sep" aria-hidden />
-            <Tooltip label={watchedLabel(watchers)}>
-              <span className="ri-term-bar__role-part" data-testid="term-watchers" aria-label={watchedLabel(watchers)} role="status">
-                <Eye size={11} strokeWidth={1.5} aria-hidden />
-                {watchers} watching
-              </span>
-            </Tooltip>
-          </>
-        )}
+        {/* #867: the pilot knows it is watched. The chip only exists while
+            watched (CORE-223), so the count always follows the rule. */}
+        <span className="ri-term-bar__role-sep" aria-hidden />
+        <Tooltip label={watchedLabel(watchers)}>
+          <span className="ri-term-bar__role-part" data-testid="term-watchers" aria-label={watchedLabel(watchers)} role="status">
+            <Eye size={11} strokeWidth={1.5} aria-hidden />
+            {watchers} watching
+          </span>
+        </Tooltip>
       </span>
     );
   }
@@ -144,10 +153,11 @@ export default function TerminalToolbar({
   onTakeControl,
   identity,
   actions,
+  end,
   onImport,
   importDisabledReason,
 }: Props) {
-  const mode = modeOf(connected, spectating, statusLabel);
+  const mode = modeOf(connected, spectating, statusLabel, watchers);
   const copyLabel =
     copyFeedback === "copied" ? "Copied" : copyFeedback === "failed" ? "Copy failed: select and press Ctrl+Shift+C" : "Copy selection";
   return (
@@ -226,6 +236,12 @@ export default function TerminalToolbar({
             would be an action that can only fail. */}
         {onDetach && (
           <IconButton icon={ExternalLink} size="sm" label="Detach to OS terminal" data-testid="term-detach" onClick={onDetach} />
+        )}
+        {end && (
+          <>
+            <span className="ri-term-bar__sep" aria-hidden />
+            {end}
+          </>
         )}
       </span>
     </div>

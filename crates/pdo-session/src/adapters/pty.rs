@@ -281,6 +281,9 @@ async fn bridge(socket: WebSocket, connecting: Connecting, session: Arc<Session>
                     // least one typed byte since the declaration. Written to the
                     // PTY first (above), then read: the bridge never delays input.
                     terminals.note_input(&actor, &input_session, &data).await;
+                    // An Agent de support's clock starts over on its
+                    // person's keystroke.
+                    input_context.support().note_input(&input_session, &data);
                 }
                 Message::Text(text) => {
                     if let Some(resize) = decode_resize(&text) {

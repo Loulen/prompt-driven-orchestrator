@@ -338,11 +338,11 @@ function StatsSurface({
                 <Button
                   size="sm"
                   onClick={onSyncPrices}
-                  disabled={syncing && !syncRefused}
+                  pending={syncing && "Syncing…"}
                   disabledReason={syncRefused}
                   data-testid="stats-sync-prices"
                 >
-                  {syncing ? "Syncing…" : "Sync costs"}
+                  Sync costs
                 </Button>
               ),
               content: (

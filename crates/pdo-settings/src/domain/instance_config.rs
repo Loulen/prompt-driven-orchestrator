@@ -32,6 +32,13 @@ pub struct InstanceConfig {
     /// ([`pdo_session::adapters::env::libassist_idle_ttl_with`]) owns the
     /// precedence.
     pub libassist_idle_ttl_secs: Option<i64>,
+    /// Stored idle timeout of the Agents de support in seconds, or `None` when
+    /// unset: how long one goes without input from its person before it asks
+    /// « Still there? » (default 1800 s). Its own knob, distinct from
+    /// [`Self::libassist_idle_ttl_secs`]. The resolver
+    /// ([`pdo_session::adapters::env::support_idle_timeout_with`]) owns the
+    /// precedence.
+    pub support_idle_timeout_secs: Option<i64>,
     /// Stored Trigger guard timeout in **seconds**, or `None` when unset. Note
     /// the env seam ([`pdo_trigger::adapters::env::GUARD_TIMEOUT_MS_OVERRIDE_ENV`]) is
     /// in milliseconds; the stored value is seconds (ADR-0015).
@@ -184,7 +191,7 @@ pub struct InstanceConfig {
     /// then off.
     pub telemetry_include_actor: Option<i64>,
     /// Stored Public URL, the address humans open PDO at, or `None` when unset
-    /// (`stored → env PDO_PUBLIC_URL → none`, resolved by
+    /// (`stored → env PDO_PUBLIC_URL → default`, the machine's address, resolved by
     /// [`pdo_kernel::public_url::resolve`]). Stored normalized: an origin `http(s)://host[:port]`
     /// without a trailing `/`.
     pub public_url: Option<String>,
@@ -214,6 +221,9 @@ pub struct UpdateInstanceConfig {
     /// Set the shared library assistant's idle TTL in seconds (#594). Set-only,
     /// like the other numeric knobs.
     pub libassist_idle_ttl_secs: Option<i64>,
+    /// Set the Agents de support's idle timeout in seconds. Set-only, like the
+    /// other numeric knobs.
+    pub support_idle_timeout_secs: Option<i64>,
     pub guard_timeout_secs: Option<i64>,
     pub default_model: Option<String>,
     /// Set the instance-wide default sandbox mode (#410). `Some("")` clears it back to
@@ -315,6 +325,7 @@ impl UpdateInstanceConfig {
         self.session_cap.is_none()
             && self.reaper_ttl_secs.is_none()
             && self.libassist_idle_ttl_secs.is_none()
+            && self.support_idle_timeout_secs.is_none()
             && self.guard_timeout_secs.is_none()
             && self.default_model.is_none()
             && self.default_sandbox.is_none()

@@ -7,7 +7,8 @@ import type { ConnectionStatus } from "../../run/store/useDaemonSocket";
 /**
  * The in-app update (#699) and the « What's new » changelog it opens from
  * (#698): the confirm, then the pure flow machine — applying → restarting →
- * verifying → reload / failed — fed by the socket and a poll of `GET /update`.
+ * verifying → reload / failed, or rolling-back → rolled-back (the Retour
+ * automatique) — fed by the socket, the clock and a poll of `GET /update`.
  */
 export function useUpdateFlow(updateStatus: UpdateStatus | null, status: ConnectionStatus) {
   // #698: the « What's new » changelog modal, opened from the status-bar version (and
@@ -27,6 +28,7 @@ export function useUpdateFlow(updateStatus: UpdateStatus | null, status: Connect
         type: "applied",
         attemptId: res.attempt_id,
         fromVersion: res.from_version || fresh.installed_version,
+        toVersion: fresh.latest_version,
         now: Date.now(),
       });
     } catch (e) {
@@ -44,9 +46,16 @@ export function useUpdateFlow(updateStatus: UpdateStatus | null, status: Connect
   // cached `/sessions` value: right after a reconnect the cache still holds the OLD
   // version and would read as « nothing changed ».
   useEffect(() => {
-    const ev: UpdateFlowEvent = { type: "socket", connected: status === "connected" };
+    const ev: UpdateFlowEvent = { type: "socket", connected: status === "connected", now: Date.now() };
     dispatchUpdateFlow(ev);
   }, [status]);
+  // CORE-314: while the daemon is away, the clock tells when the executor's
+  // verification bound has passed — it is then putting the previous version back.
+  useEffect(() => {
+    if (updateFlow.phase !== "restarting") return;
+    const id = window.setInterval(() => dispatchUpdateFlow({ type: "tick", now: Date.now() }), 1000);
+    return () => window.clearInterval(id);
+  }, [updateFlow.phase]);
   useEffect(() => {
     if (!isUpdateInProgress(updateFlow)) return;
     let cancelled = false;

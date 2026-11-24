@@ -6,6 +6,7 @@ import { useEditStore } from "../store/editStore";
 import { generateNodeId } from "../../lib/nanoid";
 import { foldHarnessOntoNode } from "../../harness/model/nodeHarness";
 import type { EditorNodeDef } from "../model/pipeline";
+import { useBackdropDismiss } from "../../shared/ui/kit/backdropDismiss";
 
 /**
  * Add a node to the canvas from YAML (#345): paste a node definition OR upload a
@@ -51,7 +52,7 @@ export default function AddNodeFromYamlModal({
     setWarnings(null);
     try {
       const result = await parseNodeYaml(yaml);
-      // Mirror LibraryDropdown.handleAdd: fresh id, drop-position, addNode
+      // Mirror LibrarySubmenu.handleAdd: fresh id, drop-position, addNode
       // (snapshots undo in one step), then the prompt sidecar. Cast covers the
       // legacy `switch`/`loop` the TS union omits (soft-warned by the daemon).
       const newId = generateNodeId();
@@ -101,11 +102,12 @@ export default function AddNodeFromYamlModal({
     }
   }
 
+  const backdrop = useBackdropDismiss(onClose);
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       data-testid="add-node-yaml-backdrop"
-      onClick={onClose}
+      {...backdrop}
     >
       <div
         className="w-[440px] max-w-[calc(90vw/var(--app-zoom,1))] rounded-lg border border-line bg-surface-2 p-4 text-sm"

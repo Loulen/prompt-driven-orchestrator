@@ -5,6 +5,7 @@
  * a rejection reaches the operator in an error toast; nothing else breaks.
  */
 
+import { errorAlreadyShown } from "../http/operations";
 import { toast } from "../ui/toast";
 import type { ContributionElement } from "./catalogue";
 import type { CommandContext, CommandFunction, CommandHost, LocationContext } from "./contract";
@@ -39,6 +40,8 @@ export async function runCommand(element: ContributionElement, context: Location
     await (fn as CommandFunction)(commandContext, commandHost(extension.id));
   } catch (cause) {
     console.warn(`extension ${extension.id}: the command ${command.id} failed`, cause);
+    // An Opération en cours of the command (`trackOperation`) already said it.
+    if (errorAlreadyShown(cause)) return;
     const reason = cause instanceof Error ? cause.message : String(cause);
     toast(`“${command.title}” failed: ${reason}`, "error");
   }

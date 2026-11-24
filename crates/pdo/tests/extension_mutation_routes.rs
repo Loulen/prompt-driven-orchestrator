@@ -29,6 +29,18 @@ const NOT_MUTATIONS: &[(&str, &str, &str)] = &[
          Actor's, so no Operation is asked (`actor_appearance.rs`)",
     ),
     (
+        "PUT",
+        "/bug-report/last",
+        "the caller's own last Destination de bug report, like its Apparence: no Ressource of \
+         the instance, never another Actor's (`extension_bug_report.rs`)",
+    ),
+    (
+        "POST",
+        "/bug-report",
+        "hands a Rapport de bug to an extension's destination: the core stores nothing, and the \
+         extension offers only the destinations the caller may send to (`extension_bug_report.rs`)",
+    ),
+    (
         "POST",
         "/repos/provisioning/preview",
         "computes the plan of a worktree provisioning; stores nothing",
@@ -494,6 +506,36 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
             "/sessions/libassist/save",
             "/sessions/libassist/save".into(),
             Some(json!({ "yaml": "name: review\n" })),
+        ),
+        call(
+            "POST",
+            "/sessions/support",
+            "/sessions/support".into(),
+            Some(json!({ "choice": { "mode": "custom", "harness": "claude" } })),
+        ),
+        call(
+            "POST",
+            "/sessions/support/ask",
+            "/sessions/support/ask".into(),
+            Some(json!({ "question": "how?" })),
+        ),
+        call(
+            "POST",
+            "/sessions/support/keep",
+            "/sessions/support/keep".into(),
+            None,
+        ),
+        call(
+            "POST",
+            "/sessions/support/source",
+            "/sessions/support/source".into(),
+            None,
+        ),
+        call(
+            "DELETE",
+            "/sessions/support",
+            "/sessions/support".into(),
+            None,
         ),
         call(
             "PUT",

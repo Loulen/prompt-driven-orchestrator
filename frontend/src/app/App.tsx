@@ -312,7 +312,7 @@ export default function App() {
               selectedTrigger={selectedTrigger}
               triggerPromptRequired={triggerPromptRequired}
               firesRefreshKey={firesRefreshKey}
-              onRunNowTrigger={(t) => void launch.handleRunNowTrigger(t)}
+              onRunNowTrigger={launch.handleRunNowTrigger}
               onEditTrigger={(t) => openNewRunModal({ kind: "edit-trigger", trigger: t })}
               projects={projects}
               runNode={runNode}

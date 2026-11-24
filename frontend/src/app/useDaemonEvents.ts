@@ -7,6 +7,7 @@ import { announceHarnessCatalogueChanged } from "../harness/store/useHarnessCata
 import { announceSettingsWritten } from "../settings/store/useSettings";
 import { announceLaunchOfferChanged } from "../run/store/useLaunchTargets";
 import { syncAppearance } from "../hooks/useAppearance";
+import { useSupportAgent } from "../session/store/supportAgentStore";
 
 /** What the live stream refreshes. */
 export interface DaemonEventTargets {
@@ -74,6 +75,8 @@ export function useDaemonEvents({
       refreshProjects();
       void loadPipelines();
       announceLaunchOfferChanged();
+      // The support agent may have asked « Still there? », or closed, meanwhile.
+      void useSupportAgent.getState().refresh();
     });
     // CORE-42: the gestures shown follow the rights and the Projets.
     const gestures = trailingWindow(refreshGestureRights);
@@ -124,6 +127,14 @@ export function useDaemonEvents({
       // so no refresh is needed; just mirror the flag.
       if (msg.type === "triggers_paused") {
         setTriggersPaused(!!msg.paused);
+        return;
+      }
+      // The caller's support agent changed: « Still there? » in every tab,
+      // answered in one, a new answer, its end.
+      if (msg.type === "support_agent_changed") {
+        if (msg.support_session && msg.support) {
+          useSupportAgent.getState().changed(msg.support_session, msg.support);
+        }
         return;
       }
       // A harness's catalogue probed again, here or in another browser: every

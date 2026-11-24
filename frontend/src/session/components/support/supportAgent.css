@@ -1,0 +1,83 @@
+/* The Agent de support: its identity at the head of the enlarged terminal's bar. */
+.sa-ident {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.sa-ident__name {
+  font-size: var(--fs-sm);
+  font-weight: var(--w-strong);
+  color: var(--text);
+  white-space: nowrap;
+}
+.sa-ident__tag {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.sa-none {
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+}
+/* The « Open support agent » window: each label above its field, the field
+   across the window's width (the agent's panel opens as wide, under it). */
+.sa-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--g-6);
+  min-width: 0;
+}
+.sa-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--g-4);
+  min-width: 0;
+  font-size: var(--fs-sm);
+}
+.sa-form__label {
+  color: var(--text-2);
+}
+/* The warning says it whole: it wraps rather than cut the agent's name. */
+.sa-form .d-banner {
+  padding-block: var(--g-2);
+}
+.sa-form .d-banner__text {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+/* The entry at the right end of the status bar: the harness's logo or « ? »,
+   an amber dot at its top right when the agent answered since it was minimized. */
+.sa-entry {
+  position: relative;
+}
+.sa-entry__dot {
+  position: absolute;
+  top: 3px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-st-await);
+  box-shadow: 0 0 0 1.5px var(--surface-2);
+}
+/* « Still there? »: the sentence, then the countdown. */
+.sa-still {
+  display: flex;
+  flex-direction: column;
+  gap: var(--g-3);
+}
+.sa-still__lead {
+  margin: 0;
+  color: var(--text);
+}
+.sa-still__note {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+.sa-still__count {
+  font-family: var(--font-code);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-st-await);
+}

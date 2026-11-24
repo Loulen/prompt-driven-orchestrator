@@ -142,8 +142,9 @@ async function startInteractiveRun(ctx) {
   await waitInteractiveServed(instance, false);
   // Opening the run selects its live node: `implementer`, its terminal attached.
   await openRun(ctx, INTERACTIVE_TASK.name);
-  // Attached live, this browser at the keys: the terminal bar reads « You pilot ».
-  await page.locator('[data-testid="term-mode"][data-role="pilot"]').waitFor({ timeout: 30_000 });
+  // Attached live, this browser alone at the keys: the terminal bar names no
+  // role, only the connection (CORE-223).
+  await page.locator('[data-testid="term-mode"]', { hasText: "attached · live" }).waitFor({ timeout: 30_000 });
   await restCursor(ctx);
   return runId;
 }

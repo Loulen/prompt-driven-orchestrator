@@ -10,6 +10,7 @@ mod hosted;
 pub mod origin;
 mod pane;
 mod sessions;
+mod support;
 mod terminal;
 mod terminal_text;
 mod terminal_zoom;
@@ -29,6 +30,10 @@ use crate::Session;
 pub use assistant::LibassistResponse;
 pub use pane::PaneResponse;
 pub use sessions::{AttachResponse, ShellResponse};
+pub use support::{
+    AskSupportRequest, CoreSourceResponse, OpenSupportRequest, StillThereView, SupportAgentView,
+    SupportStatusResponse,
+};
 pub use terminal_text::TerminalTextResponse;
 pub use terminal_zoom::TerminalZoomResponse;
 
@@ -95,6 +100,20 @@ pub fn router(session: Arc<Session>) -> Router {
         // library store, so any second naming is a way of naming the wrong file.
         .route("/sessions/libassist/save", post(assistant::save))
         .route("/sessions/libassist/draft", get(assistant::draft))
+        // The Agent de support of the caller, one per Actor: no id in the
+        // path. `POST` opens it (refused while one lives, unless `replace`),
+        // `GET` reads it, `DELETE` closes it, `ask` types a question into it,
+        // `keep` answers « Still there? », `source` gives it the core's code at
+        // the instance's tag (a clone made at the first demand, then kept).
+        .route(
+            "/sessions/support",
+            get(support::status)
+                .post(support::open)
+                .delete(support::close),
+        )
+        .route("/sessions/support/ask", post(support::ask))
+        .route("/sessions/support/keep", post(support::keep))
+        .route("/sessions/support/source", post(support::source))
         .with_state(session)
 }
 

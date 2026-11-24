@@ -17,9 +17,12 @@ use std::net::IpAddr;
 
 use clap::{Parser, Subcommand};
 use pdo_pipeline::adapters::cli::PipelineAction;
-use pdo_platform::adapters::cli::{AuditArgs, PageAction, ServiceAction, UpdateAction};
+use pdo_platform::adapters::cli::{
+    AuditArgs, BugReportAction, PageAction, ServiceAction, UpdateAction,
+};
 use pdo_review::adapters::cli::ReviewAction;
 use pdo_run::adapters::cli::{NodeAction, RunAction};
+use pdo_session::adapters::cli::support::SupportAction;
 use pdo_session::adapters::cli::SessionAction;
 use pdo_settings::adapters::cli::SettingsAction;
 use pdo_skill::adapters::cli::SkillAction;
@@ -197,6 +200,13 @@ pub enum Commands {
         #[command(subcommand)]
         action: SessionAction,
     },
+    /// Your support agent: an agent the core holds for you outside any Run,
+    /// with your rights. Open it on a profile or a harness, ask it, read it,
+    /// close it. Exits 4 when you ask with none open.
+    Support {
+        #[command(subcommand)]
+        action: SupportAction,
+    },
     /// The nodes of a Run: retry, skip, restart, start, stop, kill, recover,
     /// done, release, extend, attach files; their prompt, inputs and outputs,
     /// diff and transcript. Exits 4 when the daemon knows no such Run or node.
@@ -240,6 +250,12 @@ pub enum Commands {
     },
     /// The journal of the mutations made outside a Run, newest first.
     Audit(AuditArgs),
+    /// The Destinations de bug report the extensions offer: list them, send
+    /// a report to one, remember your last choice.
+    BugReport {
+        #[command(subcommand)]
+        action: BugReportAction,
+    },
     /// The Actor the daemon names you: the local operator, the agent of your
     /// node session, or the one your `PDO_TOKEN` establishes.
     Whoami {

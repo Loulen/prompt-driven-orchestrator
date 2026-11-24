@@ -1,38 +1,31 @@
+import { ConfirmDialog } from "../../shared/ui/kit";
+
 interface Props {
-  onConfirm: () => void;
+  runId: string;
+  /** The forget itself: the dialog waits for it, closes on success, keeps a failure on screen. */
+  onConfirm: () => Promise<unknown>;
   onCancel: () => void;
 }
 
-export default function ForgetRunModal({ onConfirm, onCancel }: Props) {
+/**
+ * The confirmation of forgetting an archived Run, on the kit's
+ * `ConfirmDialog`: its event log is deleted, the Run appears nowhere any more
+ * and the manager loses its post-mortem context. It cannot be undone.
+ */
+export default function ForgetRunModal({ runId, onConfirm, onCancel }: Props) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim">
-      <div className="w-[400px] rounded-lg border border-line bg-surface-1 p-4 shadow-lg">
-        <h3 className="font-medium text-text text-md">
-          Forget Run Permanently
-        </h3>
-        <p className="mt-2 text-text-3 text-sm">
-          This will permanently delete the event log for this run. The run will
-          no longer appear anywhere and the manager will lose any post-mortem
-          context for it.
-        </p>
-        <p className="mt-2 text-text-3 text-sm" style={{ fontWeight: 500 }}>
-          This cannot be undone.
-        </p>
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            onClick={onCancel}
-            className="cursor-pointer rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover text-xs"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            className="cursor-pointer rounded-md bg-st-failed px-3 py-1.5 text-primary-ink transition-colors hover:bg-st-failed/80 text-xs"
-          >
-            Forget
-          </button>
-        </div>
-      </div>
-    </div>
+    <ConfirmDialog
+      title="Forget this run permanently?"
+      consequence="Deletes its event log, for good"
+      target={runId}
+      actionLabel="Forget"
+      pendingLabel="Forgetting…"
+      failedTitle="Forgetting failed"
+      danger
+      onConfirm={onConfirm}
+      onClose={onCancel}
+      data-testid="forget-run-modal"
+      confirmTestId="forget-run-confirm"
+    />
   );
 }

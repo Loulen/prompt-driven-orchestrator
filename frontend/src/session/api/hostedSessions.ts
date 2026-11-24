@@ -13,16 +13,16 @@ export function fetchHostedSession(id: string): Promise<HostedSessionView> {
 }
 
 export function terminateHostedSession(id: string): Promise<HostedSession> {
-  return request<HostedSession>("POST", `${base(id)}/terminate`, { label: "Terminate" });
+  return request<HostedSession>("POST", `${base(id)}/terminate`, { label: "Terminating session" });
 }
 
 export function relaunchHostedSession(id: string): Promise<HostedSession> {
-  return request<HostedSession>("POST", `${base(id)}/relaunch`, { label: "Relaunch" });
+  return request<HostedSession>("POST", `${base(id)}/relaunch`, { label: "Relaunching session" });
 }
 
 /** Replace its whole configuration, for its next relaunch. */
 export function configureHostedSession(id: string, config: HostedConfig): Promise<HostedSession> {
-  return request<HostedSession>("PUT", `${base(id)}/config`, { body: config, label: "Configuration" });
+  return request<HostedSession>("PUT", `${base(id)}/config`, { body: config, label: "Saving session configuration" });
 }
 
 /** Its journal, oldest first. */

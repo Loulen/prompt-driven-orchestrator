@@ -145,7 +145,8 @@ class FakeApp {
           name: "implementer",
           type: "agent",
           interactive: false,
-          isolated_worktree: true,
+          // What the canvas gives a new node: the Run's worktree.
+          isolated_worktree: false,
           inputs: [{ name: "in" }],
           outputs: [{ name: "out" }],
         },
@@ -298,7 +299,9 @@ function gestures(fake: FakeApp): Record<string, () => void> {
     },
     "name-implementer": () => fake.type(NAME_INPUT, "implementer"),
     "implementer-interactive": () => fake.updateAgent(0, { interactive: true }),
-    "implementer-worktree": () => fake.updateAgent(0, { isolated_worktree: false }),
+    // Nothing to do: a new agent already shares the Run's worktree. The step is
+    // an acknowledge.
+    "implementer-worktree": () => {},
     "implementer-prompt": () => fake.type(PROMPT_INPUT, "Implement what the user asked for."),
     "implementer-out": () =>
       fake.updateAgent(0, {
@@ -316,8 +319,7 @@ function gestures(fake: FakeApp): Record<string, () => void> {
     },
     "name-tester": () => fake.type(NAME_INPUT, "tester"),
     "tester-interactive": () => fake.updateAgent(1, { interactive: true }),
-    // Nothing to do: a new agent is already isolated. The step is an acknowledge.
-    "tester-worktree": () => {},
+    "tester-worktree": () => fake.updateAgent(1, { isolated_worktree: true }),
     "tester-prompt": () => fake.type(PROMPT_INPUT, "Review the change and test it."),
     "tester-out": () =>
       fake.updateAgent(1, {
@@ -882,14 +884,17 @@ describe("the shape of every step", () => {
   });
 
   /**
-   * FP of CORE-227: step 10 said « Pick Run worktree » over a segmented control
+   * Step 10 once said « Pick Run worktree » over a segmented control
    * whose buttons read Isolated and Shared. A card names what is written on the
    * button, and the end card says the same word.
    */
   it("names the Worktree choice the way its button reads", () => {
     const step = STEPS.find((s) => s.id === "implementer-worktree")!;
-    expect(bodyOf(step)).toContain(`Pick ${workspaceButton(false)}`);
+    expect(bodyOf(step)).toContain(`already on ${workspaceButton(false)}`);
     expect(`${step.title} ${bodyOf(step)}`).not.toContain("Run worktree");
+    const tester = STEPS.find((s) => s.id === "tester-worktree")!;
+    expect(bodyOf(tester)).toContain(`Pick ${workspaceButton(true)}`);
+    expect(`${tester.title} ${bodyOf(tester)}`).not.toContain("Isolated worktree");
     const recap = FIRST_PIPELINE_TOUR.recap as { label: string; text: string }[];
     const implementer = recap.find((r) => r.label === "implementer")!;
     expect(implementer.text).toContain(workspaceButton(false));

@@ -181,7 +181,12 @@ describe("the command field", () => {
     fireEvent.click(screen.getByTestId("command-field"));
     const input = screen.getByTestId("command-palette-input");
     await waitFor(() => expect(input).toHaveFocus());
+    // Nothing matches: the support agent's group alone offers to ask it.
     fireEvent.change(input, { target: { value: "deploy" } });
+    expect(screen.queryByTestId("command-palette-empty")).toBeNull();
+    expect(screen.getByTestId("palette-group-support")).toHaveTextContent("Ask the support agent: deploy");
+    // Under `>`, no command matches.
+    fireEvent.change(input, { target: { value: ">deploy" } });
     expect(screen.getByTestId("command-palette-empty")).toHaveTextContent("No match");
     fireEvent.keyDown(input, { key: "Escape" });
     expect(screen.queryByTestId("command-palette")).toBeNull();

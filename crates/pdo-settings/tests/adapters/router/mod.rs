@@ -64,6 +64,9 @@ impl CatalogueEvents for NoCatalogueEvents {
     fn settings_changed(&self) {}
 }
 
+/// The machine's address the daemon would have computed at boot.
+pub(super) const PUBLIC_URL_DEFAULT: &str = "http://atelier:5272";
+
 pub(super) struct TestState {
     pub db: SqlitePool,
     pub settings: Arc<Settings>,
@@ -102,7 +105,9 @@ pub(super) async fn test_state() -> TestState {
             Arc::new(SessionDefaults),
             Arc::new(TriggerDefaults),
             Arc::new(ReviewDefaults),
-            Arc::new(PlatformDefaults),
+            Arc::new(PlatformDefaults {
+                public_url_default: PUBLIC_URL_DEFAULT.into(),
+            }),
             Arc::new(TelemetryDefaults),
             Arc::new(SandboxSection::new(
                 profiles.clone(),

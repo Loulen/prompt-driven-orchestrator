@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use pdo_extension_api::{
-    ActorDisplay, Admission, Attributes, Authorization, EntityRef, Extension, ExtensionContext,
-    ExtensionData, Host, Manifest, RequestParts, Resource, ResourceKind, SessionLaunch, TriggerRef,
-    EXTENSION_EVENT,
+    ActorDisplay, Admission, Attributes, Authorization, BugReport, BugReportSent, EntityRef,
+    Extension, ExtensionContext, ExtensionData, Host, Manifest, RequestParts, Resource,
+    ResourceKind, SessionLaunch, TriggerRef, EXTENSION_EVENT,
 };
 use serde_json::Value;
 use tokio::sync::broadcast::error::RecvError;
@@ -22,6 +22,7 @@ use crate::project_names::ProjectNames;
 use crate::registration::{check_manifests, RegistrationError};
 use crate::{Actor, Operation};
 
+mod bug_report;
 mod creation;
 mod git;
 mod host_of;
@@ -33,12 +34,13 @@ mod node_write;
 mod port;
 mod run_view;
 mod skills;
+pub use bug_report::{BugReportNotReceived, OfferedDestination};
 pub use creation::{CreationRefusal, RunCreator};
 pub use git::{actor_in_sentence, GitCredentials, ProvidedFor, CORE_GIT_VARIABLES};
 use host_of::{panic_message, ExtensionHostOf};
 pub use hosted::HostedSessions;
 pub use identity::Identification;
-pub use launch::{is_env_name, NodeContribution, TriggerSuspension};
+pub use launch::{is_env_name, NodeContribution, TriggerSuspension, CLAUDE_CONFIG_DIR};
 pub use neutral::NoExtensions;
 pub use node_write::NodeWrites;
 /// What a network git operation is, as the extensions see it.
@@ -379,6 +381,19 @@ impl ExtensionHost for Extensions {
 
     fn guard_ended(&self, end: &GuardEnd) {
         git::guard_ended(self, end)
+    }
+
+    fn bug_report_destinations(&self, actor: &Actor) -> Vec<OfferedDestination> {
+        self.offered_destinations(actor)
+    }
+
+    fn receive_bug_report(
+        &self,
+        actor: &Actor,
+        extension: &str,
+        report: &BugReport,
+    ) -> Result<BugReportSent, BugReportNotReceived> {
+        self.receive_report(actor, extension, report)
     }
 }
 

@@ -1,10 +1,12 @@
 //! The CLI of the platform context: `pdo page` (a client of the daemon's
-//! `/pages`), `pdo audit` (its journal), `pdo update` (its version check and
+//! `/pages`), `pdo audit` (its journal), `pdo bug-report` (the Destinations de
+//! bug report), `pdo update` (its version check and
 //! update), `pdo service` (runs on the host, no daemon involved), and
 //! [`daemon`], the client every operator command of the other contexts
 //! reaches the daemon with.
 
 mod audit;
+mod bug_report;
 pub mod daemon;
 mod page;
 mod service;
@@ -17,6 +19,7 @@ use std::path::PathBuf;
 use clap::Subcommand;
 
 pub use audit::{run_audit, AuditArgs};
+pub use bug_report::{run_bug_report, BugReportAction};
 pub use page::run_page;
 pub use service::run_service;
 pub use update::{run_update, UpdateAction};

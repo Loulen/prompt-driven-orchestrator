@@ -10,6 +10,7 @@ import type { Actor } from "../../shared/generated/Actor";
 import type { Presence } from "../../shared/generated/Presence";
 import type { DraftSummary } from "../../shared/generated/DraftSummary";
 import type { HostedLiveArtifact, HostedSession } from "../../session/model/hostedSession";
+import type { SupportChange } from "../../shared/generated/SupportChange";
 
 export interface WsMessage {
   type:
@@ -45,6 +46,9 @@ export interface WsMessage {
     | "hosted_live_artifacts_changed"
     /** An event an extension published (`Host::publish`). */
     | "extension_event"
+    /** What changed of the caller's support agent: opened, « Still there? »,
+     *  answered, kept, closed. */
+    | "support_agent_changed"
     /** Re-read the whole state (ADR-0083 §6): sent by the daemon to a client
      *  that lost messages, and emitted by the stream itself after each
      *  (re)opening, a return to the tab and a return of the network. */
@@ -83,4 +87,8 @@ export interface WsMessage {
   /** Set on `hosted_live_artifacts_changed` messages: every Artefact live the
    *  session now has. */
   artifacts?: HostedLiveArtifact[];
+  /** Set on `support_agent_changed` messages: the support agent's session. */
+  support_session?: string;
+  /** Set on `support_agent_changed` messages: what changed of it. */
+  support?: SupportChange;
 }

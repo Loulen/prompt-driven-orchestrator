@@ -12,6 +12,7 @@ import type { ReviewCommentsApi } from "../model/commentsApi";
 import type { ReviewCommentState } from "./useReviewCommentState";
 import type { ReviewEntries } from "./useReviewEntries";
 import type { ReviewRefusals } from "./useReviewRefusals";
+import { errorAlreadyShown } from "../../shared/http/operations";
 
 interface Args {
   runId: string;
@@ -108,7 +109,8 @@ export function useReviewGestures({
           showToast(`${c.id}: proposal declined — the comment stays open for ${authorLabel(res.comment.replies?.at(-1)?.author ?? "agent")}.`);
         }
       } catch (e: unknown) {
-        showToast(`${verb === "resolve" ? "Resolve" : "Reopen"} failed — ${e instanceof Error ? e.message : String(e)}`, true);
+        // Its operation already said it (the HTTP client's toast).
+        if (!errorAlreadyShown(e)) showToast(`${verb === "resolve" ? "Resolve" : "Reopen"} failed — ${e instanceof Error ? e.message : String(e)}`, true);
       } finally {
         setDeciding((d) => {
           const next = new Set(d);
@@ -144,7 +146,8 @@ export function useReviewGestures({
         );
       } catch (e: unknown) {
         // Nothing is lost: the drafts stay drafts, the operator retries.
-        showToast(`Send failed — ${e instanceof Error ? e.message : String(e)}. Your drafts are kept.`, true);
+        if (errorAlreadyShown(e)) showToast("Your drafts are kept.");
+        else showToast(`Send failed — ${e instanceof Error ? e.message : String(e)}. Your drafts are kept.`, true);
       } finally {
         setSendingKeys(new Set());
         setStartingManager(false);
@@ -171,7 +174,7 @@ export function useReviewGestures({
         `${plural(res.resent.length, "comment")} sent again${res.manager_started ? " — manager started" : ""}. Replies show up inline.`,
       );
     } catch (e: unknown) {
-      showToast(`Send again failed — ${e instanceof Error ? e.message : String(e)}`, true);
+      if (!errorAlreadyShown(e)) showToast(`Send again failed — ${e instanceof Error ? e.message : String(e)}`, true);
     } finally {
       setResending(false);
     }

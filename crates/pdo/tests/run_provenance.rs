@@ -47,6 +47,8 @@ edges:
 "#;
 
 const CHILD_PIPELINE_NAME: &str = "provenance-child";
+/// A child Run stays live: its `worker` runs. (A bare `Start → End` would
+/// end at once, CORE-142.)
 const CHILD_PIPELINE_YAML: &str = r#"name: provenance-child
 version: "1.0"
 nodes:
@@ -55,6 +57,14 @@ nodes:
     type: start
     outputs:
       - name: user_prompt
+  - id: worker
+    name: worker
+    type: agent
+    isolated_worktree: false
+    inputs:
+      - name: task
+    outputs:
+      - name: result
   - id: end
     name: End
     type: end
@@ -62,6 +72,8 @@ nodes:
       - name: result
 edges:
   - source: { node: start, port: user_prompt }
+    target: { node: worker, port: task }
+  - source: { node: worker, port: result }
     target: { node: end, port: result }
 "#;
 
@@ -104,6 +116,9 @@ fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
         pipelines_dir.join(format!("{CHILD_PIPELINE_NAME}.yaml")),
         CHILD_PIPELINE_YAML,
     )?;
+    let child_prompts = pipelines_dir.join(format!("{CHILD_PIPELINE_NAME}.prompts"));
+    std::fs::create_dir_all(&child_prompts)?;
+    std::fs::write(child_prompts.join("worker.md"), "You are a worker.\n")?;
     git_init_with_commit(repo)?;
     Ok(())
 }

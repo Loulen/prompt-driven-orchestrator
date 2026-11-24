@@ -50,7 +50,13 @@ interface ExtensionsState {
   load: () => Promise<void>;
 }
 
-async function loadOne(entry: ExtensionEntry): Promise<LoadedExtension> {
+/**
+ * Bumped by `resetExtensions`: a load started before the reset (a test that did not
+ * wait for it) neither imports with the next loader nor writes into the reset store.
+ */
+let generation = 0;
+
+async function loadOne(entry: ExtensionEntry, load: BundleLoader): Promise<LoadedExtension> {
   const url = entry.ui?.bundle_url;
   if (!url) return { entry, status: "no-ui", module: null };
   if (entry.ui?.react_major !== hostReactMajor()) {
@@ -61,7 +67,7 @@ async function loadOne(entry: ExtensionEntry): Promise<LoadedExtension> {
     return { entry, status: "incompatible", module: null, incompatibility: "ui-module" };
   }
   try {
-    return { entry, status: "ready", module: await loadBundle(url) };
+    return { entry, status: "ready", module: await load(url) };
   } catch (cause) {
     console.warn(`extension ${entry.id}: its UI bundle ${url} did not load`, cause);
     return { entry, status: "failed", module: null };
@@ -75,6 +81,8 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
   load: async () => {
     if (get().started) return;
     set({ started: true });
+    const mine = generation;
+    const load = loadBundle;
     let entries: ExtensionEntry[];
     try {
       entries = await fetchExtensions();
@@ -83,14 +91,17 @@ export const useExtensionsStore = create<ExtensionsState>((set, get) => ({
       // No `/ext` (an older daemon, a test double): no extension.
       entries = [];
     }
+    if (mine !== generation) return;
     set({ extensions: entries.map((entry) => ({ entry, status: "loading", module: null })) });
-    const loaded = await Promise.all(entries.map(loadOne));
+    const loaded = await Promise.all(entries.map((entry) => loadOne(entry, load)));
+    if (mine !== generation) return;
     set({ extensions: loaded, loaded: true });
   },
 }));
 
 /** Forget what was loaded (tests). */
 export function resetExtensions(): void {
+  generation += 1;
   useExtensionsStore.setState({ extensions: [], started: false, loaded: false });
   setBundleLoader();
 }

@@ -121,13 +121,14 @@ function declaration(reactMajor: number) {
           { location: "settings", id: "settings", label: "Test extension", type: "section", component: "SettingsPanel" },
           { location: "runs/filter", id: "started-by", label: "Started by", type: "list_filter", component: "StartedByFilter" },
           { location: "run/detail", id: "run-tab", label: "Test", type: "tab", component: "RunTab" },
-          // Its 0.2 contributions to `topbar/end`.
-          { location: "topbar/end", id: "page", label: "Test page", type: "page", component: "TestPage", icon },
-          // 0.20: a panel under its icon, which counts the messages.
+          // Its 0.2 contributions to `topbar/end`. 0.20: a panel under its icon,
+          // which counts the messages, declared before the page so the deep
+          // links prove they open the page, never the panel (CORE-165).
           {
             location: "topbar/end", id: "messages", label: "Test messages", type: "panel", component: "MessagesPanel",
             icon: "/ext/test/messages.svg", counter: "/ext/test/messages/counter",
           },
+          { location: "topbar/end", id: "page", label: "Test page", type: "page", component: "TestPage", icon },
           {
             location: "topbar/end", id: "show-context", label: "Show context", type: "action",
             command: "test.show-context", when: { has: "run" },
@@ -408,6 +409,67 @@ test("a full-window page names its header per route, a Banner shows a lock, and 
   });
   expect(shared).toBe(true);
   expect(logs.filter((line) => line.includes("Yjs was already imported"))).toEqual([]);
+});
+
+test("a Banner with wrap shows a whole sentence on several lines, its actions on the right", async ({ page }) => {
+  await playTestExtension(page);
+  await page.goto("/#/ext/test/topbar/end/screens/alpha");
+  const wrapped = page.getByTestId("test-banner-wrap").locator(".d-banner");
+  const plain = page.getByTestId("test-banner-nowrap").locator(".d-banner");
+  await expect(wrapped).toBeVisible();
+  await expect(plain).toBeVisible();
+  await expect(wrapped).not.toHaveAttribute("title");
+  await expect(plain).toHaveAttribute("title", /Editing as markdown/);
+
+  const layout = await page.evaluate(() => {
+    const read = (id: string) => {
+      const root = document.querySelector(`[data-testid="${id}"] .d-banner`) as HTMLElement;
+      const title = root.querySelector(".d-banner__title") as HTMLElement;
+      const text = root.querySelector(".d-banner__text") as HTMLElement | null;
+      const actions = root.querySelector(".d-banner__actions") as HTMLElement;
+      const rootBox = root.getBoundingClientRect();
+      return {
+        height: rootBox.height,
+        rightGap: rootBox.right - actions.getBoundingClientRect().right - parseFloat(getComputedStyle(root).paddingRight),
+        titleOverflows: title.scrollWidth > title.clientWidth,
+        titleWhiteSpace: getComputedStyle(title).whiteSpace,
+        titleWeight: getComputedStyle(title).fontWeight,
+        textOverflow: text ? getComputedStyle(text).textOverflow : null,
+      };
+    };
+    return { wrapped: read("test-banner-wrap"), plain: read("test-banner-nowrap") };
+  });
+  expect(layout.wrapped.titleOverflows).toBe(false);
+  expect(layout.wrapped.titleWhiteSpace).toBe("normal");
+  expect(layout.wrapped.titleWeight).toBe("400");
+  expect(layout.wrapped.height).toBeGreaterThan(layout.plain.height);
+  expect(Math.abs(layout.wrapped.rightGap)).toBeLessThan(1);
+  // Without wrap: one line, the text cut with an ellipsis.
+  expect(layout.plain.titleWhiteSpace).toBe("nowrap");
+  expect(layout.plain.textOverflow).toBe("ellipsis");
+
+  // wrap with a title and a text: the text under the title, as wide, no lighter.
+  const stacked = await page.evaluate(() => {
+    const root = document.querySelector('[data-testid="test-banner-wrap-text"] .d-banner') as HTMLElement;
+    const title = root.querySelector(".d-banner__title") as HTMLElement;
+    const text = root.querySelector(".d-banner__text") as HTMLElement;
+    const actions = root.querySelector(".d-banner__actions") as HTMLElement;
+    const [t, x, a] = [title, text, actions].map((el) => el.getBoundingClientRect());
+    return {
+      textBelowTitle: x.top >= t.bottom - 0.5,
+      sameLeft: Math.abs(x.left - t.left) < 1,
+      textOverflows: text.scrollWidth > text.clientWidth,
+      textWeight: getComputedStyle(text).fontWeight,
+      actionsRightOfText: a.left >= x.right,
+    };
+  });
+  expect(stacked).toEqual({
+    textBelowTitle: true,
+    sameLeft: true,
+    textOverflows: false,
+    textWeight: "400",
+    actionsRightOfText: true,
+  });
 });
 
 test("Action locations: the header, a row's « ⋯ » menu with its when, a failing command, the bulk bar", async ({

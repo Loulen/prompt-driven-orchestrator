@@ -7,6 +7,9 @@
  *
  * `>` at the start of the query keeps the commands: the core's, the
  * extensions' Actions and the selection's.
+ *
+ * The Support group (the support agent's rows, then Report a bug…) comes
+ * last, after every result.
  */
 
 import type { RowAvatar, SearchResult } from "../../shared/extensions/contract";
@@ -24,7 +27,9 @@ export type Lead =
   | { kind: "node"; status: NodeStatus }
   | { kind: "tone"; tone: StatusTone; label: string; shape?: StatusShape | null }
   | { kind: "extension"; url: string | null; label: string }
-  | { kind: "avatar"; avatar: RowAvatar };
+  | { kind: "avatar"; avatar: RowAvatar }
+  /** A harness's logo (the support agent's rows). */
+  | { kind: "harness"; harness: string };
 
 export interface ExtensionRef {
   id: string;
@@ -35,13 +40,15 @@ export interface ExtensionRef {
 export interface PaletteItem {
   /** Unique in the palette. */
   id: string;
-  /** `commands`, `runs`, `pipelines`, `triggers`, `selection`, or `ext:<extension>` for a global Action. */
+  /** `commands`, `runs`, `pipelines`, `triggers`, `support`, `selection`, or `ext:<extension>` for a global Action. */
   group: string;
   label: string;
   /** Facts the match also reads (a Run's pipeline, a Trigger's schedule); never shown in the row. */
   meta?: string;
   lead: Lead;
   kbd?: string;
+  /** Facts shown at the right of the row, muted (the open support agent's harness). */
+  hint?: string;
   /** The current choice (the theme). */
   checked?: boolean;
   /** A contextual Action: the selected item it acts on, shown on its row. */
@@ -108,7 +115,9 @@ export interface BuildInput {
   /** The groups « Show all » opened. */
   expanded: ReadonlySet<string>;
   /** The icons of the core's groups. */
-  icons: Readonly<Record<"selection" | "recent" | "commands" | "runs" | "pipelines" | "triggers", Icon>>;
+  icons: Readonly<Record<"selection" | "recent" | "commands" | "runs" | "pipelines" | "triggers" | "support", Icon>>;
+  /** The support agent's rows, at the head of the Support group, whatever the query. */
+  support?: { icon: Icon; items: PaletteItem[] };
 }
 
 const CORE_GROUPS = [
@@ -201,7 +210,20 @@ export function buildSections(input: BuildInput): Section[] {
   if (text) core.sort((a, b) => b.best - a.best);
   sections.push(...core.map((c) => c.section));
 
-  if (commands) return sections;
+  const support = match(
+    input.items.filter((item) => item.group === "support"),
+    text,
+  );
+  const supportRows: Row[] = [
+    ...(input.support?.items ?? []).map((item): Row => ({ kind: "item", key: item.id, item, hits: [] })),
+    ...support.map(itemRow),
+  ];
+  const supportSection: Section[] =
+    supportRows.length > 0
+      ? [{ key: "support", title: "Support", lead: { kind: "icon", icon: icons.support }, rows: supportRows }]
+      : [];
+
+  if (commands) return [...sections, ...supportSection];
   for (const group of byRank(input.extensions)) {
     const key = `ext:${group.extension.id}`;
     const actions = match(group.actions, text).map(itemRow);
@@ -228,7 +250,7 @@ export function buildSections(input: BuildInput): Section[] {
       rows,
     });
   }
-  return sections;
+  return [...sections, ...supportSection];
 }
 
 /**

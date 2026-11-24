@@ -17,7 +17,7 @@ function settings(): InstanceSettings {
     libassist_idle_ttl_secs: field(120, 120),
     guard_timeout_secs: field(60, 60),
     max_attachments_mb: field(50, 50),
-    public_url: field<string | null>(null, null),
+    public_url: field("http://localhost:5272", "http://localhost:5272"),
     default_model: field<string | null>(null, null),
     default_harness: field<string | null>(null, null),
     default_harness_model: { effective: {}, stored: {} },
@@ -144,3 +144,34 @@ describe("the clones folder in the draft (CORE-97)", () => {
     expect(buildPatch(values, loaded, computeDirty(values, loaded))).toHaveProperty("error");
   });
 });
+
+describe("the support agent's idle timeout in the draft", () => {
+  const withIdle = () => ({ ...settings(), support_idle_timeout_secs: field(1800, 1800) }) as InstanceSettings;
+
+  it("starts on the timeout in force, and sends a change", () => {
+    const loaded = withIdle();
+    const seeded = seedFrom(loaded);
+    expect(seeded.supportIdleStr).toBe("1800");
+    const values = { ...seeded, supportIdleStr: "60" };
+    const dirty = computeDirty(values, loaded);
+    expect([...dirty]).toEqual(["support-idle-timeout"]);
+    expect(buildPatch(values, loaded, dirty)).toEqual({ patch: { support_idle_timeout_secs: 60 } });
+  });
+
+  it("refuses less than a second", () => {
+    const loaded = withIdle();
+    const values = { ...seedFrom(loaded), supportIdleStr: "0" };
+    expect(buildPatch(values, loaded, computeDirty(values, loaded))).toEqual({
+      error: "Support agent idle timeout must be a whole number ≥ 1 second.",
+    });
+  });
+
+  it("is left alone by a daemon without it", () => {
+    const loaded = settings();
+    const values = seedFrom(loaded);
+    expect(values.supportIdleStr).toBe("");
+    expect(computeDirty(values, loaded).has("support-idle-timeout")).toBe(false);
+    expect(buildPatch(values, loaded, computeDirty(values, loaded))).toEqual({ patch: {} });
+  });
+});
+

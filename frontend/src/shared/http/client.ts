@@ -4,6 +4,7 @@
  * The typed wrappers of each context sit on top of it.
  */
 
+import { beginOperation, fallbackLabel as operationFallbackLabel, isMutation } from "./operations";
 import { followSignInOf } from "./signIn";
 
 /** Same-origin: the daemon serves the UI, so every path is relative to it. */
@@ -193,8 +194,29 @@ export interface RequestOpts {
   query?: Record<string, string | number | boolean | undefined>;
   /** Response handling; defaults to `"json"`. */
   responseMode?: ResponseMode;
-  /** Fallback error label; defaults to `` `${method} ${path}` ``. */
+  /**
+   * The name of the request, short, in the present tense (« Archiving run »).
+   * A mutation (POST, PUT, PATCH, DELETE) is an Opération en cours under this
+   * name (`./operations.ts`): its button, the status bar and the toast of its
+   * outcome say it; without it, a name after the method (« Saving… »). Also
+   * the label of an error with no daemon message; defaults there to
+   * `` `${method} ${path}` ``.
+   */
   label?: string;
+  /** The success toast's sentence, past tense (« Pipeline saved »), shown when the mutation took more than 2 s. */
+  done?: string;
+  /**
+   * Not an Opération en cours: a POST that only reads (an authorization
+   * question, a preview, a parse) or one sent on every keystroke. Nothing
+   * shows, nothing is said of its outcome.
+   */
+  silent?: boolean;
+  /**
+   * The refusal statuses the caller says itself (a run-scoped save's 404
+   * closes its tab): the operation ends without an error toast. A raw call
+   * says every `4xx` itself; its `5xx` is still toasted.
+   */
+  quietOn?: number[];
   /**
    * Let the request outlive the document (#594). A normal `fetch` started while
    * the page is unloading is cancelled with it, so the assistant's reap on
@@ -219,6 +241,34 @@ export async function request<T = unknown>(
   path: string,
   opts: RequestOpts = {},
 ): Promise<T> {
+  // A mutation is followed from its start to its outcome; a read, a silent
+  // request and a request outliving the page (`keepalive`) are not.
+  if (!isMutation(method) || opts.silent || opts.keepalive) return send<T>(method, path, opts);
+  const end = beginOperation(opts.label ?? operationFallbackLabel(method), { done: opts.done });
+  try {
+    const result = await send<T>(method, path, opts);
+    const resp = result as unknown as Response;
+    if (opts.responseMode === "raw" && !resp.ok) {
+      // A raw caller owns the status: a refusal (4xx) is its to say (a
+      // verdict, a modal), without a toast; a breakdown (5xx) is toasted.
+      if (resp.status < 500) end(undefined, true);
+      else {
+        // Read a copy, and never fail on it: the caller still owns the body.
+        const errBody: unknown = await Promise.resolve()
+          .then(() => resp.clone().json())
+          .catch(() => undefined);
+        end(new ApiError(apiErrorMessage(errBody, `${opts.label ?? `${method} ${path}`} failed: ${resp.status}`)));
+      }
+    } else end();
+    return result;
+  } catch (error) {
+    const status = error instanceof ApiError ? error.status : undefined;
+    end(error, status !== undefined && (opts.quietOn ?? []).includes(status));
+    throw error;
+  }
+}
+
+async function send<T>(method: string, path: string, opts: RequestOpts): Promise<T> {
   const { body, query, responseMode = "json", label, keepalive, signal } = opts;
 
   let url = BASE + path;

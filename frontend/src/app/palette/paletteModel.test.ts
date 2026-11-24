@@ -12,7 +12,7 @@ import {
   type PaletteItem,
 } from "./paletteModel";
 
-const icons = { selection: Play, recent: Play, commands: Play, runs: Play, pipelines: Play, triggers: Play };
+const icons = { selection: Play, recent: Play, commands: Play, runs: Play, pipelines: Play, triggers: Play, support: Play };
 
 const item = (group: string, label: string, extra: Partial<PaletteItem> = {}): PaletteItem => ({
   id: `${group}:${label}`,
@@ -144,5 +144,16 @@ describe("the palette's groups", () => {
       { extension: { id: "a", name: "Alpha" }, icon: null, rank: null, actions: [item("ext:a", "New note")], sources: [{ key: "a:s", state: undefined }] },
     ];
     expect(titles(input({ extensions }))).toEqual(["commands", "ext:a"]);
+  });
+
+  it("puts the Support group last, after every result, with or without text, under `>` too", () => {
+    const extensions = [
+      { extension: { id: "a", name: "Alpha" }, icon: null, rank: null, actions: [item("ext:a", "Report a note", { command: true })], sources: [] },
+    ];
+    const items = [...input().items, item("support", "Report a bug…", { command: true })];
+    expect(titles(input({ items, extensions }))).toEqual(["commands", "ext:a", "support"]);
+    expect(titles(input({ items, extensions, query: "report" }))).toEqual(["ext:a", "support"]);
+    expect(titles(input({ items, extensions, query: ">report" }))).toEqual(["commands", "support"]);
+    expect(titles(input({ items, query: "nightly" }))).toEqual(["triggers"]);
   });
 });

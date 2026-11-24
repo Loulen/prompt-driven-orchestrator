@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, within } from "@testing-library/react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import UpdateWaitingOverlay from "./UpdateWaitingOverlay";
 import { IDLE, UPDATE_SLOW_AFTER_MS, type UpdateFlowState } from "../model/updateFlow";
@@ -70,6 +70,10 @@ describe("UpdateWaitingOverlay (#699)", () => {
             supervision: "systemd",
             log_path: "/home/u/.pdo/update/a1.log",
             from_version: "1.60.0",
+            to_version: "1.61.0",
+            reason: "The update command exited with code 3.",
+            rolled_back: false,
+            verify_timeout_secs: 90,
           },
         })}
         onDismiss={onDismiss}
@@ -95,5 +99,44 @@ describe("UpdateWaitingOverlay (#699)", () => {
     );
     expect(screen.getByText("Update did not take effect")).toBeInTheDocument();
     expect(screen.getByTestId("update-waiting-error")).toHaveTextContent("did not change");
+  });
+
+  it("rolling back lists the steps: done, the silent version, the restore (CORE-314)", () => {
+    render(
+      <UpdateWaitingOverlay
+        flow={flow({ phase: "rolling-back", toVersion: "1.61.0", verifyTimeoutSecs: 90 })}
+        onDismiss={() => {}}
+        onOpenVersionSettings={() => {}}
+      />,
+    );
+    const steps = screen.getByTestId("update-waiting-steps");
+    expect(steps).toHaveTextContent("Snapshot of the data and the binary");
+    expect(steps).toHaveTextContent("Update command ran");
+    expect(within(steps).getByText("v1.61.0 did not answer within 90 s").closest("[data-tone]")).toHaveAttribute(
+      "data-tone",
+      "failed",
+    );
+    expect(screen.getByTestId("update-waiting-message")).toHaveTextContent("Restoring v1.60.0 and its data…");
+    expect(screen.getByText(/Updating from v1.60.0/)).toBeInTheDocument();
+  });
+
+  it("a Retour automatique ends on « Update failed · back on vY » with the reason, the log and Close", () => {
+    const onOpen = vi.fn();
+    const onDismiss = vi.fn();
+    const reason =
+      "v1.61.0 did not answer within 90 s after the restart.\nThe previous version and its data were restored.";
+    render(
+      <UpdateWaitingOverlay
+        flow={flow({ phase: "rolled-back", error: reason })}
+        onDismiss={onDismiss}
+        onOpenVersionSettings={onOpen}
+      />,
+    );
+    expect(screen.getByTestId("update-waiting-title")).toHaveTextContent("Update failed · back on v1.60.0");
+    expect(screen.getByTestId("update-waiting-error")).toHaveTextContent("did not answer within 90 s");
+    fireEvent.click(screen.getByText("Open the log"));
+    expect(onOpen).toHaveBeenCalled();
+    fireEvent.click(screen.getByText("Close"));
+    expect(onDismiss).toHaveBeenCalled();
   });
 });

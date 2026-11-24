@@ -229,7 +229,28 @@ function TestScreen({ path, navigate }) {
       { style: { ...box, padding: "var(--g-5) var(--g-6)" } },
       h("p", { "data-testid": "test-screen-path" }, `Screen: ${path}`),
       h("span", { style: { alignSelf: "flex-start" } }, h(Button, { size: "sm", onClick: () => navigate(other) }, `Go to ${SCREENS[other].title}`)),
+      path === "screens/alpha" && h(BannerPair),
     ),
+  );
+}
+
+// A whole sentence in a narrow column (API 0.28): `wrap` next to the plain
+// banner, same sentence, so both renderings compare side by side.
+const BANNER_SENTENCE =
+  "Editing as markdown replaces the blocks of this page when you save: comments anchored in the text are kept, the others are lost.";
+
+function BannerPair() {
+  const action = () => h(Button, { size: "sm" }, "Edit");
+  return h(
+    "div",
+    { style: { display: "flex", flexDirection: "column", gap: "var(--g-3)", width: "72ch", maxWidth: "100%" } },
+    h("div", { "data-testid": "test-banner-wrap" }, h(Banner, { tone: "awaiting", title: BANNER_SENTENCE, actions: action(), wrap: true })),
+    h(
+      "div",
+      { "data-testid": "test-banner-wrap-text" },
+      h(Banner, { tone: "awaiting", title: "Markdown", text: BANNER_SENTENCE, actions: action(), wrap: true }),
+    ),
+    h("div", { "data-testid": "test-banner-nowrap" }, h(Banner, { tone: "awaiting", title: "Markdown", text: BANNER_SENTENCE, actions: action() })),
   );
 }
 
@@ -760,6 +781,35 @@ export function RunsEmptyNote() {
       },
       copied === null ? "Copy the admin's address" : copied ? "Copied" : "Copy failed",
     ),
+  );
+}
+
+// `app/banner` (0.31): a full-width banner under the top bar, the kit's
+// `Banner` in the awaiting tone with one action, which opens the extension's
+// Settings page. It renders nothing (and the location takes no room) until
+// `PUT /ext/test/banner` shows it; it is read when the interface loads.
+export function AppBanner() {
+  const state = useJson("/ext/test/banner");
+  if (state?.shown !== true) return null;
+  return h(
+    "div",
+    { "data-testid": "test-app-banner" },
+    h(Banner, {
+      tone: "awaiting",
+      title: "Test banner of the core's test extension",
+      text: "An instance-wide notice",
+      actions: h(
+        Button,
+        {
+          size: "sm",
+          "data-testid": "test-app-banner-action",
+          onClick: () => {
+            window.location.hash = "#/ext/test/settings/page/banner";
+          },
+        },
+        "Open test settings",
+      ),
+    }),
   );
 }
 

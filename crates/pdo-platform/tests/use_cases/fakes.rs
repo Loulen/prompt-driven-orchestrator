@@ -21,6 +21,7 @@ use pdo_platform::domain::release::Release;
 use pdo_platform::domain::service_unit::PortState;
 use pdo_platform::domain::update_check::UpdateCache;
 use pdo_platform::domain::update_plan::UpdatePlan;
+use pdo_platform::domain::update_snapshot::{ReadyMarker, SavedFile, UpdateSnapshot};
 
 /// The rule of a [`Host`] that refuses some Operations only.
 type Rule = Box<dyn Fn(&Actor, &Operation) -> bool + Send + Sync>;
@@ -319,6 +320,8 @@ pub struct Source {
     pub releases: Mutex<Result<Vec<Release>, String>>,
     pub latest_calls: AtomicUsize,
     pub releases_calls: AtomicUsize,
+    /// The identifier presented at each call, `latest` and `releases` alike.
+    pub tokens: Mutex<Vec<Option<String>>>,
 }
 
 impl Source {
@@ -328,20 +331,31 @@ impl Source {
             releases: Mutex::new(releases.map_err(str::to_string)),
             latest_calls: AtomicUsize::new(0),
             releases_calls: AtomicUsize::new(0),
+            tokens: Mutex::new(Vec::new()),
         }
     }
 }
 
 impl ReleaseSource for Source {
-    fn latest<'a>(&'a self, _url: &'a str) -> BoxFuture<'a, Result<String, String>> {
+    fn latest<'a>(
+        &'a self,
+        _url: &'a str,
+        token: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<String, String>> {
         Box::pin(async move {
             self.latest_calls.fetch_add(1, Ordering::SeqCst);
+            self.tokens.lock().unwrap().push(token.map(str::to_string));
             self.latest.lock().unwrap().clone()
         })
     }
-    fn releases<'a>(&'a self, _url: &'a str) -> BoxFuture<'a, Result<Vec<Release>, String>> {
+    fn releases<'a>(
+        &'a self,
+        _url: &'a str,
+        token: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<Vec<Release>, String>> {
         Box::pin(async move {
             self.releases_calls.fetch_add(1, Ordering::SeqCst);
+            self.tokens.lock().unwrap().push(token.map(str::to_string));
             self.releases.lock().unwrap().clone()
         })
     }
@@ -354,6 +368,7 @@ pub struct Journal {
     pub attempt: Mutex<Option<UpdateAttempt>>,
     pub scripts: Mutex<BTreeMap<String, String>>,
     pub logs: Mutex<BTreeMap<String, String>>,
+    pub ready: Mutex<Option<ReadyMarker>>,
 }
 
 impl UpdateJournal for Journal {
@@ -398,12 +413,58 @@ impl UpdateJournal for Journal {
     fn read_log(&self, attempt_id: &str) -> Result<Option<String>, String> {
         Ok(self.logs.lock().unwrap().get(attempt_id).cloned())
     }
+    fn snapshot_dir(&self) -> PathBuf {
+        PathBuf::from("/home/u/.pdo/update/snapshot")
+    }
+    fn ready_marker_path(&self, port: u16) -> PathBuf {
+        PathBuf::from(format!("/home/u/.pdo/update/daemon-{port}.json"))
+    }
+    fn write_ready_marker(&self, _port: u16, marker: &ReadyMarker) -> Result<(), String> {
+        *self.ready.lock().unwrap() = Some(marker.clone());
+        Ok(())
+    }
+}
+
+/// A snapshotter that keeps nothing on disk: it says what it would keep, or
+/// fails with `error`.
+#[derive(Default)]
+pub struct Snapshotter {
+    pub error: Option<String>,
+    pub taken: Mutex<usize>,
+}
+
+impl UpdateSnapshotter for Snapshotter {
+    fn take<'a>(
+        &'a self,
+        dir: &'a Path,
+        exe: &'a Path,
+    ) -> BoxFuture<'a, Result<UpdateSnapshot, String>> {
+        Box::pin(async move {
+            *self.taken.lock().unwrap() += 1;
+            if let Some(e) = &self.error {
+                return Err(e.clone());
+            }
+            Ok(UpdateSnapshot {
+                dir: dir.to_path_buf(),
+                binary: SavedFile {
+                    original: exe.to_path_buf(),
+                    saved: dir.join("pdo"),
+                },
+                databases: vec![SavedFile {
+                    original: PathBuf::from("/home/u/.pdo/app/.pdo/pdo.db"),
+                    saved: dir.join("db-0-pdo.db"),
+                }],
+            })
+        })
+    }
 }
 
 /// An executor whose process exits at once with `exit_code`, or fails to spawn.
 pub struct Executor {
     pub exit_code: Option<i32>,
     pub plans: Mutex<Vec<UpdatePlan>>,
+    /// The release identifier handed with each plan.
+    pub tokens: Mutex<Vec<Option<String>>>,
 }
 
 struct Exited(Option<i32>);
@@ -418,8 +479,17 @@ impl RunningExecutor for Exited {
 }
 
 impl UpdateExecutor for Executor {
-    fn spawn(&self, plan: &UpdatePlan, _script: &Path) -> Result<Box<dyn RunningExecutor>, String> {
+    fn spawn(
+        &self,
+        plan: &UpdatePlan,
+        _script: &Path,
+        release_token: Option<&str>,
+    ) -> Result<Box<dyn RunningExecutor>, String> {
         self.plans.lock().unwrap().push(plan.clone());
+        self.tokens
+            .lock()
+            .unwrap()
+            .push(release_token.map(str::to_string));
         match self.exit_code {
             Some(code) => Ok(Box::new(Exited(Some(code)))),
             None => Err("cannot spawn the update executor: no sh".into()),

@@ -232,6 +232,10 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
    *  focusable), inert, its tooltip says the sentence. Prefer it to `disabled`
    *  for a gesture the caller's rights refuse. Since 0.23. */
   disabledReason?: string;
+  /** Its operation is running (`usePending`): a spinner in place of the
+   *  icon, this text in the present tense in place of its own (« Approving… »)
+   *  when a string, inert (`aria-disabled`, `data-pending="busy"`). */
+  pending?: boolean | string;
 }
 /** A text button: hairline, no fill. */
 export const Button: ForwardRefExoticComponent<ButtonProps & RefAttributes<HTMLButtonElement>>;
@@ -328,6 +332,8 @@ export interface SelectProps<V extends string = string> {
   align?: "start" | "end";
   /** A filter in force: the trigger is tinted. Since 0.20. */
   active?: boolean;
+  /** A refused value: the failed edge, and `aria-invalid`. */
+  invalid?: boolean;
   className?: string;
 }
 /** A single-value dropdown under a bordered 24 px trigger; its tooltip is the value shown. */
@@ -426,6 +432,11 @@ export interface ModalProps {
   onClose: () => void;
   /** false: no close control, Escape and the backdrop do nothing. */
   dismissable?: boolean;
+  /**
+   * Its action is running: the close control stays, greyed with this sentence
+   * in its tooltip, and Escape and the backdrop do nothing until it is lifted.
+   */
+  locked?: string;
   /** s 380, m 500, l 680 px wide. */
   size?: "s" | "m" | "l";
   /** Run by Ctrl+Enter. */
@@ -445,12 +456,63 @@ export interface ConfirmDialogProps {
   actionLabel: string;
   cancelLabel?: string;
   danger?: boolean;
-  onConfirm: () => void;
+  /**
+   * The confirmation. Hand back a promise (the mutation) for the dialog to
+   * wait for it: the button busy (`pendingLabel`), the dialog locked (Cancel,
+   * the close control, Escape and the backdrop do nothing); a success closes
+   * it (`onClose`), a failure keeps it open, the error's `message` in a
+   * banner and the button turned « Retry ». The operations it starts at once
+   * (`trackOperation`) still show in the status bar; their failure is not
+   * toasted again. Hand back nothing to close it yourself.
+   */
+  onConfirm: () => void | Promise<unknown>;
+  /** Cancel, and the close of a confirmation that succeeded. */
   onClose: () => void;
+  /** The button's text while the promise runs: « Archiving… ». Default « <actionLabel>… ». */
+  pendingLabel?: string;
+  /** The failure banner's title: « Archiving failed ». Default: after `pendingLabel`. */
+  failedTitle?: string;
+  /** The button's text after a failure. Default « Retry ». */
+  retryLabel?: string;
+  /** The confirmation cannot be given yet (a name to type): the button is disabled, Enter does nothing. */
+  confirmDisabled?: boolean;
+  /** More of the body, under the target; `data-autofocus` on a field gives it the focus. */
   children?: ReactNode;
+  "data-testid"?: string;
+  confirmTestId?: string;
+  cancelTestId?: string;
 }
-/** A confirmation: Enter or Ctrl+Enter confirms, Escape cancels. */
+/**
+ * A confirmation: Enter or Ctrl+Enter confirms, Escape cancels. An
+ * `onConfirm` that hands back a promise is waited for, locked, and its
+ * failure kept on screen.
+ */
 export function ConfirmDialog(props: ConfirmDialogProps): ReactNode;
+
+/** How `trackOperation` says an operation's outcome and draws its row. */
+export interface TrackOptions {
+  /** Past tense, for the success toast past 2 s: « Note moved ». Default « Done: <label> ». */
+  done?: string;
+  /** The extension's icon (an SVG URL) for its row in the status bar's list; a spinner otherwise. */
+  icon?: string;
+}
+/**
+ * Follow `work` as an Opération en cours named `label` (present tense, short:
+ * « Moving note »), in the core's indicator of the status bar once it lasts
+ * 300 ms; a failure is said in an error toast (the error's message), a
+ * success in a toast past 2 s. Hands back the result, or the rejection
+ * unchanged. For the mutations an extension sends with its own client.
+ */
+export function trackOperation<T>(
+  label: string,
+  work: Promise<T> | (() => Promise<T>),
+  options?: TrackOptions,
+): Promise<T>;
+/** Binds a button to its work: `pending` until the work `run` started settles, for `Button`'s `pending`. */
+export function usePending(): {
+  pending: boolean;
+  run: <T>(work: Promise<T> | (() => Promise<T>)) => Promise<T | undefined>;
+};
 
 export type ToastKind = "info" | "success" | "warning" | "error";
 /** Show `text` for a few seconds in the core's toast stack. */
@@ -465,6 +527,8 @@ export interface TabItem<T extends string = string> {
   label: string;
   icon?: Icon;
   count?: number;
+  /** A short word after the label, in the count's chip: `edited`. */
+  mark?: string;
   kbd?: string;
   disabled?: boolean;
 }
@@ -502,6 +566,10 @@ export function Banner(props: {
   text?: string;
   actions?: ReactNode;
   icon?: Icon;
+  /** Since 0.29: title and text wrap onto several lines, at body weight,
+   *  the text under the title, instead of ending in an ellipsis (a whole
+   *  sentence in a narrow column); the actions stay on the right. */
+  wrap?: boolean;
 }): ReactNode;
 
 /** An icon, 2 to 4 words, one action. */
@@ -726,6 +794,8 @@ declare const ExtensionUi: {
   useActorDisplays: typeof useActorDisplays;
   openProbedSocket: typeof openProbedSocket;
   copyToClipboard: typeof copyToClipboard;
+  trackOperation: typeof trackOperation;
+  usePending: typeof usePending;
   openNewRun: typeof openNewRun;
   runLink: typeof runLink;
   nodeLink: typeof nodeLink;

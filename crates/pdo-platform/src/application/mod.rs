@@ -3,6 +3,7 @@
 //! Autorisation d'opération before it touches anything.
 
 pub mod apply_update;
+pub mod bug_report;
 pub mod check_for_update;
 pub mod get_changelog;
 pub mod get_update_status;

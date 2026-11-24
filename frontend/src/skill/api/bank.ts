@@ -19,7 +19,7 @@ export function createSkill(body: {
   name?: string;
   folder_id?: string | null;
 }): Promise<Skill> {
-  return request("POST", "/settings/skills", { body });
+  return request("POST", "/settings/skills", { body, label: "Creating skill" });
 }
 
 export function fetchSkill(id: string): Promise<SkillDetail> {
@@ -31,12 +31,13 @@ export function updateSkill(
   id: string,
   patch: { name?: string; folder_id?: string | null },
 ): Promise<Skill> {
-  return request("PUT", `/settings/skills/${encodeURIComponent(id)}`, { body: patch });
+  return request("PUT", `/settings/skills/${encodeURIComponent(id)}`, { body: patch, label: "Saving skill" });
 }
 
 export function deleteSkill(id: string): Promise<void> {
   return request("DELETE", `/settings/skills/${encodeURIComponent(id)}`, {
     responseMode: "void",
+    label: "Deleting skill",
   });
 }
 
@@ -48,19 +49,20 @@ export function createSkillFolder(body: {
   name: string;
   parent_id?: string | null;
 }): Promise<SkillFolder> {
-  return request("POST", "/settings/skill-folders", { body });
+  return request("POST", "/settings/skill-folders", { body, label: "Creating skill folder" });
 }
 
 export function updateSkillFolder(
   id: string,
   patch: { name?: string; parent_id?: string | null },
 ): Promise<SkillFolder> {
-  return request("PUT", `/settings/skill-folders/${encodeURIComponent(id)}`, { body: patch });
+  return request("PUT", `/settings/skill-folders/${encodeURIComponent(id)}`, { body: patch, label: "Saving skill folder" });
 }
 
 /** The folder's skills and sub-folders move to its parent; no skill is deleted. */
 export function deleteSkillFolder(id: string): Promise<void> {
   return request("DELETE", `/settings/skill-folders/${encodeURIComponent(id)}`, {
     responseMode: "void",
+    label: "Deleting skill folder",
   });
 }

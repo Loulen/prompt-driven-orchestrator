@@ -215,9 +215,10 @@ export default function FullWindowShell({
 
   return (
     // CORE-183: under the top bar, never over it — its command field, its icons and the
-    // account stay on screen and usable while a surface is open.
-    <div className="fixed inset-x-0 top-(--h-topbar) bottom-0 z-50 bg-surface-1" data-testid={`${testId}-layer`}>
-      <div className="relative flex h-[calc(100dvh/var(--app-zoom,1)_-_var(--h-topbar))] w-[calc(100vw/var(--app-zoom,1))] flex-col bg-surface-2" data-testid={testId}>
+    // account stay on screen and usable while a surface is open. Under the extensions'
+    // application banners too (`app/banner`, `--h-appbanner`), which stay visible.
+    <div className="fixed inset-x-0 top-[calc(var(--h-topbar)+var(--h-appbanner,0px))] bottom-0 z-50 bg-surface-1" data-testid={`${testId}-layer`}>
+      <div className="relative flex h-[calc(100dvh/var(--app-zoom,1)_-_var(--h-topbar)_-_var(--h-appbanner,0px))] w-[calc(100vw/var(--app-zoom,1))] flex-col bg-surface-2" data-testid={testId}>
         <header
           className="flex h-(--h-topbar) shrink-0 items-center gap-3 border-b border-line bg-surface-1 pr-2 pl-3"
           data-testid={`${testId}-header`}

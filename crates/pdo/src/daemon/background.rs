@@ -32,6 +32,7 @@ pub(super) struct Loops {
     _run_modified: Option<JoinHandle<()>>,
     _sessions: JoinHandle<()>,
     _hosted: JoinHandle<()>,
+    _support: JoinHandle<()>,
     _telemetry: Vec<JoinHandle<()>>,
 }
 
@@ -68,6 +69,17 @@ impl Loops {
                     .clone()
                     .watch(pdo_session::application::session_ledger::RECONCILE_INTERVAL),
             ),
+            // The Agents de support's idle watch: « Still there? », then the
+            // close. A nested daemon holds its own agents: it runs it too.
+            _support: {
+                let session = session.clone();
+                tokio::spawn(async move {
+                    session
+                        .support()
+                        .watch_idle(pdo_session::application::support::IDLE_WATCH_INTERVAL)
+                        .await
+                })
+            },
             _telemetry: Vec::new(),
         }
     }

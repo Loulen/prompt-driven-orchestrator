@@ -3,7 +3,7 @@
 //! version, and at which address do humans open PDO? The stored tier is handed
 //! in by the settings context, which keeps it.
 
-use pdo_kernel::instance_default::{Disclosed, Flag, Text};
+use pdo_kernel::instance_default::{Disclosed, Flag};
 
 use super::env::env_update_check;
 use crate::domain::update_check::{resolve_update_check, UPDATE_CHECK_DEFAULT};
@@ -19,14 +19,20 @@ pub fn update_check(stored: Option<i64>) -> Flag {
     )
 }
 
-/// The address humans open PDO at: `stored → env PDO_PUBLIC_URL → none`. No
-/// built-in value: unset, links stay on the daemon's own address.
-pub fn public_url(stored: Option<&str>) -> Text {
+/// The address humans open PDO at, always set: `stored → env PDO_PUBLIC_URL →
+/// default`, the default being the machine's address the daemon computed at
+/// boot ([`pdo_kernel::public_url::default_public_url`]).
+pub fn public_url(stored: Option<&str>, default: &str) -> Disclosed<String, String, String> {
     let env = pdo_kernel::public_url::env_public_url();
     Disclosed::new(
-        pdo_kernel::public_url::resolve(stored, env.clone()),
+        pdo_kernel::public_url::resolve(stored, env.clone(), default),
         stored.map(str::to_string),
         env,
-        None,
+        default.to_string(),
     )
+}
+
+/// The daemon's system, for a bug report: not a knob, a fact of the instance.
+pub fn host_os() -> String {
+    super::host_os::host_os()
 }

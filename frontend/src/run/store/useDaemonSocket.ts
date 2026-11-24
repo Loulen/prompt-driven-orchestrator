@@ -70,6 +70,8 @@ const RELAYED: ReadonlySet<WsMessage["type"]> = new Set<WsMessage["type"]>([
   "hosted_live_artifacts_changed",
   // An extension's own event: the counter of its Page re-reads on it.
   "extension_event",
+  // The caller's support agent: « Still there? », an answer, its end.
+  "support_agent_changed",
   // ADR-0083 §6: the daemon lost messages for this client.
   "resync",
 ]);

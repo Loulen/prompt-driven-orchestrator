@@ -40,6 +40,8 @@ interface Props {
   toolbarIdentity?: ReactNode;
   /** #44: extra gestures at the right of the toolbar, before Copy. */
   toolbarActions?: ReactNode;
+  /** A gesture at the very end of the toolbar, after a separator. */
+  toolbarEnd?: ReactNode;
   /** Files given to the node: dropped on the terminal (with the files) or
    *  asked for with the Import button (empty list). Omit ⇒ no import here (the
    *  Run shell, the assistant). */
@@ -63,6 +65,7 @@ export default function TmuxTerminal({
   onSpectatingChange,
   toolbarIdentity,
   toolbarActions,
+  toolbarEnd,
   onImportFiles,
   importDisabledReason,
   fontScale = 1,
@@ -195,6 +198,7 @@ export default function TmuxTerminal({
         onTakeControl={xterm.takeControl}
         identity={toolbarIdentity}
         actions={toolbarActions}
+        end={toolbarEnd}
         onImport={onImportFiles && !readOnly ? () => onImportFiles([]) : undefined}
         importDisabledReason={importDisabledReason}
       />

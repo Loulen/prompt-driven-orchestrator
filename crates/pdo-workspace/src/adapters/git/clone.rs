@@ -221,6 +221,32 @@ pub async fn ls_remote(url: &str, env: &BTreeMap<String, String>) -> Result<(), 
     }
 }
 
+/// Whether `url` has the tag `tag`, with `env` added to git's environment:
+/// `git ls-remote --tags` asked for that one ref, nothing written.
+/// Non-interactive as the clones are; `Err` carries why the remote could not
+/// be asked (git's stderr, or the `timeout` that elapsed).
+pub async fn remote_has_tag(
+    url: &str,
+    tag: &str,
+    env: &BTreeMap<String, String>,
+    timeout: Duration,
+) -> Result<bool, String> {
+    let mut cmd = network_git(&["ls-remote", "--exit-code", "--tags", "--"], env);
+    cmd.arg(url).arg(format!("refs/tags/{tag}"));
+    let child = cmd.spawn().map_err(|e| format!("cannot run git: {e}"))?;
+    match tokio::time::timeout(timeout, child.wait_with_output()).await {
+        Ok(Ok(output)) if output.status.success() => Ok(true),
+        // `--exit-code`: 2 when the remote answered without that ref.
+        Ok(Ok(output)) if output.status.code() == Some(2) => Ok(false),
+        Ok(Ok(output)) => Err(String::from_utf8_lossy(&output.stderr).trim().to_string()),
+        Ok(Err(e)) => Err(format!("git ls-remote failed: {e}")),
+        Err(_) => Err(format!(
+            "{url} did not answer within {}s",
+            timeout.as_secs()
+        )),
+    }
+}
+
 /// The complete clone at `staging` becomes `dest` (an empty `dest` folder
 /// gives it its place).
 fn into_place(staging: &Path, dest: &Path) -> Result<(), CloneFailure> {

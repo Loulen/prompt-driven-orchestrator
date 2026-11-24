@@ -41,13 +41,13 @@ export function versionsSlice(set: Set, get: Get): Partial<EditState> {
 
     requestSave: (id: string) => {
       const tab = get().openTabs.find((t) => t.id === id);
-      if (!tab || tab.version) return;
+      if (!tab || tab.version) return undefined;
       // A shared draft is frozen as the version the window names.
       if (tab.draft) {
         set({ saveVersionFor: id });
-        return;
+        return undefined;
       }
-      void get().save(id);
+      return get().save(id);
     },
 
     closeSaveVersion: () => set({ saveVersionFor: null }),

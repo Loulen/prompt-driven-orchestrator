@@ -5,6 +5,25 @@
  */
 
 @layer components {
+  /* ------------------------------------------- application banner (`app/banner`) */
+  /* full-width lines under the top bar, one per contribution; a contribution that renders
+     nothing leaves an empty row, which takes no room */
+  .sh-appbanner {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    min-width: 0;
+    background: var(--surface-1);
+  }
+  .sh-appbanner__item {
+    min-width: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .sh-appbanner__item:empty,
+  .sh-appbanner:not(:has(> .sh-appbanner__item:not(:empty))) {
+    display: none;
+  }
+
   /* ---------------------------------------------------------------- top bar, 36 px */
   .sh-tb {
     display: flex;
@@ -251,16 +270,80 @@
     font-family: var(--font-code);
     font-variant-numeric: tabular-nums;
   }
-  .sh-sb__item[data-st="connected"] {
-    color: var(--color-st-done);
-  }
-  .sh-sb__item[data-st="reconnecting"],
   .sh-sb__item[data-near-cap="true"],
   .sh-sb__warn {
     color: var(--color-st-await);
   }
-  .sh-sb__item[data-st="disconnected"] {
+  /* The daemon's indicator: a grey check, the ruby ring of the Opérations en
+     cours, or a red cross when the connection is lost (it wins). */
+  .sh-sb__daemon {
+    color: var(--text-3);
+  }
+  .sh-sb__daemon[data-st="reconnecting"],
+  .sh-sb__daemon[data-st="disconnected"] {
     color: var(--color-st-failed);
+  }
+  .sh-sb__ring {
+    position: relative;
+    display: inline-grid;
+    place-items: center;
+    width: 15px;
+    height: 15px;
+  }
+  .sh-sb__ring-arc {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    fill: none;
+    stroke-width: 1.5;
+  }
+  .sh-sb__ring-track {
+    stroke: color-mix(in oklab, var(--primary) 30%, transparent);
+  }
+  .sh-sb__ring-head {
+    stroke: var(--primary);
+    stroke-dasharray: 26 41;
+    stroke-linecap: round;
+  }
+  .sh-sb__ring-n {
+    position: relative;
+    color: var(--text);
+    font-family: var(--font-code);
+    font-size: var(--fs-2xs);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+  /* The list of the operations in flight: a popover's look, inside the tooltip layer. */
+  .d-tiplayer > .sh-sb__pop {
+    position: static;
+    visibility: visible;
+    min-width: 260px;
+  }
+  .sh-sb__ops {
+    display: flex;
+    flex-direction: column;
+  }
+  .sh-sb__ops .d-pop__group {
+    padding-left: 8px;
+    color: var(--text-3);
+    font-size: var(--fs-2xs);
+    font-weight: var(--w-medium);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .sh-sb__ops .d-pop__row {
+    cursor: default;
+  }
+  .sh-sb__ops .d-pop__mark {
+    color: var(--primary);
+  }
+  .sh-sb__mini-spin {
+    width: 10px;
+    height: 10px;
+    border: 1.5px solid color-mix(in oklab, var(--primary) 30%, transparent);
+    border-top-color: var(--primary);
+    border-radius: 50%;
   }
   .sh-sb__pill {
     padding: 0 4px;

@@ -30,6 +30,11 @@ export interface SplitButtonProps {
    * greyed, its tooltip says this sentence. The chevron stays live.
    */
   pendingReason?: string;
+  /**
+   * The main action's operation is running: `Button`'s `pending` (a spinner,
+   * this text in the present tense when a string, inert). The chevron stays live.
+   */
+  pending?: boolean | string;
   /** The menu under the chevron; without an entry, a plain `Button`. */
   entries?: MenuEntry[];
   /** Accessible name of the chevron and of its menu. */
@@ -58,6 +63,7 @@ export const SplitButton = React.forwardRef<HTMLButtonElement, SplitButtonProps>
     onClick,
     disabledReason,
     pendingReason,
+    pending: busy,
     entries = [],
     menuLabel = "More actions",
     chevronTip,
@@ -67,7 +73,7 @@ export const SplitButton = React.forwardRef<HTMLButtonElement, SplitButtonProps>
   },
   ref,
 ) {
-  const pending = !disabledReason && !!pendingReason;
+  const pending = !disabledReason && !busy && !!pendingReason;
   const main = (
     <Button
       ref={ref}
@@ -78,6 +84,7 @@ export const SplitButton = React.forwardRef<HTMLButtonElement, SplitButtonProps>
       data-pending={pending || undefined}
       className={entries.length > 0 ? "d-split__main" : undefined}
       disabledReason={disabledReason}
+      pending={busy}
       {...(pending
         ? {
             "aria-disabled": true,
@@ -101,7 +108,7 @@ export const SplitButton = React.forwardRef<HTMLButtonElement, SplitButtonProps>
   return (
     <span
       className={cx("d-split", tone === "primary" && "d-split--primary", size === "sm" && "d-split--sm", className)}
-      data-pending={pending || undefined}
+      data-pending={pending || (!disabledReason && busy ? "busy" : undefined) || undefined}
     >
       {mainWithTip}
       <Menu

@@ -8,6 +8,7 @@ import { useDialogFocus } from "../store/useDialogFocus";
 import { registerTransientOverlay } from "../../lib/overlays";
 import { Button, IconButton } from "../../shared/ui/kit";
 import MidPath from "../../shared/ui/MidPath";
+import { useBackdropDismiss } from "../../shared/ui/kit/backdropDismiss";
 
 interface Props {
   /**
@@ -218,16 +219,12 @@ export default function FsExplorerModal({
   const modalId = modalTestId ?? `${testIdPrefix}-modal`;
   const emptyLabel = mode === "file" ? "Nothing here" : "No subfolders here";
 
+  const backdrop = useBackdropDismiss(onClose, true, { stopPropagation: true });
   return (
     <div
       className={`fixed inset-0 ${zIndexClass} flex items-center justify-center bg-scrim`}
       data-testid={`${testIdPrefix}-backdrop`}
-      onClick={(e) => {
-        // Unconditional `stopPropagation`: keeps a backdrop click from bubbling up the
-        // React tree to a parent modal's close handler.
-        e.stopPropagation();
-        onClose();
-      }}
+      {...backdrop}
     >
       <div
         ref={dialogRef}

@@ -79,7 +79,7 @@ export async function markNodeDone(
   const resp = await request<Response>(
     "POST",
     `/runs/${encodeURIComponent(runId)}/commands`,
-    { body: { kind: "mark_node_done", node_id: nodeId, iter }, responseMode: "raw" },
+    { body: { kind: "mark_node_done", node_id: nodeId, iter }, responseMode: "raw", label: "Approving node", done: "Node approved" },
   );
   // GUARDED: the success body of the sibling `POST …/done` route is the bare text
   // `ok`, and the pre-#490 code threw a naked `SyntaxError` on any non-JSON body —
@@ -156,7 +156,7 @@ export async function releaseNodeCompletion(
   const resp = await request<Response>(
     "POST",
     `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/release`,
-    { body: { iter }, responseMode: "raw" },
+    { body: { iter }, responseMode: "raw", label: "Releasing completion" },
   );
   const body: unknown = await resp.json().catch(() => null);
   if (resp.status === 409) {

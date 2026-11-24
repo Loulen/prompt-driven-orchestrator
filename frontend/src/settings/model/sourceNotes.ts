@@ -6,6 +6,7 @@
 import type {
   BoolSettingField,
   EnumSettingFieldWithReason,
+  PublicUrlField,
   SettingField,
   StringSettingField,
 } from "./settings";
@@ -197,17 +198,15 @@ export function telemetryEndpointSourceNote(field: StringSettingField): string {
   return "Source: none set.";
 }
 
-/** Which tier the Public URL comes from. No built-in value: unset, links stay on the
- *  daemon's own address. Discloses a shadowed `PDO_PUBLIC_URL` too. */
-export function publicUrlSourceNote(field: StringSettingField): string {
-  const envDisplay = field.env ? `PDO_PUBLIC_URL=${field.env}` : null;
+/** Which tier the Public URL comes from: the stored setting, `PDO_PUBLIC_URL`, or the
+ *  default, this machine's address. The default is not qualified any further. */
+export function publicUrlSourceNote(field: PublicUrlField): string {
   if (field.source === "stored") {
-    return envDisplay
-      ? `Source: stored setting (wins). Env ${envDisplay} is set but overridden.`
-      : "Source: stored setting (overrides PDO_PUBLIC_URL).";
+    const stored = "Source: stored setting (overrides PDO_PUBLIC_URL and the default).";
+    return field.env ? `${stored} Env PDO_PUBLIC_URL=${field.env} is set but overridden.` : stored;
   }
-  if (field.source === "env") return `Source: env ${envDisplay ?? "PDO_PUBLIC_URL"}.`;
-  return "Source: none set (PDO_PUBLIC_URL unset).";
+  if (field.source === "env") return "Source: environment variable PDO_PUBLIC_URL.";
+  return "Source: default, this machine's address and port.";
 }
 
 /** Which tier the clones folder comes from (CORE-97): stored, else the built-in default. */

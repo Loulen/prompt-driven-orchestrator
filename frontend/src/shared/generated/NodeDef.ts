@@ -61,7 +61,7 @@ auto_fail?: boolean | null,
  * Where this node's NodeRun works (#653, ADR-0060). `true` ⇒ a sub-worktree
  * of its own; `false` ⇒ the Run's shared worktree. Carried only by `agent`
  * and `script`, where [`normalize_node_value`] fills the type's default
- * (`agent` isolated, `script` shared) so the parsed document ALWAYS states
+ * (shared, [`NodeType::default_isolation`]) so the parsed document ALWAYS states
  * the choice — including when it equals the default. `None` on structural
  * nodes (no worktree of their own). Semantic, not layout: moving a node between worktrees changes what
  * the pipeline does, so it enters the diff and the library content hash.

@@ -611,8 +611,8 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
     assert_eq!(ui["react_major"], test_extension::REACT_MAJOR);
     let mut expected = the_four_locations_of_0_1();
     expected.extend([
-        triple("topbar/end", "page", "page"),
         triple("topbar/end", "panel", "messages"),
+        triple("topbar/end", "page", "page"),
         triple("topbar/end", "action", "show-context"),
         triple("topbar/end", "action", "never"),
         triple("node/detail", "tab", "node-tab"),
@@ -639,6 +639,7 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
         triple("stats/tab", "tab", "stats-exploding"),
         triple("settings/page", "page", "settings-page"),
         triple("runs/empty", "decoration", "runs-empty"),
+        triple("app/banner", "decoration", "app-banner"),
         triple("run/item/people", "decoration", "people"),
         triple("review/composer", "completion", "tags"),
         triple("palette", "action", "new-note"),
@@ -708,6 +709,24 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
     assert_eq!(set.status(), 200);
     assert_eq!(control.inbox.count(), 0);
     assert_eq!(daemon.get_json("/ext/test/inbox").await["count"], 0);
+    // 0.31: its application banner renders nothing until a test shows it.
+    assert_eq!(contribution("app-banner")["component"], "AppBanner");
+    assert_eq!(
+        daemon.get_json("/ext/test/banner").await,
+        json!({ "shown": false })
+    );
+    let shown = reqwest::Client::new()
+        .put(format!("{}/ext/test/banner", daemon.url()))
+        .json(&json!({ "shown": true }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(shown.status(), 200);
+    assert!(control.banner.shown());
+    assert_eq!(
+        daemon.get_json("/ext/test/banner").await,
+        json!({ "shown": true })
+    );
     let commands = ui["commands"].as_array().unwrap();
     let new_note = commands
         .iter()
@@ -720,7 +739,7 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
     assert!(commands.iter().any(|c| c["id"] == "test.at-runs-bulk"
         && c["title"] == "Test runs/bulk"
         && c["export"] == "showContext"));
-    let page = &ui["contributions"][4];
+    let page = &ui["contributions"][5];
     assert_eq!(page["icon"], "/ext/test/icon.svg");
     assert_eq!(page["component"], "TestPage");
     let action = &ui["contributions"][6];

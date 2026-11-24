@@ -68,6 +68,12 @@ impl SettingsSection for SessionDefaults {
                     json(session::libassist_idle_ttl_secs(c.libassist_idle_ttl_secs)),
                 ),
                 (
+                    "support_idle_timeout_secs",
+                    json(session::support_idle_timeout_secs(
+                        c.support_idle_timeout_secs,
+                    )),
+                ),
+                (
                     "default_model",
                     json(session::default_model(c.default_model.as_deref())),
                 ),
@@ -115,9 +121,13 @@ impl SettingsSection for ReviewDefaults {
     }
 }
 
-/// Whether the daemon may ask the release source for a newer version, and the
-/// address humans open PDO at.
-pub struct PlatformDefaults;
+/// Whether the daemon may ask the release source for a newer version, the
+/// address humans open PDO at, whose default is `public_url_default` (the
+/// machine's address, computed once at boot), and the system the daemon runs
+/// on (a fact a bug report states, not a knob).
+pub struct PlatformDefaults {
+    pub public_url_default: String,
+}
 
 impl SettingsSection for PlatformDefaults {
     fn disclose<'a>(&'a self, c: &'a InstanceConfig) -> Keys<'a> {
@@ -126,8 +136,12 @@ impl SettingsSection for PlatformDefaults {
                 ("update_check", json(platform::update_check(c.update_check))),
                 (
                     "public_url",
-                    json(platform::public_url(c.public_url.as_deref())),
+                    json(platform::public_url(
+                        c.public_url.as_deref(),
+                        &self.public_url_default,
+                    )),
                 ),
+                ("host_os", json(platform::host_os())),
             ]))
         })
     }

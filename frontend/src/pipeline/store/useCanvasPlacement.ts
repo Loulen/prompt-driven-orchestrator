@@ -12,6 +12,7 @@ import { generateNodeId } from "../../lib/nanoid";
 import { CARD_HEIGHT, CARD_WIDTH, fallbackNodeSpot, fallbackNoteSpot, freeDropSpot } from "../../lib/nodePlacement";
 import { deriveLoopRegions } from "../components/loopRegionDerivation";
 import { newNodeName } from "../model/newNodeName";
+import { defaultIsolation } from "../../lib/nodeIsolation";
 // #723 — orchestrator pastilles on the run-view node card.
 import type { EditorNodeDef } from "../model/pipeline";
 const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
@@ -109,16 +110,16 @@ export function useCanvasPlacement({
     );
 
     const view = computeDropPosition();
+    // A new node shares the Run worktree and states it: isolation is an opt-in
+    // the author makes in the inspector (ADR-0108).
     let newNode: EditorNodeDef;
     switch (type) {
       case "script":
         // #248: a script node's inputs are emergent (edge-derived), like a work
         // node — it declares none. One default output for its `output.md`.
-        // #653: a new Script shares the Run worktree — the inverse default of an
-        // Agent, so lightweight runtime and artifact work stays lightweight.
         newNode = {
           id, name, type, interactive: false, view,
-          isolated_worktree: false,
+          isolated_worktree: defaultIsolation(type),
           inputs: [],
           outputs: [{ name: "out" }],
           // ADR-0089: a new node may publish live artifacts of its own.
@@ -128,9 +129,7 @@ export function useCanvasPlacement({
       default:
         newNode = {
           id, name, type, interactive: false, view,
-          // #653/ADR-0060: a new Agent is isolated. The safe placement is the
-          // default, and sharing the Run worktree is an explicit opt-out.
-          isolated_worktree: true,
+          isolated_worktree: defaultIsolation(type),
           inputs: [{ name: "in" }],
           outputs: [{ name: "out" }],
           // ADR-0089: a new node may publish live artifacts of its own.

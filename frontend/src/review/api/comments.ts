@@ -32,7 +32,7 @@ export function sendReviewComments(
 ): Promise<SendReviewCommentsResponse> {
   return request<SendReviewCommentsResponse>("POST", `/runs/${encodeURIComponent(runId)}/review/comments/send`, {
     body: { comments },
-    label: "Send review comments",
+    label: "Sending review comments",
   });
 }
 
@@ -43,7 +43,7 @@ export function sendReviewComments(
 export function resendReviewComments(runId: string, ids: string[]): Promise<ResendReviewCommentsResponse> {
   return request<ResendReviewCommentsResponse>("POST", `/runs/${encodeURIComponent(runId)}/review/comments/resend`, {
     body: { ids },
-    label: "Send review comments again",
+    label: "Sending review comments again",
   });
 }
 
@@ -52,7 +52,7 @@ export function resolveReviewComment(runId: string, commentId: string): Promise<
   return request<ReviewDecisionResponse>(
     "POST",
     `/runs/${encodeURIComponent(runId)}/review/comments/${encodeURIComponent(commentId)}/resolve`,
-    { body: {}, label: "Resolve review comment" },
+    { body: {}, label: "Resolving review comment" },
   );
 }
 
@@ -61,6 +61,6 @@ export function reopenReviewComment(runId: string, commentId: string): Promise<R
   return request<ReviewDecisionResponse>(
     "POST",
     `/runs/${encodeURIComponent(runId)}/review/comments/${encodeURIComponent(commentId)}/reopen`,
-    { body: {}, label: "Reopen review comment" },
+    { body: {}, label: "Reopening review comment" },
   );
 }

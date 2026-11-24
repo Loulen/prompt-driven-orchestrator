@@ -36,11 +36,13 @@
 //! - **`ui`** (`ui.js`): one element at each location of the catalogue. The
 //!   four locations of 0.1 through their 0.1 slots (`Navigation`,
 //!   `SettingsPanel`, `ListFilter`/`DetailTab` of the Runs), so they prove the
-//!   0.1 form still renders; `topbar/end` through 0.2 contributions: a page with
-//!   its icon (which opens `/ws` through `openProbedSocket` of
-//!   `@pdo/extension-ui`, 0.10, and shows the socket's state), a panel under
-//!   its icon (`MessagesPanel`, 0.20: the items of `messages.rs`, each deleted with
-//!   an « Undo » in a toast; the icon counts them), an action calling [`SHOW_CONTEXT`] while a Run is selected, and
+//!   0.1 form still renders; `topbar/end` through 0.2 contributions: a panel
+//!   under its icon (`MessagesPanel`, 0.20: the items of `messages.rs`, each
+//!   deleted with an « Undo » in a toast; the icon counts them), declared
+//!   **before** the page so a deep link proves it opens the page, never the
+//!   panel (CORE-165); a page with its icon (which opens `/ws` through
+//!   `openProbedSocket` of `@pdo/extension-ui`, 0.10, and shows the socket's
+//!   state), an action calling [`SHOW_CONTEXT`] while a Run is selected, and
 //!   an action whose `when` never holds. The page, at `screens/alpha` and
 //!   `screens/beta`, sets the title and the icon of the shell's header per
 //!   route; `screens/beta` shows a read-only Banner with a lock (0.20); its
@@ -67,6 +69,10 @@
 //!   (0.9): `SettingsPage`, which shows its deep link's path.
 //! - `runs/empty` (0.11): `RunsEmptyNote`, a line saying why the Runs list is
 //!   empty, and a Copy button through `copyToClipboard` of `@pdo/extension-ui`.
+//! - `app/banner` (0.31, `banner.rs`): `AppBanner`, a kit `Banner` (tone
+//!   awaiting) under the top bar whose action opens the extension's Settings
+//!   page at `banner`; it renders nothing until `PUT /ext/test/banner`
+//!   (`{"shown": true}`) shows it (read when the interface loads).
 //! - `review/composer` (0.14): `tags`, a source of completion opened by `#`
 //!   (`suggestTags`: `bug`, `perf`, `review-later` and `run-<the Run's id>`),
 //!   whose inserted `#tag` renders as a chip (`TagChip`).
@@ -132,6 +138,11 @@
 //!   `node_write.rs`): `POST /ext/test/runs/<id>/nodes/<node>/write`
 //!   (`{"text", "iter"?}`) answers a Node that waits for a person on behalf
 //!   of the caller, and names the Node's deep link.
+//! - **`bug_report_destinations`** / **`receive_bug_report`** (API 0.28,
+//!   `bug_reports.rs`): « Test inbox » (accepts the prompts) and « Test
+//!   board », the board alone for the Actor `guest`; each report kept and
+//!   answered `BUG-<n>`, readable at `/ext/test/bug-reports/<n>`; `PUT
+//!   /ext/test/bug-reports/refusal` has it refuse them.
 //! - [`SecondTestExtension`] (`test2`): a second extension with a section at
 //!   `project/edit`, a tab at `session/detail` and a global action of
 //!   `palette` ranked 1, so two extensions share a location, and its group
@@ -150,6 +161,8 @@
 //!
 //! [`Host`]: pdo::extension_api::Host
 
+pub mod banner;
+pub mod bug_reports;
 pub mod creation;
 pub mod gate;
 pub mod hosted;
@@ -169,11 +182,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use pdo::extension_api::{
-    Actor, ActorDisplay, Admission, Attributes, Authorization, CliInvocation, CliOutput, CliSpec,
-    EntityRef, Extension, ExtensionContext, ExtensionSkill, GitEnv, GitOperation, GuardEnd,
-    Manifest, NodeEnv, NodeLaunch, Operation, RequestParts, ResourceDeclaration, ResourceKind,
-    SessionLaunch, Slot, TriggerRef, UiCommand, UiContribution, UiContributions, UiLocation,
-    UiSlot, Verb, When,
+    Actor, ActorDisplay, Admission, Attributes, Authorization, BugReport, BugReportDestination,
+    BugReportSent, CliInvocation, CliOutput, CliSpec, EntityRef, Extension, ExtensionContext,
+    ExtensionSkill, GitEnv, GitOperation, GuardEnd, Manifest, NodeEnv, NodeLaunch, Operation,
+    RequestParts, ResourceDeclaration, ResourceKind, SessionLaunch, Slot, TriggerRef, UiCommand,
+    UiContribution, UiContributions, UiLocation, UiSlot, Verb, When,
 };
 use serde_json::Value;
 
@@ -467,6 +480,10 @@ pub struct Control {
     pub creation: creation::Creation,
     /// The count of its `Inbox` Action (API 0.20).
     pub inbox: palette::Inbox,
+    /// The bug reports it received (API 0.28).
+    pub bug_reports: bug_reports::BugReports,
+    /// Whether its application banner shows (API 0.31).
+    pub banner: banner::AppBanner,
 }
 
 impl Default for Control {
@@ -485,6 +502,8 @@ impl Default for Control {
             launch: launch::Launch::default(),
             creation: creation::Creation::default(),
             inbox: palette::Inbox::default(),
+            bug_reports: bug_reports::BugReports::default(),
+            banner: banner::AppBanner::default(),
         }
     }
 }
@@ -692,6 +711,18 @@ impl Extension for TestExtension {
         self.control.launch.guard_ended(end)
     }
 
+    fn bug_report_destinations(&self, actor: &Actor) -> Vec<BugReportDestination> {
+        self.control.bug_reports.destinations(actor)
+    }
+
+    fn receive_bug_report(
+        &self,
+        actor: &Actor,
+        report: &BugReport,
+    ) -> Result<BugReportSent, String> {
+        self.control.bug_reports.receive(actor, report)
+    }
+
     fn on_create(&self, actor: &Actor, _entity: &EntityRef) -> Attributes {
         let started_by = match actor {
             Actor::Identified { id, .. } => id.clone(),
@@ -777,12 +808,9 @@ impl Extension for TestExtension {
                 "Test",
                 "RunTab",
             ))
-            .contribute(
-                UiContribution::page(UiLocation::TopbarEnd, "page", "Test page", "TestPage")
-                    .with_icon(format!("/ext/{ID}/icon.svg"))
-                    .with_counter(format!("/ext/{ID}/counter")),
-            )
-            // 0.20: a panel under its icon, its counter the messages.
+            // 0.20: a panel under its icon, its counter the messages. Declared before
+            // the page, so the deep links toward the page prove they never open
+            // the panel (CORE-165).
             .contribute(
                 UiContribution::panel(
                     UiLocation::TopbarEnd,
@@ -792,6 +820,11 @@ impl Extension for TestExtension {
                 )
                 .with_icon(format!("/ext/{ID}/messages.svg"))
                 .with_counter(format!("/ext/{ID}/messages/counter")),
+            )
+            .contribute(
+                UiContribution::page(UiLocation::TopbarEnd, "page", "Test page", "TestPage")
+                    .with_icon(format!("/ext/{ID}/icon.svg"))
+                    .with_counter(format!("/ext/{ID}/counter")),
             )
             .contribute(
                 UiContribution::action(UiLocation::TopbarEnd, "show-context", &show_context)
@@ -954,6 +987,14 @@ impl Extension for TestExtension {
                 "runs-empty",
                 "Why empty",
                 "RunsEmptyNote",
+            ))
+            // 0.31: a full-width banner under the top bar, shown only while
+            // `PUT /ext/test/banner` says so (`banner.rs`).
+            .contribute(UiContribution::decoration(
+                UiLocation::AppBanner,
+                "app-banner",
+                "Test banner",
+                "AppBanner",
             ))
             // 0.12: who has the row's Run open.
             .contribute(UiContribution::decoration(

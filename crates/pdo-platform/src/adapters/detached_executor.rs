@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use super::github_releases::GITHUB_TOKEN_ENV;
 use crate::application::ports::{RunningExecutor, UpdateExecutor};
 use crate::domain::update_plan::UpdatePlan;
 
@@ -41,8 +42,13 @@ impl RunningExecutor for Child {
 }
 
 impl UpdateExecutor for DetachedExecutor {
-    fn spawn(&self, plan: &UpdatePlan, script: &Path) -> Result<Box<dyn RunningExecutor>, String> {
-        spawn_detached(plan, script, self.override_cmd.as_deref())
+    fn spawn(
+        &self,
+        plan: &UpdatePlan,
+        script: &Path,
+        release_token: Option<&str>,
+    ) -> Result<Box<dyn RunningExecutor>, String> {
+        spawn_detached(plan, script, self.override_cmd.as_deref(), release_token)
             .map(|child| Box::new(Child(child)) as Box<dyn RunningExecutor>)
             .map_err(|e| format!("cannot spawn the update executor: {e}"))
     }
@@ -52,6 +58,9 @@ impl UpdateExecutor for DetachedExecutor {
 /// stdout+stderr appended to the log. `override_cmd` (the [`EXECUTOR_OVERRIDE_ENV`]
 /// seam) replaces `sh <script>` by `<override_cmd> <script>`; the plan travels as
 /// env variables either way so a fixture can log it without parsing shell.
+/// `release_token`, the release channel's identifier, is set as
+/// [`GITHUB_TOKEN_ENV`] (removed when `None`), for an update command that
+/// downloads from a private source.
 ///
 /// The child is not waited on by the caller — the daemon may be gone before it
 /// ends. It IS reaped when the daemon survives (fixture executor, failed upgrade):
@@ -61,6 +70,7 @@ fn spawn_detached(
     plan: &UpdatePlan,
     script: &Path,
     override_cmd: Option<&str>,
+    release_token: Option<&str>,
 ) -> std::io::Result<std::process::Child> {
     use std::os::unix::process::CommandExt;
     let log = std::fs::OpenOptions::new()
@@ -94,8 +104,12 @@ fn spawn_detached(
         .env("PDO_UPDATE_RELAUNCH", plan.relaunch.join(" "))
         .env("PDO_UPDATE_LOG", &plan.log_path)
         .env("PDO_UPDATE_ATTEMPT_FILE", &plan.attempt_path)
-        .env("PDO_UPDATE_SCRIPT", script)
-        .stdin(std::process::Stdio::null())
+        .env("PDO_UPDATE_SCRIPT", script);
+    match release_token {
+        Some(token) => cmd.env(GITHUB_TOKEN_ENV, token),
+        None => cmd.env_remove(GITHUB_TOKEN_ENV),
+    };
+    cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(log))
         .stderr(std::process::Stdio::from(log_err));
     // SAFETY: `setsid` is async-signal-safe and touches no memory shared with the
@@ -132,6 +146,11 @@ mod tests {
             log_path: dir.join("a1.log"),
             attempt_path: dir.join("last-attempt.json"),
             from_version: "1.0.0".into(),
+            to_version: None,
+            snapshot: None,
+            ready_marker: dir.join("daemon-5172.json"),
+            verify_timeout_secs: 90,
+            release_token_for_command_only: false,
         }
     }
 
@@ -143,7 +162,7 @@ mod tests {
         let executor = DetachedExecutor::new(Some(
             "sh -c 'echo \"$PDO_UPDATE_METHOD $1\"; exit 3' fixture".into(),
         ));
-        let child = executor.spawn(&plan(dir.path()), &script).unwrap();
+        let child = executor.spawn(&plan(dir.path()), &script, None).unwrap();
         assert!(child.pid() > 0);
         assert_eq!(child.wait(), Some(3));
         let log = std::fs::read_to_string(dir.path().join("a1.log")).unwrap();
@@ -156,10 +175,319 @@ mod tests {
         let script = dir.path().join("a1.sh");
         std::fs::write(&script, "echo ran; exit 0\n").unwrap();
         let child = DetachedExecutor::new(None)
-            .spawn(&plan(dir.path()), &script)
+            .spawn(&plan(dir.path()), &script, None)
             .unwrap();
         assert_eq!(child.wait(), Some(0));
         let log = std::fs::read_to_string(dir.path().join("a1.log")).unwrap();
         assert_eq!(log, "ran\n");
+    }
+
+    // ---- The Retour automatique, run for real under `sh` -------------------
+    //
+    // The generated script against fake binaries: `--version` prints the
+    // version, `daemon` writes the readiness marker then sleeps (or, broken,
+    // exits at once). The update command copies the new binary in place and
+    // « migrates » the database, as a new version would.
+
+    use crate::adapters::fs_update_journal::FsUpdateJournal;
+    use crate::application::ports::UpdateJournal;
+    use crate::domain::attempt::AttemptStatus;
+    use crate::domain::install::InstallMethod as Method;
+    use crate::domain::update_plan::render_update_script;
+    use crate::domain::update_snapshot::{SavedFile, UpdateSnapshot};
+    use std::time::{Duration, Instant};
+
+    fn fake_binary(path: &Path, version: &str, marker: &Path, starts: bool) {
+        use std::os::unix::fs::PermissionsExt;
+        let daemon = if starts {
+            // It also notes the release identifier it was started with.
+            format!(
+                "printf '%s' \"${{PDO_GITHUB_TOKEN:-}}\" > {m}.token; \
+                 printf '{{\"version\":\"{version}\",\"pid\":%s}}\\n' $$ > {m}; exec sleep 30",
+                m = marker.display()
+            )
+        } else {
+            "echo 'cannot start' >&2; exit 1".to_string()
+        };
+        std::fs::write(
+            path,
+            format!(
+                "#!/bin/sh\ncase \"$1\" in\n  --version) echo \"pdo {version}\" ;;\n  daemon) {daemon} ;;\nesac\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    fn marker_pid(marker: &Path) -> Option<(String, u32)> {
+        let text = std::fs::read_to_string(marker).ok()?;
+        let v: serde_json::Value = serde_json::from_str(text.trim()).ok()?;
+        Some((
+            v["version"].as_str()?.to_string(),
+            v["pid"].as_u64()? as u32,
+        ))
+    }
+
+    fn alive(pid: u32) -> bool {
+        // SAFETY: signal 0 only checks the pid exists.
+        unsafe { libc::kill(pid as i32, 0) == 0 }
+    }
+
+    struct Rollback {
+        _tmp: tempfile::TempDir,
+        journal: FsUpdateJournal,
+        exe: PathBuf,
+        db: PathBuf,
+        marker: PathBuf,
+        snapshot_dir: PathBuf,
+        old_pid: u32,
+        exit: Option<i32>,
+    }
+
+    impl Drop for Rollback {
+        fn drop(&mut self) {
+            if let Some((_, pid)) = marker_pid(&self.marker) {
+                unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+            }
+            unsafe { libc::kill(self.old_pid as i32, libc::SIGKILL) };
+        }
+    }
+
+    /// Start the « old » daemon (1.0.0), take the snapshot the daemon would,
+    /// then run the executor whose update command is `upgrade` (`$NEW` is the
+    /// new binary, 2.0.0, that starts or not).
+    fn run_update(new_starts: bool, upgrade: &str) -> Rollback {
+        run_update_with(new_starts, upgrade, None)
+    }
+
+    /// [`run_update`], the executor handed `token` as the binary's own release
+    /// identifier.
+    fn run_update_with(new_starts: bool, upgrade: &str, token: Option<&str>) -> Rollback {
+        let tmp = tempfile::tempdir().unwrap();
+        let journal = FsUpdateJournal::new(Some(tmp.path().join("home")));
+        let marker = journal.ready_marker_path(5172);
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        let exe = tmp.path().join("bin/pdo");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        fake_binary(&exe, "1.0.0", &marker, true);
+        let new = tmp.path().join("new-pdo");
+        fake_binary(&new, "2.0.0", &marker, new_starts);
+        let db = tmp.path().join("repo/.pdo/pdo.db");
+        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        std::fs::write(&db, "old data").unwrap();
+        std::fs::write(db.with_file_name("pdo.db-wal"), "old wal").unwrap();
+
+        // The old daemon, reaped by a thread so a stopped one is gone, not a zombie.
+        let mut old = std::process::Command::new(&exe)
+            .arg("daemon")
+            .spawn()
+            .unwrap();
+        let old_pid = old.id();
+        std::thread::spawn(move || old.wait());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while marker_pid(&marker).is_none() {
+            assert!(Instant::now() < deadline, "the old daemon never started");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        // The snapshot, as the daemon takes it before the spawn.
+        let snapshot_dir = journal.snapshot_dir();
+        std::fs::create_dir_all(&snapshot_dir).unwrap();
+        std::fs::copy(&exe, snapshot_dir.join("pdo")).unwrap();
+        std::fs::copy(&db, snapshot_dir.join("db-0-pdo.db")).unwrap();
+        let snapshot = UpdateSnapshot {
+            dir: snapshot_dir.clone(),
+            binary: SavedFile {
+                original: exe.clone(),
+                saved: snapshot_dir.join("pdo"),
+            },
+            databases: vec![SavedFile {
+                original: db.clone(),
+                saved: snapshot_dir.join("db-0-pdo.db"),
+            }],
+        };
+        let upgrade = upgrade
+            .replace("$NEW", &new.display().to_string())
+            .replace("$EXE", &exe.display().to_string())
+            .replace("$DB", &db.display().to_string());
+        let plan = UpdatePlan {
+            attempt_id: "a1".into(),
+            method: Method::Declared,
+            upgrade_command: upgrade,
+            supervision: Supervision::None,
+            exe: exe.clone(),
+            port: 5172,
+            bind: None,
+            working_dir: tmp.path().to_path_buf(),
+            daemon_pid: old_pid,
+            relaunch: vec![exe.display().to_string(), "daemon".into()],
+            log_path: journal.log_path("a1"),
+            attempt_path: journal.attempt_path(),
+            from_version: "1.0.0".into(),
+            to_version: Some("2.0.0".into()),
+            snapshot: Some(snapshot),
+            ready_marker: marker.clone(),
+            verify_timeout_secs: 2,
+            release_token_for_command_only: token.is_some(),
+        };
+        let script = journal
+            .write_script("a1", &render_update_script(&plan))
+            .unwrap();
+        let exit = DetachedExecutor::new(None)
+            .spawn(&plan, &script, token)
+            .unwrap()
+            .wait();
+        Rollback {
+            _tmp: tmp,
+            journal,
+            exe,
+            db,
+            marker,
+            snapshot_dir,
+            old_pid,
+            exit,
+        }
+    }
+
+    #[test]
+    fn a_new_version_that_answers_succeeds_and_drops_the_snapshot() {
+        let r = run_update(true, "cp $NEW $EXE && printf migrated > $DB");
+        let log = r.journal.read_log("a1").unwrap().unwrap_or_default();
+        assert_eq!(r.exit, Some(0), "{log}");
+        let a = r.journal.read_attempt().unwrap();
+        assert_eq!(a.status, AttemptStatus::Succeeded, "{log}");
+        assert!(!a.rolled_back);
+        assert_eq!(a.reason, None);
+        let (version, pid) = marker_pid(&r.marker).unwrap();
+        assert_eq!(version, "2.0.0");
+        assert!(alive(pid));
+        assert!(!r.snapshot_dir.exists(), "one snapshot, removed on success");
+        assert_eq!(std::fs::read_to_string(&r.db).unwrap(), "migrated");
+        assert!(log.contains("verify   daemon answers v2.0.0"), "{log}");
+    }
+
+    #[test]
+    fn a_new_version_that_does_not_start_is_rolled_back_with_its_data() {
+        let r = run_update(false, "cp $NEW $EXE && printf migrated > $DB");
+        let log = r.journal.read_log("a1").unwrap().unwrap_or_default();
+        assert_eq!(r.exit, Some(1), "{log}");
+        let a = r.journal.read_attempt().unwrap();
+        assert_eq!(a.status, AttemptStatus::Failed, "{log}");
+        assert!(a.rolled_back);
+        assert_eq!(
+            a.reason.as_deref(),
+            Some(
+                "v2.0.0 did not answer within 2 s after the restart. \
+                 The previous version and its data were restored."
+            )
+        );
+        // The previous binary and its data are back, and answer.
+        assert!(std::fs::read_to_string(&r.exe)
+            .unwrap()
+            .contains("pdo 1.0.0"));
+        assert_eq!(std::fs::read_to_string(&r.db).unwrap(), "old data");
+        assert!(
+            !r.db.with_file_name("pdo.db-wal").exists(),
+            "the WAL of the broken version is dropped"
+        );
+        let (version, pid) = marker_pid(&r.marker).unwrap();
+        assert_eq!(version, "1.0.0");
+        assert!(alive(pid));
+        assert!(!alive(r.old_pid), "the first daemon was stopped");
+        for step in [
+            "snapshot 1 database, binary 1.0.0 kept",
+            "verify   no answer in 2 s",
+            "rollback binary 1.0.0, 1 database",
+            "verify   daemon answers v1.0.0",
+            "result   failed (rolled back)",
+        ] {
+            assert!(log.contains(step), "missing `{step}`:\n{log}");
+        }
+    }
+
+    #[test]
+    fn a_failed_update_command_leaves_the_daemon_running_and_restores_nothing() {
+        let r = run_update(true, "echo 'no network' >&2; exit 3");
+        let log = r.journal.read_log("a1").unwrap().unwrap_or_default();
+        assert_eq!(r.exit, Some(3), "{log}");
+        let a = r.journal.read_attempt().unwrap();
+        assert_eq!(a.status, AttemptStatus::Failed);
+        assert!(!a.rolled_back);
+        assert_eq!(
+            a.reason.as_deref(),
+            Some("The update command exited with code 3.")
+        );
+        assert!(alive(r.old_pid), "the running daemon is untouched");
+        assert_eq!(marker_pid(&r.marker).unwrap().1, r.old_pid);
+        assert!(log.contains("no network"));
+        assert!(!log.contains("rollback"), "{log}");
+        assert!(!r.snapshot_dir.exists());
+    }
+
+    #[test]
+    fn the_executor_receives_the_release_identifier_or_none_at_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("a1.sh");
+        std::fs::write(&script, "#!/bin/sh\n").unwrap();
+        let seen = dir.path().join("seen");
+        let executor = DetachedExecutor::new(Some(format!(
+            "sh -c 'printf \"[%s]\" \"${{PDO_GITHUB_TOKEN-unset}}\" >> {}' fixture",
+            seen.display()
+        )));
+        let p = plan(dir.path());
+        assert_eq!(
+            executor.spawn(&p, &script, Some("tok-1")).unwrap().wait(),
+            Some(0)
+        );
+        assert_eq!(executor.spawn(&p, &script, None).unwrap().wait(), Some(0));
+        assert_eq!(std::fs::read_to_string(&seen).unwrap(), "[tok-1][unset]");
+    }
+
+    const TOKEN: &str = "rel-identifier-7f3a";
+
+    /// The update command notes what it received, out of the log.
+    fn noting_command(tail: &str) -> String {
+        format!("printf '%s' \"$PDO_GITHUB_TOKEN\" > $EXE.received && {tail}")
+    }
+
+    fn assert_never_shown(r: &Rollback) {
+        let log = r.journal.read_log("a1").unwrap().unwrap_or_default();
+        assert!(!log.contains(TOKEN), "the log shows the identifier:\n{log}");
+        let attempt = std::fs::read_to_string(r.journal.attempt_path()).unwrap();
+        assert!(!attempt.contains(TOKEN), "{attempt}");
+        let script = std::fs::read_to_string(r.journal.log_path("a1").with_extension("sh"))
+            .unwrap_or_default();
+        assert!(!script.contains(TOKEN), "{script}");
+        assert_eq!(
+            std::fs::read_to_string(r.exe.with_extension("received")).unwrap(),
+            TOKEN,
+            "the update command received the identifier"
+        );
+    }
+
+    #[test]
+    fn the_update_command_receives_the_identifier_which_the_new_daemon_does_not_inherit() {
+        let r = run_update_with(true, &noting_command("cp $NEW $EXE"), Some(TOKEN));
+        assert_eq!(
+            r.journal.read_attempt().unwrap().status,
+            AttemptStatus::Succeeded
+        );
+        assert_never_shown(&r);
+        let inherited = std::fs::read_to_string(r.marker.with_extension("json.token")).unwrap();
+        assert_eq!(inherited, "", "the restarted daemon has no identifier");
+    }
+
+    #[test]
+    fn the_retour_automatique_never_shows_nor_inherits_the_identifier() {
+        let r = run_update_with(
+            false,
+            &noting_command("cp $NEW $EXE && printf migrated > $DB"),
+            Some(TOKEN),
+        );
+        let a = r.journal.read_attempt().unwrap();
+        assert!(a.rolled_back);
+        assert_never_shown(&r);
+        let inherited = std::fs::read_to_string(r.marker.with_extension("json.token")).unwrap();
+        assert_eq!(inherited, "", "the restored daemon has no identifier");
     }
 }

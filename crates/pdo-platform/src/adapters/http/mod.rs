@@ -6,20 +6,29 @@
 //! proxy whitelist (`frontend/vite.config.ts`).
 
 mod audit;
+mod bug_report;
 mod origin;
 mod pages;
 mod update;
 
 use std::sync::Arc;
 
+use axum::extract::DefaultBodyLimit;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 
+pub use bug_report::{
+    BugReportDestinationView, BugReportDestinations, BugReportScreenshot,
+    RememberBugReportDestination, SendBugReport,
+};
 pub use origin::OriginHint;
 
 use crate::Platform;
+
+/// The largest body of `POST /bug-report`.
+const BUG_REPORT_BODY_LIMIT: usize = 16 * 1024 * 1024;
 
 /// The routes of the platform context, with their state.
 pub fn router(platform: Arc<Platform>) -> Router {
@@ -35,6 +44,13 @@ pub fn router(platform: Arc<Platform>) -> Router {
         .route("/update/apply", post(update::apply))
         .route("/update/attempts/{id}/log", get(update::attempt_log))
         .route("/audit", get(audit::feed))
+        .route("/bug-report/destinations", get(bug_report::destinations))
+        .route(
+            "/bug-report",
+            // A screenshot of 10 MB, in base64, in its JSON.
+            post(bug_report::send).route_layer(DefaultBodyLimit::max(BUG_REPORT_BODY_LIMIT)),
+        )
+        .route("/bug-report/last", put(bug_report::remember))
         .with_state(platform)
 }
 

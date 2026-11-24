@@ -74,7 +74,7 @@ export function startNode(
   return request<StartNodeResult>(
     "POST",
     `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/start`,
-    { label: "start_node" },
+    { label: "Starting node" },
   );
 }
 
@@ -85,7 +85,7 @@ export function stopNode(
   return request<void>(
     "POST",
     `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/stop`,
-    { responseMode: "void", label: "stop_node" },
+    { responseMode: "void", label: "Stopping node" },
   );
 }
 
@@ -102,7 +102,7 @@ export function retryNode(
   return request<RetryNodeResult>(
     "POST",
     `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/retry`,
-    { label: "retry_node" },
+    { label: "Retrying node" },
   );
 }
 
@@ -137,6 +137,6 @@ export function importNodeFiles(
   return request<ImportFilesResponse>(
     "POST",
     `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/attachments`,
-    { body: form, query: { iter }, label: "Import" },
+    { body: form, query: { iter }, label: "Importing files", done: "Files imported" },
   );
 }

@@ -20,6 +20,7 @@ export function previewProvisioning(
 ): Promise<ProvisioningPlan> {
   return request("POST", "/repos/provisioning/preview", {
     body: { repository, git_ref: gitRef, scope, rules, inherited, project_id: projectId },
+    silent: true,
   });
 }
 
@@ -30,7 +31,7 @@ export function fetchInstanceProvisioning(): Promise<ProvisioningRules> {
 export function saveInstanceProvisioning(
   rules: ProvisioningRules,
 ): Promise<ProvisioningRules> {
-  return request("PUT", "/settings/provisioning", { body: rules });
+  return request("PUT", "/settings/provisioning", { body: rules, label: "Saving provisioning rules" });
 }
 
 export function fetchProjectProvisioning(projectId: string): Promise<ProvisioningRules> {
@@ -43,5 +44,6 @@ export function saveProjectProvisioning(
 ): Promise<ProvisioningRules> {
   return request("PUT", `/projects/${encodeURIComponent(projectId)}/provisioning`, {
     body: rules,
+    label: "Saving project provisioning",
   });
 }

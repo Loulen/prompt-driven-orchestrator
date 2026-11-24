@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { runBulk, type BulkItem, type BulkOutcome } from "../../lib/bulk";
+import { useBackdropDismiss } from "../../shared/ui/kit/backdropDismiss";
 
 interface Props {
   /** Confirm-dialog heading, e.g. "Cleanup 3 runs?". */
@@ -110,13 +111,12 @@ export default function BulkActionModal({
     return () => document.removeEventListener("keydown", handleKey);
   }, [phase, onClose]);
 
+  const backdrop = useBackdropDismiss(onClose, phase !== "running");
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       data-testid="bulk-action-backdrop"
-      onClick={() => {
-        if (phase !== "running") onClose();
-      }}
+      {...backdrop}
     >
       <div
         className="w-[380px] rounded-lg border border-line bg-surface-1 p-4 shadow-lg text-sm"

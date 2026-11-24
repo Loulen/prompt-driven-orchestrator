@@ -39,6 +39,10 @@ pub fn check_ranges(edit: &UpdateInstanceConfig) -> Result<(), String> {
             edit.libassist_idle_ttl_secs,
             "libassist_idle_ttl_secs must be >= 1",
         ),
+        (
+            edit.support_idle_timeout_secs,
+            "support_idle_timeout_secs must be >= 1",
+        ),
     ];
     for (value, message) in at_least_one {
         if value.is_some_and(|n| n < 1) {
@@ -159,6 +163,7 @@ mod tests {
             json!({ "session_cap": 0 }),
             json!({ "reaper_ttl_secs": 0 }),
             json!({ "libassist_idle_ttl_secs": 0 }),
+            json!({ "support_idle_timeout_secs": 0 }),
             json!({ "guard_timeout_secs": 0 }),
             json!({ "guard_timeout_secs": 601 }),
             json!({ "max_attachments_mb": 0 }),

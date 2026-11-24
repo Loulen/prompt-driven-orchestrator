@@ -58,6 +58,10 @@ pub struct DaemonConfig {
     /// `Some(url)` points the check at a local fixture, same seam as
     /// [`Self::price_source_url`]; `None` → the channel's source, if any.
     pub update_source_url: Option<String>,
+    /// The repository the Agent de support clones the core's code from, at
+    /// the tag of this binary: the operator's `PDO_CORE_SOURCE_URL` (a mirror,
+    /// a local fixture in tests); `None` → the public repository.
+    pub core_source_url: Option<String>,
     /// The release channel a distribution declares (#24, set by
     /// `Config::with_release_channel`); `None` → the vanilla channel (`PDO`, the
     /// core's version, the public repository's releases, the detected install method).
@@ -81,6 +85,8 @@ pub struct DaemonConfig {
     /// The daemon's own command line for an unsupervised relaunch (#699), argv form.
     /// `daemon_cli_config` fills it; `None` → `<stable exe> daemon --port <bound port>`.
     pub relaunch_command: Option<Vec<String>>,
+    /// The test seams of the Update's Retour automatique (CORE-314).
+    pub update_seams: UpdateSeams,
     /// Run the ~30 s background Trigger-scheduler loop. `true` in production;
     /// `false` in the layer-3 test literals, because `tokio::time::interval` fires
     /// its FIRST tick immediately and that boot tick races the deterministic
@@ -136,6 +142,23 @@ pub struct DaemonConfig {
 
 /// The extension host the daemon's use cases ask (see
 /// [`DaemonConfig::extension_host`]).
+/// The test seams of an Update, read once from the environment: a fixture
+/// command in place of the install method's, a shorter verification, a
+/// version declared in place of the build's (a wrapper binary posing as
+/// another version). Unset in production.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UpdateSeams {
+    /// `PDO_UPDATE_UPGRADE_COMMAND`: the command an Update runs instead of the
+    /// install method's (or the channel's).
+    pub upgrade_command: Option<String>,
+    /// `PDO_UPDATE_VERIFY_TIMEOUT`: seconds the executor waits for the
+    /// restarted daemon to answer; `None` → 90.
+    pub verify_timeout_secs: Option<u64>,
+    /// `PDO_UPDATE_INSTALLED_VERSION`: the version the daemon declares
+    /// installed (and answers in), instead of its channel's.
+    pub installed_version: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct ExtensionHostHandle(pub Arc<dyn pdo_kernel::extension_host::ExtensionHost>);
 

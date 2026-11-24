@@ -24,12 +24,17 @@
  * `NewRunPrefill` of `contract.ts`): the caller names itself in `extension`
  * for its `run/new` sections to receive `data`. Since 0.23 it writes the
  * deep links toward a Run and a Node (`runLink`, `nodeLink`), as the daemon
- * writes them (`run_link`, `node_link` of the extension API).
+ * writes them (`run_link`, `node_link` of the extension API). It follows
+ * the extensions' mutations as the core follows its own (Opérations en
+ * cours): `trackOperation(label, work, { done, icon })` names one in the
+ * status bar's indicator and says its outcome in a toast, and `usePending`
+ * turns its button busy (`Button`'s `pending`).
  */
 
 import { useActorDisplay, useActorDisplays, useCurrentActor } from "../actors/store";
 import { openProbedSocket } from "../http/probedSocket";
 import { copyToClipboard } from "../lib/clipboard";
+import { trackOperation } from "../http/operations";
 import SessionTerminal from "../../session/components/SessionTerminal";
 import TerminalZoom from "../../session/components/TerminalZoom";
 import { useTerminalZoom } from "../../session/store/useTerminalZoom";
@@ -61,6 +66,8 @@ export const extensionUiModule = {
   useActorDisplays,
   openProbedSocket,
   copyToClipboard,
+  trackOperation,
+  usePending: kit.usePending,
   openNewRun,
   runLink: formatRunLink,
   nodeLink: formatNodeLink,

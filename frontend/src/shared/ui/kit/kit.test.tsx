@@ -14,6 +14,7 @@ import type ExtensionUiDeclared from "../../../../public/shared/pdo-extension-ui
 import { extensionUiModule } from "../../extensions/uiModule";
 import { resetToasts } from "../toast";
 import Toaster from "../Toaster";
+import { clickBackdrop } from "../../../test/clickBackdrop";
 import {
   Avatar,
   Banner,
@@ -133,6 +134,7 @@ describe("rendering in both themes", () => {
         </Checkbox>
         <Chip tone="failed">qa</Chip>
         <Banner tone="awaiting" title="Approval" text="By a Maintainer" />
+        <Banner tone="awaiting" title="Editing as markdown replaces the blocks" wrap />
         <EmptyState icon={Rocket}>No deploy yet</EmptyState>
         <KeyValue rows={[{ k: "Region", v: "eu-west-3" }]} />
         <StatusIcon kind="run" status="failed" />
@@ -424,6 +426,12 @@ describe("primitives", () => {
     expect(trigger).toHaveAttribute("data-active");
     rerender(<Select label="Pipeline" value={null} onChange={() => {}} options={options} />);
     expect(trigger).toHaveAttribute("title", "Pipeline");
+    expect(trigger).not.toHaveAttribute("aria-invalid");
+  });
+
+  it("Select wears a refused value as invalid", () => {
+    render(<Select label="Run" placeholder="Pick a run" value={null} invalid onChange={() => {}} options={[]} />);
+    expect(screen.getByRole("button", { name: "Run" })).toHaveAttribute("aria-invalid", "true");
   });
 
   it("Select opens a listbox from the keyboard and picks the highlighted option", async () => {
@@ -686,6 +694,22 @@ describe("primitives", () => {
     expect(screen.getByRole("tab", { name: "Overview" })).toHaveFocus();
   });
 
+  it("Tabs show a tab's mark after its label", () => {
+    render(
+      <Tabs
+        label="Report"
+        value="report"
+        onChange={() => {}}
+        items={[
+          { value: "report", label: "Report" },
+          { value: "preview", label: "Preview", mark: "edited" },
+        ]}
+      />,
+    );
+    expect(screen.getByRole("tab", { name: /Preview/ }).querySelector(".d-tab__n")).toHaveTextContent("edited");
+    expect(screen.getByRole("tab", { name: "Report" }).querySelector(".d-tab__n")).toBeNull();
+  });
+
   it("Section folds from its head", async () => {
     const user = userEvent.setup();
     render(
@@ -715,6 +739,31 @@ describe("primitives", () => {
     expect(submit).toHaveBeenCalledOnce();
     await user.keyboard("{Escape}");
     expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("Modal closes on a press and a release on its backdrop, not on a selection released there", () => {
+    const close = vi.fn();
+    const { unmount } = render(
+      <Modal title="Save" onClose={close}>
+        <p>Selectable text</p>
+      </Modal>,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Save" });
+    fireEvent.pointerDown(screen.getByText("Selectable text"));
+    fireEvent.pointerUp(dialog);
+    fireEvent.click(dialog);
+    expect(close).not.toHaveBeenCalled();
+    clickBackdrop(dialog);
+    expect(close).toHaveBeenCalledOnce();
+    unmount();
+    const locked = vi.fn();
+    render(
+      <Modal title="Secret" onClose={locked} dismissable={false}>
+        <p>once</p>
+      </Modal>,
+    );
+    clickBackdrop(screen.getByRole("dialog", { name: "Secret" }));
+    expect(locked).not.toHaveBeenCalled();
   });
 
   it("ConfirmDialog states the action, its target, and confirms", async () => {

@@ -50,10 +50,16 @@ pub struct ContextResources {
     pub repo_root: PathBuf,
     /// The port the daemon listens on.
     pub port: u16,
+    /// The default tier of the Public URL: the machine's address, from where
+    /// the daemon listens ([`pdo_kernel::public_url::default_public_url`]).
+    pub public_url_default: String,
     /// The home the update journal lives under: the per-daemon override, else
     /// `$HOME`; `None` when neither is set.
     pub home_root: Option<PathBuf>,
     pub update_source_url: Option<String>,
+    /// Where the Agent de support clones the core's code from; `None` → the
+    /// public repository.
+    pub core_source_url: Option<String>,
     /// The distribution's release channel; `None` → the vanilla one.
     pub release_channel: Option<UpdateChannel>,
     /// The Marque the SPA is served under.
@@ -62,6 +68,7 @@ pub struct ContextResources {
     pub install_method_override: Option<InstallMethod>,
     pub supervision_override: Option<Supervision>,
     pub relaunch_command: Option<Vec<String>>,
+    pub update_seams: crate::daemon::config::UpdateSeams,
     pub service_health_override: Option<ServiceHealthOverride>,
     /// Replaces the harness tail of a session (the per-daemon test seam).
     pub tmux_cmd_override: Option<String>,
@@ -141,6 +148,7 @@ pub(crate) fn wire_over(
         &late_runs,
         &late_platform,
         &late_pipelines,
+        &skills,
         host.clone(),
     );
     let run = run::run(run::RunWiring {
@@ -291,14 +299,17 @@ pub(crate) mod testing {
                 db: db.clone(),
                 repo_root: repo_root.clone(),
                 port: next_test_daemon_port(),
+                public_url_default: "http://localhost:5272".into(),
                 home_root: None,
                 update_source_url: None,
+                core_source_url: None,
                 release_channel: None,
                 brand: crate::Brand::default(),
                 update_executor_override: None,
                 install_method_override: None,
                 supervision_override: None,
                 relaunch_command: None,
+                update_seams: Default::default(),
                 service_health_override: options.service_health,
                 // Self-destructing no-op: should a test reach the spawn path, the
                 // node session runs `true` and exits immediately — never real claude.

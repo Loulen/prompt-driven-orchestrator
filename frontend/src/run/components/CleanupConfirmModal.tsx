@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useId, useState } from "react";
+import { ConfirmDialog, TextInput } from "../../shared/ui/kit";
 import type { CascadeImpact } from "../model/runTree";
 
 interface Props {
   runId: string;
-  onConfirm: () => void;
+  /** The archive itself: the dialog waits for it, closes on success, keeps a failure on screen. */
+  onConfirm: () => Promise<unknown>;
   onCancel: () => void;
   isLive?: boolean;
   /** #815 — what the daemon's cascade drags along (finished children archived
@@ -28,16 +30,13 @@ function cascadeCopy(cascade: CascadeImpact | undefined): string | null {
   return parts.join(" ");
 }
 
-// Spelled out so the consequences of archiving a *live* run are explicit. The
-// "hasn't finished" phrasing is asserted by the unit test — keep it literal.
-// #315/ADR-0020: completed outputs are now PRESERVED on archive (durable store),
-// so the copy no longer claims they are lost — only in-flight work is.
-const LIVE_BODY =
-  "This run hasn't finished. Archiving it now kills every active node session " +
-  "and removes the run's worktrees from disk. Completed outputs are kept — the " +
-  "run stays viewable (read-only) after archiving; only in-flight, uncommitted " +
-  "work is lost.";
-
+/**
+ * The confirmation of a Run's archive, on the kit's `ConfirmDialog`: busy
+ * while the daemon archives, closed on success, the daemon's message kept on
+ * a failure. A live Run asks for its id's 7-hex suffix first, so the user
+ * proves they archive the Run they think they do. #315/ADR-0020: completed
+ * outputs are kept on archive, so the copy never claims they are lost.
+ */
 export default function CleanupConfirmModal({
   runId,
   onConfirm,
@@ -46,101 +45,49 @@ export default function CleanupConfirmModal({
   cascade,
 }: Props) {
   const cascadeText = cascadeCopy(cascade);
-  // The 7-hex unique suffix (clean, no dash) of the run id. Run-specific so the
-  // user proves they are archiving the run they think they are.
   const shortId = runId.slice(-7);
   const [confirmText, setConfirmText] = useState("");
-  const canConfirm = confirmText.trim() === shortId;
-
-  // Escape-to-cancel parity with ConfirmDeleteModal. Deliberately NO global
-  // Enter listener: on the live branch Enter-to-submit is gated by the input's
-  // own onKeyDown, so it can never bypass the typed confirmation.
-  useEffect(() => {
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onCancel();
-    }
-    document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
-  }, [onCancel]);
+  const inputId = useId();
+  const canConfirm = !isLive || confirmText.trim() === shortId;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim">
-      <div
-        role="dialog"
-        aria-modal="true"
-        data-testid="cleanup-confirm-modal"
-        className="w-[360px] rounded-lg border border-line bg-surface-1 p-4 shadow-lg"
-      >
-        {isLive ? (
-          <>
-            <h3 className="font-medium text-text text-md">
-              Archive this run before it completes?
-            </h3>
-            <p className="mt-2 text-text-3 text-sm">
-              {LIVE_BODY}
-            </p>
-            {cascadeText && (
-              <p className="mt-2 text-text-3 text-sm" data-testid="cleanup-cascade">
-                {cascadeText}
-              </p>
-            )}
-            <label className="mt-3 block text-text-3 text-sm">
-              Type{" "}
-              <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-text">
-                {shortId}
-              </code>{" "}
-              to confirm
-            </label>
-            <input
-              className="mt-1.5 w-full rounded-md border border-line-strong bg-surface-2 px-2.5 py-1.5 font-mono text-text placeholder:text-text-3 focus:border-primary focus:outline-none text-sm"
-              placeholder={shortId}
-              value={confirmText}
-              onChange={(e) => setConfirmText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && canConfirm) onConfirm();
-              }}
-              data-testid="cleanup-confirm-input"
-              autoFocus
-            />
-          </>
-        ) : (
-          <>
-            <h3 className="font-medium text-text text-md">
-              Cleanup Run
-            </h3>
-            <p className="mt-2 text-text-3 text-sm">
-              This removes the run's worktrees from disk. Its completed outputs
-              are kept — the run stays viewable (read-only) after archiving.
-              Proceed?
-            </p>
-            {cascadeText && (
-              <p className="mt-2 text-text-3 text-sm" data-testid="cleanup-cascade">
-                {cascadeText}
-              </p>
-            )}
-          </>
-        )}
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            onClick={onCancel}
-            className="cursor-pointer rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover text-xs"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            disabled={isLive && !canConfirm}
-            className={
-              isLive
-                ? "cursor-pointer rounded-md bg-st-failed px-3 py-1.5 text-primary-ink transition-colors hover:bg-st-failed/80 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-st-failed text-xs"
-                : "cursor-pointer rounded-md bg-st-failed px-3 py-1.5 text-primary-ink transition-colors hover:bg-st-failed/80 text-xs"
-            }
-            data-testid="cleanup-confirm-button"
-          >
-            {isLive ? "Archive run" : "Cleanup"}
-          </button>
-        </div>
-      </div>
-    </div>
+    <ConfirmDialog
+      title={isLive ? "Archive this run before it completes?" : "Archive this run?"}
+      consequence={isLive ? "Kills its active sessions" : "Removes its worktrees, keeps its outputs"}
+      target={runId}
+      actionLabel="Archive"
+      pendingLabel="Archiving…"
+      failedTitle="Archiving failed"
+      danger
+      confirmDisabled={!canConfirm}
+      onConfirm={onConfirm}
+      onClose={onCancel}
+      data-testid="cleanup-confirm-modal"
+      confirmTestId="cleanup-confirm-button"
+    >
+      {cascadeText && (
+        <p className="d-confirm__line" data-testid="cleanup-cascade">
+          {cascadeText}
+        </p>
+      )}
+      {isLive && (
+        <>
+          <label className="d-confirm__hint" htmlFor={inputId}>
+            Type <code className="d-code">{shortId}</code> to confirm
+          </label>
+          <TextInput
+            id={inputId}
+            mono
+            placeholder={shortId}
+            value={confirmText}
+            onChange={(e) => setConfirmText(e.target.value)}
+            data-testid="cleanup-confirm-input"
+            data-autofocus=""
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </>
+      )}
+    </ConfirmDialog>
   );
 }

@@ -15,7 +15,10 @@ use pdo_session::application::ports::Tmux;
 use pdo_session::{Session, SessionOptions, SessionPorts};
 
 use super::ContextResources;
-use crate::ports::session::{HostedSide, RunSide, SessionRunPorts};
+use crate::ports::session::{
+    GitCoreRepository, HostedSide, ManagedSkills, RunSide, SessionRunPorts, SupportSide,
+    CORE_REPOSITORY_URL,
+};
 use crate::ports::Late;
 
 pub(super) fn session(
@@ -24,6 +27,7 @@ pub(super) fn session(
     runs: &Late<Runs>,
     platform: &Late<Platform>,
     pipelines: &Late<Pipelines>,
+    skills: &Arc<pdo_skill::Skills>,
     host: Arc<dyn ExtensionHost>,
 ) -> Arc<Session> {
     let run = SessionRunPorts::over(RunSide {
@@ -61,12 +65,33 @@ pub(super) fn session(
                 harness: hosted.clone(),
                 admission: hosted,
             },
+            support: Arc::new(SupportSide {
+                runs: runs.clone(),
+                db: r.db.clone(),
+            }),
+            events: r.bus.clone(),
+            // The skills PDO manages, from the bank; the core's repository,
+            // read at this binary's tag.
+            support_skills: Arc::new(ManagedSkills {
+                skills: skills.clone(),
+            }),
+            core_repository: Arc::new(GitCoreRepository {
+                url: r
+                    .core_source_url
+                    .clone()
+                    .unwrap_or_else(|| CORE_REPOSITORY_URL.to_string()),
+            }),
         },
         SessionOptions {
             daemon_port: r.port,
             repo_root: r.repo_root.clone(),
             tmux_cmd_override: r.tmux_cmd_override.clone(),
             allowed_ws_origins: r.allowed_ws_origins.clone(),
+            // One folder per Actor, under the daemon's `~/.pdo/`, like the
+            // Sessions hébergées'.
+            support_root: pdo_home.join(".pdo").join("support"),
+            // The clones of the core, cloned at the first demand.
+            core_source_root: pdo_home.join(".pdo").join("core-source"),
         },
     )
 }

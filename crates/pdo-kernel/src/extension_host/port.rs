@@ -3,13 +3,17 @@
 use std::sync::Arc;
 
 use pdo_extension_api::{
-    ActorDisplay, Admission, Attributes, Authorization, EntityRef, ExtensionData, GitOperation,
-    GuardEnd, RequestParts, Resource, ResourceKind, SessionLaunch, TriggerRef,
+    ActorDisplay, Admission, Attributes, Authorization, BugReport, BugReportSent, EntityRef,
+    ExtensionData, GitOperation, GuardEnd, RequestParts, Resource, ResourceKind, SessionLaunch,
+    TriggerRef,
 };
 use serde_json::Value;
 
 use super::creation::{self, CreationRefusal};
-use super::{GitCredentials, Identification, NodeContribution, ProvidedSkills, TriggerSuspension};
+use super::{
+    BugReportNotReceived, GitCredentials, Identification, NodeContribution, OfferedDestination,
+    ProvidedSkills, TriggerSuspension,
+};
 use crate::attributes::{AttributeStore, NoAttributes};
 use crate::{Actor, Operation};
 
@@ -128,6 +132,24 @@ pub trait ExtensionHost: Send + Sync {
     /// Tell every extension a guard has ended, so each revokes what it handed
     /// to it ([`GuardEnd`]). Nothing by default.
     fn guard_ended(&self, _end: &GuardEnd) {}
+
+    /// The Destinations de bug report the extensions offer `actor`, in
+    /// registration order (API 0.28). None by default.
+    fn bug_report_destinations(&self, _actor: &Actor) -> Vec<OfferedDestination> {
+        Vec::new()
+    }
+
+    /// Hand `report`, which `actor` sends, to the extension `extension`, and
+    /// answer what it created. Blocking: call it off the request path. No
+    /// extension by default.
+    fn receive_bug_report(
+        &self,
+        _actor: &Actor,
+        _extension: &str,
+        _report: &BugReport,
+    ) -> Result<BugReportSent, BugReportNotReceived> {
+        Err(BugReportNotReceived::UnknownExtension)
+    }
 
     /// Whether no extension can refuse anything: the reads then skip the
     /// question altogether (CORE-5), so a daemon without extension serves its

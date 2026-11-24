@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import RunShellModal from "./RunShellModal";
+import { clickBackdrop } from "../../test/clickBackdrop";
 
 // Mock the inline terminal so the test never spins up xterm.js / a real PTY
 // WebSocket in jsdom. It echoes back the `session` prop it received so the test
@@ -56,8 +57,14 @@ describe("RunShellModal", () => {
     // Clicking the card (terminal) must NOT close.
     fireEvent.click(screen.getByTestId("tmux-terminal"));
     expect(onClose).not.toHaveBeenCalled();
-    // Clicking the backdrop itself closes.
-    fireEvent.click(screen.getByTestId("run-shell-modal"));
+    // A press on the card released over the backdrop must NOT close.
+    const backdrop = screen.getByTestId("run-shell-modal");
+    fireEvent.pointerDown(screen.getByTestId("tmux-terminal"));
+    fireEvent.pointerUp(backdrop);
+    fireEvent.click(backdrop);
+    expect(onClose).not.toHaveBeenCalled();
+    // Pressing and releasing on the backdrop itself closes.
+    clickBackdrop(backdrop);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

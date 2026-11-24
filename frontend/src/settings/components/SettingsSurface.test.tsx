@@ -8,6 +8,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { useBugReport } from "../../platform/store/bugReport";
 import { isOn, rowOf, switchFor, switchOf, tipFor, tipOf } from "./settingsSurface/testing";
 
 // Every case renders the whole surface: a few seconds each on a busy machine,
@@ -196,6 +197,13 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
       env: null,
       default: 60,
     },
+    support_idle_timeout_secs: {
+      effective: 1800,
+      source: "default",
+      stored: null,
+      env: null,
+      default: 1800,
+    },
     max_attachments_mb: {
       effective: 50,
       source: "default",
@@ -203,7 +211,7 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
       env: null,
       default: 50,
     },
-    public_url: { effective: null, source: "default", stored: null, env: null, default: null },
+    public_url: { effective: "http://localhost:5272", source: "default", stored: null, env: null, default: "http://localhost:5272" },
     // Unset by default (account default): effective/stored/env/default all null.
     default_model: {
       effective: null,
@@ -546,6 +554,23 @@ describe("SettingsSurface", () => {
     ).toBe("50");
   });
 
+  it("puts the support agent's idle timeout in the runtime limits, after the guard timeout, and saves it", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    updateSettingsMock.mockResolvedValue(
+      sample({ support_idle_timeout_secs: { effective: 60, source: "stored", stored: 60, env: null, default: 1800 } }),
+    );
+    render(<SettingsSurface open onClose={() => {}} />);
+    const idle = (await screen.findByTestId("setting-support-idle-timeout")) as HTMLInputElement;
+    expect(idle.value).toBe("1800");
+    const row = screen.getByTestId("setting-row-support-idle-timeout");
+    expect(row).toHaveTextContent("Support agent idle timeout");
+    const order = [...document.querySelectorAll('[data-testid^="setting-row-"]')].map((r) => r.getAttribute("data-testid"));
+    expect(order.indexOf("setting-row-support-idle-timeout")).toBe(order.indexOf("setting-row-guard-timeout") + 1);
+    fireEvent.change(idle, { target: { value: "60" } });
+    fireEvent.click(screen.getByTestId("settings-save"));
+    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledWith({ support_idle_timeout_secs: 60 }));
+  });
+
   it("follows a write made elsewhere on the fields it is not editing; an edit in progress stays (CORE-232)", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
@@ -602,16 +627,19 @@ describe("SettingsSurface", () => {
           source: "stored",
           stored: "https://pdo.example.net",
           env: null,
-          default: null,
+          default: "http://localhost:5272",
         },
       }),
     );
     render(<SettingsSurface open onClose={() => {}} />);
     expect(await screen.findByTestId("settings-section-public-url")).toHaveTextContent("Public URL");
     const field = await screen.findByTestId("setting-public-url");
-    expect(await tipFor("public-url")).toMatch(
-      "Source: none set (PDO_PUBLIC_URL unset).",
-    );
+    // Empty, with the machine's address in its placeholder, unqualified.
+    expect(field).toHaveValue("");
+    expect(field).toHaveAttribute("placeholder", "http://localhost:5272");
+    expect(await tipFor("public-url")).toMatch("Source: default, this machine's address and port.");
+    expect(tipOf("public-url")).toContain("http://localhost:5272/#/pages/my-page");
+    expect(tipOf("public-url")).not.toMatch(/deduced/i);
 
     fireEvent.change(field, { target: { value: "pdo.example.net" } });
     expect(screen.getByTestId("setting-public-url-invalid")).toBeInTheDocument();
@@ -624,6 +652,42 @@ describe("SettingsSurface", () => {
     fireEvent.click(screen.getByTestId("settings-save"));
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
     expect(updateSettingsMock).toHaveBeenCalledWith({ public_url: "https://pdo.example.net/" });
+  });
+
+  it("General › Public URL names the tier its value comes from, and the placeholder what an empty field uses", async () => {
+    fetchSettingsMock.mockResolvedValue(
+      sample({
+        public_url: {
+          effective: "https://env.example.net",
+          source: "env",
+          stored: null,
+          env: "https://env.example.net",
+          default: "http://localhost:5272",
+        },
+      }),
+    );
+    const { unmount } = render(<SettingsSurface open onClose={() => {}} />);
+    const field = await screen.findByTestId("setting-public-url");
+    expect(field).toHaveAttribute("placeholder", "https://env.example.net");
+    expect(await tipFor("public-url")).toMatch("Source: environment variable PDO_PUBLIC_URL.");
+    unmount();
+
+    fetchSettingsMock.mockResolvedValue(
+      sample({
+        public_url: {
+          effective: "https://pdo.example.net",
+          source: "stored",
+          stored: "https://pdo.example.net",
+          env: null,
+          default: "http://localhost:5272",
+        },
+      }),
+    );
+    render(<SettingsSurface open onClose={() => {}} />);
+    expect(await screen.findByTestId("setting-public-url")).toHaveValue("https://pdo.example.net");
+    expect(await tipFor("public-url")).toMatch(
+      "Source: stored setting (overrides PDO_PUBLIC_URL and the default).",
+    );
   });
 
   it("names both price paths even though neither file exists", async () => {
@@ -2495,7 +2559,7 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     const surface = await screen.findByTestId("settings-surface");
     // CORE-183: the window's height less the top bar's, which stays above it.
     expect(surface).toHaveClass(
-      "h-[calc(100dvh/var(--app-zoom,1)_-_var(--h-topbar))]",
+      "h-[calc(100dvh/var(--app-zoom,1)_-_var(--h-topbar)_-_var(--h-appbanner,0px))]",
       "w-[calc(100vw/var(--app-zoom,1))]",
     );
     const rail = screen.getByRole("tablist", { name: "Settings categories" });
@@ -2546,7 +2610,11 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     );
     const diagnostics = screen.getByTestId("settings-page-diagnostics");
     expect(diagnostics).not.toHaveAttribute("hidden");
-    expect(entries()).toEqual(["Price table", "Harness descriptors"]);
+    expect(entries()).toEqual(["Bug report", "Price table", "Harness descriptors"]);
+    // Bug report first: a button that opens its window on the selection.
+    fireEvent.click(screen.getByTestId("settings-report-bug"));
+    expect(useBugReport.getState().opened).toEqual({ runId: null, pipeline: null });
+    act(() => useBugReport.getState().closeBugReport());
     // Read-only: values are there, nothing to edit, and the sync lives in Stats.
     expect(
       screen.getByTestId("setting-price-table-fetched-path"),

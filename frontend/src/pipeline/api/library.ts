@@ -16,14 +16,14 @@ export function fetchLibrary(): Promise<LibraryEntry[]> {
 }
 
 export function saveToLibrary(spec: LibrarySaveSpec): Promise<LibraryEntry> {
-  return request<LibraryEntry>("POST", "/library", { body: spec, label: "POST /library" });
+  return request<LibraryEntry>("POST", "/library", { body: spec, label: "Saving node to library" });
 }
 
 export function deleteFromLibrary(name: string): Promise<void> {
   return request<void>(
     "DELETE",
     `/library/${encodeURIComponent(name)}`,
-    { responseMode: "void", label: `DELETE /library/${name}` },
+    { responseMode: "void", label: "Deleting library node" },
   );
 }
 
@@ -31,7 +31,7 @@ export function instantiateFromLibrary(name: string): Promise<InstantiateResult>
   return request<InstantiateResult>(
     "POST",
     `/library/${encodeURIComponent(name)}/instantiate`,
-    { label: `POST /library/${name}/instantiate` },
+    { label: "Adding library node" },
   );
 }
 
@@ -43,7 +43,7 @@ export function instantiateFromLibrary(name: string): Promise<InstantiateResult>
  * body carries a verbatim `error`; a 200 carries `{spec, prompt, warnings}`.
  */
 export function parseNodeYaml(yaml: string): Promise<ParseNodeResult> {
-  return request<ParseNodeResult>("POST", "/nodes/parse", { body: { yaml }, label: "POST /nodes/parse" });
+  return request<ParseNodeResult>("POST", "/nodes/parse", { body: { yaml }, label: "POST /nodes/parse", silent: true });
 }
 
 /// Import a Claude Code workflow `.js` as a draft library pipeline (#155). The
@@ -58,6 +58,6 @@ export function importWorkflow(
   return request<{ id: string; scope: string; warnings?: string[] }>(
     "POST",
     "/library/import",
-    { body: { filename, content }, label: "POST /library/import" },
+    { body: { filename, content }, label: "Importing workflow" },
   );
 }

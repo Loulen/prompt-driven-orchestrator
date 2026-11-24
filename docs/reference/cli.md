@@ -152,6 +152,9 @@ Run `pdo service install` to start PDO at boot and keep it running after logout.
 | `pdo session show\|events <id> [--json]` | A hosted session: its extension, kind, state, folder and configuration; or its events, oldest first (`at`, kind, who, message). |
 | `pdo session terminate\|relaunch <id> [--json]` | Terminate a hosted session, or relaunch an ended one (resuming its conversation when its harness can). |
 | `pdo session configure <id> [--harness <h>] [--model <m>] [--effort <e>] [--prompt <text>] [--json]` | Change its configuration, applied at its next relaunch: only the flags given change, an empty value clears the field. |
+| `pdo support open [<question>] (--profile <id>\|--harness <h> [--model <m>] [--effort <e>]) [--replace] [--json]` | Open your support agent (an agent the core holds for you outside any Run, with your rights) on an agentic profile or a harness, the question as its first message. Refused while one is open unless `--replace`, which closes it first; refused, with its reason, on a harness not installed here. |
+| `pdo support ask <question>\|status\|keep\|close [--json]` | Ask your open support agent (exit 4 when none is open), read it (session, `open` or `closed`, profile, harness · model · effort), keep it (answer « Still there? »: its idle clock starts over), or close it. |
+| `pdo support source [--json]` | The folder of the core's code at this instance's tag (`v<version>`): a shallow clone of the public repository (`PDO_CORE_SOURCE_URL` points elsewhere), made under `~/.pdo/core-source/` the first time, then reused. Refused, with nothing cloned, when the version has no public tag. Your support agent runs it to read the code it cites. |
 | `pdo settings get [<key>…] [--json]` | The instance settings, one tab-separated line each: key, effective value, where it comes from (`stored`, `env`, `default`). The instance's own tiers (`skills`, `agent_choice`) follow as stored, source `stored`; the facts shown beside the settings (harness catalogues, price table…) are left out. With keys, those settings only, each with its whole value; an unknown key is refused, exit 1. |
 | `pdo settings set <key>=<value>… [--file <path>\|-] [--json]` | Change instance settings as Settings saves them. A value is read as JSON when it is JSON (`session_cap=5`, `review_agent_can_resolve=true`, `skills='[{"id":"tdd"}]'`), as a string otherwise (`public_url=https://pdo.example.net`); `<key>=` clears a text setting; `--file` gives the change as a JSON object. The daemon validates the whole change as for the UI (ranges, a staging profile, harness or agentic profile that must exist, skills of the bank) and refuses it with its reason, writing nothing, exit 1. Prints each setting changed (`skills` included). |
 | `pdo settings refresh-harness <name> [--json]` | Probe a harness's catalogue (models, efforts) again now. |
@@ -168,12 +171,12 @@ Run `pdo service install` to start PDO at boot and keep it running after logout.
 | `pdo skill folder list\|add\|update\|remove\|rescan\|sync …` | The folders of the bank: `add <name> [--parent <id>]`, `update <id> [--name] [--parent <id>\|--root]`, `remove <id>`; for a folder imported from a Source, `rescan <id>` compares it with the Source, `sync <id> [--new] [--only <path>]…` brings the changed skills (and the new ones with `--new`) up to date. |
 | `pdo skill scan\|import\|cancel-scan\|sources …` | A Source's skills: `scan <source> [--scan-id <id>]` lists its candidates (status, path, name); `import <source> [--only <path>]… [--on-collision skip\|replace] [--folder <id>\|--folder-name <name> [--parent <id>]]` imports its new valid skills (exit 1 when there is none); `cancel-scan <id>` stops a scan; `sources` lists the Sources imported lately. |
 | `pdo skill export --skill <skill>… --folder <id>… -o <zip>` / `pdo skill upload <zip>` | Export skills (each by its id or its name) and folders as a zip, or upload such a zip: its new skills go to a folder named after the file, the ones the bank holds are kept. |
-| `pdo update status\|check\|changelog\|apply\|log <attempt> [--json]` | The version section of Settings › General: the installed and latest versions and whether an update may run now; a check of the release source now; « What's new »; the update itself (detached, then the daemon restarts); an attempt's journal. |
+| `pdo update status\|check\|changelog\|apply\|log <attempt> [--json]` | The version section of Settings › General: the installed and latest versions and whether an update may run now; a check of the release source now; « What's new »; the update itself (detached, then the daemon restarts, is checked for the new version and rolled back with its data when it does not answer); an attempt's journal. `status` ends with the last attempt, its outcome (`failed (rolled back)`…) and why. |
 | `pdo audit [--from <rfc3339>] [--to <rfc3339>] [--target-kind <kind>] [--target-id <id>] [--limit <n>] [--json]` | The journal of the mutations made outside a Run, newest first, one tab-separated line each: time, action, target kind, target id, actor hint, and what it changed to when that is short (`{"paused":true}`). |
 | `pdo whoami [--json]` | The Actor the daemon names you: `local_operator`, `agent:<run>/<node>` from a node session, or `<namespace>:<id>` when an extension establishes you from `PDO_TOKEN`, followed by its display name. |
 
 The gestures of `pdo run` (all but `create`, `wait` and `list`), `pdo node`, `pdo pipeline`,
-`pdo project`, `pdo trigger`, `pdo session`, `pdo settings`, `pdo stats`, `pdo skill`, `pdo update`,
+`pdo project`, `pdo trigger`, `pdo session`, `pdo support`, `pdo settings`, `pdo stats`, `pdo skill`, `pdo update`,
 `pdo review`, `pdo audit` and `pdo whoami` are thin clients of the daemon's routes: they send what the UI sends, print what it answers in text or, with `--json`, as
 JSON, and leave every rule to the daemon (who may, which state allows what). Their exit codes: 0
 success; 1 when the daemon is unreachable or refuses the call (its reason on stderr); 2 for a
@@ -221,6 +224,8 @@ node named exists, every path is a file of the page. A guide it refuses mounts n
 command prints why, for example ``guide entry 2: Run `r1` not found``. The guide is stored with the mount and
 goes with it: `pdo page unmount`, or the archive of the Run whose agent mounted the page.
 
-The printed addresses start at the instance's **Public URL** (Settings › General, or
-`PDO_PUBLIC_URL`; the stored setting wins), else at `PDO_DAEMON_URL`. A node session receives the
-Public URL as `PDO_PUBLIC_URL`, and its preamble names it.
+The printed addresses start at the instance's **Public URL**: the value set in Settings › General,
+else `PDO_PUBLIC_URL`, else the machine's address. That default is `http://<host name>:<port>` for
+a daemon listening on every interface (the default), `http://localhost:<port>` for one bound to the
+loopback, and the bound address itself otherwise. A node session and the Pipeline Manager receive
+the Public URL as `PDO_PUBLIC_URL`, and the node's preamble names it.

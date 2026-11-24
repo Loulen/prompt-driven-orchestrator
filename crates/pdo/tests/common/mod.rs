@@ -42,6 +42,7 @@ impl TestDaemon {
                 price_source_url: None,
                 price_refresh_at_boot: false,
                 update_source_url: None,
+                core_source_url: None,
                 release_channel: None,
                 brand: pdo::Brand::Pdo,
                 run_update_check_loop: false,
@@ -49,6 +50,7 @@ impl TestDaemon {
                 install_method_override: None,
                 supervision_override: None,
                 relaunch_command: None,
+                update_seams: Default::default(),
                 allowed_ws_origins: Vec::new(),
                 run_trigger_scheduler_loop: false,
                 nested_daemon: false,
@@ -140,6 +142,7 @@ impl TestDaemon {
                 price_source_url: None,
                 price_refresh_at_boot: false,
                 update_source_url: None,
+                core_source_url: None,
                 release_channel: None,
                 brand: pdo::Brand::Pdo,
                 run_update_check_loop: false,
@@ -147,6 +150,7 @@ impl TestDaemon {
                 install_method_override: None,
                 supervision_override: None,
                 relaunch_command: None,
+                update_seams: Default::default(),
                 allowed_ws_origins: Vec::new(),
                 // #450: tests drive firing via the `run_trigger_tick` seam; the
                 // heartbeat's boot tick would race it.
@@ -298,6 +302,7 @@ impl TestDaemon {
                 price_source_url: None,
                 price_refresh_at_boot: false,
                 update_source_url: None,
+                core_source_url: None,
                 release_channel: None,
                 brand: pdo::Brand::Pdo,
                 run_update_check_loop: false,
@@ -305,6 +310,7 @@ impl TestDaemon {
                 install_method_override: None,
                 supervision_override: None,
                 relaunch_command: None,
+                update_seams: Default::default(),
                 allowed_ws_origins: Vec::new(),
                 // #450: tests drive firing via the `run_trigger_tick` seam; the
                 // heartbeat's boot tick would race it.
@@ -359,6 +365,7 @@ impl TestDaemon {
                 price_source_url: None,
                 price_refresh_at_boot: false,
                 update_source_url: None,
+                core_source_url: None,
                 release_channel: None,
                 brand: pdo::Brand::Pdo,
                 run_update_check_loop: false,
@@ -366,6 +373,7 @@ impl TestDaemon {
                 install_method_override: None,
                 supervision_override: None,
                 relaunch_command: None,
+                update_seams: Default::default(),
                 allowed_ws_origins: Vec::new(),
                 // #450: tests drive firing via the `run_trigger_tick` seam; the
                 // heartbeat's boot tick would race it.
@@ -423,6 +431,7 @@ impl TestDaemon {
                 price_source_url: None,
                 price_refresh_at_boot: false,
                 update_source_url: None,
+                core_source_url: None,
                 release_channel: None,
                 brand: pdo::Brand::Pdo,
                 run_update_check_loop: false,
@@ -430,6 +439,7 @@ impl TestDaemon {
                 install_method_override: None,
                 supervision_override: None,
                 relaunch_command: None,
+                update_seams: Default::default(),
                 allowed_ws_origins: Vec::new(),
                 // #450: tests drive firing via the `run_trigger_tick` seam; the
                 // heartbeat's boot tick would race it.
@@ -476,6 +486,7 @@ impl TestDaemon {
                 price_source_url: None,
                 price_refresh_at_boot: false,
                 update_source_url: None,
+                core_source_url: None,
                 release_channel: None,
                 brand: pdo::Brand::Pdo,
                 run_update_check_loop: false,
@@ -483,6 +494,7 @@ impl TestDaemon {
                 install_method_override: None,
                 supervision_override: None,
                 relaunch_command: None,
+                update_seams: Default::default(),
                 allowed_ws_origins: Vec::new(),
                 // #450: tests drive firing via the `run_trigger_tick` seam; the
                 // heartbeat's boot tick would race it.
@@ -538,6 +550,7 @@ impl TestDaemon {
                 price_source_url: Some(price_source_url),
                 price_refresh_at_boot: true,
                 update_source_url: None,
+                core_source_url: None,
                 release_channel: None,
                 brand: pdo::Brand::Pdo,
                 run_update_check_loop: false,
@@ -545,6 +558,7 @@ impl TestDaemon {
                 install_method_override: None,
                 supervision_override: None,
                 relaunch_command: None,
+                update_seams: Default::default(),
                 allowed_ws_origins: Vec::new(),
                 // #450: deterministic tick seam — no background heartbeat.
                 run_trigger_scheduler_loop: false,
@@ -595,6 +609,7 @@ impl TestDaemon {
                 price_source_url: None,
                 price_refresh_at_boot: false,
                 update_source_url: None,
+                core_source_url: None,
                 release_channel: None,
                 brand: pdo::Brand::Pdo,
                 run_update_check_loop: false,
@@ -602,6 +617,7 @@ impl TestDaemon {
                 install_method_override: Some(install_method),
                 supervision_override: Some(supervision),
                 relaunch_command: None,
+                update_seams: Default::default(),
                 allowed_ws_origins: Vec::new(),
                 run_trigger_scheduler_loop: false,
                 nested_daemon: false,
@@ -648,6 +664,7 @@ impl TestDaemon {
                 price_source_url: None,
                 price_refresh_at_boot: false,
                 update_source_url: Some(update_source_url),
+                core_source_url: None,
                 release_channel: None,
                 brand: pdo::Brand::Pdo,
                 run_update_check_loop: false,
@@ -655,6 +672,7 @@ impl TestDaemon {
                 install_method_override: None,
                 supervision_override: None,
                 relaunch_command: None,
+                update_seams: Default::default(),
                 allowed_ws_origins: Vec::new(),
                 // #450: deterministic tick seam — no background heartbeat.
                 run_trigger_scheduler_loop: false,
@@ -705,6 +723,7 @@ impl TestDaemon {
                 price_source_url: None,
                 price_refresh_at_boot: false,
                 update_source_url: None,
+                core_source_url: None,
                 release_channel: None,
                 brand: pdo::Brand::Pdo,
                 run_update_check_loop: false,
@@ -712,6 +731,7 @@ impl TestDaemon {
                 install_method_override: None,
                 supervision_override: None,
                 relaunch_command: None,
+                update_seams: Default::default(),
                 // #450: deterministic tick seam — no background heartbeat.
                 run_trigger_scheduler_loop: false,
                 // See the sibling literals: armed sweeps, per-daemon opt-out.
@@ -1243,6 +1263,19 @@ pub fn lock_update_check_unset() -> EnvVarGuard {
         &UPDATE_CHECK_LOCK,
         pdo_platform::domain::update_check::UPDATE_CHECK_ENV,
         None,
+    )
+}
+
+static GITHUB_TOKEN_LOCK: Mutex<()> = Mutex::new(());
+
+/// Set (`None`: unset) the operator's `PDO_GITHUB_TOKEN` for the lifetime of
+/// the returned guard, excluding any other test that also wants it.
+#[must_use = "the identifier is restored as soon as the guard is dropped"]
+pub fn lock_github_token(value: Option<&str>) -> EnvVarGuard {
+    EnvVarGuard::acquire_value(
+        &GITHUB_TOKEN_LOCK,
+        pdo_platform::adapters::github_releases::GITHUB_TOKEN_ENV,
+        value,
     )
 }
 

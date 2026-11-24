@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { X } from "lucide-react";
 import TmuxTerminal from "./TmuxTerminal";
+import { useBackdropDismiss } from "../../shared/ui/kit/backdropDismiss";
 
 interface Props {
   /** tmux session to attach to (e.g. `pdo-shell-<run-id>`), from `openRunShell`. */
@@ -40,14 +41,13 @@ export default function RunShellModal({ session, onClose }: Props) {
     document.addEventListener("keydown", handleKey, true);
     return () => document.removeEventListener("keydown", handleKey, true);
   }, [onClose]);
+  const backdrop = useBackdropDismiss(onClose);
 
   return (
     <div
       className="fixed inset-0 z-50 grid place-items-center"
       style={{ background: "rgba(5,7,10,0.66)", backdropFilter: "blur(4px)" }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+      {...backdrop}
       data-testid="run-shell-modal"
     >
       <div

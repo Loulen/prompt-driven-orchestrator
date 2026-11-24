@@ -53,7 +53,7 @@ export function saveSandboxProfile(
   return request<SandboxProfile>(
     "PUT",
     `/settings/sandbox-profiles/${encodeURIComponent(name)}`,
-    { body: diff },
+    { body: diff, label: "Saving staging profile" },
   );
 }
 
@@ -67,7 +67,7 @@ export function deleteSandboxProfile(name: string): Promise<void> {
   return request<void>(
     "DELETE",
     `/settings/sandbox-profiles/${encodeURIComponent(name)}`,
-    { responseMode: "void" },
+    { responseMode: "void", label: "Deleting staging profile" },
   );
 }
 

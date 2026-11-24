@@ -48,6 +48,8 @@ export interface PaletteHost {
   /** Settings › Appearance (« Customize appearance »). */
   openAppearance?: () => void;
   openStats?: () => void;
+  /** The Bug report window, prefilled with the selection. */
+  reportBug?: () => void;
 }
 
 const NONE: PaletteHost = {

@@ -61,7 +61,9 @@ pub(super) fn settings(
             Arc::new(SessionDefaults),
             Arc::new(TriggerDefaults),
             Arc::new(ReviewDefaults),
-            Arc::new(PlatformDefaults),
+            Arc::new(PlatformDefaults {
+                public_url_default: r.public_url_default.clone(),
+            }),
             Arc::new(TelemetryDefaults),
             Arc::new(WorkspaceDefaults),
             Arc::new(sandbox),

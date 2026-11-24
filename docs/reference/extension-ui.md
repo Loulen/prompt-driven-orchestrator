@@ -132,7 +132,10 @@ selected Run, or when its repository belongs to no Projet.
   interface PanelProps { extension: ExtensionRef; context: LocationContext; close(): void }
   ```
 
-  `close()` closes it, before following a link it offers, say.
+  `close()` closes it, before following a link it offers, say. A deep link never opens a panel:
+  `#/ext/<id>/topbar/end/<path>` opens the extension's first page there, whatever the order of
+  its contributions, and toward an extension with only a panel or actions at `topbar/end` it shows
+  the « no page » error toast ([Deep links](#deep-links)).
 - **Counter** (since 0.19, on a panel and an action since 0.20): a page, a panel or an action
   may declare where the counter of its icon is read
   (`UiContribution::with_counter("/ext/<id>/counter")`, on the wire `counter`). The core reads it
@@ -155,6 +158,21 @@ selected Run, or when its repository belongs to no Projet.
 - **Context**: `DecorationContext`, `entity` = `null`. Who is signed in: `useCurrentActor()` of
   `@pdo/extension-ui` ([below](#the-actors-names)).
 - **Since**: 0.8.
+
+### `app/banner`
+
+- **Accepts**: decoration.
+- **Renders**: the application banner, a full-width line **under the top bar**, above every screen
+  of the interface (the Runs, a Run's detail, Settings, Stats, an extension's page: a full-window
+  surface opens under the banner, not over it). One line per contribution, in the catalogue's
+  order, each behind its extension's error boundary (a failing one becomes a `Banner` in the failed
+  tone naming the extension). The component draws itself with the kit's `Banner` of
+  `@pdo/extension-ui` (a status icon, a short fact, the detail, one action) and **decides alone
+  whether to show**: when it renders nothing, its line takes no room and the layout is the one
+  without contribution. The person cannot dismiss it: keep it for a notice about the whole
+  instance, and show it only while it holds.
+- **Context**: `DecorationContext`, `entity` = `null`.
+- **Since**: 0.31.
 
 ### `settings`
 
@@ -371,10 +389,13 @@ unchanged.
 
 A decoration location renders the marks the extensions put on one item, side by side, each behind
 its own error boundary (a failing one becomes a small « ! » whose tooltip names the extension).
+`app/banner` differs: it stacks full-width lines, and a failing one becomes a failed `Banner`
+([above](#appbanner)).
 **Without a contribution nothing is rendered at all**: the item keeps its layout. Several wrap
 rather than push the item's own text out, except on the rows of the left panel's lists, which
 keep one line and end in an ellipsis. The component receives `entity` and `context`:
-`DecorationContext` = `LocationContext` + `entity` (`EntityContext`, `null` on the status bar).
+`DecorationContext` = `LocationContext` + `entity` (`EntityContext`, `null` on the status bar and
+the application banner).
 Its `when` clause sees the entity: `When::has("entity.attributes.test/note")` marks only the items
 that carry the attribute.
 
@@ -838,8 +859,9 @@ Settings (`settings/page`) the header keeps the Settings' title: `setTitle` does
 
 ## Deep links
 
-`#/ext/<extension>/<location>/<path>` opens the extension's first page at `<location>` (in
-declaration order, whatever its `when`) and hands `<path>` to it as `context.path`.
+`#/ext/<extension>/<location>/<path>` opens the extension's first **page** at `<location>` (in
+declaration order, whatever its `when`; a panel or an action declared there, even before the page,
+is never opened by a link) and hands `<path>` to it as `context.path`.
 
 - Opening a page from its entry writes its deep link to the address bar; `navigate(path)` writes
   the new one; closing the page leaves it. « Back » and « Forward » follow.
@@ -1112,6 +1134,7 @@ copies it.
 | `--text`, `--text-2`, `--text-3` | Primary, secondary and muted ink; every one holds 4.5:1 on every surface |
 | `--line`, `--line-soft`, `--line-strong` | Hairlines |
 | `--primary`, `--primary-hi`, `--primary-ink` | The accent of the one primary action of a view and of the selection (ruby under Acogni, emerald under Classic), its hover, the ink on it |
+| `--brand-accent` (since 0.28) | The Marque's accent: the Acogni ruby of the mode, under every Theme. Paint a logo with it, never an action: the action is `--primary` |
 | `--selected-edge`, `--focus-ring`, `--scrim`, `--shadow`, `--dim`, `--dim-soft` | The selection's edge, the focus ring, a dialog's backdrop, a floating layer's shadow, a tour's dim |
 | `--color-st-running`, `-await`, `-done`, `-blocked`, `-failed`, `-skipped` | The six status colours (a status is shown as colour and icon) |
 | `--fs-2xs` … `--fs-xl`, `--lh-ui`, `--w-regular`, `--w-medium`, `--w-strong` | The type scale, 10 to 16 px, 13 px for the body text; line height; weights |
@@ -1143,15 +1166,16 @@ mounted page) takes the logos from the binary rather than embedding its own copy
 
 | Address | What it is |
 | --- | --- |
-| `/shared/brand/mark.svg` | The mark, square. Ink in `currentColor`, accent in `var(--primary)` (ruby when absent) |
+| `/shared/brand/mark.svg` | The mark, square. Ink in `currentColor`, accent in `var(--brand-accent)` (ruby when absent) |
 | `/shared/brand/lockup.svg` | The mark with the name: PDO's mark and « PDO » in `--font-code`; Acogni Driver's wordmark, rule and tag |
 | `/shared/brand/favicon.svg` | The mark in fixed colours that follow `prefers-color-scheme`, for `<link rel="icon">` and `<img>`; `/shared/favicon.svg` answers the same |
 
 `mark.svg` and `lockup.svg` take the colour of the page once inlined (fetch the file, insert its
-text): through an `<img>` an SVG reads neither `currentColor` nor the tokens. Put them in an
-element with the class `acogni-brand` to keep their accent ruby under the Classic Theme too, as the
-interface does. `document.documentElement.dataset.brand` is not set on such a page; the interface's
-own carries `pdo` or `acogni-driver`.
+text): through an `<img>` an SVG reads neither `currentColor` nor the tokens. Their accent reads
+`--brand-accent` from `/shared/tokens.css`, so it stays the Acogni ruby of the mode under the
+Classic Theme too, with no class or rule of the page's own. Before 0.28 it read `--primary`, and
+turned emerald under Classic. `document.documentElement.dataset.brand` is not set on such a page;
+the interface's own carries `pdo` or `acogni-driver`.
 
 The interface is drawn at the **UI scale** (Settings › Interface, 100, 110 or 120 %, 120 by
 default), a CSS `zoom` on its root. A length in pixels needs nothing. A position computed from
@@ -1192,7 +1216,7 @@ taking `size`, `strokeWidth` and `className`.
 
 | Export | What it draws |
 | --- | --- |
-| `Button` | A text button, hairline: `tone` `primary` (the accent, the one main action), `ghost`, `danger`; `size` `sm` (20 px); an `icon`; `disabledReason` (0.23) |
+| `Button` | A text button, hairline: `tone` `primary` (the accent, the one main action), `ghost`, `danger`; `size` `sm` (20 px); an `icon`; `disabledReason` (0.23); `pending`, busy while its operation runs ([Operations in progress](#operations-in-progress)) |
 | `IconButton` | An icon-only button, its `label` and `kbd` in a tooltip; `pressed`, a `badge` count; `disabledReason` (0.23) |
 | `Tooltip` | Wraps one control: « Name (shortcut) », one `description` line at most. Shows once the pointer moves on the control (not when a surface opens under a still pointer) or on a keyboard focus (not on the focus a menu gives back after Escape or a pick) |
 | `Kbd` | A key or a chord |
@@ -1203,13 +1227,13 @@ taking `size`, `strokeWidth` and `className`.
 | `Switch`, `Checkbox` | On/off, the accent when on; a box with its text, `mixed` |
 | `Popover` | A non-modal panel under its `trigger`; Escape and a click outside close it |
 | `Menu` | A menu under its `trigger`: check column, icon, label, shortcut; separators, labels, submenus, `danger`; an entry's `disabledReason` greys it and the menu says the sentence once, at its foot, with a lock (0.23) |
-| `Modal` | A modal dialog: title bar, body, footer (`actions`, `footerNote`); Escape closes, Ctrl+Enter runs `onSubmit` |
-| `ConfirmDialog` | A confirmation: the action and its object, the consequence, the mono target; Enter confirms |
+| `Modal` | A modal dialog: title bar, body, footer (`actions`, `footerNote`); Escape closes, Ctrl+Enter runs `onSubmit`; `locked` while its action runs |
+| `ConfirmDialog` | A confirmation: the action and its object, the consequence, the mono target; Enter confirms. An `onConfirm` that hands back a promise is waited for ([A confirmation that waits](#a-confirmation-that-waits)) |
 | `toast(text, kind?, options?)` | A toast in the core's stack: `info`, `success`, `warning`, `error`, a `title`, one action |
 | `Tabs` | A tab strip, the live tab underlined in the accent, a count |
 | `Section` | A section: caps head with a chevron and a count, actions on hover; folds |
 | `KeyValue` | A read-only property grid |
-| `Banner` | A tinted line at the top of a pane: status icon, fact, detail, actions; an `icon` in the tone's colour instead of the status icon (a lock on a read-only state, since 0.20) |
+| `Banner` | A tinted line at the top of a pane: status icon, fact, detail, actions; an `icon` in the tone's colour instead of the status icon (a lock on a read-only state, since 0.20); `wrap` (0.29): title and text wrap onto several lines, at body weight, the text under the title, instead of ending in an ellipsis, actions on the right |
 | `EmptyState` | An icon, two to four words, one action; loading and error alike |
 | `Chip` | A neutral chip, a status `tone` as its icon; removable |
 | `StatusIcon` | A Run's or a node's status as the core draws it, or a `tone` with its name (and, since 0.20, a fixed `shape`: `todo`, `doing`, `review`, `done`) |
@@ -1380,6 +1404,99 @@ It draws no person on a Run (since 0.12): an extension does, at `run/item/people
 
 Over HTTP: `GET /actors/me` (`{actor, display}`) and `POST /actors/display` (`{actors: [Actor]}`
 → `{displays: [ActorDisplay | null]}`, in order).
+
+## Operations in progress
+
+Every mutation the core's interface sends to the daemon (POST, PUT, PATCH, DELETE) is an
+**Opération en cours** until it settles: its button turns busy, the daemon's indicator of the
+status bar counts it once it lasts 300 ms (its name, or the list with durations, on hover), and
+its outcome shows in a toast, a failure always, a success past 2 s. An extension's interface
+sends its mutations with its own client: it names them with `trackOperation` of
+`@pdo/extension-ui`, and they show in the same indicator and toasts.
+
+```ts
+import { Button, trackOperation, usePending } from "@pdo/extension-ui";
+
+/** A `fetch` resolves on a 4xx: reject it, for the toast to say the failure. */
+async function ok(resp: Response): Promise<Response> {
+  if (!resp.ok) throw new Error((await resp.json().catch(() => null))?.error ?? `${resp.status}`);
+  return resp;
+}
+
+function MoveButton({ note }: { note: string }) {
+  const { pending, run } = usePending();
+  return (
+    <Button
+      tone="primary"
+      pending={pending && "Moving…"}
+      onClick={() =>
+        void run(() =>
+          trackOperation("Moving note", fetch(`/ext/test/notes/${note}/move`, { method: "POST" }).then(ok), {
+            done: "Note moved",
+            icon: "/ext/test/icon.svg",
+          }),
+        ).catch(() => {})
+      }
+    >
+      Move
+    </Button>
+  );
+}
+```
+
+- **`trackOperation(label, work, options?)`**: `label` is short, in the present tense (« Moving
+  note »). `work` is a promise, or a function that starts one; the result comes back, a rejection
+  passes through unchanged after its toast (the error's `message`, after « Moving note failed »).
+  `done` is the success toast's sentence, in the past tense (default « Done: Moving note »);
+  `icon` an SVG URL drawn in its row of the list (a spinner otherwise). A `fetch` that resolves on
+  a `4xx` is no failure: reject it yourself (`ok` above) for the toast to say it. A rejection
+  that is not an object (a bare string) cannot be marked as said: reject with an `Error`.
+- **`usePending()`**: `{ pending, run }`. `run(work)` starts the work and stays `pending` until it
+  settles; a second call while pending does nothing.
+- **`Button`'s `pending`**: `true`, or the text in the present tense to show in place of its own;
+  a spinner replaces its icon, it is inert (`aria-disabled`, `data-pending="busy"`) and keeps the
+  focus.
+- Reads stay silent: name only what changes something.
+
+### A confirmation that waits
+
+A `ConfirmDialog` whose `onConfirm` hands back a promise waits for it. While it runs, the button
+spins with `pendingLabel` (« Archiving… ») and the dialog is locked: Cancel and the close control
+are greyed, Escape and a click on the backdrop do nothing. A success closes it (it calls
+`onClose`). A failure keeps it open: a failed `Banner` at its top, `failedTitle` (« Archiving
+failed ») and the error's `message`, and the button turns « Retry »; Cancel works again. The
+operations the promise starts at once, before its first `await`, still show in the status bar; their
+failure is said in the dialog only, not in a toast as well. Let the promise reject on a failure:
+one that catches it and resolves closes the dialog, and the failure is then said in a toast.
+
+```ts
+import { ConfirmDialog, trackOperation } from "@pdo/extension-ui";
+
+/** A `fetch` resolves on a 4xx: reject it, with the daemon's message, for the dialog to say it. */
+async function ok(resp: Response): Promise<Response> {
+  if (!resp.ok) throw new Error((await resp.json().catch(() => null))?.error ?? `${resp.status}`);
+  return resp;
+}
+
+function ArchiveNote({ note, onClose }: { note: string; onClose: () => void }) {
+  return (
+    <ConfirmDialog
+      title="Archive this note?"
+      target={note}
+      actionLabel="Archive"
+      pendingLabel="Archiving…"
+      danger
+      onConfirm={() =>
+        trackOperation("Archiving note", fetch(`/ext/test/notes/${note}/archive`, { method: "POST" }).then(ok))
+      }
+      onClose={onClose}
+    />
+  );
+}
+```
+
+`confirmDisabled` keeps the confirmation from being given (a name still to type, in a field passed as
+`children`, marked `data-autofocus` to take the focus).
 
 ## WebSockets
 

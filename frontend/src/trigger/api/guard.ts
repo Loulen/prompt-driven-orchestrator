@@ -31,7 +31,7 @@ export function testGuard(
     "/triggers/guard/test",
     {
       body: { guard_command, target_repo, project_id },
-      label: "POST /triggers/guard/test",
+      label: "Testing guard",
     },
   );
 }

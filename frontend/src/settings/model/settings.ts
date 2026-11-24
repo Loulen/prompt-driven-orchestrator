@@ -43,6 +43,18 @@ export interface StringSettingField {
 }
 
 /**
+ * The Public URL: a {@link StringSettingField} whose `effective` and `default` are always set,
+ * the default being the machine's address the daemon computed at boot.
+ */
+export interface PublicUrlField {
+  effective: string;
+  source: SettingSource;
+  stored: string | null;
+  env: string | null;
+  default: string;
+}
+
+/**
  * String sibling of {@link StringSettingField} carrying an advisory `reason` (#432).
  *
  * Only `default_sandbox` needs it: it is the one enum knob whose value space is OPEN (a
@@ -81,12 +93,20 @@ export interface InstanceSettings {
   session_cap: SettingField;
   reaper_ttl_secs: SettingField;
   guard_timeout_secs: SettingField;
+  /** How long a support agent goes without input before it asks « Still there? », in
+   *  seconds (`stored → env PDO_SUPPORT_IDLE_TIMEOUT_SECS → default 1800`). Absent from
+   *  an older daemon. */
+  support_idle_timeout_secs?: SettingField;
   /** #779: images + files budget per Run, in MB (`stored → env → default 50`). Bounds the
    *  multipart body of `POST /runs` and drives the « New run » modal's client-side gate. */
   max_attachments_mb: SettingField;
-  /** The address humans open PDO at (`stored → env PDO_PUBLIC_URL → none`). Agents receive
-   *  it and `pdo page mount` prints its links under it; `null` keeps them on localhost. */
-  public_url: StringSettingField;
+  /** The address humans open PDO at (`stored → env PDO_PUBLIC_URL → default`), always set.
+   *  Agents receive it, `pdo page mount` and the copied links of a Page print their links
+   *  under it. `default` is the machine's address (`http://<host>:<port>`). */
+  public_url: PublicUrlField;
+  /** The system the daemon runs on (`Linux 6.8.0 (x86_64)`), which a bug report states.
+   *  Absent from an older daemon. */
+  host_os?: string;
   /** CORE-97: where a repository given by its URL is cloned (`stored → ~/pdo/repos`),
    *  as typed: `~` stands for the daemon's home. Absent from an older daemon. */
   clones_folder?: StringSettingField;

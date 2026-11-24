@@ -15,7 +15,7 @@ export function killNode(
   return request<void>(
     "POST",
     `/runs/${encodeURIComponent(runId)}/commands`,
-    { body: { kind: "kill_node", node_id: nodeId, iter }, responseMode: "void", label: "kill_node" },
+    { body: { kind: "kill_node", node_id: nodeId, iter }, responseMode: "void", label: "Killing node" },
   );
 }
 
@@ -27,7 +27,7 @@ export function restartNode(
   return request<void>(
     "POST",
     `/runs/${encodeURIComponent(runId)}/commands`,
-    { body: { kind: "restart_node", node_id: nodeId, iter }, responseMode: "void", label: "restart_node" },
+    { body: { kind: "restart_node", node_id: nodeId, iter }, responseMode: "void", label: "Restarting node" },
   );
 }
 
@@ -35,7 +35,7 @@ export function pauseRun(runId: string): Promise<void> {
   return request<void>(
     "POST",
     `/runs/${encodeURIComponent(runId)}/commands`,
-    { body: { kind: "pause_run" }, responseMode: "void", label: "pause_run" },
+    { body: { kind: "pause_run" }, responseMode: "void", label: "Pausing run" },
   );
 }
 
@@ -43,7 +43,7 @@ export function resumeRun(runId: string): Promise<void> {
   return request<void>(
     "POST",
     `/runs/${encodeURIComponent(runId)}/commands`,
-    { body: { kind: "resume_run" }, responseMode: "void", label: "resume_run" },
+    { body: { kind: "resume_run" }, responseMode: "void", label: "Resuming run" },
   );
 }
 
@@ -58,7 +58,7 @@ export function reopenRun(runId: string): Promise<void> {
   return request<void>(
     "POST",
     `/runs/${encodeURIComponent(runId)}/commands`,
-    { body: { kind: "reopen_run" }, responseMode: "void", label: "reopen_run" },
+    { body: { kind: "reopen_run" }, responseMode: "void", label: "Reopening run" },
   );
 }
 
@@ -71,7 +71,7 @@ export function endRegion(runId: string, regionId: string): Promise<void> {
   return request<void>(
     "POST",
     `/runs/${encodeURIComponent(runId)}/commands`,
-    { body: { kind: "end_region", region_id: regionId }, responseMode: "void", label: "end_region" },
+    { body: { kind: "end_region", region_id: regionId }, responseMode: "void", label: "Ending loop" },
   );
 }
 
@@ -91,7 +91,7 @@ export function bumpRegion(
     {
       body: { kind: "bump_region", region_id: regionId, additional_iter: additionalIter },
       responseMode: "void",
-      label: "bump_region",
+      label: "Raising loop budget",
     },
   );
 }
@@ -114,7 +114,7 @@ export function setRegionMaxCost(
     {
       body: { kind: "set_region_max_cost", region_id: regionId, max_cost_usd: maxCostUsd },
       responseMode: "void",
-      label: "set_region_max_cost",
+      label: "Setting loop cost cap",
     },
   );
 }
@@ -123,7 +123,7 @@ export function retryAll(runId: string): Promise<CreateRunResponse> {
   return request<CreateRunResponse>(
     "POST",
     `/runs/${encodeURIComponent(runId)}/commands`,
-    { body: { kind: "retry_all" }, label: "retry_all" },
+    { body: { kind: "retry_all" }, label: "Retrying run", done: "Run retried" },
   );
 }
 
@@ -131,7 +131,7 @@ export function cleanupRun(runId: string): Promise<void> {
   return request<void>(
     "POST",
     `/runs/${encodeURIComponent(runId)}/commands`,
-    { body: { kind: "cleanup_run" }, responseMode: "void", label: `POST /runs/${runId}/commands` },
+    { body: { kind: "cleanup_run" }, responseMode: "void", label: "Archiving run", done: "Run archived" },
   );
 }
 
@@ -139,6 +139,6 @@ export function renameRun(runId: string, name: string): Promise<void> {
   return request<void>(
     "POST",
     `/runs/${encodeURIComponent(runId)}/commands`,
-    { body: { kind: "rename_run", name }, responseMode: "void", label: `POST /runs/${runId}/commands` },
+    { body: { kind: "rename_run", name }, responseMode: "void", label: "Renaming run" },
   );
 }

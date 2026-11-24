@@ -70,6 +70,10 @@ pub const REAPER_INTERVAL_SECS_ENV: &str = "PDO_REAPER_INTERVAL_SECS";
 /// ADR-0051).
 pub const LIBASSIST_IDLE_TTL_SECS_ENV: &str = "PDO_LIBASSIST_IDLE_TTL_SECS";
 
+/// Overrides the Agent de support's idle timeout (seconds). Default: 1800
+/// (30 min).
+pub const SUPPORT_IDLE_TIMEOUT_SECS_ENV: &str = "PDO_SUPPORT_IDLE_TIMEOUT_SECS";
+
 #[cfg(test)]
 mod tests {
     use super::*;

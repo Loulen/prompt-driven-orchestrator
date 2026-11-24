@@ -8,6 +8,7 @@ import EffortPicker from "../../harness/components/EffortPicker";
 import HarnessSelect from "../../harness/components/HarnessSelect";
 import { findHarnessOption, effortOffer, modelCount, probedAgo } from "../../harness/model/catalog";
 import { useHarnessCatalog, useRefreshModels, useRefreshModelsRefused } from "../../harness/store/useHarnessCatalog";
+import { useBackdropDismiss } from "../../shared/ui/kit/backdropDismiss";
 
 /**
  * The agent profile editor (#899): one modal for both a row's **Edit** pencil
@@ -106,14 +107,12 @@ export default function AgentProfileModal({
     )
   );
 
+  const backdrop = useBackdropDismiss(onClose, true, { stopPropagation: true });
   return (
     <div
       className="fixed inset-0 z-[60] grid place-items-center bg-scrim"
       data-testid="agent-profile-backdrop"
-      onClick={(event) => {
-        event.stopPropagation();
-        onClose();
-      }}
+      {...backdrop}
     >
       <div
         className="d-frame w-[500px] max-w-[calc(90vw/var(--app-zoom,1))] rounded-(--radius-ui) border border-line bg-surface-0"

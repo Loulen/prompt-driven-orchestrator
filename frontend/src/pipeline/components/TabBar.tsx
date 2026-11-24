@@ -14,7 +14,7 @@ import type { Project } from "../../workspace/model/project";
 import { PageTabActions, PageTabButtons } from "../../platform/components/PageTabs";
 import { useMountedPages } from "../../platform/store/mountedPages";
 import type { RunListEntry } from "../../shared/generated/RunListEntry";
-import { Button, Tooltip } from "../../shared/ui/kit";
+import { Button, Tooltip, usePending } from "../../shared/ui/kit";
 import { useOverflowing } from "../../hooks/useOverflowing";
 import { useActiveTabInView } from "../../hooks/useActiveTabInView";
 import TabContextMenu from "./TabContextMenu";
@@ -60,7 +60,6 @@ export default function TabBar({
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setActiveTab = useEditStore((s) => s.setActiveTab);
-  const closeTab = useEditStore((s) => s.closeTab);
   const closeTabs = useEditStore((s) => s.closeTabs);
   const moveTab = useEditStore((s) => s.moveTab);
   const movePage = useMountedPages((s) => s.movePage);
@@ -69,6 +68,8 @@ export default function TabBar({
   const overflowing = useOverflowing(listRef);
   const save = useEditStore((s) => s.save);
   const requestSave = useEditStore((s) => s.requestSave);
+  // Save: busy until the daemon answers a direct save (a shared draft opens its window at once).
+  const saving = usePending();
   const saveVersionFor = useEditStore((s) => s.saveVersionFor);
   const closeSaveVersion = useEditStore((s) => s.closeSaveVersion);
   const lastSavedAt = useEditStore((s) => s.lastSavedAt);
@@ -85,12 +86,13 @@ export default function TabBar({
   // Right-click context menu (#342): viewport coords so it doesn't drift when
   // the tab strip scrolls. Null = closed.
   const [menu, setMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
-  // A mass-close awaiting confirmation because it would discard unsaved work.
+  // A close (single or mass) awaiting confirmation because it would discard unsaved work.
   const [pendingClose, setPendingClose] = useState<{ ids: string[]; victims: OpenPipeline[] } | null>(null);
 
   // Gate a close request on unsaved work: confirm if any target tab is unsaved,
-  // else close atomically. The single × keeps its silent drop (unchanged); the
-  // menu is the explicit path, so it never loses work without asking.
+  // else close atomically. Every close gesture goes through it: the menu, and
+  // since CORE-281 the single × and the middle click too, so none loses work
+  // without asking (a synced shared draft loses nothing, ADR-0088).
   const requestClose = useCallback(
     (ids: string[]) => {
       const victims = openTabs.filter((t) => ids.includes(t.id));
@@ -162,7 +164,7 @@ export default function TabBar({
                 showPage(null);
                 setActiveTab(tab.id);
               }}
-              onClose={() => closeTab(tab.id)}
+              onClose={() => requestClose([tab.id])}
               onContextMenu={(e) => {
                 e.preventDefault();
                 setMenu({ x: e.clientX, y: e.clientY, tabId: tab.id });
@@ -213,8 +215,11 @@ export default function TabBar({
                   size="sm"
                   tone="primary"
                   icon={Save}
-                  onClick={() => { if (activeTabId) requestSave(activeTabId); }}
-                  disabled={activeDraft ? !activeTab?.dirty : !anyDirty}
+                  onClick={() => {
+                    if (activeTabId) void saving.run(async () => requestSave(activeTabId)).catch(() => {});
+                  }}
+                  disabled={!saving.pending && (activeDraft ? !activeTab?.dirty : !anyDirty)}
+                  pending={saving.pending && "Saving…"}
                   data-testid="save-button"
                 >
                   {activeDraft ? "Save…" : "Save"}

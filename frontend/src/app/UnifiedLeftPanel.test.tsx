@@ -1895,6 +1895,31 @@ describe("UnifiedLeftPanel — run-level controls (#110)", () => {
     );
   });
 
+  it("a refused retry-all stays in its confirmation with the daemon's message", async () => {
+    mockRetryAll.mockRejectedValueOnce(new Error("1 node is still running"));
+    const onSelectRun = vi.fn();
+    render(
+      <UnifiedLeftPanel
+        runs={[runRow("failed")]}
+        selectedRunId={null}
+        onSelectRun={onSelectRun}
+        onNewRun={noop}
+        libraryPipelines={[]}
+        onLibraryPipelinesChanged={noop}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("retry-all-button"));
+    const dialog = screen.getByRole("dialog", { name: "Retry all nodes?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Retry all" }));
+
+    const banner = await within(dialog).findByRole("alert");
+    expect(banner).toHaveTextContent("Retry all failed");
+    expect(banner).toHaveTextContent("1 node is still running");
+    expect(onSelectRun).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Retry all nodes?" })).toBeInTheDocument();
+  });
+
   it("cancelling retry-all never calls retryAll and closes the modal", () => {
     renderPanel({ runs: [runRow("halted")] });
     fireEvent.click(screen.getByTestId("retry-all-button"));

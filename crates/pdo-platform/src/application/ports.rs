@@ -17,6 +17,7 @@ use crate::domain::release::Release;
 use crate::domain::service_unit::PortState;
 use crate::domain::update_check::UpdateCache;
 use crate::domain::update_plan::UpdatePlan;
+use crate::domain::update_snapshot::{ReadyMarker, UpdateSnapshot};
 
 /// The future a port returns: boxed, so the port stays object-safe.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -134,17 +135,26 @@ pub trait UpdateCheckSetting: Send + Sync {
 
 /// The `public_url` instance setting. Implemented by the `settings` context.
 pub trait PublicUrlSetting: Send + Sync {
-    /// The address humans open PDO at, resolved fresh (`stored → env → none`)
-    /// so a change takes effect without a restart.
-    fn resolve(&self) -> BoxFuture<'_, Option<String>>;
+    /// The address humans open PDO at, resolved fresh (`stored → env →
+    /// default`) so a change takes effect without a restart.
+    fn resolve(&self) -> BoxFuture<'_, String>;
 }
 
-/// The release source.
+/// The release source. `token`: the release channel's identifier, presented
+/// as a `Bearer`; `None`: no authentication.
 pub trait ReleaseSource: Send + Sync {
     /// The latest published version at `url`.
-    fn latest<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<String, String>>;
+    fn latest<'a>(
+        &'a self,
+        url: &'a str,
+        token: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<String, String>>;
     /// The published releases listed at `url`.
-    fn releases<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Vec<Release>, String>>;
+    fn releases<'a>(
+        &'a self,
+        url: &'a str,
+        token: Option<&'a str>,
+    ) -> BoxFuture<'a, Result<Vec<Release>, String>>;
 }
 
 /// The update journal: the check cache, the last attempt, the scripts and logs.
@@ -165,6 +175,24 @@ pub trait UpdateJournal: Send + Sync {
     fn append_log(&self, attempt_id: &str, line: &str);
     /// An attempt's log; `Ok(None)` when there is none.
     fn read_log(&self, attempt_id: &str) -> Result<Option<String>, String>;
+    /// Where the snapshot of the Retour automatique is kept (one at a time).
+    fn snapshot_dir(&self) -> PathBuf;
+    /// Where the daemon listening on `port` writes its readiness marker.
+    fn ready_marker_path(&self, port: u16) -> PathBuf;
+    /// Write the readiness marker of the daemon listening on `port`.
+    fn write_ready_marker(&self, port: u16, marker: &ReadyMarker) -> Result<(), String>;
+}
+
+/// What keeps the databases and the binary before an Update, for the Retour
+/// automatique.
+pub trait UpdateSnapshotter: Send + Sync {
+    /// Replace the snapshot in `dir` with a consistent copy of every database
+    /// and a copy of the binary at `exe`.
+    fn take<'a>(
+        &'a self,
+        dir: &'a Path,
+        exe: &'a Path,
+    ) -> BoxFuture<'a, Result<UpdateSnapshot, String>>;
 }
 
 /// An executor that was spawned and runs on its own.
@@ -177,7 +205,15 @@ pub trait RunningExecutor: Send {
 
 /// What runs an update plan, detached from the daemon.
 pub trait UpdateExecutor: Send + Sync {
-    fn spawn(&self, plan: &UpdatePlan, script: &Path) -> Result<Box<dyn RunningExecutor>, String>;
+    /// `release_token`: the release channel's identifier, handed to the
+    /// executor's environment under `PDO_GITHUB_TOKEN` (`None`: removed from
+    /// it). It never travels in the plan, so never in the script nor its log.
+    fn spawn(
+        &self,
+        plan: &UpdatePlan,
+        script: &Path,
+        release_token: Option<&str>,
+    ) -> Result<Box<dyn RunningExecutor>, String>;
 }
 
 /// How this binary was installed and is supervised.
@@ -222,4 +258,22 @@ pub trait ServiceHost {
     fn remove_file(&self, path: &Path) -> anyhow::Result<()>;
     /// Run a side-effect command, capturing its outcome.
     fn run_cmd(&self, program: &str, args: &[&str]) -> anyhow::Result<CmdOutcome>;
+}
+
+/// The last Destination de bug report each Actor sent to: « Send to »
+/// starts on it.
+pub trait BugReportChoices: Send + Sync {
+    /// Create the storage if it does not exist yet.
+    fn init(&self) -> BoxFuture<'_, Result<(), StorageError>>;
+    /// The destination `actor` chose last; `None` while it never chose.
+    fn last<'a>(
+        &'a self,
+        actor: &'a pdo_kernel::Actor,
+    ) -> BoxFuture<'a, Result<Option<String>, StorageError>>;
+    /// Remember `destination` as `actor`'s last choice.
+    fn remember<'a>(
+        &'a self,
+        actor: &'a pdo_kernel::Actor,
+        destination: &'a str,
+    ) -> BoxFuture<'a, Result<(), StorageError>>;
 }

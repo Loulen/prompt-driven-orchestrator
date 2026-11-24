@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 
 use crate::domain::merge_action;
 use crate::domain::{event, state};
+use pdo_pipeline::domain::pipeline::NodeType;
 use pdo_workspace::domain::provisioning;
 
 /// The effort level a node's iteration was **launched** with, read back from its
@@ -127,13 +128,15 @@ pub fn find_node_type<'a>(run_state: &'a state::RunState, node_id: &str) -> Opti
 /// fallback for one whose events predate #653.
 ///
 /// A snapshot that states the isolation is authoritative. Absent it, the type's
-/// default stands in: an `agent` is isolated, a `script` shares the Run
-/// worktree, and a structural node has no worktree of its own.
+/// default stands in ([`NodeType::default_isolation_of`]): an `agent` and a
+/// `script` share the Run worktree, and a structural node has no worktree of
+/// its own.
 pub fn snapshot_isolation(run_state: &state::RunState, node_id: &str) -> bool {
     let Some(def) = run_state.node_defs.iter().find(|nd| nd.id == node_id) else {
         return false;
     };
-    def.isolated_worktree.unwrap_or(def.node_type == "agent")
+    def.isolated_worktree
+        .unwrap_or_else(|| NodeType::default_isolation_of(&def.node_type))
 }
 
 /// Where a node's iteration `iter` works (#653, ADR-0060): its FROZEN answer

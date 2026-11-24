@@ -20,15 +20,14 @@ import type { IterationTiming } from "../../model/iterationDuration";
 import { useNodeDurationMode } from "../../store/nodeDurationModeStore";
 import { STATUS_LABELS } from "./labels";
 import IterMark from "../IterMark";
+import HarnessLogo from "../../../harness/components/HarnessLogo";
 
-/** The one-letter glyph of a harness, its full name in the tooltip. */
-const HARNESS_LETTER: Record<string, string> = { claude: "C", opencode: "O", copilot: "G", codex: "X", pi: "P" };
-
+/** The logo of a harness, its full name in the tooltip. */
 export function HarnessGlyph({ harness }: { harness: string }) {
   const tip = `${harness} · frozen at spawn`;
   return (
     <span className="ri-hglyph" data-testid="node-frozen-harness" title={tip} aria-label={tip} role="img">
-      {HARNESS_LETTER[harness] ?? harness.slice(0, 1).toUpperCase()}
+      <HarnessLogo harness={harness} size={12} />
     </span>
   );
 }

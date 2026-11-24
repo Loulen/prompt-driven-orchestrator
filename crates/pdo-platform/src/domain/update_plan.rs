@@ -4,16 +4,30 @@
 //! NOT run the upgrade itself — its own restart would kill it midway. It writes a
 //! small POSIX shell script and spawns it detached, then answers at once with the
 //! attempt id. The script does exactly what the user would type (CONTEXT.md § *Mise
-//! à jour depuis l'app*: sharp tool, delegate to the installation method):
+//! à jour depuis l'app*: sharp tool, delegate to the installation method), then
+//! checks the result and undoes it when it is broken (the **Retour automatique**):
 //!
-//! 1. the **installation method's** upgrade command (`brew update && brew upgrade
+//! 1. the daemon has already taken the **snapshot** (its databases, the binary in
+//!    place, [`UpdateSnapshot`]) before spawning the script;
+//! 2. the **installation method's** upgrade command (`brew update && brew upgrade
 //!    Loulen/tap/pdo`, the cargo-dist installer re-run, or the command a
-//!    distribution's release channel declares, #24);
-//! 2. if **supervised**: `pdo service install` (idempotent, port preserved — and,
+//!    distribution's release channel declares, #24) — a non-zero exit stops
+//!    there, the running daemon untouched, nothing restored;
+//! 3. if **supervised**: `pdo service install` (idempotent, port preserved — and,
 //!    since #699, writing the STABLE binary path so an existing unit pointing into
 //!    a versioned Cellar is repaired), then a service restart;
-//! 3. if **not supervised**: stop the daemon by pid and relaunch it with its
-//!    original command line (same port), itself detached.
+//!    if **not supervised**: stop the daemon by pid and relaunch it with its
+//!    original command line (same port), itself detached;
+//! 4. **verify**: wait, at most `verify_timeout_secs`, for the daemon to answer
+//!    in a version other than the one it started from (its readiness marker,
+//!    [`super::update_snapshot::ReadyMarker`]). Only then is the attempt
+//!    `succeeded`, and the snapshot removed;
+//! 5. otherwise **roll back**: stop the daemon, copy the binary and the databases
+//!    back, restart, wait for it to answer, and record `failed` with the reason.
+//!
+//! The release channel's identifier reaches the update command through the
+//! executor's environment (`PDO_GITHUB_TOKEN`), never through the plan: the
+//! script, and so its log, cannot show it.
 //!
 //! Everything here is a pure function of the plan, so the script is golden-tested.
 
@@ -22,6 +36,8 @@ use std::path::PathBuf;
 
 use super::attempt::ATTEMPT_SCHEMA;
 use super::install::{InstallMethod, Supervision};
+use super::update_rollback::{rollback_function, start_daemon, STOP_PID, WAIT_READY};
+use super::update_snapshot::UpdateSnapshot;
 
 /// Everything the script needs, decided by the daemon at apply time.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +66,21 @@ pub struct UpdatePlan {
     pub log_path: PathBuf,
     pub attempt_path: PathBuf,
     pub from_version: String,
+    /// The newest version known at apply time, for the log and the record.
+    pub to_version: Option<String>,
+    /// What the Retour automatique puts back; `None`: nothing was kept, a
+    /// broken update is reported, not undone.
+    pub snapshot: Option<UpdateSnapshot>,
+    /// The readiness marker the restarted daemon writes once it serves.
+    pub ready_marker: PathBuf,
+    /// How long the script waits for the restarted daemon to answer.
+    pub verify_timeout_secs: u64,
+    /// The release identifier the executor receives (`PDO_GITHUB_TOKEN`) is
+    /// the binary's own: the script drops it from its environment once the
+    /// update command has run, so neither the restarted daemon nor the
+    /// Retour automatique inherits it. `false`: it is the operator's, which
+    /// the daemon was started with and keeps.
+    pub release_token_for_command_only: bool,
 }
 
 impl UpdatePlan {
@@ -97,38 +128,87 @@ fn json_escape(s: &str) -> String {
         .unwrap_or_default()
 }
 
+/// `<exe> service install --port <port> [--bind <ip>]`: (re)writes the unit
+/// for the binary in place, the port and the bind kept.
+pub(crate) fn service_install(plan: &UpdatePlan) -> String {
+    let bind_arg = plan
+        .bind
+        .map(|ip| format!(" --bind {}", sh_quote(&ip.to_string())))
+        .unwrap_or_default();
+    format!(
+        "{} service install --port {}{bind_arg}",
+        q(&plan.exe),
+        plan.port
+    )
+}
+
+/// A path, quoted for `sh`.
+pub(crate) fn q(path: &std::path::Path) -> String {
+    sh_quote(&path.display().to_string())
+}
+
+/// A string for a double-quoted `sh` argument: `"`, `\`, `$` and backquotes
+/// escaped.
+pub(crate) fn dq(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('$', "\\$")
+        .replace('`', "\\`")
+}
+
+/// The `record` function: rewrites `last-attempt.json` (the daemon wrote it as
+/// `running`; the script owns the end state since the daemon dies before it).
+/// `record <status> <exit_code> [reason] [rolled_back]`; a reason is plain text
+/// the script composes, never with a `"` or a `\`.
+fn record_function(plan: &UpdatePlan) -> String {
+    let to_version = match &plan.to_version {
+        Some(v) => format!("\\\"{}\\\"", dq(&json_escape(v))),
+        None => "null".to_string(),
+    };
+    let json = format!(
+        "{{\\\"schema\\\":\\\"{schema}\\\",\\\"attempt_id\\\":\\\"{id}\\\",\\\"status\\\":\\\"$1\\\",\
+         \\\"started_at\\\":\\\"$STARTED_AT\\\",\\\"finished_at\\\":\\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\\",\
+         \\\"exit_code\\\":$2,\\\"method\\\":\\\"{method}\\\",\\\"command\\\":\\\"{cmd}\\\",\
+         \\\"supervision\\\":\\\"{sup}\\\",\\\"log_path\\\":\\\"{log}\\\",\\\"from_version\\\":\\\"{from}\\\",\
+         \\\"to_version\\\":{to_version},\\\"reason\\\":$r,\\\"rolled_back\\\":${{4:-false}},\
+         \\\"verify_timeout_secs\\\":{timeout}}}",
+        schema = ATTEMPT_SCHEMA,
+        id = dq(&json_escape(&plan.attempt_id)),
+        method = plan.method.as_str(),
+        cmd = dq(&json_escape(plan.upgrade_command())),
+        sup = plan.supervision.as_str(),
+        log = dq(&json_escape(&plan.log_path.display().to_string())),
+        from = dq(&json_escape(&plan.from_version)),
+        timeout = plan.verify_timeout_secs,
+    );
+    format!(
+        "record() {{\n  \
+         if [ -n \"${{3:-}}\" ]; then r=\"\\\"$3\\\"\"; else r=null; fi\n  \
+         printf '%s\\n' \"{json}\" > \"$ATTEMPT_FILE.tmp\" && mv \"$ATTEMPT_FILE.tmp\" \"$ATTEMPT_FILE\"\n\
+         }}\n"
+    )
+}
+
 /// Render the executor script. Pure: identical plans give identical bytes.
 ///
 /// Shape (POSIX `sh`, no bashisms — the FP container's `sh` is dash):
 /// * a `PATH` widened with the exe dir, `~/.local/bin` and the Homebrew prefixes,
 ///   because a daemon started by systemd has a minimal `PATH` without `brew`;
-/// * `record <status> <exit_code>` rewrites `last-attempt.json` (the daemon wrote it
-///   as `running`; the script owns the end state since the daemon dies before it);
+/// * `say <step> <text>` writes one log line, `HH:MM:SS step text`;
+/// * `record` rewrites `last-attempt.json` (see [`record_function`]);
 /// * the upgrade command — a non-zero exit records `failed` and stops there: the
-///   old daemon keeps running, nothing is restarted onto a half-installed binary;
+///   old daemon keeps running, nothing is restarted nor restored;
 /// * supervised: `pdo service install --port <port>` from the daemon's cwd, then the
 ///   supervisor's restart; unsupervised: SIGTERM the pid, wait until it is gone,
-///   relaunch the recorded argv in a new session with stdio to the log.
+///   relaunch the recorded argv in a new session with stdio to the log;
+/// * the verification, then the success or the Retour automatique.
 pub fn render_update_script(plan: &UpdatePlan) -> String {
     let exe_dir = plan
         .exe
         .parent()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| ".".to_string());
-    let attempt_json_head = format!(
-        "{{\\\"schema\\\":\\\"{schema}\\\",\\\"attempt_id\\\":\\\"{id}\\\",\\\"status\\\":\\\"$1\\\",\
-         \\\"started_at\\\":\\\"{started}\\\",\\\"finished_at\\\":\\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\\",\
-         \\\"exit_code\\\":$2,\\\"method\\\":\\\"{method}\\\",\\\"command\\\":\\\"{cmd}\\\",\
-         \\\"supervision\\\":\\\"{sup}\\\",\\\"log_path\\\":\\\"{log}\\\",\\\"from_version\\\":\\\"{from}\\\"}}",
-        schema = ATTEMPT_SCHEMA,
-        id = json_escape(&plan.attempt_id),
-        started = "$STARTED_AT",
-        method = plan.method.as_str(),
-        cmd = json_escape(&json_escape(plan.upgrade_command())),
-        sup = plan.supervision.as_str(),
-        log = json_escape(&json_escape(&plan.log_path.display().to_string())),
-        from = json_escape(&plan.from_version),
-    );
+    let exe = q(&plan.exe);
 
     let mut s = String::new();
     s.push_str("#!/bin/sh\n");
@@ -142,124 +222,129 @@ pub fn render_update_script(plan: &UpdatePlan) -> String {
         "export PATH={exe_dir}:$HOME/.local/bin:/home/linuxbrew/.linuxbrew/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\n",
         exe_dir = sh_quote(&exe_dir)
     ));
-    s.push_str(&format!(
-        "ATTEMPT_FILE={}\n",
-        sh_quote(&plan.attempt_path.display().to_string())
-    ));
+    s.push_str(&format!("ATTEMPT_FILE={}\n", q(&plan.attempt_path)));
+    s.push_str(&format!("MARKER={}\n", q(&plan.ready_marker)));
+    s.push_str(&format!("TIMEOUT={}\n", plan.verify_timeout_secs));
+    s.push_str(&format!("FROM={}\n", sh_quote(&plan.from_version)));
     s.push_str("STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)\n");
-    s.push_str("record() {\n");
+    s.push_str(&record_function(plan));
+    s.push_str("say() {\n  printf '%s %-8s %s\\n' \"$(date +%H:%M:%S)\" \"$1\" \"$2\"\n}\n");
+    s.push_str(WAIT_READY);
+    s.push_str(STOP_PID);
+    if let Some(snapshot) = &plan.snapshot {
+        s.push_str(&rollback_function(plan, snapshot));
+    } else {
+        // Nothing kept: a broken update is reported, never undone.
+        s.push_str("rollback() {\n  say result \"failed (nothing to restore)\"\n  record failed 1 \"$1\" false\n  exit 1\n}\n");
+    }
     s.push_str(&format!(
-        "  printf '%s\\n' \"{attempt_json_head}\" > \"$ATTEMPT_FILE.tmp\" && mv \"$ATTEMPT_FILE.tmp\" \"$ATTEMPT_FILE\"\n"
-    ));
-    s.push_str("}\n");
-    s.push_str(&format!(
-        "echo \"== pdo update {} started $STARTED_AT (from v{})\"\n",
-        plan.attempt_id, plan.from_version
-    ));
-    s.push_str(&format!(
-        "echo \"== method: {} · supervision: {}\"\n",
+        "say start \"pdo update {} from v{} · method {} · supervision {}\"\n",
+        dq(&plan.attempt_id),
+        dq(&plan.from_version),
         plan.method.as_str(),
         plan.supervision.as_str()
     ));
-    s.push_str(&format!(
-        "echo \"== upgrade: {}\"\n",
-        plan.upgrade_command().replace('"', "\\\"")
-    ));
+    if let Some(to) = &plan.to_version {
+        s.push_str(&format!("say target \"v{}\"\n", dq(to)));
+    }
+    match &plan.snapshot {
+        Some(snapshot) => s.push_str(&format!(
+            "say snapshot \"{}\"\n",
+            dq(&snapshot.summary(&plan.from_version))
+        )),
+        None => s.push_str("say snapshot \"none: a broken update cannot be undone\"\n"),
+    }
+    let clean_snapshot = plan
+        .snapshot
+        .as_ref()
+        .map(|snap| format!("rm -rf {}\n", q(&snap.dir)))
+        .unwrap_or_default();
+
+    // 2. The upgrade command.
+    s.push_str(&format!("say run \"{}\"\n", dq(plan.upgrade_command())));
     s.push_str(&format!(
         "sh -c {}\nrc=$?\n",
         sh_quote(plan.upgrade_command())
     ));
+    if plan.release_token_for_command_only {
+        // The release identifier was for the update command alone.
+        s.push_str("unset PDO_GITHUB_TOKEN\n");
+    }
     s.push_str("if [ \"$rc\" -ne 0 ]; then\n");
     s.push_str(
-        "  echo \"== upgrade command failed (exit $rc); the running daemon is left untouched\"\n",
+        "  say result \"failed: the update command exited $rc; the running daemon is left untouched\"\n",
     );
-    s.push_str("  record failed \"$rc\"\n  exit \"$rc\"\nfi\n");
+    for line in clean_snapshot.lines() {
+        s.push_str(&format!("  {line}\n"));
+    }
+    s.push_str("  record failed \"$rc\" \"The update command exited with code $rc.\"\n  exit \"$rc\"\nfi\n");
+    // The version the new binary says it is, reduced to the characters a
+    // version uses (it goes into the record's JSON).
     s.push_str(&format!(
-        "echo \"== installed: $({} --version 2>/dev/null || echo unknown)\"\n",
-        sh_quote(&plan.exe.display().to_string())
+        "NEW=$({exe} --version 2>/dev/null | awk '{{print $NF}}' | tr -cd 'A-Za-z0-9._+-')\n"
     ));
+    s.push_str("say installed \"${NEW:-unknown}\"\n");
+    // How the reason names the new version: the binary's own word, else the
+    // newest known release, else no version at all.
+    match &plan.to_version {
+        Some(to) => s.push_str(&format!("LABEL=\"v${{NEW:-{}}}\"\n", dq(to))),
+        None => s.push_str(
+            "if [ -n \"$NEW\" ]; then LABEL=\"v$NEW\"; else LABEL=\"The new version\"; fi\n",
+        ),
+    }
 
+    // 3. The restart.
+    s.push_str(&format!(
+        "cd {} || rollback \"Cannot enter the daemon's working directory.\"\n",
+        q(&plan.working_dir)
+    ));
     match plan.supervision {
         Supervision::Systemd | Supervision::Launchd => {
             s.push_str(&format!(
-                "cd {} || {{ echo \"== cannot cd to the daemon's working dir\"; record failed 1; exit 1; }}\n",
-                sh_quote(&plan.working_dir.display().to_string())
+                "say unit \"reinstalling the service unit (stable path {})\"\n",
+                dq(&plan.exe.display().to_string())
             ));
-            s.push_str(&format!(
-                "echo \"== reinstalling the service unit (stable path {})\"\n",
-                plan.exe.display()
-            ));
-            let bind_arg = plan
-                .bind
-                .map(|ip| format!(" --bind {}", sh_quote(&ip.to_string())))
-                .unwrap_or_default();
-            s.push_str(&format!(
-                "{} service install --port {}{bind_arg}\nrc=$?\n",
-                sh_quote(&plan.exe.display().to_string()),
-                plan.port
-            ));
+            s.push_str(&format!("{}\nrc=$?\n", service_install(plan)));
             s.push_str("if [ \"$rc\" -ne 0 ]; then\n");
-            s.push_str("  echo \"== service install failed (exit $rc)\"\n  record failed \"$rc\"\n  exit \"$rc\"\nfi\n");
-            match plan.supervision {
-                Supervision::Systemd => {
-                    s.push_str("echo \"== restarting: systemctl --user restart pdo\"\n");
-                    s.push_str("record succeeded 0\n");
-                    s.push_str("systemctl --user restart pdo\nrc=$?\n");
-                }
-                _ => {
-                    s.push_str(
-                        "echo \"== restarting: launchctl kickstart -k gui/$(id -u)/com.pdo.daemon\"\n",
-                    );
-                    s.push_str("record succeeded 0\n");
-                    s.push_str("launchctl kickstart -k \"gui/$(id -u)/com.pdo.daemon\"\nrc=$?\n");
-                }
-            }
-            s.push_str("if [ \"$rc\" -ne 0 ]; then\n");
-            s.push_str("  echo \"== restart failed (exit $rc)\"\n  record failed \"$rc\"\n  exit \"$rc\"\nfi\n");
-            s.push_str("echo \"== done; the service comes back on the new binary\"\n");
+            s.push_str("  say unit \"service install failed (exit $rc)\"\n");
+            s.push_str("  rollback \"The service install failed (exit $rc).\"\nfi\n");
         }
         Supervision::None => {
             s.push_str(&format!(
-                "cd {} || {{ echo \"== cannot cd to the daemon's working dir\"; record failed 1; exit 1; }}\n",
-                sh_quote(&plan.working_dir.display().to_string())
-            ));
-            s.push_str(&format!(
-                "echo \"== stopping the daemon (pid {}) — tmux sessions survive\"\n",
+                "say stop \"daemon pid {} · tmux sessions survive\"\n",
                 plan.daemon_pid
             ));
-            s.push_str(&format!("kill -TERM {} 2>/dev/null\n", plan.daemon_pid));
-            s.push_str("i=0\n");
-            s.push_str(&format!(
-                "while kill -0 {} 2>/dev/null && [ \"$i\" -lt 100 ]; do sleep 0.1; i=$((i+1)); done\n",
-                plan.daemon_pid
-            ));
-            s.push_str(&format!(
-                "if kill -0 {pid} 2>/dev/null; then echo \"== daemon still alive, SIGKILL\"; kill -KILL {pid} 2>/dev/null; sleep 0.5; fi\n",
-                pid = plan.daemon_pid
-            ));
-            let argv: Vec<String> = plan.relaunch.iter().map(|a| sh_quote(a)).collect();
-            s.push_str(&format!(
-                "echo \"== relaunching: {}\"\n",
-                plan.relaunch.join(" ").replace('"', "\\\"")
-            ));
-            s.push_str("record succeeded 0\n");
-            // `setsid` when present (util-linux); otherwise a subshell in the
-            // background is enough for a daemon whose parent — this script — ends.
-            s.push_str(&format!(
-                "if command -v setsid >/dev/null 2>&1; then setsid {argv} </dev/null >>{log} 2>&1 & else ({argv} </dev/null >>{log} 2>&1 &) fi\n",
-                argv = argv.join(" "),
-                log = sh_quote(&plan.log_path.display().to_string())
-            ));
-            s.push_str("echo \"== done; the daemon comes back on the new binary\"\n");
+            s.push_str(&format!("stop_pid {}\n", plan.daemon_pid));
         }
     }
-    s.push_str("exit 0\n");
+    s.push_str(&start_daemon(plan));
+    s.push_str("if [ \"$rc\" -ne 0 ]; then\n");
+    s.push_str("  say restart \"failed (exit $rc)\"\n");
+    s.push_str("  rollback \"The restart failed (exit $rc).\"\nfi\n");
+
+    // 4. The verification.
+    s.push_str("if wait_ready \"$TIMEOUT\"; then\n");
+    s.push_str("  if [ \"$READY\" != \"$FROM\" ]; then\n");
+    s.push_str("    say verify \"daemon answers v$READY\"\n");
+    for line in clean_snapshot.lines() {
+        s.push_str(&format!("    {line}\n"));
+    }
+    s.push_str("    record succeeded 0\n");
+    s.push_str("    say result succeeded\n");
+    s.push_str("    exit 0\n");
+    s.push_str("  fi\n");
+    s.push_str("  say verify \"daemon answers v$FROM: the binary did not change\"\n");
+    s.push_str("  rollback \"The daemon came back on v$FROM: the binary did not change.\"\n");
+    s.push_str("fi\n");
+    s.push_str("say verify \"no answer in $TIMEOUT s\"\n");
+    s.push_str("rollback \"$LABEL did not answer within $TIMEOUT s after the restart.\"\n");
     s
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::update_snapshot::SavedFile;
 
     fn plan(method: InstallMethod, supervision: Supervision) -> UpdatePlan {
         UpdatePlan {
@@ -281,6 +366,27 @@ mod tests {
             log_path: PathBuf::from("/home/u/.pdo/update/20260905-120000-abc123.log"),
             attempt_path: PathBuf::from("/home/u/.pdo/update/last-attempt.json"),
             from_version: "1.60.0".into(),
+            to_version: Some("1.61.0".into()),
+            snapshot: Some(UpdateSnapshot {
+                dir: PathBuf::from("/home/u/.pdo/update/snapshot"),
+                binary: SavedFile {
+                    original: PathBuf::from("/home/linuxbrew/.linuxbrew/bin/pdo"),
+                    saved: PathBuf::from("/home/u/.pdo/update/snapshot/pdo"),
+                },
+                databases: vec![
+                    SavedFile {
+                        original: PathBuf::from("/home/u/.pdo/app/.pdo/pdo.db"),
+                        saved: PathBuf::from("/home/u/.pdo/update/snapshot/db-0-pdo.db"),
+                    },
+                    SavedFile {
+                        original: PathBuf::from("/home/u/.pdo/extensions/acme/acme.db"),
+                        saved: PathBuf::from("/home/u/.pdo/update/snapshot/db-1-acme.db"),
+                    },
+                ],
+            }),
+            ready_marker: PathBuf::from("/home/u/.pdo/update/daemon-5172.json"),
+            verify_timeout_secs: 90,
+            release_token_for_command_only: false,
         }
     }
 
@@ -293,7 +399,7 @@ mod tests {
         let install = s
             .find("/home/linuxbrew/.linuxbrew/bin/pdo service install --port 5172")
             .expect("idempotent service install through the STABLE path");
-        let restart = s.find("systemctl --user restart pdo").unwrap();
+        let restart = s.find("\nsystemctl --user restart pdo\n").unwrap();
         assert!(
             up < install && install < restart,
             "order: upgrade → install → restart"
@@ -304,7 +410,7 @@ mod tests {
         );
         assert!(!s.contains("Cellar"), "never the versioned target");
         assert!(
-            !s.contains("kill -TERM"),
+            !s.contains("stop_pid 4242"),
             "supervised: the supervisor restarts"
         );
         assert!(
@@ -313,6 +419,20 @@ mod tests {
         );
         assert!(s.contains("update-attempt-v1"));
         assert!(s.contains("/home/linuxbrew/.linuxbrew/bin:/opt/homebrew/bin"));
+    }
+
+    #[test]
+    fn launchd_rollback_boots_the_job_out_before_restoring() {
+        let s = render_update_script(&plan(InstallMethod::Homebrew, Supervision::Launchd));
+        let body = &s[s.find("rollback() {").unwrap()..];
+        let bootout = body
+            .find("launchctl bootout \"gui/$(id -u)/com.pdo.daemon\"")
+            .expect("KeepAlive would relaunch a job merely killed");
+        let wait = body.find("then stop_pid").unwrap();
+        let restore = body.find("cp -f").unwrap();
+        let install = body.find("service install --port 5172").unwrap();
+        assert!(bootout < wait && wait < restore && restore < install);
+        assert!(!body.contains("launchctl kill"));
     }
 
     #[test]
@@ -354,8 +474,10 @@ mod tests {
     fn unsupervised_script_stops_the_pid_and_relaunches_the_recorded_argv() {
         let s = render_update_script(&plan(InstallMethod::Script, Supervision::None));
         assert!(s.contains("pdo-daemon-installer.sh | sh"));
-        assert!(s.contains("kill -TERM 4242"));
-        assert!(s.contains("kill -0 4242"), "waits for the pid to be gone");
+        assert!(
+            s.contains("stop_pid 4242"),
+            "stops the pid and waits for it"
+        );
         assert!(
             s.contains("setsid /home/linuxbrew/.linuxbrew/bin/pdo daemon --port 5172"),
             "same arguments (port):\n{s}"
@@ -371,9 +493,119 @@ mod tests {
     fn a_declared_channel_runs_its_own_command() {
         let s = render_update_script(&plan(InstallMethod::Declared, Supervision::Systemd));
         assert!(s.contains("sh -c acme-upgrade\n"), "{s}");
-        assert!(s.contains("== method: declared"));
+        assert!(s.contains("method declared"));
         assert!(s.contains("\\\"method\\\":\\\"declared\\\""));
         assert!(!s.contains("brew upgrade"), "never the vanilla command");
+    }
+
+    /// The order the Retour automatique rests on: snapshot reported, command,
+    /// restart, verification; success only after it; rollback otherwise.
+    #[test]
+    fn the_attempt_succeeds_only_once_the_new_version_answers() {
+        let s = render_update_script(&plan(InstallMethod::Homebrew, Supervision::Systemd));
+        let at = |needle: &str| {
+            s.find(needle)
+                .unwrap_or_else(|| panic!("missing `{needle}`:\n{s}"))
+        };
+        let snapshot = at("say snapshot \"2 databases, binary 1.60.0 kept\"");
+        let command = at("sh -c 'brew update");
+        let restart = at("\nsystemctl --user restart pdo\n");
+        let verify = at("if wait_ready \"$TIMEOUT\"; then\n  if [ \"$READY\" != \"$FROM\" ]");
+        let succeeded = at("    record succeeded 0\n");
+        assert!(snapshot < command && command < restart && restart < verify && verify < succeeded);
+        assert!(s.contains("TIMEOUT=90\n"));
+        assert!(s.contains("MARKER=/home/u/.pdo/update/daemon-5172.json\n"));
+        assert_eq!(
+            s.matches("record succeeded").count(),
+            1,
+            "never succeeded before the verification"
+        );
+        assert!(
+            s[verify..succeeded].contains("rm -rf /home/u/.pdo/update/snapshot\n"),
+            "the snapshot is removed after a success"
+        );
+        assert!(s.contains("LABEL=\"v${NEW:-1.61.0}\"\n"));
+        assert!(s.ends_with(
+            "say verify \"no answer in $TIMEOUT s\"\n\
+             rollback \"$LABEL did not answer within $TIMEOUT s after the restart.\"\n"
+        ));
+    }
+
+    #[test]
+    fn the_rollback_puts_the_binary_and_every_database_back_then_restarts() {
+        let s = render_update_script(&plan(InstallMethod::Homebrew, Supervision::Systemd));
+        let body = &s[s.find("rollback() {").unwrap()..];
+        let body = &body[..body.find("\n}\n").unwrap()];
+        let stop = body.find("systemctl --user stop pdo").unwrap();
+        let binary = body
+            .find("cp -f /home/u/.pdo/update/snapshot/pdo /home/linuxbrew/.linuxbrew/bin/pdo")
+            .unwrap();
+        let core_db = body
+            .find(
+                "cp -f /home/u/.pdo/update/snapshot/db-0-pdo.db /home/u/.pdo/app/.pdo/pdo.db \
+                 && rm -f /home/u/.pdo/app/.pdo/pdo.db-wal /home/u/.pdo/app/.pdo/pdo.db-shm",
+            )
+            .unwrap();
+        assert!(body.contains("db-1-acme.db /home/u/.pdo/extensions/acme/acme.db"));
+        let unit = body
+            .find("cd /home/u/.pdo/app && /home/linuxbrew/.linuxbrew/bin/pdo service install --port 5172")
+            .expect("the restored binary writes its own unit");
+        let restart = body.find("systemctl --user restart pdo").unwrap();
+        assert!(stop < binary && binary < core_db && core_db < unit && unit < restart);
+        assert!(body.contains(
+            "record failed 1 \"$1 The previous version and its data were restored.\" true"
+        ));
+        assert!(body.contains("exit 1"));
+    }
+
+    #[test]
+    fn a_failed_update_command_restores_nothing() {
+        let s = render_update_script(&plan(InstallMethod::Homebrew, Supervision::None));
+        let failed = &s[s.find("if [ \"$rc\" -ne 0 ]; then").unwrap()..];
+        let failed = &failed[..failed.find("\nfi\n").unwrap()];
+        assert!(
+            failed.contains("record failed \"$rc\" \"The update command exited with code $rc.\"")
+        );
+        assert!(failed.contains("rm -rf /home/u/.pdo/update/snapshot"));
+        assert!(!failed.contains("rollback"), "the daemon is untouched");
+        assert!(!failed.contains("stop_pid"), "the daemon is untouched");
+    }
+
+    #[test]
+    fn the_same_version_coming_back_is_rolled_back_too() {
+        let s = render_update_script(&plan(InstallMethod::Script, Supervision::None));
+        assert!(
+            s.contains("rollback \"The daemon came back on v$FROM: the binary did not change.\"")
+        );
+        assert!(s.contains("& NEW_PID=$!"), "the relaunched pid is kept");
+        assert!(
+            s.contains("stop_pid \"${NEW_PID:-}\""),
+            "and stopped on a rollback"
+        );
+    }
+
+    #[test]
+    fn without_a_snapshot_a_broken_update_is_reported_not_undone() {
+        let mut plan = plan(InstallMethod::Homebrew, Supervision::Systemd);
+        plan.snapshot = None;
+        plan.to_version = None;
+        let s = render_update_script(&plan);
+        assert!(s.contains("record failed 1 \"$1\" false"));
+        // No version known: the reason names none, never « vthe new version ».
+        assert!(s.contains("else LABEL=\"The new version\"; fi"));
+        assert!(!s.contains("cp -f"));
+        assert!(!s.contains("rm -rf"));
+    }
+
+    #[test]
+    fn a_command_with_shell_characters_lands_verbatim_in_the_record() {
+        let mut plan = plan(InstallMethod::Declared, Supervision::None);
+        plan.upgrade_command = "acme-up --token \"$TOKEN\" `id` \\x".into();
+        let s = render_update_script(&plan);
+        assert!(
+            s.contains(r#"\"command\":\"acme-up --token \\\"\$TOKEN\\\" \`id\` \\\\x\""#),
+            "{s}"
+        );
     }
 
     #[test]
@@ -382,5 +614,23 @@ mod tests {
         assert_eq!(sh_quote("a b"), "'a b'");
         assert_eq!(sh_quote("it's"), "'it'\\''s'");
         assert_eq!(sh_quote(""), "''");
+    }
+
+    #[test]
+    fn a_binarys_release_identifier_is_dropped_right_after_the_update_command() {
+        let mut plan = plan(InstallMethod::Declared, Supervision::None);
+        let without = render_update_script(&plan);
+        assert!(
+            !without.contains("PDO_GITHUB_TOKEN"),
+            "the operator's identifier stays with the restarted daemon"
+        );
+        plan.release_token_for_command_only = true;
+        let s = render_update_script(&plan);
+        let command = s.find("sh -c acme-upgrade\nrc=$?\n").unwrap();
+        let unset = s.find("\nunset PDO_GITHUB_TOKEN\n").unwrap();
+        let rc_check = s.find("if [ \"$rc\" -ne 0 ]; then").unwrap();
+        let restart = s.find("stop_pid 4242\n").unwrap();
+        assert!(command < unset && unset < rc_check && unset < restart);
+        assert_eq!(s.matches("PDO_GITHUB_TOKEN").count(), 1, "{s}");
     }
 }

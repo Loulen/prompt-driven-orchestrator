@@ -6,7 +6,7 @@
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
 import type { PipelineValidation } from "../../shared/generated/PipelineValidation";
 import type { PipelineVersionRef } from "../../shared/generated/PipelineVersionRef";
-import { ApiError, request } from "../../shared/http/client";
+import { ApiError, apiErrorMessage, request } from "../../shared/http/client";
 import type { PipelineDetail } from "../model/pipeline";
 import { foldPipelineDetail } from "../model/pipelineDetail";
 import type { SaveAs } from "./versions";
@@ -53,7 +53,7 @@ export function savePipeline(
   // ADR-0088: a tab's shared draft is saved with what it held, which the
   // daemon then counts the draft's changes from, as the version `version` says.
   const body = draft ? { yaml, prompts, draft, ...(version ? { version } : {}) } : { yaml, prompts };
-  return request<SaveResult>("PUT", `/pipelines/${encodeURIComponent(id)}`, { body, label: `PUT /pipelines/${id}` });
+  return request<SaveResult>("PUT", `/pipelines/${encodeURIComponent(id)}`, { body, label: "Saving pipeline", done: "Pipeline saved" });
 }
 
 /**
@@ -69,7 +69,7 @@ export function renamePipeline(
   return request<{ ok: boolean; id: string; name?: string; renamed?: boolean }>(
     "PUT",
     `/pipelines/${encodeURIComponent(id)}/rename`,
-    { body: { name }, label: `PUT /pipelines/${id}/rename` },
+    { body: { name }, label: "Renaming pipeline" },
   );
 }
 
@@ -81,7 +81,7 @@ export function createPipeline(
   return request<{ id: string; scope: string; path: string }>(
     "POST",
     "/pipelines",
-    { body: { name }, label: "POST /pipelines" },
+    { body: { name }, label: "Creating pipeline" },
   );
 }
 
@@ -97,7 +97,7 @@ export function setPipelineValidation(
   return request<{ ok: boolean; id: string; validation: PipelineValidation }>(
     "PUT",
     `/pipelines/${encodeURIComponent(id)}/validation`,
-    { body: validation, label: `PUT /pipelines/${id}/validation` },
+    { body: validation, label: "Saving validation" },
   );
 }
 
@@ -105,7 +105,7 @@ export function duplicatePipeline(
   id: string,
 ): Promise<{ id: string; scope: string; path: string }> {
   return request("POST", `/pipelines/${encodeURIComponent(id)}/duplicate`, {
-    label: `POST /pipelines/${id}/duplicate`,
+    label: "Duplicating pipeline",
   });
 }
 
@@ -117,11 +117,18 @@ export async function deletePipeline(id: string, scope?: string): Promise<void> 
   const resp = await request<Response>(
     "DELETE",
     `/pipelines/${encodeURIComponent(id)}`,
-    { responseMode: "raw" },
+    { responseMode: "raw", label: "Deleting pipeline" },
   );
   if (resp.status === 409) {
     const body = await resp.json();
     throw new ApiError(body.error ?? "Pipeline has active runs", { status: 409, body });
   }
-  if (!resp.ok) throw new ApiError(`DELETE /pipelines/${id} failed: ${resp.status}`, { status: resp.status });
+  if (!resp.ok) {
+    // The daemon's message, for the confirmation that says it.
+    const body: unknown = await resp.json().catch(() => null);
+    throw new ApiError(apiErrorMessage(body, `DELETE /pipelines/${id} failed: ${resp.status}`), {
+      status: resp.status,
+      body,
+    });
+  }
 }

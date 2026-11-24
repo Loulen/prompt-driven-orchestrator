@@ -9,5 +9,5 @@ export function fetchAppearance(): Promise<ActorAppearance> {
 
 /** Replace the caller's Apparence. */
 export function saveAppearance(document: AppearanceDocument): Promise<ActorAppearance> {
-  return request<ActorAppearance>("PUT", "/actors/me/appearance", { body: document });
+  return request<ActorAppearance>("PUT", "/actors/me/appearance", { body: document, label: "Saving appearance" });
 }

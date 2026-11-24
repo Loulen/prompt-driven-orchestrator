@@ -157,10 +157,11 @@ export default function CloneRepositoryForm({
               size="sm"
               tone="primary"
               onClick={() => void clone()}
-              disabled={!valid || busy}
+              disabled={!busy && !valid}
+              pending={busy && "Starting…"}
               data-testid="project-clone-start"
             >
-              {busy ? "Starting…" : shownTarget?.cloned && editingPath === null ? "Add" : "Clone and add"}
+              {shownTarget?.cloned && editingPath === null ? "Add" : "Clone and add"}
             </Button>
             <IconButton icon={X} size="sm" label="Cancel" kbd="Esc" onClick={onCancel} data-testid="project-clone-dismiss" />
           </>

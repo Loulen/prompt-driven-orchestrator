@@ -182,14 +182,16 @@ describe("TriggersListPanel", () => {
     );
   });
 
-  it("says a delete the daemon refuses instead of swallowing it (CORE-232)", async () => {
+  it("says a delete the daemon refuses instead of swallowing it, in its confirmation (CORE-232)", async () => {
+    toastMock.mockClear();
     deleteTrigger.mockRejectedValueOnce(new Error("trigger is suspended"));
     renderPanel([trigger()]);
     fireEvent.click(screen.getByTestId("trigger-delete"));
     fireEvent.click(within(screen.getByTestId("confirm-delete-modal")).getByRole("button", { name: "Delete" }));
-    await waitFor(() =>
-      expect(toastMock).toHaveBeenCalledWith("Delete Nightly audit: trigger is suspended", "error"),
-    );
+    const banner = await within(screen.getByTestId("confirm-delete-modal")).findByRole("alert");
+    expect(banner).toHaveTextContent("Deleting failed");
+    expect(banner).toHaveTextContent("trigger is suspended");
+    expect(toastMock).not.toHaveBeenCalled();
   });
 
   it("names a due fire « now », and says what wakes a Trigger with no next fire (CORE-232)", () => {

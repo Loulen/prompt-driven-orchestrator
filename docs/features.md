@@ -254,12 +254,13 @@ Decisions: [ADR-0062](adr/0062-les-skills-sont-livres-dans-le-worktree-jamais-co
 ### Isolated worktrees
 
 Every run gets its own git worktree and branch, and two runs never share one. Each node picks where
-it works: an `agent` node works in its own sub-worktree by default, merged back into the run's branch
-when it completes, or it opts into the run's shared worktree (Workspace: isolated / shared).
+it works: a node works in the run's shared worktree by default, or it opts into a sub-worktree of
+its own, merged back into the run's branch when it completes (Workspace: shared / isolated).
 Provisioning (files to copy, commands to run) is declared once and frozen per run.
 
 Decisions: [ADR-0036](adr/0036-merge-back-resolved-in-the-node-favour.md),
 [ADR-0060](adr/0060-l-isolation-est-un-choix-du-node.md),
+[ADR-0108](adr/0108-l-isolation-est-un-opt-in.md),
 [ADR-0061](adr/0061-le-provisionnement-de-worktree-est-declaratif-additif-et-gele-par-run.md).
 
 ### Live sessions
@@ -312,6 +313,13 @@ keeps running after logout. When a new release is out, the version in the status
 with your install method and reloads the page. Settings › General › Version & update shows the
 installed and latest versions (read from the public repository's releases), your install method and
 the command it runs. See [cli.md](reference/cli.md).
+
+An update that breaks the instance undoes itself. Before the command runs, PDO keeps a snapshot of
+its databases (its own and its extensions') and of the binary. The update only counts as done once
+the restarted daemon answers in the new version, within 90 s. Otherwise PDO puts the previous binary
+and its data back and restarts it. The waiting screen then says « Update failed · back on vY » with
+the reason, and Version & update shows the attempt as « rolled back », with its log. Anything
+written while the update command ran is lost on a rollback.
 
 Decisions: [ADR-0019](adr/0019-persistent-daemon-service-unit.md).
 

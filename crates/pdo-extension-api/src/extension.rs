@@ -1,67 +1,13 @@
-use std::fmt;
-use std::path::PathBuf;
-use std::sync::Arc;
-
 use crate::{
-    Actor, ActorDisplay, Admission, Attributes, Authorization, CliInvocation, CliOutput, CliSpec,
-    EntityRef, ExtensionSkill, GitEnv, GitOperation, GuardEnd, Host, Manifest, NeutralHost,
-    NodeEnv, NodeLaunch, Operation, ResourceKind, SessionLaunch, TriggerRef, UiContributions,
+    Actor, ActorDisplay, Admission, Attributes, Authorization, BugReport, BugReportDestination,
+    BugReportSent, CliInvocation, CliOutput, CliSpec, EntityRef, ExtensionContext, ExtensionSkill,
+    GitEnv, GitOperation, GuardEnd, Manifest, NodeEnv, NodeLaunch, Operation, ResourceKind,
+    SessionLaunch, TriggerRef, UiContributions,
 };
 
 /// The head of an HTTP request, as `identify` sees it: method, URI, headers.
 /// Never the body, which a hook must not consume.
 pub type RequestParts = axum::http::request::Parts;
-
-/// What the core gives an extension when the daemon starts.
-#[derive(Clone)]
-#[non_exhaustive]
-pub struct ExtensionContext {
-    /// The extension's own data folder, `~/.pdo/extensions/<id>/`, created
-    /// before [`Extension::start`] is called: its database, its files. Nothing
-    /// else of the core writes there.
-    pub data_dir: PathBuf,
-    /// The core's mechanisms, for the extension's own mutations: the
-    /// Autorisation d'opération of every extension, the events, the
-    /// attributes of the other extensions. Keep it: it serves as long as the
-    /// daemon runs.
-    pub host: Arc<dyn Host>,
-}
-
-impl ExtensionContext {
-    /// The context of the data folder `data_dir`, with the [`NeutralHost`]
-    /// (everything allowed, events go nowhere, no attribute).
-    pub fn new(data_dir: impl Into<PathBuf>) -> Self {
-        Self {
-            data_dir: data_dir.into(),
-            host: Arc::new(NeutralHost),
-        }
-    }
-
-    /// The same context, with `host`.
-    pub fn with_host(mut self, host: Arc<dyn Host>) -> Self {
-        self.host = host;
-        self
-    }
-}
-
-impl fmt::Debug for ExtensionContext {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ExtensionContext")
-            .field("data_dir", &self.data_dir)
-            .finish_non_exhaustive()
-    }
-}
-
-/// Two contexts are equal when they name the same folder and share the same
-/// host.
-impl PartialEq for ExtensionContext {
-    fn eq(&self, other: &Self) -> bool {
-        self.data_dir == other.data_dir
-            && std::ptr::addr_eq(Arc::as_ptr(&self.host), Arc::as_ptr(&other.host))
-    }
-}
-
-impl Eq for ExtensionContext {}
 
 /// A third-party module registered when the daemon starts (ADR-0081).
 ///
@@ -75,12 +21,25 @@ impl Eq for ExtensionContext {}
 /// When the daemon starts, it calls [`Extension::skills`] once (to seed the
 /// Banque de skills, before `start`), then [`Extension::start`] once, then
 /// [`Extension::routes`] and [`Extension::ui`], before it serves anything.
+///
+/// The daemon is not the only caller. Every `pdo service` subcommand builds
+/// the binary's extensions too (ADR-0081, amendment #23): their constructors
+/// run and [`Extension::manifest`] is called. `pdo service install` and
+/// `pdo service uninstall` then ask [`Extension::authorize`] for the
+/// [`Actor::LocalOperator`] (`service` × `create` / `delete`), but **never
+/// call** [`Extension::start`] nor [`Extension::skills`]: no data folder, no
+/// [`Host`], no async runtime. Only `manifest` and `authorize` are called
+/// there ([`Extension::on_event`]'s thread is started but receives nothing).
+/// Nothing tells the extension which of the two lifecycles it is in, other
+/// than that `start` has not been called.
 pub trait Extension: Send + Sync + 'static {
     /// Who this extension is.
     fn manifest(&self) -> Manifest;
 
     /// Receive what the core gives the extension (its data folder, its
     /// [`Host`]), once, when the daemon starts. Does nothing by default.
+    ///
+    /// Only the daemon calls it, never `pdo service`: see the trait's doc.
     fn start(&self, _context: &ExtensionContext) {}
 
     /// Identify the actor behind a request. `None` (the default) lets the next
@@ -124,6 +83,13 @@ pub trait Extension: Send + Sync + 'static {
     /// without running anything. A refused read hides the entity from a list
     /// and from `/ws`, and answers `403` for one entity: refuse a read on its
     /// resource and verb, never on a verb you do not know.
+    ///
+    /// Also asked outside the daemon, by `pdo service install` (`service` ×
+    /// `create`, not on `--dry-run`) and `pdo service uninstall` (`service` ×
+    /// `delete`), for the [`Actor::LocalOperator`], on an extension that was
+    /// **never started**: no data folder, no [`Host`]. An extension that
+    /// refuses for lack of its state (its database not open) makes
+    /// `pdo service install` fail on a fresh install.
     fn authorize(&self, _actor: &Actor, _operation: &Operation) -> Authorization {
         Authorization::Allow
     }
@@ -237,7 +203,8 @@ pub trait Extension: Send + Sync + 'static {
     /// The skills this extension brings, seeded into the Banque de skills
     /// once, when the daemon starts: called **before** [`Extension::start`],
     /// so the list must not depend on it (embed the files). A skill the list
-    /// no longer holds is removed from the bank. None by default.
+    /// no longer holds is removed from the bank. Only the daemon calls it,
+    /// never `pdo service`. None by default.
     fn skills(&self) -> Vec<ExtensionSkill> {
         Vec::new()
     }
@@ -253,7 +220,10 @@ pub trait Extension: Send + Sync + 'static {
     ///
     /// When a variable names `CLAUDE_CONFIG_DIR`, the core reads that Node's
     /// Claude Code transcripts (its cost, its liveness) under that folder
-    /// instead of `~/.claude`.
+    /// instead of `~/.claude`. Given to the relaunch of a Session hébergée
+    /// (through [`Self::session_env`]), it is also where the core looks for the
+    /// conversation to resume: found there, the relaunch resumes it; not
+    /// found there, it starts a new one.
     ///
     /// The git identity variables (`GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`,
     /// `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL`) also sign the Node's
@@ -363,6 +333,37 @@ pub trait Extension: Send + Sync + 'static {
         GitEnv::default()
     }
 
+    /// The Destinations de bug report this extension offers `actor` (API
+    /// 0.28), in the order « Send to » lists them, under the extension's
+    /// name, after the core's own. Offer only where `actor` may create the
+    /// item: the core sends a report only to a destination this hook lists
+    /// for its sender. None by default.
+    ///
+    /// Called on the daemon's request path, each time the Bug report window
+    /// opens: keep it quick. A panic offers none.
+    fn bug_report_destinations(&self, _actor: &Actor) -> Vec<BugReportDestination> {
+        Vec::new()
+    }
+
+    /// Receive a Rapport de bug `actor` sends to one of this extension's
+    /// destinations (API 0.28): create the item, then answer how a person
+    /// names it and where it is ([`BugReportSent`]), which the sender's toast
+    /// links to. `Err(reason)`: nothing was created, and the window shows the
+    /// reason. The report carries the prompts only when the destination
+    /// accepts them.
+    ///
+    /// Called on a blocking thread of the daemon's tokio runtime, never on
+    /// its request path: it may take its time. A panic is a failure. By
+    /// default, a failure: offering a destination without receiving its
+    /// reports is a bug.
+    fn receive_bug_report(
+        &self,
+        _actor: &Actor,
+        _report: &BugReport,
+    ) -> Result<BugReportSent, String> {
+        Err("this extension offers a bug report destination but does not receive reports".into())
+    }
+
     /// A guard [`Self::git_env`] was asked about has ended: it passed, skipped,
     /// failed or timed out ([`GuardEnd::outcome`]). Called once per guard,
     /// whatever its end and whether or not this extension gave it anything,
@@ -459,6 +460,13 @@ mod tests {
                 crate::GitOperationKind::Clone
             ))
             .is_empty());
+        assert!(ext.bug_report_destinations(&actor).is_empty());
+        assert!(ext
+            .receive_bug_report(
+                &actor,
+                &BugReport::new("d", "t", "x", crate::BugReportFields::default())
+            )
+            .is_err());
         assert_eq!(ext.manifest().id, "bare");
     }
 
@@ -466,14 +474,5 @@ mod tests {
     fn extensions_are_object_safe() {
         let extensions: Vec<Box<dyn Extension>> = vec![Box::new(Bare)];
         assert_eq!(extensions.len(), 1);
-    }
-
-    #[test]
-    fn a_context_carries_the_neutral_host_until_given_one() {
-        let context = ExtensionContext::new("/tmp/x");
-        assert_eq!(context, context.clone());
-        let other = ExtensionContext::new("/tmp/x").with_host(Arc::new(NeutralHost));
-        assert_ne!(context, other, "another host");
-        assert!(format!("{context:?}").contains("/tmp/x"));
     }
 }

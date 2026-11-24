@@ -210,10 +210,11 @@ describe("FullWindowShell — under the top bar (CORE-183)", () => {
   it("lays its layer under the app's top bar, never over it", () => {
     renderShell(null);
     const layer = screen.getByTestId("surface-layer");
-    // The layer starts at the top bar's bottom edge: the bar stays on screen and clickable.
-    expect(layer.className).toContain("top-(--h-topbar)");
+    // The layer starts at the top bar's bottom edge, under the extensions' application banners
+    // (`app/banner`): the bar and the banners stay on screen and clickable.
+    expect(layer.className).toContain("top-[calc(var(--h-topbar)+var(--h-appbanner,0px))]");
     expect(layer.className).not.toContain("inset-0");
-    expect(screen.getByTestId("surface").className).toContain("var(--h-topbar)");
+    expect(screen.getByTestId("surface").className).toContain("_-_var(--h-topbar)_-_var(--h-appbanner,0px)");
     // The header keeps its ✕.
     expect(within(screen.getByTestId("surface-header")).getByRole("button", { name: "Close surface" })).toBeTruthy();
   });

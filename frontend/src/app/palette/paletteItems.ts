@@ -1,13 +1,16 @@
 /**
  * The core's rows of the command field: its commands (New run, Stats,
- * Settings, Customize appearance, the Theme, the Dark mode and Compact nodes…), its Runs, Pipelines and Triggers, and the gestures
+ * Settings, Customize appearance, the Theme, the Dark mode and Compact nodes…), its Support
+ * group (Report a bug…), its Runs, Pipelines and Triggers, and the gestures
  * on the selected item (a Run's Pause, Resume, Retry all; a node's Approve,
  * « Auto-approve when ready », Retry and Stop), a refused one greyed with the refusal's sentence (CORE-42, CORE-205). And
  * the extensions' Actions, as rows.
  */
 
 import {
+  Bug,
   CircleCheck,
+  CircleQuestionMark,
   Copy,
   LockOpen,
   FoldVertical,
@@ -29,6 +32,7 @@ import { runCommand } from "../../shared/extensions/commands";
 import type { PaletteAction } from "../../shared/extensions/palette";
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
 import { isRefusal, toastRefusal } from "../../shared/authorization/refusal";
+import { errorAlreadyShown } from "../../shared/http/operations";
 import { copyToClipboard } from "../../shared/lib/clipboard";
 import { toast } from "../../shared/ui/toast";
 import { SettingsIcon, StatsIcon } from "../../shared/ui/brand/AccentIcons";
@@ -54,6 +58,7 @@ export const GROUP_ICONS: BuildInput["icons"] = {
   runs: Play,
   pipelines: Workflow,
   triggers: Zap,
+  support: CircleQuestionMark,
 };
 
 export interface CoreContext {
@@ -86,6 +91,9 @@ export function coreItems({ host, pipelines, openPipeline, appearance, setTheme,
   command("theme-classic", "Theme: Classic", Palette, () => setTheme("classic"), { checked: appearance.theme === "classic" });
   command("dark-mode", "Dark mode", SunMoon, toggleMode, { checked: appearance.mode === "dark" });
   command("compact-nodes", "Compact nodes", FoldVertical, toggleCompactNodes, { checked: compactNodes });
+  if (host.reportBug) {
+    command("report-bug", "Report a bug…", Bug, host.reportBug, { group: "support", meta: "issue github support" });
+  }
   for (const run of host.runs) {
     items.push({
       id: `run:${run.run_id}`,
@@ -273,6 +281,8 @@ async function autoApprove(runId: string, nodeId: string, iter: number) {
 
 /** A gesture that failed: its refusal, or its error, in a toast. */
 function report(e: unknown) {
+  // Its operation already said it (the HTTP client's toast).
+  if (errorAlreadyShown(e)) return;
   if (isRefusal(e)) toastRefusal(e);
   else toast(e instanceof Error ? e.message : String(e), "error");
 }

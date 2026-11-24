@@ -2,7 +2,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunState } from "../../shared/generated/RunState";
 import type { PaletteSelection } from "./paletteHost";
-import { paletteSelection } from "./usePaletteHostSync";
+import { bugReportPrefill, paletteSelection } from "./usePaletteHostSync";
 import { MISSING_REFRESH_MS, useSelectionMissingOutputs } from "./useSelectionMissingOutputs";
 
 const fetchNodeIOMock = vi.fn();
@@ -94,5 +94,23 @@ describe("useSelectionMissingOutputs", () => {
     expect(result.current).toBeNull();
     fail(new Error("down"));
     await waitFor(() => expect(result.current).toEqual([]));
+  });
+});
+
+describe("the Bug report window's prefill", () => {
+  it("is the selection's Run and Pipeline", () => {
+    expect(bugReportPrefill(null)).toEqual({ runId: null, pipeline: null });
+    expect(
+      bugReportPrefill({ kind: "run", run: { id: "r1", name: null, pipeline: "ship", status: "failed", attributes: {} } }),
+    ).toEqual({ runId: "r1", pipeline: "ship" });
+    expect(bugReportPrefill(select(runWith({})))).toEqual({ runId: "r1", pipeline: null });
+    expect(bugReportPrefill({ kind: "pipeline", pipeline: { id: "ship", name: "Ship", attributes: {} } })).toEqual({
+      runId: null,
+      pipeline: "ship",
+    });
+    expect(bugReportPrefill({ kind: "trigger", trigger: { pipeline_name: "ship" } } as PaletteSelection)).toEqual({
+      runId: null,
+      pipeline: "ship",
+    });
   });
 });

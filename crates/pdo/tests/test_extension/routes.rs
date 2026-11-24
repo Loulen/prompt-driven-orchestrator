@@ -41,6 +41,8 @@ pub(super) fn router(control: Control) -> Router {
         .merge(super::sessions::routes(control.creation.clone()))
         .merge(super::node_write::routes(control.creation.clone()))
         .merge(super::messages::routes(control.creation.clone()))
+        .merge(super::bug_reports::routes(control.bug_reports.clone()))
+        .merge(super::banner::routes(control.banner.clone()))
         .merge(super::palette::routes(
             control.inbox.clone(),
             control.creation.clone(),

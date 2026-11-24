@@ -7,6 +7,7 @@
  */
 
 import { ApiError, refusalSentenceOf } from "../http/client";
+import { errorAlreadyShown } from "../http/operations";
 import { toast } from "../ui/toast";
 
 /** The slug of every refusal by the Autorisation d'opération. */
@@ -26,8 +27,12 @@ export function refusalSentence(error: unknown): string | null {
   return isRefusal(error) ? refusalSentenceOf(error.body) : null;
 }
 
-/** Show the refusal of a gesture, if `error` is one; anything else stays silent. */
+/**
+ * Show the refusal of a gesture, if `error` is one and its operation did not
+ * already say it; anything else stays silent.
+ */
 export function toastRefusal(error: unknown): void {
+  if (errorAlreadyShown(error)) return;
   const sentence = refusalSentence(error);
   if (sentence !== null) toast(sentence, "error");
 }

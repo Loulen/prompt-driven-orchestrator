@@ -15,5 +15,5 @@ export function fetchSettings(): Promise<InstanceSettings> {
 export function updateSettings(
   patch: UpdateSettingsRequest,
 ): Promise<InstanceSettings> {
-  return request<InstanceSettings>("PUT", "/settings", { body: patch });
+  return request<InstanceSettings>("PUT", "/settings", { body: patch, label: "Saving settings", done: "Settings saved" });
 }

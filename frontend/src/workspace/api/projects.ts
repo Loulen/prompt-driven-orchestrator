@@ -26,7 +26,7 @@ export function fetchDeletedProjects(): Promise<DeletedProject[]> {
 export function createProject(name: string, members: string[] = []): Promise<Project> {
   return request<Project>("POST", "/projects", {
     body: members.length > 0 ? { name, members } : { name },
-    label: "POST /projects",
+    label: "Creating project",
   });
 }
 
@@ -51,7 +51,7 @@ export function updateProject(
 ): Promise<Project> {
   return request<Project>("PATCH", `/projects/${encodeURIComponent(projectId)}`, {
     body: req,
-    label: `PATCH /projects/${projectId}`,
+    label: "Saving project",
   });
 }
 
@@ -63,7 +63,7 @@ export function addProjectMember(projectId: string, path: string): Promise<Proje
   return request<Project>(
     "POST",
     `/projects/${encodeURIComponent(projectId)}/members`,
-    { body: { path }, label: `POST /projects/${projectId}/members` },
+    { body: { path }, label: "Adding project member" },
   );
 }
 
@@ -71,13 +71,13 @@ export function removeProjectMember(projectId: string, path: string): Promise<Pr
   return request<Project>(
     "DELETE",
     `/projects/${encodeURIComponent(projectId)}/members`,
-    { body: { path }, label: `DELETE /projects/${projectId}/members` },
+    { body: { path }, label: "Removing project member" },
   );
 }
 
 export function deleteProject(projectId: string): Promise<void> {
   return request<void>("DELETE", `/projects/${encodeURIComponent(projectId)}`, {
     responseMode: "void",
-    label: `DELETE /projects/${projectId}`,
+    label: "Deleting project",
   });
 }

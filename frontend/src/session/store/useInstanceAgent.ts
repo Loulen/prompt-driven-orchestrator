@@ -10,13 +10,14 @@ const HARNESS_FLOOR = "claude";
  * The instance's harness catalogue and default harness (CORE-125): what an
  * agent Session hébergée inherits when its configuration names no harness.
  */
-export function useInstanceAgent(): { catalog: HarnessCatalog; inherited: AgentCombination } {
+export function useInstanceAgent(): { catalog: HarnessCatalog; inherited: AgentCombination; loaded: boolean } {
   const [settings, setSettings] = useState<Awaited<ReturnType<typeof fetchSettings>> | null>(null);
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
     let alive = true;
     fetchSettings().then(
       (read) => alive && setSettings(read),
-      () => undefined,
+      () => alive && setFailed(true),
     );
     return () => {
       alive = false;
@@ -26,7 +27,8 @@ export function useInstanceAgent(): { catalog: HarnessCatalog; inherited: AgentC
     () => ({
       catalog: harnessCatalog(settings?.harness_descriptors ?? null),
       inherited: { harness: settings?.default_harness.effective || HARNESS_FLOOR, model: null, effort: null },
+      loaded: settings !== null || failed,
     }),
-    [settings],
+    [settings, failed],
   );
 }

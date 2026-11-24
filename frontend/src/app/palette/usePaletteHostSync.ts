@@ -9,6 +9,7 @@ import { approveReleasable } from "../../run/model/approve";
 import { usePaletteHost, type PaletteHost, type PaletteSelection } from "./paletteHost";
 import { whyNoRunAnywhere } from "../../run/model/runCreationRights";
 import { useRunCreationRightsStore } from "../../run/store/runCreationRightsStore";
+import { NO_PREFILL, openBugReport, useBugReport, type BugReportPrefill } from "../../platform/store/bugReport";
 
 interface SelectionInput {
   selectedTrigger: Trigger | null;
@@ -63,6 +64,25 @@ export function paletteSelection({ selectedTrigger, selectedRun, editTab, canvas
   return null;
 }
 
+/**
+ * What the Bug report window starts with for a selection: its Run (a node's
+ * Run), and its Pipeline (a Run's, a Trigger's, the editor tab's).
+ */
+export function bugReportPrefill(selection: PaletteSelection | null): BugReportPrefill {
+  switch (selection?.kind) {
+    case "run":
+      return { runId: selection.run.id, pipeline: selection.run.pipeline };
+    case "node":
+      return { runId: selection.run.id, pipeline: null };
+    case "trigger":
+      return { runId: null, pipeline: selection.trigger.pipeline_name };
+    case "pipeline":
+      return { runId: null, pipeline: selection.pipeline.id };
+    default:
+      return NO_PREFILL;
+  }
+}
+
 /** What the shell opens: a Run, a Trigger, the New Run form, Settings, Stats; and what it closes. */
 interface ShellGestures extends Pick<PaletteHost, "runs" | "triggers" | "openRun" | "openTrigger"> {
   openNewRunModal: (intent: OpenIntent) => void;
@@ -105,6 +125,10 @@ export function usePaletteHostSync(shell: ShellGestures, selection: SelectionInp
   const openStats = useCallback(() => stats(), [stats]);
   const noRunReason = useRunCreationRightsStore((s) => whyNoRunAnywhere(s.rights));
   const newRunRefused = noRunReason;
+  // The Bug report window opens on the selection, from Ctrl+K and from Settings › Diagnostics.
+  const prefill = useMemo(() => bugReportPrefill(selected), [selected]);
+  const reportBug = useCallback(() => openBugReport(prefill), [prefill]);
+  useEffect(() => useBugReport.getState().setSelection(prefill), [prefill]);
   useEffect(() => {
     usePaletteHost.getState().setHost({
       runs,
@@ -118,6 +142,7 @@ export function usePaletteHostSync(shell: ShellGestures, selection: SelectionInp
       openSettings,
       openAppearance,
       openStats,
+      reportBug,
     });
-  }, [runs, triggers, selected, openRun, openTrigger, newRun, newRunRefused, newTrigger, openSettings, openAppearance, openStats]);
+  }, [runs, triggers, selected, openRun, openTrigger, newRun, newRunRefused, newTrigger, openSettings, openAppearance, openStats, reportBug]);
 }

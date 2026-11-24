@@ -21,6 +21,12 @@ pub const DEFAULT_REAPER_INTERVAL: Duration = Duration::from_secs(60);
 /// whose timers Chrome has throttled to ~1/min.
 pub const DEFAULT_LIBASSIST_IDLE_TTL: Duration = Duration::from_secs(120);
 
+/// How long an Agent de support goes without input from its person before it
+/// asks « Still there? ». Its own knob, unrelated to
+/// [`DEFAULT_LIBASSIST_IDLE_TTL`]: a person reads an answer, thinks, and comes
+/// back to the same conversation.
+pub const DEFAULT_SUPPORT_IDLE_TIMEOUT: Duration = Duration::from_secs(1800);
+
 /// Resolve the model a work node launches with: the node's own `model:`
 /// override wins, else the instance `default_effective` (#296/#347). An empty
 /// string on *either* side collapses to the next tier — "" means "unset"

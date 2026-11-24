@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent } from "@testing-library/react";
 import ConfirmDeleteModal from "./ConfirmDeleteModal";
+import { clickBackdrop } from "../../test/clickBackdrop";
 
 describe("ConfirmDeleteModal", () => {
   const baseProps = {
@@ -71,7 +72,7 @@ describe("ConfirmDeleteModal", () => {
     const onClose = vi.fn();
     render(<ConfirmDeleteModal {...baseProps} onClose={onClose} />);
     // The backdrop of a modal <dialog> is the dialog itself.
-    fireEvent.click(screen.getByTestId("confirm-delete-modal"));
+    clickBackdrop(screen.getByTestId("confirm-delete-modal"));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -125,5 +126,16 @@ describe("ConfirmDeleteModal", () => {
       fireEvent.keyDown(screen.getByTestId("confirm-delete-modal"), { key: "Enter", ctrlKey: true });
       expect(onConfirm).toHaveBeenCalledWith(true);
     });
+  });
+
+  it("keeps a refused deletion open with the daemon's message", async () => {
+    const onClose = vi.fn();
+    const onConfirm = vi.fn(() => Promise.reject(new Error("2 runs use this pipeline")));
+    render(<ConfirmDeleteModal {...baseProps} onClose={onClose} onConfirm={onConfirm} />);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Delete" })));
+    expect(screen.getByRole("alert")).toHaveTextContent("Deleting failed");
+    expect(screen.getByRole("alert")).toHaveTextContent("2 runs use this pipeline");
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

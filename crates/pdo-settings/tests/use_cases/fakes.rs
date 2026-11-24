@@ -38,6 +38,7 @@ impl Default for InMemoryConfig {
                 session_cap: None,
                 reaper_ttl_secs: None,
                 libassist_idle_ttl_secs: None,
+                support_idle_timeout_secs: None,
                 guard_timeout_secs: None,
                 default_model: None,
                 default_sandbox: None,
@@ -93,6 +94,7 @@ impl InstanceConfigStore for InMemoryConfig {
                 session_cap,
                 reaper_ttl_secs,
                 libassist_idle_ttl_secs,
+                support_idle_timeout_secs,
                 guard_timeout_secs,
                 max_attachments_mb
             );

@@ -348,6 +348,7 @@ pub async fn build_with(
         },
         RunsOptions {
             daemon_port: port,
+            public_url_default: None,
             allowed_ws_origins: Vec::new(),
             repo_root: root.clone(),
             // Self-destructing no-op: a spawned node session runs `true` and

@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { copyToClipboard } from "./clipboard";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { copyImageToClipboard, copyToClipboard } from "./clipboard";
 
 describe("copyToClipboard (#772)", () => {
   it("prefers navigator.clipboard when present", async () => {
@@ -58,5 +58,40 @@ describe("every Copy of the core", () => {
       .filter(([path, text]) => path !== "./clipboard.ts" && /clipboard\??\.writeText/.test(text))
       .map(([path]) => path);
     expect(writers).toEqual([]);
+  });
+});
+
+describe("copyImageToClipboard", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    Reflect.deleteProperty(window, "ClipboardItem");
+    Reflect.deleteProperty(navigator, "clipboard");
+  });
+
+  it("writes a PNG through the async Clipboard API", async () => {
+    const write = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { write }, configurable: true });
+    class Item {
+      items: Record<string, Promise<Blob>>;
+      constructor(items: Record<string, Promise<Blob>>) {
+        this.items = items;
+      }
+    }
+    Object.defineProperty(window, "ClipboardItem", { value: Item, configurable: true });
+    const png = new Blob(["x"], { type: "image/png" });
+    expect(await copyImageToClipboard(png)).toBe(true);
+    const [[[item]]] = write.mock.calls;
+    expect(await item.items["image/png"]).toBe(png);
+  });
+
+  it("says false where no Clipboard API carries an image (plain http)", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    expect(await copyImageToClipboard(new Blob(["x"], { type: "image/png" }))).toBe(false);
+  });
+
+  it("says false when the write is refused", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: { write: vi.fn().mockRejectedValue(new Error("denied")) }, configurable: true });
+    Object.defineProperty(window, "ClipboardItem", { value: class {}, configurable: true });
+    expect(await copyImageToClipboard(new Blob(["x"], { type: "image/png" }))).toBe(false);
   });
 });

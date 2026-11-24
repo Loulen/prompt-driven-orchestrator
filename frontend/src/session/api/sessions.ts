@@ -17,7 +17,7 @@ export function attachSession(sessionId: string): Promise<void> {
   return request<void>(
     "POST",
     `/sessions/${encodeURIComponent(sessionId)}/attach`,
-    { responseMode: "void", label: "attach" },
+    { responseMode: "void", label: "attach", silent: true },
   );
 }
 
@@ -25,7 +25,7 @@ export function attachManager(runId: string): Promise<void> {
   return request<void>(
     "POST",
     `/sessions/${encodeURIComponent(runId)}/manager/attach`,
-    { responseMode: "void", label: "manager attach" },
+    { responseMode: "void", label: "manager attach", silent: true },
   );
 }
 
@@ -41,7 +41,7 @@ export function openRunShell(
   return request<{ session: string; created: boolean }>(
     "POST",
     `/sessions/${encodeURIComponent(runId)}/shell`,
-    { label: "open shell" },
+    { label: "Opening shell" },
   );
 }
 
@@ -84,7 +84,7 @@ export function sendTextToNodeTerminal(
   return request<TerminalTextResponse>(
     "POST",
     `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/terminal-text`,
-    { body: { iter, text, poste: posteId() }, label: "Send to terminal" },
+    { body: { iter, text, poste: posteId() }, label: "Sending to terminal" },
   );
 }
 
@@ -103,6 +103,6 @@ export function putTerminalZoom(session: string, zoom: number): Promise<Terminal
   return request<TerminalZoomResponse>(
     "PUT",
     `/sessions/${encodeURIComponent(session)}/terminal-zoom`,
-    { body: { zoom }, label: "Terminal zoom" },
+    { body: { zoom }, label: "Terminal zoom", silent: true },
   );
 }

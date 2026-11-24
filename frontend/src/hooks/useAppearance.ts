@@ -32,6 +32,7 @@ import { applyStatusPalette } from "../lib/statusPalette";
 import { applyThemeChoice } from "../lib/theme";
 import { fetchAppearance, saveAppearance } from "../settings/api/appearance";
 import { toast } from "../shared/ui/toast";
+import { errorAlreadyShown } from "../shared/http/operations";
 
 let snapshot: Appearance = DEFAULT_APPEARANCE;
 let loaded = false;
@@ -107,9 +108,10 @@ function persist(appearance: Appearance): Promise<void> {
         await saveAppearance(toDocument(next));
         warned = false;
         if (!queued) unsaved = false;
-      } catch {
+      } catch (e) {
         // The local copy holds the change; the next change, or the next sync, writes it again.
-        if (!warned) toast("Your appearance could not be saved", "error");
+        // A failure its operation already said is not said twice.
+        if (!warned && !errorAlreadyShown(e)) toast("Your appearance could not be saved", "error");
         warned = true;
       }
     }

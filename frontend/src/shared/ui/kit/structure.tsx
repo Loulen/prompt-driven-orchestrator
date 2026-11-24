@@ -17,6 +17,8 @@ export interface TabItem<T extends string = string> {
   label: string;
   icon?: Icon;
   count?: number;
+  /** A short word after the label, in the count's chip: `edited`. */
+  mark?: string;
   kbd?: string;
   disabled?: boolean;
 }
@@ -70,6 +72,7 @@ export function Tabs<T extends string>({ items, value, onChange, label }: TabsPr
             {t.icon && <t.icon size={13} strokeWidth={1.5} aria-hidden />}
             <span>{t.label}</span>
             {t.count != null && <span className="d-tab__n">{t.count}</span>}
+            {t.mark && <span className="d-tab__n">{t.mark}</span>}
           </button>
         );
         return t.kbd ? (
@@ -183,17 +186,20 @@ export interface BannerProps {
   detail?: string;
   /** `data-testid` of the `detail`. */
   detailTestId?: string;
+  /** Title and text wrap onto several lines at body weight, the text under the title, instead of ending in an ellipsis: a whole sentence in a narrow column. */
+  wrap?: boolean;
 }
 
-/** A tinted line at the top of a pane: the status icon (or `icon`), a short fact, the detail, actions. */
-export function Banner({ tone, title, text, actions, icon: BannerIcon, detail, detailTestId }: BannerProps) {
+/** A tinted line at the top of a pane: the status icon (or `icon`), a short fact, the detail, actions; `wrap`: a whole sentence over several lines. */
+export function Banner({ tone, title, text, actions, icon: BannerIcon, detail, detailTestId, wrap }: BannerProps) {
   return (
     <div
       className="d-banner"
       style={{ ["--st" as string]: toneColor(tone) }}
       role={tone === "failed" ? "alert" : "status"}
-      title={text ?? detail}
+      title={wrap ? undefined : (text ?? detail)}
       data-detail={detail ? "true" : undefined}
+      data-wrap={wrap ? "true" : undefined}
     >
       {BannerIcon ? (
         <BannerIcon size={14} strokeWidth={1.5} className="d-banner__icon" aria-hidden />

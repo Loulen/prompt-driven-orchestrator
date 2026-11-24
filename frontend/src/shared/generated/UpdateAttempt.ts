@@ -20,4 +20,24 @@ command: string, supervision: Supervision, log_path: string,
  * Version the daemon ran when the attempt started — so the UI can tell « the
  * daemon came back on the same version » from a real update.
  */
-from_version: string, };
+from_version: string, 
+/**
+ * The newest version known when the attempt started, the one it aims at;
+ * `None` when no check had found one.
+ */
+to_version: string | null, 
+/**
+ * Why the attempt failed, in a sentence a human reads (« v2.0.0 did not
+ * answer within 90 s after the restart. … »); `None` while running, after
+ * a success, or when only the exit code is known.
+ */
+reason: string | null, 
+/**
+ * The Retour automatique put the previous binary and its databases back.
+ */
+rolled_back: boolean, 
+/**
+ * How long the executor waits for the restarted daemon to answer before
+ * it rolls back; `None` on a record older than the Retour automatique.
+ */
+verify_timeout_secs: number | null, };

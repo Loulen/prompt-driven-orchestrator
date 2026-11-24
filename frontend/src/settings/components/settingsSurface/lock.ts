@@ -2,7 +2,7 @@
  * The instance form, read only (CORE-248): without `instance_settings` × `update`, every
  * field of the instance categories is greyed, the refusal's sentence in its tooltip. No
  * banner: the grey already says it. A section that is not the instance form (its own
- * persistence, this device, your account, read only) and a row wearing its own scope keep
+ * persistence, this device, your account, read only, a gesture) and a row wearing its own scope keep
  * their controls.
  */
 
@@ -20,9 +20,9 @@ export const SectionLockContext = createContext<string | undefined>(undefined);
 
 /** Whether `section` holds fields of the instance form. */
 export function holdsInstanceFields(
-  section: Pick<SettingsSection, "readOnly" | "ownPersistence" | "deviceLocal" | "account">,
+  section: Pick<SettingsSection, "readOnly" | "ownPersistence" | "deviceLocal" | "account" | "gesture">,
 ): boolean {
-  return !section.readOnly && !section.ownPersistence && !section.deviceLocal && !section.account;
+  return !section.readOnly && !section.ownPersistence && !section.deviceLocal && !section.account && !section.gesture;
 }
 
 /** Why a row's control is greyed, `undefined` when it is not. */

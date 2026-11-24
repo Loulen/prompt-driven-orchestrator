@@ -378,6 +378,26 @@ describe("TmuxTerminal", () => {
     expect(toolbar.firstElementChild).toBe(identity);
   });
 
+  // The support agent's « End session » closes the bar, after a rule.
+  it("puts the end slot last, after Copy and Collapse", () => {
+    render(
+      <TmuxTerminal
+        session="pdo-support-operator"
+        expanded
+        onExpand={() => {}}
+        toolbarEnd={<button data-testid="slot-end">end</button>}
+      />,
+    );
+    const toolbar = screen.getByTestId("term-toolbar");
+    const end = within(toolbar).getByTestId("slot-end");
+    const collapse = within(toolbar).getByTestId("term-expand");
+    expect(collapse.compareDocumentPosition(end) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const detach = within(toolbar).getByTestId("term-detach");
+    expect(detach.compareDocumentPosition(end) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(end.parentElement?.lastElementChild).toBe(end);
+    expect(end.previousElementSibling).toHaveClass("ri-term-bar__sep");
+  });
+
   it("keeps the plain toolbar without slots", () => {
     render(<TmuxTerminal session="pdo-run1-impl-iter-1" />);
     const toolbar = screen.getByTestId("term-toolbar");
@@ -1341,6 +1361,24 @@ describe("TmuxTerminal", () => {
       const container = screen.getByTestId("xterm-container");
       expect(container.parentElement?.dataset.tooltip).toBeUndefined();
       expect(container.dataset.role).toBe("solo");
+    });
+
+    it("names the pilot only while another browser watches (CORE-223)", async () => {
+      const { ws } = await mountLive();
+      roleFrame(ws, { role: "solo" });
+      expect(screen.getByTestId("term-mode")).toHaveTextContent(/^attached · live$/);
+      expect(screen.queryByText("You pilot")).toBeNull();
+
+      roleFrame(ws, { role: "pilot", spectators: 1 });
+      const chip = screen.getByTestId("term-mode");
+      expect(chip).toHaveAttribute("data-role", "pilot");
+      expect(chip).toHaveTextContent("You pilot");
+      expect(chip).toHaveTextContent("1 watching");
+
+      roleFrame(ws, { role: "solo" });
+      expect(screen.getByTestId("term-mode")).not.toHaveAttribute("data-role");
+      expect(screen.getByTestId("term-mode")).toHaveTextContent(/^attached · live$/);
+      expect(screen.queryByText("You pilot")).toBeNull();
     });
 
     it("a pilot with spectators sees an eye and their number", async () => {

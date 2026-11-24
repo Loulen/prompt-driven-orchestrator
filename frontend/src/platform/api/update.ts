@@ -18,7 +18,7 @@ export function fetchUpdateStatus(): Promise<UpdateStatus> {
 }
 
 export function checkForUpdateNow(): Promise<UpdateStatus> {
-  return request<UpdateStatus>("POST", "/update/check", { label: "POST /update/check" });
+  return request<UpdateStatus>("POST", "/update/check", { label: "Checking for updates" });
 }
 
 /**
@@ -36,7 +36,7 @@ export function fetchUpdateChangelog(): Promise<UpdateChangelog> {
  * an attempt is already running. `GET /update/attempts/{id}/log` is the journal, text.
  */
 export function applyUpdate(): Promise<UpdateApplyResponse> {
-  return request<UpdateApplyResponse>("POST", "/update/apply", { label: "POST /update/apply" });
+  return request<UpdateApplyResponse>("POST", "/update/apply", { label: "Installing update" });
 }
 
 export async function fetchUpdateAttemptLog(attemptId: string): Promise<string> {

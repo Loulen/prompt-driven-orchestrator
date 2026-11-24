@@ -20,11 +20,11 @@ default, and with no extension the daemon behaves as if none existed.
 | Hook | Called | Default |
 | --- | --- | --- |
 | `manifest` | at registration | required |
-| `start(context)` | once, before serving; `context.data_dir`, `context.host` | nothing |
+| `start(context)` | once, before serving (the daemon only, never `pdo service`, below); `context.data_dir`, `context.host` | nothing |
 | `identify(request)` | on every request; the first `Some` wins | `None`: the core decides |
 | `admit(request)` (0.8) | on a request no extension identified, before any route; the first non-`Admit` wins, a panic refuses | `Admission::Admit` |
 | `display_name(actor)` (0.8) | wherever an Actor is shown; the first `Some` wins, a panic is skipped | `None`: shown as without extension |
-| `authorize(actor, operation)` | before every mutation of an actor, and every guarded read (0.8, below); the first refusal wins, a panic refuses | allow |
+| `authorize(actor, operation)` | before every mutation of an actor, and every guarded read (0.8, below); the first refusal wins, a panic refuses; also by `pdo service install` / `uninstall`, unstarted (below) | allow |
 | `on_create(actor, entity)` | after a creation; attributes prefixed `<id>/` | none |
 | `validate_create(actor, kind, value)` (0.9) | before a creation carrying a value for this extension, after the authorization; `Err(reason)` refuses with `400`, a panic refuses | accept |
 | `on_create_with_data(actor, entity, data)` (0.9) | in place of `on_create`, with the value the creation carried (`None` without one); a Run's before its first Node | `on_create(actor, entity)` |
@@ -32,7 +32,7 @@ default, and with no extension the daemon behaves as if none existed.
 | `routes()` | once; nested under `/ext/<id>/` | none |
 | `ui()` | on every `GET /ext` | none |
 | `cli()` / `run_cli(invocation)` | `pdo ext <id> …` | no command line |
-| `skills()` | once, before `start` | none |
+| `skills()` | once, before `start` (the daemon only) | none |
 | `node_env(launch)` (0.8) | at every launch of a Node, agent or script, and at an agent's resume; the first registered wins a name | none |
 | `node_preamble(launch)` (0.8) | at every launch of an agent; texts follow in registration order | none |
 | `session_env(launch)` (0.13) | at every launch of a session that makes an agent act or runs a script Node: a Node (the core asks this hook, never `node_env` directly), the Pipeline Manager, the library assistant; the first registered wins a name | `node_env` for a Node, none otherwise |
@@ -40,6 +40,18 @@ default, and with no extension the daemon behaves as if none existed.
 | `trigger_suspension(trigger)` (0.8) | at every read of a Trigger and every due tick; the first `Some` wins, a panic suspends nothing | not suspended |
 | `git_env(operation)` | at every network git operation the daemon runs for an Actor: the clone of a repository added by its URL, the fetch of New Run, the clone of a Source de skills, the fetch before a Trigger fires; and before a Trigger's guard runs (its dry-run included); the first registered wins a name | none: the daemon's credentials, a guard as before |
 | `guard_ended(end)` | once a guard `git_env` was asked about has ended, whatever its end (passed, skipped, failed, timed out); in registration order, a panic is ignored | nothing |
+| `bug_report_destinations(actor)` (0.28) | each time the Bug report window opens, and before a report is sent; in registration order, a panic offers none | none |
+| `receive_bug_report(actor, report)` (0.28) | on a blocking thread, for a report sent to one of its destinations; `Err(reason)` reaches the sender, a panic is a failure | a failure |
+
+### Outside the daemon: `pdo service`
+
+Every `pdo service` subcommand builds the binary's extensions too (ADR-0081): their constructors
+run and `manifest` is called. `pdo service install` and `pdo service uninstall` then ask
+`authorize` for the local operator: `service` × `create` for the install (not on `--dry-run`),
+`service` × `delete` for the uninstall; `pdo service status` asks nothing. Only `manifest` and
+`authorize` are called, **never** `start` nor `skills`: no data folder, no `Host`, no async runtime
+(the `on_event` thread is started but receives nothing). An extension that refuses for lack of its
+state (its database not open) makes `pdo service install` fail on a fresh install.
 
 ## The Manifest
 
@@ -846,6 +858,35 @@ slot. While suspended:
 The suspension is asked again at each read. When its cause changes outside any mutation of a
 Trigger, call `Host::triggers_changed()` (0.11): an interface open on the Triggers then shows the
 pill appear or go without reloading.
+
+## Destinations de bug report (0.28)
+
+The Bug report window sends a report of the core either to the core's public issues (opened in the
+browser, always listed first) or to a destination an extension offers. `bug_report_destinations`
+receives the Actor and answers its `BugReportDestination`s: an `id` unique within the extension,
+a `label`, `accepts_prompts` (false by default, `accepting_prompts()`), an `icon` (an SVG it
+serves, `with_icon(url)`). Offer only where the Actor may create the item: the daemon sends a
+report only to a destination this hook lists for its sender. « Send to » lists them under the
+extension's name; the core names them `<extension>/<id>`.
+
+`receive_bug_report` gets the sender and a `BugReport`: the destination's `id`, a `title` (the
+description's first line, shortened), the `text` (the markdown the person saw in the Preview,
+edited or not), the same report section by section (`BugReportFields`: `description`, `version`,
+`os`, `harnesses`, `run`, `pipeline`, `prompts`, each `None` when left out) and the `screenshot`
+(`media_type`, `bytes`) when one was joined. `prompts` is only there toward a destination that
+accepts them, when the person checked « Include prompts »; the daemon refuses the report
+otherwise, and without a description. It runs on a blocking thread: create the item, then answer
+`BugReportSent { reference, link }`. The sender's toast says « Bug report sent: <reference> » and
+its « Open » follows `link`: an absolute URL, a path the daemon serves (opened in a new tab), or a
+link inside the interface (`#/ext/<id>/…`). `Err(reason)` creates nothing: the window stays open
+and shows the reason.
+
+The routes are the core's: `GET /bug-report/destinations` (`{destinations, last}`), `POST
+/bug-report` (`{destination, text, fields, screenshot?: {media_type, data}}`, the bytes in
+base64, at most 10 MB; `200` the `BugReportSent`, `404 unknown_destination`, `400
+bug_report_refused`, `502 bug_report_not_sent` with the extension's reason) and `PUT
+/bug-report/last` (`{destination}`), with their commands `pdo bug-report destinations | send |
+last`. The daemon remembers each Actor's last destination, which the window starts on.
 
 ## The credentials of a git operation of the daemon
 

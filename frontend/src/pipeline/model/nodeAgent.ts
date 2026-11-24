@@ -9,10 +9,15 @@ interface ProfileBrief {
   effort?: string;
 }
 
-/** What runs a node, as its canvas card names it: a short word and the full line. */
+/**
+ * What runs a node, as its canvas card names it: a short word, the full line
+ * and the harness whose logo leads the Run card's Model cell (`null` when
+ * none is known: a script, a missing profile, an inherit not frozen yet).
+ */
 export interface NodeAgentLabel {
   short: string;
   title: string;
+  harness?: string | null;
 }
 
 const line = (...parts: (string | null | undefined)[]) => parts.filter(Boolean).join(" · ");
@@ -28,19 +33,30 @@ export function nodeAgentLabel(
   frozenHarness?: string | null,
   nameOf: (profileId: string) => string = (profileId) => profileId,
 ): NodeAgentLabel {
-  if (node.type === "script") return { short: "bash", title: "Script · bash" };
-  const choice = node.agent_choice;
+  if (node.type === "script") return { short: "bash", title: "Script · bash", harness: null };
+  const label = agentLabel(node.agent_choice, profiles, frozenHarness, nameOf);
+  // The harness a Run froze is what actually ran the node (ADR-0046), whatever its agent names.
+  return { ...label, harness: frozenHarness || label.harness };
+}
+
+function agentLabel(
+  choice: AgentChoice | null | undefined,
+  profiles: readonly ProfileBrief[],
+  frozenHarness: string | null | undefined,
+  nameOf: (profileId: string) => string,
+): NodeAgentLabel {
   if (choice?.mode === "custom") {
-    return { short: choice.model || choice.harness, title: line(choice.harness, choice.model, choice.effort) };
+    return { short: choice.model || choice.harness, title: line(choice.harness, choice.model, choice.effort), harness: choice.harness };
   }
   if (choice?.mode === "profile") {
     const profile = profiles.find((p) => p.id === choice.profile_id);
-    if (!profile) return { short: "profile", title: `Missing profile ${nameOf(choice.profile_id)}` };
+    if (!profile) return { short: "profile", title: `Missing profile ${nameOf(choice.profile_id)}`, harness: null };
     return {
       short: profile.model?.split("/").pop() || profile.name,
       title: line(profile.name, profile.harness, profile.model, profile.effort),
+      harness: profile.harness,
     };
   }
-  if (frozenHarness) return { short: frozenHarness, title: frozenHarness };
-  return { short: "inherit", title: "Inherits the run agent" };
+  if (frozenHarness) return { short: frozenHarness, title: frozenHarness, harness: frozenHarness };
+  return { short: "inherit", title: "Inherits the run agent", harness: null };
 }

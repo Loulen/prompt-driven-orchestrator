@@ -44,6 +44,9 @@ export function YamlTab({
   );
   const shownYaml = dirty ? fallbackYaml : (yaml ?? fallbackYaml);
   const [copied, setCopied] = useState(false);
+  // The timer that turns « Copied » back: cleared on unmount, so it never sets the state of a gone tab.
+  const copiedTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(copiedTimer.current), []);
   const [copyError, setCopyError] = useState(false);
   const [showExcluded, setShowExcluded] = useState(false);
   const [sidecarError, setSidecarError] = useState<string | null>(null);
@@ -100,7 +103,8 @@ export function YamlTab({
     setCopyError(false);
     if (await copyToClipboard(yaml)) {
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
+      window.clearTimeout(copiedTimer.current);
+      copiedTimer.current = window.setTimeout(() => setCopied(false), 2000);
     } else {
       setCopyError(true);
     }

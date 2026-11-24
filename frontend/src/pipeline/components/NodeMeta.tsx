@@ -5,6 +5,7 @@
  * marker.
  */
 import { Coins, FileCode, FileImage, Files, FileText, GitFork, Images, Repeat, Timer, type LucideIcon } from "lucide-react";
+import type { ReactNode } from "react";
 import type { PortType } from "../../shared/generated/PortType";
 import { formatDuration } from "../../run/model/runDuration";
 import { nodeCostAmount } from "../../run/model/costLabel";
@@ -13,22 +14,25 @@ import type { ElementMarks } from "../../hooks/useElementMarks";
 import { RUN_CARD } from "../model/runCardElements";
 import type { EditNodeData } from "./EditNode";
 import { nodeTypeGlyph } from "../model/nodeTypeGlyph";
+import HarnessLogo from "../../harness/components/HarnessLogo";
 
-/** One cell of the card's meta grid: an icon, a value, the name in the tooltip. */
+/** One cell of the card's meta grid: an icon (or a `lead` in its place), a value, the name in the tooltip. */
 function Cell({
   icon: Icon,
+  lead,
   title,
   value,
   marks,
 }: {
   icon: LucideIcon;
+  lead?: ReactNode;
   title: string;
   value: string | null | undefined;
   marks?: ElementMarks;
 }) {
   return (
     <span className="cv-n__cell" title={value ? `${title}: ${value}` : title} {...marks}>
-      <Icon size={11} strokeWidth={1.5} aria-hidden />
+      {lead ?? <Icon size={11} strokeWidth={1.5} aria-hidden />}
       <span>{value || "·"}</span>
     </span>
   );
@@ -98,7 +102,14 @@ export function NodeMeta({
       : null;
   const iter = run && run.iter > 0 ? (data.loopBadge || run.iterations > 1 ? `×${run.iter}` : String(run.iter)) : null;
   const cells = [
-    { id: RUN_CARD.agent, icon: AgentIcon, title: agent.title, value: agent.short },
+    {
+      id: RUN_CARD.agent,
+      icon: AgentIcon,
+      // The harness that runs the node leads its model; the title already names it.
+      lead: agent.harness ? <HarnessLogo harness={agent.harness} size={11} /> : undefined,
+      title: agent.title,
+      value: agent.short,
+    },
     { id: RUN_CARD.iteration, icon: Repeat, title: "Iteration", value: iter },
     { id: RUN_CARD.elapsed, icon: Timer, title: "Elapsed", value: elapsed },
     { id: RUN_CARD.cost, icon: Coins, title: "Cost", value: cost },

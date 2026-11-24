@@ -18,8 +18,8 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 
 - The progress counter of a bulk action keeps the total it started with. During a Cleanup in the
   Runs tab, archived Runs leave the list while the action runs, and the counter used to lower its
-  total until it read "4/3"; it now reads 0/3, 1/3, 2/3. The fix covers every bulk action
-  (Runs Retry and Pause, Triggers, Pipelines) (CORE-299).
+  total until it read "4/3"; it now reads 0/3, 1/3, 2/3. The fix covers every bulk action:
+  Runs Retry and Pause, Triggers, Pipelines.
 
 ## 2.89.0
 

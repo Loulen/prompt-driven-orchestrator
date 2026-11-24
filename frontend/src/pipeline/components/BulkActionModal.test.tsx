@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import BulkActionModal from "./BulkActionModal";
 
@@ -101,5 +101,77 @@ describe("BulkActionModal", () => {
     expect(screen.queryByTestId("bulk-confirm")).not.toBeInTheDocument();
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  // CORE-299: the parent rebuilds `items` from live state (archived Runs drop out
+  // of the cleanup list), so the counter's total must stay fixed at the start.
+  describe("progress total while the parent's list shrinks", () => {
+    function deferredRun() {
+      const pending = new Map<string, () => void>();
+      const run = vi.fn(
+        (id: string) => new Promise<void>((resolve) => pending.set(id, resolve)),
+      );
+      const resolve = async (id: string) => {
+        await waitFor(() => expect(pending.has(id)).toBe(true));
+        pending.get(id)!();
+      };
+      return { run, resolve };
+    }
+
+    const onSettled = vi.fn();
+    beforeEach(() => onSettled.mockClear());
+
+    function modal(
+      list: ReturnType<typeof items>,
+      run: (id: string) => Promise<void>,
+      skipConfirm = false,
+    ) {
+      return (
+        <BulkActionModal
+          destructive={!skipConfirm}
+          skipConfirm={skipConfirm}
+          runningLabel="Cleaning up"
+          title="Cleanup runs?"
+          description="removes worktrees"
+          confirmLabel="Cleanup"
+          items={list}
+          run={run}
+          onClose={() => {}}
+          onSettled={onSettled}
+        />
+      );
+    }
+
+    it("keeps the total fixed at the confirmed count", async () => {
+      const { run, resolve } = deferredRun();
+      const { rerender } = render(modal(items("a", "b", "c"), run));
+      fireEvent.click(screen.getByTestId("bulk-confirm"));
+      expect(screen.getByTestId("bulk-progress")).toHaveTextContent("Cleaning up… 0/3");
+
+      await resolve("a");
+      await waitFor(() => expect(screen.getByTestId("bulk-progress")).toHaveTextContent("1/3"));
+      rerender(modal(items("b", "c"), run));
+      expect(screen.getByTestId("bulk-progress")).toHaveTextContent("1/3");
+
+      await resolve("b");
+      await waitFor(() => expect(screen.getByTestId("bulk-progress")).toHaveTextContent("2/3"));
+      rerender(modal(items("c"), run));
+      expect(screen.getByTestId("bulk-progress")).toHaveTextContent("2/3");
+      await resolve("c");
+      await waitFor(() => expect(onSettled).toHaveBeenCalled());
+    });
+
+    it("keeps the total fixed on the skipConfirm path", async () => {
+      const { run, resolve } = deferredRun();
+      const { rerender } = render(modal(items("a", "b"), run, true));
+      expect(screen.getByTestId("bulk-progress")).toHaveTextContent("0/2");
+
+      await resolve("a");
+      await waitFor(() => expect(screen.getByTestId("bulk-progress")).toHaveTextContent("1/2"));
+      rerender(modal(items("b"), run, true));
+      expect(screen.getByTestId("bulk-progress")).toHaveTextContent("1/2");
+      await resolve("b");
+      await waitFor(() => expect(onSettled).toHaveBeenCalled());
+    });
   });
 });

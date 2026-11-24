@@ -54,7 +54,13 @@ export default function BulkActionModal({
   onSettled,
 }: Props) {
   const [phase, setPhase] = useState<Phase>(skipConfirm ? "running" : "confirm");
-  const [done, setDone] = useState(0);
+  // The total is fixed when the action starts (runBulk reports it); the parent's
+  // live list may shrink while it runs (e.g. archived Runs drop out of Cleanup, CORE-299).
+  const [progress, setProgress] = useState({ done: 0, total: items.length });
+  const onProgress = useCallback(
+    (done: number, total: number) => setProgress({ done, total }),
+    [],
+  );
   const [outcome, setOutcome] = useState<BulkOutcome | null>(null);
   // Guards the executor against a double-invoke (React strict-mode effects, or a
   // double confirm click) — refs persist across a strict remount.
@@ -76,22 +82,22 @@ export default function BulkActionModal({
     [onSettled, onClose],
   );
 
-  // Kick the executor. `setDone` is passed as a progress callback (not called in
+  // Kick the executor. `onProgress` is passed as a progress callback (not called in
   // an effect body), and `settle` runs only after the run awaits — so neither the
   // confirm-click path nor the skipConfirm effect setStates synchronously.
   const begin = useCallback(() => {
     if (startedRef.current) return;
     startedRef.current = true;
     setPhase("running");
-    void runBulk(items, run, setDone).then(settle);
-  }, [items, run, settle]);
+    void runBulk(items, run, onProgress).then(settle);
+  }, [items, run, onProgress, settle]);
 
   useEffect(() => {
     // Reversible actions start immediately; the phase was already seeded to
     // "running", so no synchronous setState is needed here.
     if (!skipConfirm || startedRef.current) return;
     startedRef.current = true;
-    void runBulk(items, run, setDone).then(settle);
+    void runBulk(items, run, onProgress).then(settle);
     // Run once on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -151,7 +157,7 @@ export default function BulkActionModal({
           <div className="flex flex-col items-center gap-3 py-2" data-testid="bulk-progress">
             <Loader2 size={20} className="animate-spin text-primary" />
             <div className="text-text-2 text-sm">
-              {runningLabel}… {done}/{items.length}
+              {runningLabel}… {progress.done}/{progress.total}
             </div>
           </div>
         )}

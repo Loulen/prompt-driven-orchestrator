@@ -54,7 +54,7 @@ function card(over: Partial<EditNodeData> & Pick<EditNodeData, "nodeId">): EditN
     inputs: [],
     outputs: [],
     inRun: true,
-    agent: { short: "Sonnet", title: "Agent" },
+    agent: { short: "Sonnet", title: "Agent", harness: "claude" },
     ...over,
   };
 }
@@ -69,7 +69,7 @@ export const SAMPLE_CARDS: readonly EditNodeData[] = [
   }),
   card({
     nodeId: "tdd",
-    agent: { short: "Opus", title: "Agent" },
+    agent: { short: "Opus", title: "Agent", harness: "claude" },
     isolated: true,
     loopBadge: { text: "×2", kind: "bounded" },
     run: { iter: 2, iterations: 2, startedAt: at(3), completedAt: at(10), cost: cost(1.24) },

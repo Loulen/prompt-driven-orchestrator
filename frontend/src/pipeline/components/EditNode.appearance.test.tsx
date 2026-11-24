@@ -135,3 +135,43 @@ describe("a node's card on a Run canvas, with an Apparence", () => {
     expect(cells()).toEqual(["Agent", "Worktree", "out · markdown"]);
   });
 });
+
+describe("the Model cell of a Run card", () => {
+  const modelCell = () => document.querySelector<HTMLElement>('.cv-n__cell[title^="Agent"]');
+
+  it("leads with the logo of the harness that runs the node, then its model", () => {
+    appearance({ "run.canvas.agent": true });
+    draw({ ...DATA, runCanvas: true, agent: { short: "opus", title: "Agent", harness: "claude" } });
+    const cell = modelCell()!;
+    expect(cell.querySelector('[data-harness-logo="claude"]')).not.toBeNull();
+    expect(cell).toHaveTextContent("opus");
+    expect(cell.querySelectorAll(":scope > svg")).toHaveLength(1);
+  });
+
+  it("draws the initial of a harness with no mark", () => {
+    appearance({ "run.canvas.agent": true });
+    draw({ ...DATA, runCanvas: true, agent: { short: "codex", title: "Agent", harness: "codex" } });
+    expect(modelCell()!.querySelector('.h-logo--initial[data-harness-logo="codex"]')).not.toBeNull();
+  });
+
+  it("keeps the type glyph when no harness is known", () => {
+    appearance({ "run.canvas.agent": true });
+    draw({ ...DATA, runCanvas: true, agent: { short: "inherit", title: "Agent", harness: null } });
+    const cell = modelCell()!;
+    expect(cell.querySelector("[data-harness-logo]")).toBeNull();
+    expect(cell.querySelector(":scope > svg")).not.toBeNull();
+  });
+
+  it("draws no logo when the Apparence hides the Model", () => {
+    appearance({});
+    draw({ ...DATA, runCanvas: true, agent: { short: "opus", title: "Agent", harness: "claude" } });
+    expect(modelCell()).toBeNull();
+    expect(document.querySelector("[data-harness-logo]")).toBeNull();
+  });
+
+  it("keeps the type glyph on the editor's card", () => {
+    draw({ agent: { short: "opus", title: "Agent", harness: "claude" } });
+    expect(document.querySelector("[data-harness-logo]")).toBeNull();
+    expect(modelCell()!.querySelector(":scope > svg")).not.toBeNull();
+  });
+});

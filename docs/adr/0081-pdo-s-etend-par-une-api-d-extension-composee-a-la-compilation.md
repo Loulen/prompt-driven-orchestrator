@@ -845,3 +845,36 @@ coûts sous-estimait une orchestration. `Host::run_cost` porte désormais le **C
 - **Version** : mineure, par ajout (un champ optionnel de `RunCost`, deux types) ; le numéro est
   posé à la fusion vers `main` (ADR-0095). Une extension antérieure compile et tourne sans
   changement : `RunCost` est `non_exhaustive` et le champ manque à sa lecture JSON.
+
+## Amendement CORE-322 : Start et End reçoivent une Décoration et une Section
+
+Ce qu'une extension sait du début et de la fin d'un Run (ce qui l'a lancé, ce qu'il a produit)
+n'avait pas de place sur le Run lui-même : Start et End n'ont ni onglet `node/detail` (leur
+inspecteur n'a pas d'onglets) ni Décoration dans le graphe (amendement CORE-145). Le core rouvre la
+carte, pour les seuls **Nœuds structurels**, sans revenir sur ce qui avait motivé CORE-145.
+
+- **`marker/item`** : une Décoration par contribution, sur une **rangée de hauteur fixe** (une
+  ligne) sous le titre de Start ou de End, sur le canvas d'un Run en lecture seulement (ni
+  l'éditeur de Pipeline, ni un Run édité). La rangée est réservée dès qu'une contribution s'applique
+  (sa clause `when` vraie), même si son composant ne rend rien : la hauteur du marqueur est connue
+  avant le rendu, et la compaction comme les routes des arêtes la suivent sans mesurer. Le marqueur
+  prend alors la largeur d'une carte ; un contenu plus large est coupé (à l'extension de dire
+  « +n »). Masquable par contribution dans Appearance › Run canvas ; « Compact nodes » ne la masque
+  pas.
+- **`marker/detail`** : une Section par contribution dans l'inspecteur de Start et de End, après
+  celles du core.
+- **Contexte** : le contexte de base, `entity` (`kind: "node"`, l'id, `type: "start" | "end"`, le
+  nom) et `marker` (`run`, `node`, `type`, `reached`). Pas d'itération : un Nœud structurel n'en a
+  pas. Le contexte suit l'état du Run ; une contribution relit ses données quand `reached` ou le
+  statut du Run change. `when: { eq: ["marker.type", "end"] }` limite une contribution à End.
+- **Les cartes de travail restent nues** : la raison de CORE-145 (une ligne de hauteur variable
+  sur des cartes que la compaction aligne) tient pour elles ; ce qu'une extension rattache à un
+  Node de travail reste dans `node/detail`, `node/toolbar`, `port/item` et `canvas/node/menu`.
+- **Version** : mineure, par ajout (deux variantes de `UiLocation`) ; le numéro est posé à la
+  fusion vers `main` (ADR-0095). Une extension antérieure compile et tourne sans changement.
+
+Écartés : une Décoration sur tout type de node (rouvre CORE-145 sans besoin connu) ; une
+superposition sous la pastille, hors mise en page (elle chevauche arêtes et nœud suivant) ; des
+onglets dans l'inspecteur de Start et End pour y accueillir `node/detail` (un second mécanisme
+pour un panneau qui n'a que des sections) ; quatre emplacements `run/start` et `run/end` (le même
+contexte, filtrable par `when`).

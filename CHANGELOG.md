@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.92.0
 
 - New command `pdo service refresh [--port] [--bind] [--dry-run]`: rewrites the installed service
   unit only when the binary in place renders it differently (`unchanged`, or `rewrote <path>` then

@@ -14,6 +14,19 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- New extension seams on the Start and End markers of a Run (extension API, minor): `marker/item`
+  puts an extension's decorations on a fixed one-line row under the marker's title, on the canvas
+  of a Run being read (not in the pipeline editor, not in a Run edited for itself); `marker/detail`
+  adds an extension's sections to the Start and End inspectors, after the core's. Both hand over
+  the marker as `entity` and as `marker` (`run`, `node`, `type`, `reached`), so `when: { eq:
+  ["marker.type", "end"] }` keeps a contribution to End. A decorated marker takes a card's width
+  and 47 px; the rest of the graph goes down by as much, and the row stays reserved while End is
+  not reached. Work node cards stay bare. Settings › Appearance › Run canvas gets an
+  "Extensions" group with a switch per marker decoration; "Compact nodes" does not hide them.
+  Without an extension, Start and End are unchanged.
+
 ## 2.90.3
 
 - When the one-click Update of a Distribution fails and rolls back, the reason and the update log

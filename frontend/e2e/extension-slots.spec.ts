@@ -137,6 +137,12 @@ function declaration(reactMajor: number) {
             location: "topbar/end", id: "never", label: "Never shown", type: "action",
             command: "test.never", when: { eq: ["run.status", "never-a-status"] },
           },
+          // 0.32: the Start and End markers of a Run, a decoration on both and a section of End only.
+          { location: "marker/item", id: "marker-mark", label: "Marker mark", type: "decoration", component: "MarkerMark" },
+          {
+            location: "marker/detail", id: "marker-section", label: "Test end", type: "section",
+            component: "MarkerSection", when: { eq: ["marker.type", "end"] },
+          },
           ...actions.contributions,
         ],
         commands: [
@@ -307,6 +313,31 @@ test("the four slots show the test extension's contributions", async ({ page }) 
   await expect(page.getByTestId("test-extension-settings")).toContainText(
     "Data folder: /home/pdo/.pdo/extensions/test",
   );
+});
+
+test("marker/item and marker/detail: Start and End of a Run carry a row and a section, the work card none", async ({ page }) => {
+  await playTestExtension(page);
+  await page.goto("/");
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await page.getByText(runId.slice(0, 20)).first().click({ position: { x: 5, y: 5 } });
+
+  const start = page.locator('[data-testid="node-card"][data-kind="start"]');
+  const end = page.locator('[data-testid="node-card"][data-kind="end"]');
+  // Each marker takes its card form, its row reserved whether or not the decoration draws.
+  await expect(start).toHaveAttribute("data-decorated", "true");
+  await expect(end).toHaveAttribute("data-decorated", "true");
+  await expect(start.getByTestId("test-marker-mark-start")).toBeVisible();
+  // In flow px, whatever the canvas's zoom.
+  expect(await start.evaluate((card) => (card as HTMLElement).offsetHeight)).toBe(47);
+  await expect(end.getByTestId("marker-row")).toBeVisible();
+  await expect(page.locator('[data-testid="node-card"]:not([data-kind="start"]):not([data-kind="end"]) [data-testid="marker-row"]')).toHaveCount(0);
+
+  // End's inspector carries the section after Termination reasons; Start's, filtered out, does not.
+  await end.click();
+  await expect(page.getByTestId("end-inspector").getByTestId("test-marker-section")).toContainText("node end (end)");
+  await start.click();
+  await expect(page.getByTestId("start-inspector")).toBeVisible();
+  await expect(page.getByTestId("test-marker-section")).toHaveCount(0);
 });
 
 test("topbar/end: an icon before Stats, its page with the context, a command, a deep link", async ({

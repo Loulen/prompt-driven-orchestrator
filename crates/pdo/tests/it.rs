@@ -476,6 +476,9 @@ mod session_cap_admission;
 #[path = "service_bind_cli.rs"]
 mod service_bind_cli;
 
+#[path = "service_probe_auth.rs"]
+mod service_probe_auth;
+
 #[path = "smoke_daemon.rs"]
 mod smoke_daemon;
 

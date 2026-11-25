@@ -201,7 +201,9 @@ pub use pdo_kernel::env::{DEFAULT_DAEMON_URL, DEFAULT_PORT};
 pub enum PortState {
     /// Nothing is listening — safe to enable + start.
     Free,
-    /// A PDO daemon already answers `GET /sessions` here. Treat idempotently:
+    /// A PDO daemon already answers `GET /sessions` here, or refuses it with
+    /// PDO's own `401 {"error": "unauthenticated"}` (an identity extension
+    /// gates the API, CORE-326). Treat idempotently:
     /// ensure the unit is written + enabled for boot, but do NOT `--now` a
     /// competing instance onto the bound port.
     PdoDaemon,
@@ -230,6 +232,33 @@ pub fn connect_addr(listen_addr: SocketAddr) -> SocketAddr {
     }
 }
 
+/// Classify the reply to the probe's `GET /sessions`: is it a PDO daemon?
+///
+/// - a `2xx` whose body carries `"cap"` and `"version"` — markers no random
+///   service would emit together;
+/// - a `401` whose JSON body has `"error": "unauthenticated"`: the core's
+///   [`Admission`](pdo_extension_api::Admission) refusal, sent when an identity
+///   extension gates the API and the probe carries no token (CORE-326). The
+///   field is parsed, not grepped, so a foreign 401 page mentioning the word
+///   does not match.
+///
+/// Anything else is `Foreign`.
+pub fn classify_daemon_reply(status: u16, body: &str) -> PortState {
+    let is_pdo = match status {
+        200..=299 => body.contains("\"cap\"") && body.contains("\"version\""),
+        401 => serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|v| v.get("error")?.as_str().map(str::to_owned))
+            .is_some_and(|e| e == pdo_extension_api::UNAUTHENTICATED),
+        _ => false,
+    };
+    if is_pdo {
+        PortState::PdoDaemon
+    } else {
+        PortState::Foreign
+    }
+}
+
 /// Human-readable description of a port-probe result, for the plan / guard output.
 pub fn describe_port_state(addr: SocketAddr, state: &PortState) -> String {
     match state {
@@ -250,6 +279,67 @@ pub fn describe_port_state(addr: SocketAddr, state: &PortState) -> String {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    fn admission_body(admission: pdo_extension_api::Admission) -> String {
+        admission.body().expect("a refusal has a body").to_string()
+    }
+
+    #[test]
+    fn a_2xx_sessions_payload_is_a_pdo_daemon_only_with_both_markers() {
+        assert_eq!(
+            classify_daemon_reply(200, r#"{"cap":10,"version":"2.90.1","sessions":[]}"#),
+            PortState::PdoDaemon
+        );
+        assert_eq!(
+            classify_daemon_reply(200, "<html>hello</html>"),
+            PortState::Foreign
+        );
+        assert_eq!(
+            classify_daemon_reply(200, r#"{"version":"1"}"#),
+            PortState::Foreign
+        );
+    }
+
+    #[test]
+    fn a_401_admission_refusal_is_a_pdo_daemon() {
+        use pdo_extension_api::Admission;
+        let refused = admission_body(Admission::refuse("no session"));
+        let redirected = admission_body(Admission::redirect("/ext/iam/sign-in"));
+        assert_eq!(classify_daemon_reply(401, &refused), PortState::PdoDaemon);
+        assert_eq!(
+            classify_daemon_reply(401, &redirected),
+            PortState::PdoDaemon
+        );
+    }
+
+    #[test]
+    fn a_401_in_any_other_format_is_foreign() {
+        for body in [
+            r#"{"error":"invalid_token"}"#,
+            "<html><body>unauthenticated</body></html>",
+            r#""unauthenticated""#,
+            r#"{"error":{"code":"unauthenticated"}}"#,
+            "",
+        ] {
+            assert_eq!(
+                classify_daemon_reply(401, body),
+                PortState::Foreign,
+                "{body:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_401_carries_the_admission_meaning() {
+        let refused = admission_body(pdo_extension_api::Admission::refuse("x"));
+        for status in [403, 500, 302] {
+            assert_eq!(
+                classify_daemon_reply(status, &refused),
+                PortState::Foreign,
+                "{status}"
+            );
+        }
+    }
 
     #[test]
     fn systemd_unit_is_byte_faithful_to_the_prod_recipe() {

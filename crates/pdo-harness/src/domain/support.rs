@@ -93,7 +93,8 @@ impl Capability {
             Capability::TurnEnd => "Complete a node when its turn ends",
             Capability::UsageLimit => "Detect the harness usage-limit menu",
             Capability::Staging => {
-                "Stage the harness home in a sandbox and disarm its blocking dialogs"
+                "Stage the harness home in a sandbox and disarm its blocking dialogs. The home \
+                 carries its key: see [Where a harness key lives](#where-a-harness-key-lives)"
             }
             Capability::ContextUsage => "Show peak context-window usage",
             Capability::Steering => {
@@ -304,6 +305,8 @@ mod tests {
         assert!(block.contains("✅ derived: per-message token usage × the price table"));
         assert!(block.contains("❌"));
         assert!(!block.contains("Why a capability is absent"));
+        // CORE-321: the staging row sends the reader to where each harness's key lives.
+        assert!(block.contains("[Where a harness key lives](#where-a-harness-key-lives)"));
         assert!(block.starts_with(BEGIN_MARKER));
         assert!(block.trim_end().ends_with(END_MARKER));
     }

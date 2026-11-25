@@ -100,7 +100,15 @@ fn read_script(daemon: &TestDaemon, id: &str) -> String {
 
 #[tokio::test]
 async fn apply_homebrew_answers_at_once_and_the_fixture_receives_the_brew_command() {
-    let daemon = spawn(InstallMethod::Homebrew, Supervision::Systemd, "exit 0").await;
+    // The fixture outlives the request: an apply that waited for it would answer
+    // `succeeded`, not `running`. No wall-clock bound: one flakes under a loaded
+    // test run and proves nothing against an executor that exits at once.
+    let daemon = spawn(
+        InstallMethod::Homebrew,
+        Supervision::Systemd,
+        "sleep 3\nexit 0",
+    )
+    .await;
 
     // Before: the read reports the gate open and no attempt yet.
     let before = update_json(&daemon).await;
@@ -110,17 +118,15 @@ async fn apply_homebrew_answers_at_once_and_the_fixture_receives_the_brew_comman
     assert_eq!(before["last_attempt"], serde_json::Value::Null);
     assert_eq!(before["active_runs"], 0);
 
-    let t0 = Instant::now();
     let resp = apply(&daemon).await;
     assert_eq!(resp.status(), 202, "apply answers immediately");
-    assert!(
-        t0.elapsed() < Duration::from_secs(2),
-        "apply must not wait for the executor"
-    );
     let body: serde_json::Value = resp.json().await.unwrap();
     let id = body["attempt_id"].as_str().unwrap().to_string();
     assert!(!id.is_empty());
-    assert_eq!(body["status"], "running");
+    assert_eq!(
+        body["status"], "running",
+        "apply must not wait for the executor"
+    );
     assert_eq!(
         body["command"],
         "brew update && brew upgrade Loulen/tap/pdo"

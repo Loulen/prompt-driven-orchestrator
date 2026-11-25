@@ -14,6 +14,21 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## 2.90.2
+
+- The one-click Update (Settings › Update) works again on an instance where an identity extension
+  (`iam`) requires sign-in. Its `pdo service install` step took the running daemon, which refuses
+  anonymous calls with `401`, for a foreign process: the step refused and the Update rolled back.
+  The port probe now recognises PDO's own `401 {"error": "unauthenticated"}` as a PDO daemon; any
+  other `401` still counts as foreign. `pdo service install` on a machine where a signed-in-only
+  daemon already runs now enables the unit for boot without starting a second instance.
+
+## 2.90.1
+
+- The harness reference (`docs/reference/harnesses.md`) gains a section "Where a harness key
+  lives": the order in which `claude` and `pi` look for their key, the `!command` form of `pi`, and
+  how to price a custom model. The *Sandbox staging set* row of `pdo docs support-table` points to it.
+
 ## 2.90.0
 
 - On a Run canvas, the Model cell of a node card (Settings › Appearance › Run canvas) now leads

@@ -73,6 +73,12 @@
 //!   awaiting) under the top bar whose action opens the extension's Settings
 //!   page at `banner`; it renders nothing until `PUT /ext/test/banner`
 //!   (`{"shown": true}`) shows it (read when the interface loads).
+//! - `marker/item` and `marker/detail` (0.32): `MarkerMark`, a decoration on
+//!   the Start and End markers of a Run's canvas that names the marker once
+//!   the Run has reached it (`marker.reached`) and renders nothing before (its
+//!   row stays reserved); `MarkerSection`, a section of the End inspector only
+//!   (`when: { eq: ["marker.type", "end"] }`) naming the Run and whether End
+//!   is reached.
 //! - `review/composer` (0.14): `tags`, a source of completion opened by `#`
 //!   (`suggestTags`: `bug`, `perf`, `review-later` and `run-<the Run's id>`),
 //!   whose inserted `#tag` renders as a chip (`TagChip`).
@@ -996,6 +1002,23 @@ impl Extension for TestExtension {
                 "Test banner",
                 "AppBanner",
             ))
+            // 0.32: the Start and End markers of a Run: a decoration on both,
+            // a section of End's inspector only.
+            .contribute(UiContribution::decoration(
+                UiLocation::MarkerItem,
+                "marker-mark",
+                "Marker mark",
+                "MarkerMark",
+            ))
+            .contribute(
+                UiContribution::section(
+                    UiLocation::MarkerDetail,
+                    "marker-section",
+                    "Test end",
+                    "MarkerSection",
+                )
+                .when(When::eq("marker.type", "end")),
+            )
             // 0.12: who has the row's Run open.
             .contribute(UiContribution::decoration(
                 UiLocation::RunItemPeople,

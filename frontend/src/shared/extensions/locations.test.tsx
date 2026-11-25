@@ -13,10 +13,20 @@ import TriggersListPanel from "../../trigger/components/TriggersListPanel";
 import TriggerDetailPanel from "../../trigger/components/TriggerDetailPanel";
 import type { Trigger } from "../generated/Trigger";
 import type { Project } from "../../workspace/model/project";
-import type { DecorationContext, DecorationProps, ListFilterProps, SectionProps, TabProps } from "./contract";
+import type { DecorationContext, DecorationProps, ListFilterProps, MarkerContext, SectionProps, TabProps } from "./contract";
 import ExtensionDecorations from "./ExtensionDecorations";
 import { ReactFlowProvider } from "@xyflow/react";
 import { EditNode } from "../../pipeline/components/EditNode";
+import EndInspector from "../../pipeline/components/EndInspector";
+import StartInspector from "../../pipeline/components/StartInspector";
+import { useCanvasCompaction } from "../../pipeline/store/useCanvasCompaction";
+import { runCardHeight } from "../../pipeline/model/runCardElements";
+import type { OpenPipeline } from "../../pipeline/store/editState";
+import type { EditorPipelineDef } from "../../pipeline/model/pipeline";
+import { resetAppearance, updateAppearance } from "../../hooks/useAppearance";
+import type { EndNodeInfo } from "../generated/EndNodeInfo";
+import type { StartNodeInfo } from "../generated/StartNodeInfo";
+import type { Node } from "@xyflow/react";
 import ExtensionSections from "./ExtensionSections";
 import { useSectionForm } from "./sectionForm";
 import { hostReactMajor } from "./shared";
@@ -135,6 +145,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
   resetExtensions();
 });
+
+const START: StartNodeInfo = {
+  input_path: "_input/output.md",
+  started_at: "2026-01-01T00:00:00.000Z",
+  target_node_ids: ["work"],
+  input_images: [],
+  input_files: [],
+};
 
 const RUN = { entity: { kind: "run", id: "r1", attributes: { "test/note": "note-1" } } };
 
@@ -467,7 +485,7 @@ describe("the trigger/item decorations", () => {
 });
 
 describe("a node card of the canvas", () => {
-  function nodeProps(nodeType: "agent" | "start") {
+  function nodeProps(nodeType: "agent" | "start" | "end", data: Record<string, unknown> = {}) {
     return {
       id: nodeType,
       data: {
@@ -477,8 +495,9 @@ describe("a node card of the canvas", () => {
         status: "pending",
         reached: false,
         inputs: [],
-        outputs: [{ name: "out" }],
+        outputs: nodeType === "end" ? [] : [{ name: "out" }],
         interactive: false,
+        ...data,
       },
       selected: false,
       type: "edit",
@@ -493,18 +512,220 @@ describe("a node card of the canvas", () => {
     } as unknown as Parameters<typeof EditNode>[0];
   }
 
-  it.each(["agent", "start"] as const)("leave the %s card bare, a marker included", async (nodeType) => {
-    // The card has no decoration location any more: a contribution aimed at
-    // the old id renders nowhere on it.
-    serve([extension("demo", [at("canvas/node", "decoration", "b", "Badge")])]);
+  /** A card as a Run canvas being read draws it; a marker carries the row the canvas reserved for it. */
+  const onRunCanvas = { runCanvas: true, decorated: true, runId: "r1", inRun: true };
+
+  it("leaves a work card bare, whatever the markers' location holds", async () => {
+    serve([extension("demo", [at("canvas/node", "decoration", "old", "Badge"), at("marker/item", "decoration", "b", "Badge")])]);
     render(
       <ReactFlowProvider>
-        <EditNode {...nodeProps(nodeType)} />
+        <EditNode {...nodeProps("agent", onRunCanvas)} />
       </ReactFlowProvider>,
     );
     await screen.findByTestId("node-card");
     await new Promise((r) => setTimeout(r, 200));
     expect(screen.queryByTestId("badge")).toBeNull();
+    expect(screen.queryByTestId("marker-row")).toBeNull();
+  });
+
+  it.each(["start", "end"] as const)("decorates the %s marker of a Run canvas being read, on a row under its title", async (nodeType) => {
+    serve([extension("demo", [at("marker/item", "decoration", "b", "Badge")])]);
+    render(
+      <ReactFlowProvider>
+        <EditNode {...nodeProps(nodeType, onRunCanvas)} />
+      </ReactFlowProvider>,
+    );
+    expect(await screen.findByTestId("badge")).toHaveTextContent(`marker/item:${nodeType}`);
+    const card = screen.getByTestId("node-card");
+    expect(card).toHaveAttribute("data-decorated", "true");
+    expect(within(screen.getByTestId("marker-row")).getByTestId("badge")).toBeInTheDocument();
+    expect(card.querySelector(".cv-mk__head")).toHaveTextContent(nodeType);
+  });
+
+  it("leaves the marker a pill outside a Run canvas being read: the editor, a Run edited for itself", async () => {
+    serve([extension("demo", [at("marker/item", "decoration", "b", "Badge")])]);
+    render(
+      <ReactFlowProvider>
+        <EditNode {...nodeProps("start", { decorated: true, runId: "r1" })} />
+      </ReactFlowProvider>,
+    );
+    await screen.findByTestId("node-card");
+    await new Promise((r) => setTimeout(r, 200));
+    expect(screen.queryByTestId("marker-row")).toBeNull();
+    expect(screen.queryByTestId("badge")).toBeNull();
+    expect(screen.getByTestId("node-card")).not.toHaveAttribute("data-decorated");
+  });
+
+  it("hands the decoration the marker as entity and as marker", async () => {
+    let seen: unknown = null;
+    setBundleLoader(async () => ({
+      ...bundle,
+      Spy: ({ context, entity }: DecorationProps) => {
+        seen = { entity, marker: (context as unknown as { marker: unknown }).marker, location: context.location };
+        return null;
+      },
+    }));
+    serve([extension("demo", [at("marker/item", "decoration", "spy", "Spy")])]);
+    render(
+      <ReactFlowProvider>
+        <EditNode {...nodeProps("end", { ...onRunCanvas, label: "Done", reached: true })} />
+      </ReactFlowProvider>,
+    );
+    await waitFor(() => expect(seen).not.toBeNull());
+    expect(seen).toEqual({
+      location: "marker/item",
+      entity: { kind: "node", id: "end", type: "end", name: "Done", attributes: {} },
+      marker: { run: "r1", node: "end", type: "end", reached: true },
+    });
+  });
+
+  it("keeps the row of a decoration that renders nothing", async () => {
+    setBundleLoader(async () => ({ ...bundle, Nothing: () => null }));
+    serve([extension("demo", [at("marker/item", "decoration", "n", "Nothing")])]);
+    render(
+      <ReactFlowProvider>
+        <EditNode {...nodeProps("end", onRunCanvas)} />
+      </ReactFlowProvider>,
+    );
+    expect(await screen.findByTestId("extension-decoration-demo:n")).toBeEmptyDOMElement();
+    expect(screen.getByTestId("marker-row")).toBeInTheDocument();
+  });
+
+  it("marks a failing decoration with the extension's « ! », the marker still drawn", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    serve([extension("demo", [at("marker/item", "decoration", "boom", "Boom")])]);
+    render(
+      <ReactFlowProvider>
+        <EditNode {...nodeProps("start", onRunCanvas)} />
+      </ReactFlowProvider>,
+    );
+    const failed = await screen.findByTestId("extension-failed-demo");
+    expect(failed).toHaveTextContent("!");
+    expect(within(screen.getByTestId("marker-row")).getByTestId("extension-failed-demo")).toBe(failed);
+    expect(screen.getByTestId("node-card")).toHaveTextContent("start");
+  });
+});
+
+describe("the Start and End markers of a Run canvas", () => {
+  const pipeline = {
+    name: "p",
+    version: "1.0",
+    variables: {},
+    nodes: [
+      { id: "start", name: "Start", type: "start", inputs: [], outputs: [{ name: "out" }], interactive: false, view: { x: 0, y: 0 } },
+      { id: "work", name: "Work", type: "agent", inputs: [], outputs: [{ name: "out" }], interactive: false, view: { x: 0, y: 100 } },
+      { id: "end", name: "End", type: "end", inputs: [], outputs: [], interactive: false, view: { x: 0, y: 200 } },
+    ],
+    edges: [],
+  } as unknown as EditorPipelineDef;
+  const cards: Node[] = pipeline.nodes.map((n) => ({
+    id: n.id,
+    position: { x: n.view!.x, y: n.view!.y },
+    data: { nodeType: n.type, label: n.name, reached: false },
+  }));
+  const tab = (over: Partial<OpenPipeline> = {}) => ({ id: "t", pipeline, runId: "r1", ...over }) as OpenPipeline;
+  const decorated = (placed: Node[]) => placed.filter((c) => (c.data as { decorated?: boolean }).decorated).map((c) => c.id);
+  const yOf = (placed: Node[], id: string) => placed.find((c) => c.id === id)!.position.y;
+
+  beforeEach(() => {
+    localStorage.clear();
+    resetAppearance();
+  });
+
+  async function layout(contributions: UiContribution[], t: OpenPipeline = tab()) {
+    serve([extension("demo", contributions)]);
+    const hook = renderHook(() => useCanvasCompaction(t, pipeline, cards));
+    await act(async () => {});
+    await act(async () => {});
+    return hook;
+  }
+
+  // The default Apparence shows two cells of a work card: it is shorter than the 65 px it was placed for.
+  const lift = 65 - runCardHeight(2);
+
+  it("leaves the markers alone without contribution", async () => {
+    const { result } = await layout([]);
+    expect(decorated(result.current.placed)).toEqual([]);
+    expect(yOf(result.current.placed, "end")).toBe(200 - lift);
+  });
+
+  it("reserves the row of every marker a contribution applies to, and takes the graph down by it", async () => {
+    const { result } = await layout([at("marker/item", "decoration", "b", "Badge")]);
+    await waitFor(() => expect(decorated(result.current.placed)).toEqual(["start", "end"]));
+    const gain = 47 - 24;
+    expect(result.current.placed.find((c) => c.id === "start")!.data).toMatchObject({ runId: "r1", runCanvas: true });
+    expect(yOf(result.current.placed, "work")).toBe(100 + gain);
+    expect(yOf(result.current.placed, "end")).toBe(200 + gain - lift);
+  });
+
+  it("decorates End alone for a contribution whose when names it", async () => {
+    const { result } = await layout([at("marker/item", "decoration", "b", "Badge", { eq: ["marker.type", "end"] })]);
+    await waitFor(() => expect(decorated(result.current.placed)).toEqual(["end"]));
+  });
+
+  it("decorates nothing in a Run edited for itself", async () => {
+    const { result } = await layout([at("marker/item", "decoration", "b", "Badge")], tab({ runEditing: true }));
+    expect(decorated(result.current.placed)).toEqual([]);
+    expect(yOf(result.current.placed, "work")).toBe(100);
+  });
+
+  it("frees the row of a contribution the Apparence hides, and keeps it with Compact nodes", async () => {
+    const { result } = await layout([at("marker/item", "decoration", "b", "Badge")]);
+    await waitFor(() => expect(decorated(result.current.placed)).toEqual(["start", "end"]));
+    act(() => updateAppearance((a) => ({ ...a, compactNodes: true })));
+    expect(decorated(result.current.placed)).toEqual(["start", "end"]);
+    act(() => updateAppearance((a) => ({ ...a, compactNodes: false, elements: { ...a.elements, "run.canvas.ext.demo:b": false } })));
+    expect(decorated(result.current.placed)).toEqual([]);
+  });
+});
+
+describe("the marker/detail sections of the Start and End inspectors", () => {
+  const END = { id: "end", ports: [] } as unknown as EndNodeInfo;
+
+  it("adds the extension's section after Termination reasons, with the marker", async () => {
+    setBundleLoader(async () => ({
+      ...bundle,
+      MarkerSection: ({ context, entity }: SectionProps) => {
+        const { marker } = context as unknown as MarkerContext;
+        return <p>{`${entity?.id} ${marker.type} ${marker.run} ${marker.reached}`}</p>;
+      },
+    }));
+    serve([extension("demo", [at("marker/detail", "section", "s", "MarkerSection", { eq: ["marker.type", "end"] })])]);
+    render(<EndInspector endNode={END} runId="r1" reached />);
+    const section = await screen.findByTestId("extension-section-demo:s");
+    expect(section).toHaveTextContent("end end r1 true");
+    expect(section).toHaveTextContent("Extension demo");
+    const inspector = screen.getByTestId("end-inspector");
+    expect(inspector.textContent!.indexOf("Termination reasons")).toBeLessThan(inspector.textContent!.indexOf("end end r1"));
+  });
+
+  it("keeps a section whose when names End out of Start's inspector", async () => {
+    serve([
+      extension("demo", [
+        at("marker/detail", "section", "end-only", "DraftSection", { eq: ["marker.type", "end"] }),
+        at("marker/detail", "section", "both", "DraftSection"),
+      ]),
+    ]);
+    render(<StartInspector startNode={START} runId="r1" nodeId="start" />);
+    expect(await screen.findByTestId("extension-section-demo:both")).toHaveTextContent("section of start");
+    expect(screen.queryByTestId("extension-section-demo:end-only")).toBeNull();
+  });
+
+  it("shows the extension's sentence in place of a failing section, the inspector still drawn", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    serve([extension("demo", [at("marker/detail", "section", "boom", "Boom")])]);
+    render(<EndInspector endNode={END} runId="r1" reached={false} />);
+    expect(await screen.findByText("This element of the extension demo failed.")).toBeInTheDocument();
+    expect(screen.getByText("Termination reasons")).toBeInTheDocument();
+  });
+
+  it("adds no section without a contribution, nor at a work node's detail", async () => {
+    serve([extension("demo", [at("node/detail", "tab", "t", "EntityTab")])]);
+    render(<EndInspector endNode={END} runId="r1" reached />);
+    await act(async () => {});
+    expect(screen.queryByTestId(/^extension-section-/)).toBeNull();
   });
 });
 

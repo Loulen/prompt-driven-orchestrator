@@ -139,6 +139,22 @@ pub enum UiLocation {
     /// the port's name: a [`UiElement::Decoration`] per contribution.
     #[serde(rename = "port/item")]
     PortItem,
+    /// The Start and End markers (Nœuds structurels) on the canvas of a Run
+    /// being read, neither in the pipeline editor nor in a Run edited for
+    /// itself: a [`UiElement::Decoration`] per contribution, side by side on
+    /// one row of fixed height under the marker's title. The row is reserved
+    /// as soon as one contribution applies (its `when` holds), even when its
+    /// component renders nothing, and the marker then takes a card's width;
+    /// what is wider is cut. Hands over the marker as `entity` (`kind:
+    /// "node"`, its id, its `type`, `start` or `end`, its name) and as
+    /// `marker` (`run`, `node`, `type`, `reached`). Since 0.32.
+    #[serde(rename = "marker/item")]
+    MarkerItem,
+    /// The inspector of the Start or End marker of a Run: a
+    /// [`UiElement::Section`] per contribution, after the core's sections.
+    /// Hands over the same context as [`UiLocation::MarkerItem`]. Since 0.32.
+    #[serde(rename = "marker/detail")]
+    MarkerDetail,
     /// A mark in the status bar, before the service health: a
     /// [`UiElement::Decoration`] per contribution.
     #[serde(rename = "statusbar")]
@@ -283,6 +299,8 @@ impl UiLocation {
         UiLocation::TriggerItem,
         UiLocation::PipelineItem,
         UiLocation::PortItem,
+        UiLocation::MarkerItem,
+        UiLocation::MarkerDetail,
         UiLocation::Statusbar,
         UiLocation::RunsEmpty,
         UiLocation::TriggersFilter,
@@ -333,6 +351,8 @@ impl UiLocation {
             UiLocation::TriggerItem => "trigger/item",
             UiLocation::PipelineItem => "pipeline/item",
             UiLocation::PortItem => "port/item",
+            UiLocation::MarkerItem => "marker/item",
+            UiLocation::MarkerDetail => "marker/detail",
             UiLocation::Statusbar => "statusbar",
             UiLocation::RunsEmpty => "runs/empty",
             UiLocation::TriggersFilter => "triggers/filter",
@@ -449,6 +469,42 @@ mod tests {
         assert!(!UiLocation::RunsEmpty.accepts(&section));
         assert!(!UiLocation::RunsEmpty.accepts(&action));
         assert!(!UiLocation::RunsEmpty.is_action_location());
+    }
+
+    #[test]
+    fn the_markers_take_a_decoration_and_a_section() {
+        assert_eq!(UiLocation::MarkerItem.id(), "marker/item");
+        assert_eq!(UiLocation::MarkerDetail.id(), "marker/detail");
+        assert!(UiLocation::ALL.contains(&UiLocation::MarkerItem));
+        assert!(UiLocation::ALL.contains(&UiLocation::MarkerDetail));
+        assert_eq!(
+            serde_json::to_value(UiLocation::MarkerItem).unwrap(),
+            "marker/item"
+        );
+        assert_eq!(
+            serde_json::to_value(UiLocation::MarkerDetail).unwrap(),
+            "marker/detail"
+        );
+        let decoration = UiElement::Decoration {
+            component: "D".into(),
+        };
+        let section = UiElement::Section {
+            component: "S".into(),
+        };
+        let tab = UiElement::Tab {
+            component: "T".into(),
+        };
+        let action = UiElement::Action {
+            command: "c".into(),
+        };
+        assert!(UiLocation::MarkerItem.accepts(&decoration));
+        assert!(!UiLocation::MarkerItem.accepts(&section));
+        assert!(!UiLocation::MarkerItem.accepts(&action));
+        assert!(UiLocation::MarkerDetail.accepts(&section));
+        assert!(!UiLocation::MarkerDetail.accepts(&decoration));
+        assert!(!UiLocation::MarkerDetail.accepts(&tab));
+        assert!(!UiLocation::MarkerItem.is_action_location());
+        assert!(!UiLocation::MarkerDetail.is_action_location());
     }
 
     #[test]

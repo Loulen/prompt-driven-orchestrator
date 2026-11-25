@@ -7,6 +7,7 @@ import { fetchArtifact, artifactUrl } from "../../run/api/artifacts";
 import type { FileInfo } from "../../run/api/nodes";
 import MarkdownArtifactModal from "../../run/components/MarkdownArtifactModal";
 import ImageLightbox from "../../shared/ui/ImageLightbox";
+import MarkerDetailSections from "./MarkerDetailSections";
 
 interface Props {
   startNode: StartNodeInfo;
@@ -14,6 +15,8 @@ interface Props {
   /** The Run's name, on the footer of the input file opened from here. */
   runName?: string | null;
   nodeId: string;
+  /** The marker's name in the Run's pipeline, when it has one. */
+  nodeName?: string | null;
 }
 
 /** #779: the uppercase extension badge of an input-file chip. */
@@ -23,7 +26,7 @@ function startFileBadge(name: string): string {
   return name.slice(dot + 1).toUpperCase().slice(0, 4);
 }
 
-export default function StartInspector({ startNode, runId, runName = null, nodeId }: Props) {
+export default function StartInspector({ startNode, runId, runName = null, nodeId, nodeName = null }: Props) {
   const [inputText, setInputText] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   // The ordered image list + clicked index currently shown fullscreen, or null
@@ -137,6 +140,8 @@ export default function StartInspector({ startNode, runId, runName = null, nodeI
           </Section>
         </div>
       )}
+
+      <MarkerDetailSections run={runId} node={nodeId} name={nodeName ?? nodeId} type="start" reached />
 
       {modalOpen && (
         <MarkdownArtifactModal

@@ -14,7 +14,9 @@
  *  - Waypoints and pinned labels follow the shift of their own ordinate; a
  *    waypoint level with a folded side port follows the port, so the leg into
  *    it stays horizontal.
- *  - Start, End and a note do not shrink. A note follows the shift at its
+ *  - Start, End and a note do not shrink; a decorated marker (`decorated`)
+ *    is laid out at its own height, the canvas already grown for it
+ *    (`markerCanvas.ts`). A note follows the shift at its
  *    bottom unless it would then cover a card; it then holds its band.
  */
 import type { EdgeAnchor } from "../../shared/generated/EdgeAnchor";
@@ -29,7 +31,10 @@ import type { EditorPipelineDef } from "./pipeline";
  * The heights of the cards, in flow px, as `canvas.css` draws them: change
  * both together. A detailed card is its 24 px header, its two-row meta grid
  * (39 px) and its border; an orchestrator with child runs adds the « N runs »
- * row (18 px and its 4 px margin), on both sizes.
+ * row (18 px and its 4 px margin), on both sizes. A Start or End marker is a
+ * 24 px pill; decorated (`marker/item`, `.cv-mk[data-decorated]`) it is a
+ * card's width and 47 px: its border, a 24 px header, a 1 px rule and the
+ * 20 px row.
  */
 export const COMPACT_CARD = {
   width: 208,
@@ -38,6 +43,7 @@ export const COMPACT_CARD = {
   compact: 30,
   runs: 22,
   marker: 24,
+  decoratedMarker: 47,
   noteWidth: 200,
 } as const;
 
@@ -62,6 +68,8 @@ export interface CompactCanvasInput {
   withRuns?: ReadonlySet<string>;
   /** The size every work card is drawn at: one line by default. */
   card?: CardSize;
+  /** The markers that carry a `marker/item` row: a card's width, 47 px high. */
+  decorated?: ReadonlySet<string>;
 }
 
 export interface CompactCanvas {
@@ -97,6 +105,11 @@ export function compactCanvas(pipeline: EditorPipelineDef, input: CompactCanvasI
     const x = n.view?.x ?? fallback.x;
     const y = n.view?.y ?? fallback.y;
     if (isMarker(n.type)) {
+      if (input.decorated?.has(n.id)) {
+        const h = COMPACT_CARD.decoratedMarker;
+        nodeRects.push({ id: n.id, x, y, w: COMPACT_CARD.width, h, hCompact: h });
+        return;
+      }
       const w = Math.min(COMPACT_CARD.width, 40 + (n.name ?? n.id).length * 7);
       nodeRects.push({ id: n.id, x, y, w, h: COMPACT_CARD.marker, hCompact: COMPACT_CARD.marker });
       return;

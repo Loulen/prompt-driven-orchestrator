@@ -784,6 +784,37 @@ export function RunsEmptyNote() {
   );
 }
 
+// `marker/item` (0.32): on the Start and End markers of a Run's canvas, the
+// marker's type and its Run once the Run has reached it (`marker.reached`).
+// Before that it renders nothing: the core keeps the row reserved, so the
+// graph does not move when End is reached.
+export function MarkerMark({ context }) {
+  const { marker } = context;
+  if (!marker.reached) return null;
+  return h(
+    "span",
+    {
+      "data-testid": `test-marker-mark-${marker.type}`,
+      title: `Test · ${marker.type} of ${marker.run}`,
+      style: { display: "inline-flex", gap: "4px", fontFamily: "var(--font-code)", fontSize: "10px" },
+    },
+    h(Chip, null, `test · ${marker.type}`),
+    h("span", { style: muted }, marker.run),
+  );
+}
+
+// `marker/detail` (0.32), End only (`when: { eq: ["marker.type", "end"] }`):
+// the Run, the marker and whether the Run reached it.
+export function MarkerSection({ context, entity }) {
+  const { marker } = context;
+  return h(
+    "div",
+    { style: { ...box, fontSize: "11px" }, "data-testid": "test-marker-section" },
+    h("p", null, `${entity.kind} ${entity.id} (${entity.type}) of ${marker.run}`),
+    h("p", { style: muted }, `${marker.reached ? "Reached" : "Not reached"} · Run ${context.run?.status ?? "unknown"}`),
+  );
+}
+
 // `app/banner` (0.31): a full-width banner under the top bar, the kit's
 // `Banner` in the awaiting tone with one action, which opens the extension's
 // Settings page. It renders nothing (and the location takes no room) until

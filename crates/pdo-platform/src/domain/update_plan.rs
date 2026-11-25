@@ -189,6 +189,12 @@ fn record_function(plan: &UpdatePlan) -> String {
     )
 }
 
+/// The shell filter that reads a version out of `--version`: the first word
+/// shaped like one (`X.Y.Z…`), since a Distribution appends the core's version
+/// (CONTEXT.md § Canal de mise à jour), reduced to the characters a version
+/// uses (it goes into the record's JSON). POSIX awk: dash, busybox, BSD.
+const VERSION_WORD: &str = "awk '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]+\\.[0-9]+\\.[0-9]+/){print $i; exit}}' | tr -cd 'A-Za-z0-9._+-'";
+
 /// Render the executor script. Pure: identical plans give identical bytes.
 ///
 /// Shape (POSIX `sh`, no bashisms — the FP container's `sh` is dash):
@@ -278,10 +284,9 @@ pub fn render_update_script(plan: &UpdatePlan) -> String {
         s.push_str(&format!("  {line}\n"));
     }
     s.push_str("  record failed \"$rc\" \"The update command exited with code $rc.\"\n  exit \"$rc\"\nfi\n");
-    // The version the new binary says it is, reduced to the characters a
-    // version uses (it goes into the record's JSON).
+    // The version the new binary says it is.
     s.push_str(&format!(
-        "NEW=$({exe} --version 2>/dev/null | awk '{{print $NF}}' | tr -cd 'A-Za-z0-9._+-')\n"
+        "NEW=$({exe} --version 2>/dev/null | {VERSION_WORD})\n"
     ));
     s.push_str("say installed \"${NEW:-unknown}\"\n");
     // How the reason names the new version: the binary's own word, else the
@@ -632,5 +637,52 @@ mod tests {
         let restart = s.find("stop_pid 4242\n").unwrap();
         assert!(command < unset && unset < rc_check && unset < restart);
         assert_eq!(s.matches("PDO_GITHUB_TOKEN").count(), 1, "{s}");
+    }
+
+    /// The script reads the new version from the first word shaped like one:
+    /// a Distribution prints `<name> <version> (core PDO <core>)`.
+    #[test]
+    fn the_new_version_is_the_first_version_shaped_word() {
+        let s = render_update_script(&plan(InstallMethod::Homebrew, Supervision::Systemd));
+        assert!(
+            s.contains(&format!(
+                "NEW=$(/home/linuxbrew/.linuxbrew/bin/pdo --version 2>/dev/null | {VERSION_WORD})\n"
+            )),
+            "{s}"
+        );
+        assert!(s.contains(
+            "NEW=$(/home/linuxbrew/.linuxbrew/bin/pdo --version 2>/dev/null | \
+             awk '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]+\\.[0-9]+\\.[0-9]+/){print $i; exit}}' | \
+             tr -cd 'A-Za-z0-9._+-')\n"
+        ));
+        assert!(!s.contains("$NF"), "the last word is no longer read:\n{s}");
+        assert!(s.contains("say installed \"${NEW:-unknown}\"\n"));
+        assert!(s.contains("LABEL=\"v${NEW:-1.61.0}\"\n"));
+    }
+
+    /// [`VERSION_WORD`] run for real under `sh`, on what binaries print.
+    #[test]
+    fn the_version_word_is_read_from_vanilla_and_distribution_outputs() {
+        for (printed, expected) in [
+            ("acme-pdo 0.3.0 (core PDO 2.89.0)", "0.3.0"),
+            ("Acogni Driver 0.89.0 (core PDO 2.89.0)", "0.89.0"),
+            ("pdo 2.89.0", "2.89.0"),
+            ("pdo 2.90.0-rc.1", "2.90.0-rc.1"),
+            ("pdo 2.90.0+build.7", "2.90.0+build.7"),
+            ("acme-1.2.3 0.4.0", "0.4.0"),
+            ("", ""),
+            ("pdo", ""),
+        ] {
+            let out = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!(
+                    "printf '%s\\n' {} | {VERSION_WORD}",
+                    sh_quote(printed)
+                ))
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{printed}");
+            assert_eq!(String::from_utf8_lossy(&out.stdout), expected, "{printed}");
+        }
     }
 }

@@ -522,6 +522,8 @@ pub struct FakeServiceHost {
     pub user: String,
     pub port_state: PortState,
     pub commands: std::cell::RefCell<Vec<(String, Vec<String>)>>,
+    /// How many times the port was probed.
+    pub probes: std::cell::Cell<usize>,
 }
 
 impl FakeServiceHost {
@@ -535,6 +537,7 @@ impl FakeServiceHost {
             user: "user".to_string(),
             port_state,
             commands: std::cell::RefCell::new(Vec::new()),
+            probes: std::cell::Cell::new(0),
         }
     }
 
@@ -563,7 +566,15 @@ impl ServiceHost for FakeServiceHost {
         Ok(self.user.clone())
     }
     fn probe_port(&self, _addr: SocketAddr) -> PortState {
+        self.probes.set(self.probes.get() + 1);
         self.port_state.clone()
+    }
+    fn read_file(&self, path: &Path) -> anyhow::Result<Option<String>> {
+        match std::fs::read_to_string(path) {
+            Ok(contents) => Ok(Some(contents)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
     fn write_file(&self, path: &Path, contents: &str) -> anyhow::Result<()> {
         if let Some(parent) = path.parent() {

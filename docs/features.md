@@ -310,7 +310,8 @@ Decisions: [ADR-0066](adr/0066-les-page-mounts-servent-du-html-navigable-sur-ges
 `pdo service install` installs a systemd user unit or a launchd agent, so PDO starts at boot and
 keeps running after logout. When a new release is out, the version in the status bar says so
 (`→ <version>`): click it to read what changed, then **Update** › **Update now**, and PDO updates
-with your install method and reloads the page. Settings › General › Version & update shows the
+with your install method, refreshes the service unit without checking the port (`pdo service
+refresh`, also yours to run after updating by hand) and reloads the page. Settings › General › Version & update shows the
 installed and latest versions (read from the public repository's releases), your install method and
 the command it runs. See [cli.md](reference/cli.md).
 

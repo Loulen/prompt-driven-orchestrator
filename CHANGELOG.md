@@ -14,6 +14,20 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- New command `pdo service refresh [--port] [--bind] [--dry-run]`: rewrites the installed service
+  unit only when the binary in place renders it differently (`unchanged`, or `rewrote <path>` then
+  `systemctl --user daemon-reload`), without checking the port, enabling anything or creating a
+  unit; `--dry-run` prints the diff. Run it after updating by hand.
+- The one-click Update of a supervised daemon no longer checks the port: the new binary runs
+  `pdo service refresh` instead of `pdo service install`, and its output lands in the update log
+  (`unit` lines). A slow or authenticated daemon no longer makes the Update roll back. Under
+  launchd, the restart boots the job out and in again so a rewritten plist is read. The rollback
+  still runs `pdo service install` with the restored binary.
+- Extensions: `pdo service refresh` asks `authorize` for `service` × `update` (not on
+  `--dry-run`), for the local operator, like `install` and `uninstall`.
+
 ## 2.91.0
 
 - New extension seams on the Start and End markers of a Run (extension API, minor): `marker/item`

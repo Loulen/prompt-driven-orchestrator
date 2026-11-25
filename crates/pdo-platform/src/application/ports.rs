@@ -234,7 +234,7 @@ pub struct CmdOutcome {
 
 /// The host `pdo service` installs the unit on.
 ///
-/// Everything non-hermetic (exe/cwd/home/user lookup, port probe, file write,
+/// Everything non-hermetic (exe/cwd/home/user lookup, port probe, file read and write,
 /// command spawn) goes through this port, so the suite never runs a real
 /// `systemctl`/`launchctl` or touches `~/.config`.
 pub trait ServiceHost {
@@ -252,6 +252,8 @@ pub trait ServiceHost {
     fn user(&self) -> anyhow::Result<String>;
     /// Classify the address the service daemon would occupy.
     fn probe_port(&self, addr: SocketAddr) -> PortState;
+    /// Read a unit/plist file; `None` when it is absent.
+    fn read_file(&self, path: &Path) -> anyhow::Result<Option<String>>;
     /// Write a unit/plist file, creating parent dirs.
     fn write_file(&self, path: &Path, contents: &str) -> anyhow::Result<()>;
     /// Remove a unit/plist file (uninstall); Ok if already absent.

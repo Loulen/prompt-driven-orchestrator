@@ -4,7 +4,7 @@
 //! Pure text, golden-tested through [`super::update_plan::render_update_script`].
 
 use super::install::Supervision;
-use super::update_plan::{dq, q, service_install, sh_quote, UpdatePlan};
+use super::update_plan::{dq, q, service_command, sh_quote, UpdatePlan};
 use super::update_snapshot::UpdateSnapshot;
 
 /// `wait_ready <seconds>`: wait for a readiness marker whose daemon is alive;
@@ -25,10 +25,17 @@ pub(crate) const WAIT_READY: &str = "wait_ready() {
 }
 ";
 
+/// How the update restarts a launchd job: the plist `service refresh` may
+/// have rewritten is read again only when the job is booted out then in
+/// again; `kickstart -k` would restart it on the plist loaded before.
+pub(crate) const RELOAD_PLIST: bool = true;
+
 /// The lines that (re)start the daemon on whatever binary is in place, from
 /// the daemon's working dir; `$rc` is the restart's exit code. Unsupervised,
-/// `NEW_PID` is the relaunched daemon.
-pub(crate) fn start_daemon(plan: &UpdatePlan) -> String {
+/// `NEW_PID` is the relaunched daemon. Under launchd, `reload_plist` boots
+/// the job out and in again (the update), otherwise `kickstart -k` (the
+/// rollback, whose `service install` has just bootstrapped the plist).
+pub(crate) fn start_daemon(plan: &UpdatePlan, reload_plist: bool) -> String {
     let mut s = String::new();
     s.push_str("rm -f \"$MARKER\"\n");
     match plan.supervision {
@@ -36,9 +43,18 @@ pub(crate) fn start_daemon(plan: &UpdatePlan) -> String {
             s.push_str("say restart \"systemctl --user restart pdo\"\n");
             s.push_str("systemctl --user restart pdo\nrc=$?\n");
         }
-        Supervision::Launchd => {
+        Supervision::Launchd if !reload_plist => {
             s.push_str("say restart \"launchctl kickstart -k gui/$(id -u)/com.pdo.daemon\"\n");
             s.push_str("launchctl kickstart -k \"gui/$(id -u)/com.pdo.daemon\"\nrc=$?\n");
+        }
+        Supervision::Launchd => {
+            s.push_str(
+                "say restart \"launchctl bootout + bootstrap gui/$(id -u)/com.pdo.daemon\"\n",
+            );
+            s.push_str("launchctl bootout \"gui/$(id -u)/com.pdo.daemon\" 2>/dev/null\n");
+            s.push_str(
+                "launchctl bootstrap \"gui/$(id -u)\" \"$HOME/Library/LaunchAgents/com.pdo.daemon.plist\"\nrc=$?\n",
+            );
         }
         Supervision::None => {
             let argv: Vec<String> = plan.relaunch.iter().map(|a| sh_quote(a)).collect();
@@ -126,10 +142,10 @@ pub(crate) fn rollback_function(plan: &UpdatePlan, snapshot: &UpdateSnapshot) ->
         s.push_str(&format!(
             "  cd {} && {} || say rollback \"service install failed\"\n",
             q(&plan.working_dir),
-            service_install(plan)
+            service_command(plan, "install")
         ));
     }
-    for line in start_daemon(plan).lines() {
+    for line in start_daemon(plan, !RELOAD_PLIST).lines() {
         s.push_str(&format!("  {line}\n"));
     }
     s.push_str("  if [ \"$rc\" -eq 0 ] && wait_ready \"$TIMEOUT\"; then\n");

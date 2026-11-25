@@ -13,9 +13,12 @@
 //!    Loulen/tap/pdo`, the cargo-dist installer re-run, or the command a
 //!    distribution's release channel declares, #24) — a non-zero exit stops
 //!    there, the running daemon untouched, nothing restored;
-//! 3. if **supervised**: `pdo service install` (idempotent, port preserved — and,
-//!    since #699, writing the STABLE binary path so an existing unit pointing into
-//!    a versioned Cellar is repaired), then a service restart;
+//! 3. if **supervised**: the **new** binary's `pdo service refresh` — the unit
+//!    rewritten only when its rendering changed (port and bind preserved; since
+//!    #699 the STABLE binary path, so a unit pointing into a versioned Cellar is
+//!    repaired), with no port check: the port is held by the daemon being
+//!    updated, and no `enable` — then a service restart (under launchd,
+//!    `bootout` + `bootstrap`, so a rewritten plist is read again);
 //!    if **not supervised**: stop the daemon by pid and relaunch it with its
 //!    original command line (same port), itself detached;
 //! 4. **verify**: wait, at most `verify_timeout_secs`, for the daemon to answer
@@ -36,7 +39,7 @@ use std::path::PathBuf;
 
 use super::attempt::ATTEMPT_SCHEMA;
 use super::install::{InstallMethod, Supervision};
-use super::update_rollback::{rollback_function, start_daemon, STOP_PID, WAIT_READY};
+use super::update_rollback::{rollback_function, start_daemon, RELOAD_PLIST, STOP_PID, WAIT_READY};
 use super::update_snapshot::UpdateSnapshot;
 
 /// Everything the script needs, decided by the daemon at apply time.
@@ -48,13 +51,13 @@ pub struct UpdatePlan {
     /// release channel declares.
     pub upgrade_command: String,
     pub supervision: Supervision,
-    /// The stable path of the daemon binary (what `service install` and the
-    /// relaunch invoke): Homebrew's `bin/pdo`, never `Cellar/pdo/<v>/bin/pdo`.
+    /// The stable path of the daemon binary (what `service refresh`, the
+    /// rollback's `service install` and the relaunch invoke): Homebrew's `bin/pdo`, never `Cellar/pdo/<v>/bin/pdo`.
     pub exe: PathBuf,
     pub port: u16,
     /// Explicit bind passed to the daemon, if any. `None` preserves the default.
     pub bind: Option<IpAddr>,
-    /// The daemon's cwd: `service install` derives `WorkingDirectory` from it and
+    /// The daemon's cwd: `service refresh` derives `WorkingDirectory` from it and
     /// the relaunch must resolve the same repo root.
     pub working_dir: PathBuf,
     /// The running daemon's pid, stopped by the script before an unsupervised
@@ -128,15 +131,16 @@ fn json_escape(s: &str) -> String {
         .unwrap_or_default()
 }
 
-/// `<exe> service install --port <port> [--bind <ip>]`: (re)writes the unit
-/// for the binary in place, the port and the bind kept.
-pub(crate) fn service_install(plan: &UpdatePlan) -> String {
+/// `<exe> service <action> --port <port> [--bind <ip>]`: `install` (the
+/// rollback, on the restored binary) or `refresh` (the update, on the new one)
+/// writes the unit for the binary in place, the port and the bind kept.
+pub(crate) fn service_command(plan: &UpdatePlan, action: &str) -> String {
     let bind_arg = plan
         .bind
         .map(|ip| format!(" --bind {}", sh_quote(&ip.to_string())))
         .unwrap_or_default();
     format!(
-        "{} service install --port {}{bind_arg}",
+        "{} service {action} --port {}{bind_arg}",
         q(&plan.exe),
         plan.port
     )
@@ -204,8 +208,8 @@ const VERSION_WORD: &str = "awk '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]+\\.[0-9]+\\
 /// * `record` rewrites `last-attempt.json` (see [`record_function`]);
 /// * the upgrade command — a non-zero exit records `failed` and stops there: the
 ///   old daemon keeps running, nothing is restarted nor restored;
-/// * supervised: `pdo service install --port <port>` from the daemon's cwd, then the
-///   supervisor's restart; unsupervised: SIGTERM the pid, wait until it is gone,
+/// * supervised: `pdo service refresh --port <port>` from the daemon's cwd, its
+///   output in the log, then the supervisor's restart; unsupervised: SIGTERM the pid, wait until it is gone,
 ///   relaunch the recorded argv in a new session with stdio to the log;
 /// * the verification, then the success or the Retour automatique.
 pub fn render_update_script(plan: &UpdatePlan) -> String {
@@ -306,13 +310,18 @@ pub fn render_update_script(plan: &UpdatePlan) -> String {
     match plan.supervision {
         Supervision::Systemd | Supervision::Launchd => {
             s.push_str(&format!(
-                "say unit \"reinstalling the service unit (stable path {})\"\n",
+                "say unit \"refreshing the service unit (stable path {})\"\n",
                 dq(&plan.exe.display().to_string())
             ));
-            s.push_str(&format!("{}\nrc=$?\n", service_install(plan)));
+            // Its output (`unchanged`, `rewrote <path>`…) goes to the log.
+            s.push_str(&format!(
+                "UNIT_OUT=$({} 2>&1)\nrc=$?\n",
+                service_command(plan, "refresh")
+            ));
+            s.push_str("printf '%s\\n' \"$UNIT_OUT\" | while IFS= read -r line; do [ -z \"$line\" ] || say unit \"$line\"; done\n");
             s.push_str("if [ \"$rc\" -ne 0 ]; then\n");
-            s.push_str("  say unit \"service install failed (exit $rc)\"\n");
-            s.push_str("  rollback \"The service install failed (exit $rc).\"\nfi\n");
+            s.push_str("  say unit \"service refresh failed (exit $rc)\"\n");
+            s.push_str("  rollback \"The service refresh failed (exit $rc).\"\nfi\n");
         }
         Supervision::None => {
             s.push_str(&format!(
@@ -322,7 +331,7 @@ pub fn render_update_script(plan: &UpdatePlan) -> String {
             s.push_str(&format!("stop_pid {}\n", plan.daemon_pid));
         }
     }
-    s.push_str(&start_daemon(plan));
+    s.push_str(&start_daemon(plan, RELOAD_PLIST));
     s.push_str("if [ \"$rc\" -ne 0 ]; then\n");
     s.push_str("  say restart \"failed (exit $rc)\"\n");
     s.push_str("  rollback \"The restart failed (exit $rc).\"\nfi\n");
@@ -396,22 +405,22 @@ mod tests {
     }
 
     #[test]
-    fn homebrew_supervised_script_upgrades_reinstalls_the_unit_then_restarts() {
+    fn homebrew_supervised_script_upgrades_refreshes_the_unit_then_restarts() {
         let s = render_update_script(&plan(InstallMethod::Homebrew, Supervision::Systemd));
         assert!(s.starts_with("#!/bin/sh\n"));
         assert!(s.contains("sh -c 'brew update && brew upgrade Loulen/tap/pdo'"));
         let up = s.find("brew upgrade").unwrap();
-        let install = s
-            .find("/home/linuxbrew/.linuxbrew/bin/pdo service install --port 5172")
-            .expect("idempotent service install through the STABLE path");
+        let cd = s
+            .find("\ncd /home/u/.pdo/app || rollback")
+            .expect("refresh from the daemon's cwd");
+        let refresh = s
+            .find("UNIT_OUT=$(/home/linuxbrew/.linuxbrew/bin/pdo service refresh --port 5172 2>&1)\nrc=$?\n")
+            .expect("the new binary refreshes the unit through the STABLE path");
         let restart = s.find("\nsystemctl --user restart pdo\n").unwrap();
+        let verify = s.find("if wait_ready \"$TIMEOUT\"; then\n  if").unwrap();
         assert!(
-            up < install && install < restart,
-            "order: upgrade → install → restart"
-        );
-        assert!(
-            s.contains("cd /home/u/.pdo/app"),
-            "install from the daemon's cwd"
+            up < cd && cd < refresh && refresh < restart && restart < verify,
+            "order: upgrade → refresh → restart → verify"
         );
         assert!(!s.contains("Cellar"), "never the versioned target");
         assert!(
@@ -440,19 +449,112 @@ mod tests {
         assert!(!body.contains("launchctl kill"));
     }
 
+    /// The restart boots the job out then in again, so launchd reads the plist
+    /// `service refresh` may have rewritten; `kickstart -k` would not.
     #[test]
-    fn launchd_uses_kickstart() {
+    fn launchd_restarts_by_bootout_then_bootstrap() {
         let s = render_update_script(&plan(InstallMethod::Homebrew, Supervision::Launchd));
-        assert!(s.contains("launchctl kickstart -k \"gui/$(id -u)/com.pdo.daemon\""));
+        let main = &s[s.find("say start ").unwrap()..];
+        let refresh = main.find("pdo service refresh --port 5172 2>&1)").unwrap();
+        let bootout = main
+            .find("\nlaunchctl bootout \"gui/$(id -u)/com.pdo.daemon\" 2>/dev/null\n")
+            .expect("bootout, its error ignored");
+        let bootstrap = main
+            .find("\nlaunchctl bootstrap \"gui/$(id -u)\" \"$HOME/Library/LaunchAgents/com.pdo.daemon.plist\"\nrc=$?\n")
+            .expect("bootstrap, its exit code checked");
+        let verify = main.find("if wait_ready \"$TIMEOUT\"; then\n  if").unwrap();
+        assert!(refresh < bootout && bootout < bootstrap && bootstrap < verify);
+        assert!(!main.contains("kickstart"));
+        // The rollback is unchanged: `service install` bootstraps, then kickstart.
+        let rollback = &s[s.find("rollback() {").unwrap()..s.find("say start ").unwrap()];
+        let install = rollback.find("service install --port 5172").unwrap();
+        let kickstart = rollback
+            .find("launchctl kickstart -k \"gui/$(id -u)/com.pdo.daemon\"")
+            .unwrap();
+        assert!(install < kickstart);
+        assert!(!rollback.contains("launchctl bootstrap"));
         assert!(!s.contains("systemctl"));
     }
 
     #[test]
     fn supervised_update_preserves_an_explicit_bind() {
+        for supervision in [Supervision::Systemd, Supervision::Launchd] {
+            let mut plan = plan(InstallMethod::Homebrew, supervision);
+            plan.bind = Some("127.0.0.1".parse().unwrap());
+            let s = render_update_script(&plan);
+            assert!(s.contains("service refresh --port 5172 --bind 127.0.0.1 2>&1)"));
+            assert!(s.contains("service install --port 5172 --bind 127.0.0.1 ||"));
+        }
+    }
+
+    /// The update never runs `service install` (its port check would meet the
+    /// daemon being updated): only the rollback does, on the restored binary,
+    /// once the port is free.
+    #[test]
+    fn service_install_is_left_to_the_rollback() {
+        for supervision in [Supervision::Systemd, Supervision::Launchd] {
+            let s = render_update_script(&plan(InstallMethod::Homebrew, supervision));
+            let start = s.find("rollback() {").unwrap();
+            let end = start + s[start..].find("\n}\n").unwrap();
+            let rollback = &s[start..end];
+            assert_eq!(
+                s.matches("service install").count(),
+                rollback.matches("service install").count(),
+                "{s}"
+            );
+            assert!(rollback.contains("service install --port 5172"));
+            assert!(!s[start..end].contains("service refresh"));
+        }
+    }
+
+    /// The refresh's own words land in the log; its failure rolls back.
+    #[test]
+    fn the_refresh_output_is_logged_and_its_failure_rolls_back() {
+        let s = render_update_script(&plan(InstallMethod::Homebrew, Supervision::Systemd));
+        let refresh = s.find("service refresh --port 5172").unwrap();
+        let after = &s[refresh..];
+        assert!(after.contains(
+            "printf '%s\\n' \"$UNIT_OUT\" | while IFS= read -r line; do [ -z \"$line\" ] || say unit \"$line\"; done\n\
+             if [ \"$rc\" -ne 0 ]; then\n  \
+             say unit \"service refresh failed (exit $rc)\"\n  \
+             rollback \"The service refresh failed (exit $rc).\"\nfi\n"
+        ));
+    }
+
+    /// The log lines the script writes, run for real under `sh` with a fake
+    /// `pdo` that prints what `service refresh` prints.
+    #[test]
+    fn each_line_the_refresh_prints_becomes_a_unit_line_of_the_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let pdo = dir.path().join("pdo");
+        std::fs::write(
+            &pdo,
+            "#!/bin/sh\necho \"args $*\"\necho 'rewrote /u/pdo.service'\necho\nexit 3\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&pdo, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
         let mut plan = plan(InstallMethod::Homebrew, Supervision::Systemd);
-        plan.bind = Some("127.0.0.1".parse().unwrap());
+        plan.exe = pdo;
         let s = render_update_script(&plan);
-        assert!(s.contains("service install --port 5172 --bind 127.0.0.1"));
+        let start = s.find("UNIT_OUT=").unwrap();
+        let end = s[start..].find("\nfi\n").unwrap() + start;
+        let step = format!(
+            "say() {{ printf '%s|%s\\n' \"$1\" \"$2\"; }}\nrollback() {{ echo \"rollback $1\"; }}\n{}\nfi\n",
+            &s[start..end]
+        );
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(step)
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "unit|args service refresh --port 5172\n\
+             unit|rewrote /u/pdo.service\n\
+             unit|service refresh failed (exit 3)\n\
+             rollback The service refresh failed (exit 3).\n"
+        );
     }
 
     #[test]

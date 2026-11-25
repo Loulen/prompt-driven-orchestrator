@@ -2,13 +2,21 @@
 
 > Amendé par le grilling #766 : `Environment=PDO_BIND=` optionnel dans l'unité ; le `PATH` de l'unité
 > n'est plus la référence des harnais (ADR-0055) et l'unité le dit en commentaire.
+>
+> Amendé le 2026-11-25 (CORE-330) : l'Update en un clic n'appelle plus `pdo service install`. Le
+> nouveau binaire met l'unité à jour par `pdo service refresh` : réécriture seulement si son rendu
+> diffère de l'unité en place, puis `daemon-reload` sous systemd, sans vérification du port (tenu
+> par le daemon qui se met à jour), sans `enable` ni `enable-linger`, sans jamais créer d'unité.
+> Sous launchd, le redémarrage de l'Update fait `bootout` + `bootstrap` pour relire le plist. Le
+> Retour automatique garde `service install` (port libre, ancien binaire). La garde de port
+> ci-dessous ne vaut donc que pour la première installation.
 
 Sans cette ADR, on laisse le daemon en `pdo daemon` best-effort (ADR-0012) : fermer son laptop ou
 rebooter arrête silencieusement toute autonomie planifiée — la différence entre « ça tourne tant que
 tu es loggé » et un orchestrateur autonome.
 
 **Décision : rendre le daemon installable comme service OS persistant via `pdo service
-{install|uninstall|status}`.** systemd `--user` est le chemin **first-class** (Linux, testé) ; le
+{install|refresh|uninstall|status}`.** systemd `--user` est le chemin **first-class** (Linux, testé) ; le
 LaunchAgent launchd est **best-effort** (macOS, génération testée, chemin réel non testé). Infra
 purement **additive** — aucun couplage au scheduler, à la projection ou au runtime.
 
@@ -59,7 +67,8 @@ purement **additive** — aucun couplage au scheduler, à la projection ou au ru
   non-service tourne déjà (reflétée au prochain restart).
 - Le bind par défaut reste `0.0.0.0` (#260, accès LAN assumé). Depuis #766, `pdo daemon --bind <ip>`
   (`PDO_BIND`) restreint l'écoute, et `pdo service install --bind` l'écrit dans l'unité
-  (`Environment=PDO_BIND=`), préservé par la réinstallation de l'Update comme `PDO_PORT`. Défense en
+  (`Environment=PDO_BIND=`), préservé par la mise à jour de l'unité lors de l'Update
+  (`service refresh`) comme `PDO_PORT`. Défense en
   profondeur derrière un reverse proxy, pas un substitut à l'auth (toujours hors scope).
 
 ## Relations

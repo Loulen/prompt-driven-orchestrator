@@ -117,7 +117,7 @@ pub enum ResourceKind {
     Repository,
     Session,
     Update,
-    /// The daemon's OS service unit (`pdo service install` / `uninstall`).
+    /// The daemon's OS service unit (`pdo service install` / `refresh` / `uninstall`).
     Service,
     /// A Stats absorption: one row counting the data of others (Combine).
     StatsAbsorption,

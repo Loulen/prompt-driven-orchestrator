@@ -154,13 +154,21 @@ async fn apply_homebrew_answers_at_once_and_the_fixture_receives_the_brew_comman
     assert!(log.contains("supervision=systemd"));
     assert!(log.contains(&format!("port={}", daemon.addr.port())));
 
-    // The generated script (what production runs) reinstalls the unit through the
-    // binary path, then restarts the service — no kill/relaunch when supervised.
+    // The generated script (what production runs) refreshes the unit through the
+    // binary path, then restarts the service — no kill/relaunch when supervised,
+    // and `service install` (its port check) only in the rollback.
     let script = read_script(&daemon, &id);
     assert!(script.contains("brew update && brew upgrade Loulen/tap/pdo"));
     assert!(
-        script.contains(&format!("service install --port {}", daemon.addr.port())),
-        "idempotent service install with the daemon's port:\n{script}"
+        script.contains(&format!("service refresh --port {}", daemon.addr.port())),
+        "the unit refreshed with the daemon's port:\n{script}"
+    );
+    let rollback = &script[script.find("rollback() {").unwrap()..];
+    let rollback = &rollback[..rollback.find("\n}\n").unwrap()];
+    assert_eq!(
+        script.matches("service install").count(),
+        rollback.matches("service install").count(),
+        "no service install outside the rollback:\n{script}"
     );
     assert!(script.contains("systemctl --user restart pdo"));
     assert!(!script.contains(&format!("stop_pid {}", std::process::id())));

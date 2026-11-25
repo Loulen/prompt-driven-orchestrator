@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.90.3
 
 - When the one-click Update of a Distribution fails and rolls back, the reason and the update log
   now name the version that failed (e.g. `v0.90.0`) instead of the core version the Distribution

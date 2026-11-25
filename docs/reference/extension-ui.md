@@ -10,7 +10,7 @@ what each accepts and the context each hands over are part of the semver of
 The Rust types are in `pdo-extension-api` (`UiLocation`, `UiContribution`, `UiElement`,
 `UiCommand`, `When`, `UiContributions`). Their TypeScript is generated into
 `frontend/src/shared/generated/` (`UiLocation.ts`, `UiContribution.ts`…); the props and contexts
-below are `frontend/src/shared/extensions/contract.ts` (`runPeople.ts` for `run/item/people`, `pageContract.ts` for the pages and the panels).
+below are `frontend/src/shared/extensions/contract.ts` (`runPeople.ts` for `run/item/people`, `pageContract.ts` for the pages and the panels, `markerContract.ts` for `marker/item` and `marker/detail`).
 
 ## Declaring contributions
 
@@ -385,13 +385,25 @@ unchanged.
   attributes, created_by, trigger_editor }`): the Actor that created the Run and, for a fired
   Run, the Trigger's last editor, `null` when unknown (API 0.8). No `form`.
 
+### `marker/detail`
+
+- **Accepts**: section.
+- **Renders**: the inspector of the Start or End marker of a Run (its Nœuds structurels), after
+  the core's sections: on End after « Termination reasons », on Start after Input, Images and
+  Files. Headed like them, the extension's name at the right of the head. A work node's detail
+  takes none: `node/detail` is its location.
+- **Context**: `MarkerContext`, the one of [`marker/item`](#markeritem). No `form`. `when: { eq:
+  ["marker.type", "end"] }` (`When::eq("marker.type", "end")`) keeps a section to End.
+- **Since**: 0.32.
+
 ### Decorations
 
 A decoration location renders the marks the extensions put on one item, side by side, each behind
 its own error boundary (a failing one becomes a small « ! » whose tooltip names the extension).
 `app/banner` differs: it stacks full-width lines, and a failing one becomes a failed `Banner`
 ([above](#appbanner)).
-**Without a contribution nothing is rendered at all**: the item keeps its layout. Several wrap
+**Without a contribution nothing is rendered at all**: the item keeps its layout (`marker/item`
+differs: the marker takes its card form as soon as a contribution applies, [below](#markeritem)). Several wrap
 rather than push the item's own text out, except on the rows of the left panel's lists, which
 keep one line and end in an ellipsis. The component receives `entity` and `context`:
 `DecorationContext` = `LocationContext` + `entity` (`EntityContext`, `null` on the status bar and
@@ -455,6 +467,36 @@ A decoration sits inside its item, often a button: keep it small (a badge of one
 - **Context**: `PortItemContext` = `DecorationContext` + `port` (`{ run, node, name, direction:
   "input" | "output", type }`), `entity` = `{ kind: "port", id: "<node>/<port>", name, attributes:
   {} }`.
+
+### `marker/item`
+
+- **Accepts**: decoration.
+- **Renders**: the Start and End markers (Nœuds structurels) on the canvas of a Run being read,
+  **neither in the pipeline editor nor in a Run edited for itself**; the work nodes' cards take
+  none. As soon as one contribution applies (its `when` holds on the marker), the marker takes a
+  card's width (208 px): its header (icon, name, the check of a reached End), a rule, then **one
+  row of 20 px**, the marks side by side, on one line, **cut** when wider (say « +n » yourself).
+  The row is **reserved even when the component renders nothing**: the canvas lays the marker out
+  before rendering it, at a fixed 47 px, and the rest of the graph goes down by as much; render
+  nothing until you have something to show (End before the Run reaches it), the graph does not
+  move. The row is not a target: a click selects the marker and opens its inspector, the place for
+  links ([`marker/detail`](#markerdetail)). « Compact nodes » does not hide the row; Settings ›
+  Appearance › Run canvas has a switch per contribution (« Extension · label »), and a hidden one
+  frees the row.
+- **Context**: `MarkerContext` = `LocationContext` + `entity` + `marker`:
+
+  ```ts
+  interface MarkerEntity extends EntityContext { kind: "node"; type: "start" | "end"; name: string | null }
+  interface MarkerContext extends LocationContext {
+    entity: MarkerEntity;
+    marker: { run: string; node: string; type: "start" | "end"; reached: boolean };
+  }
+  ```
+
+  `reached` is true on Start in any Run, on End once the Run has reached it (it ended, or waits at
+  End for its started nodes). A marker has no iteration. The context follows the Run: read your
+  data again when `marker.reached` or `run.status` changes.
+- **Since**: 0.32.
 
 ### `review/file`
 

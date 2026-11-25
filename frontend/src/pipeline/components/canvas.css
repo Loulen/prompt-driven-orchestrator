@@ -204,6 +204,42 @@
 .cv-mk[data-selected] { outline: 1.5px solid var(--selected-edge); outline-offset: 3px; }
 .cv-mk[data-rim] { box-shadow: 0 0 0 1px var(--surface-0), 0 0 0 2.5px color-mix(in oklab, var(--cv-wire) 45%, transparent); }
 .cv-mk[data-wire] { box-shadow: 0 0 0 1px var(--surface-0), 0 0 0 2.5px var(--cv-wire); }
+/* Decorated by an extension (`marker/item`, on a Run canvas being read): a card's width, its 24 px header, a rule,
+   then one row of 20 px, cut when wider. 47 px with the borders, mirrored in `model/compactCanvas.ts`
+   (COMPACT_CARD.decoratedMarker): change both together. */
+.cv-mk[data-decorated] {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  width: 208px;
+  max-width: none;
+  height: 47px;
+  padding: 0;
+}
+.cv-mk__head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  box-sizing: content-box;
+  height: 24px;
+  min-width: 0;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--line);
+}
+.cv-mk__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cv-mk__row {
+  display: flex;
+  align-items: center;
+  flex: none;
+  height: 20px;
+  min-width: 0;
+  padding: 0 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: var(--fs-2xs);
+}
 
 /* ------------------------------------------------------------ edges */
 .cv-edge__line { fill: none; stroke: var(--cv-edge); stroke-width: 1.25; }

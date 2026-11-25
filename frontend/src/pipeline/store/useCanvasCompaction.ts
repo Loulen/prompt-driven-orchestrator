@@ -3,6 +3,8 @@ import type { Node } from "@xyflow/react";
 import { useAppearance } from "../../hooks/useAppearance";
 import { isVisible } from "../../lib/appearance";
 import { compactCanvas } from "../model/compactCanvas";
+import { markerGrownCanvas } from "../model/markerCanvas";
+import { useDecoratedMarkers, type MarkerOfRun } from "../../shared/extensions/markerContext";
 import { runCardSize } from "../model/runCardElements";
 import { grownCanvas } from "../model/grownCanvas";
 import { IDENTITY_SHIFT, type CanvasShift } from "./canvasShift";
@@ -44,12 +46,20 @@ export function useCanvasCompaction(
     () => JSON.stringify(cards.filter((c) => (c.data as { childCounts?: unknown }).childCounts != null).map((c) => c.id)),
     [cards],
   );
+  const runId = tab?.runId;
+  const markers = useMemo(() => (runCanvas && runId ? markersOf(runId, cards) : []), [runCanvas, runId, cards]);
+  const decoratedIds = useDecoratedMarkers(markers);
+  const decorated = useMemo(() => new Set(decoratedIds ? decoratedIds.split("\n") : []), [decoratedIds]);
+  const base = useMemo(
+    () => (runCanvas && pipeline ? markerGrownCanvas(pipeline, decorated) : pipeline),
+    [runCanvas, pipeline, decorated],
+  );
   const compaction = useMemo(
     () =>
-      height > 0 && pipeline
-        ? compactCanvas(pipeline, { withRuns: new Set(JSON.parse(withRuns) as string[]), card: { width, height } })
+      height > 0 && base
+        ? compactCanvas(base, { withRuns: new Set(JSON.parse(withRuns) as string[]), card: { width, height }, decorated })
         : null,
-    [width, height, pipeline, withRuns],
+    [width, height, base, withRuns, decorated],
   );
   const growth = useMemo(
     () => (!runCanvas && template && pipeline ? grownCanvas(pipeline) : null),
@@ -65,15 +75,16 @@ export function useCanvasCompaction(
       });
     }
     if (!runCanvas) return cards;
-    const views = new Map(compaction?.pipeline.nodes.map((n) => [n.id, n.view]));
+    const views = new Map((compaction?.pipeline ?? base)?.nodes.map((n) => [n.id, n.view]));
     return cards.map((card) => {
       const box = compaction?.cards[card.id];
       if (box) return { ...card, position: { x: box.x, y: box.y }, data: { ...card.data, runCanvas: true, ...(compact ? { compact: true } : {}) } };
       const view = views.get(card.id);
-      return { ...card, ...(view ? { position: { x: view.x, y: view.y } } : {}), data: { ...card.data, runCanvas: true } };
+      const marker = decorated.has(card.id) ? { decorated: true, runId } : {};
+      return { ...card, ...(view ? { position: { x: view.x, y: view.y } } : {}), data: { ...card.data, runCanvas: true, ...marker } };
     });
-  }, [compaction, grown, cards, runCanvas, compact]);
-  const shown = compaction?.pipeline ?? grown?.pipeline ?? pipeline;
+  }, [compaction, grown, cards, runCanvas, compact, base, decorated, runId]);
+  const shown = compaction?.pipeline ?? grown?.pipeline ?? base;
   // One stable identity when nothing is shifted: the edges reading it do not
   // re-render on every edit, and a write skips the conversion outright.
   const shift: CanvasShift = useMemo(
@@ -84,4 +95,14 @@ export function useCanvasCompaction(
     if (shiftRef) shiftRef.current = shift;
   }, [shiftRef, shift]);
   return { shown, cards: compaction?.cards ?? grown?.cards, placed, shift };
+}
+
+/** The Start and End markers among the derived cards, as `marker/item` sees them. */
+function markersOf(run: string, cards: Node[]): MarkerOfRun[] {
+  return cards.flatMap((card) => {
+    const data = card.data as { nodeType?: string; label?: string; reached?: boolean };
+    if (data.nodeType !== "start" && data.nodeType !== "end") return [];
+    const type = data.nodeType;
+    return [{ run, node: card.id, name: data.label ?? null, type, reached: type === "start" || data.reached === true }];
+  });
 }

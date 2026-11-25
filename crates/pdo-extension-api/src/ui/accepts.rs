@@ -35,7 +35,8 @@ impl UiLocation {
             | UiLocation::RunNew
             | UiLocation::NodeConfig
             | UiLocation::PipelineConfig
-            | UiLocation::RunInfo => matches!(element, UiElement::Section { .. }),
+            | UiLocation::RunInfo
+            | UiLocation::MarkerDetail => matches!(element, UiElement::Section { .. }),
             UiLocation::RunsFilter
             | UiLocation::TriggersFilter
             | UiLocation::PipelinesFilter
@@ -51,6 +52,7 @@ impl UiLocation {
             | UiLocation::TriggerItem
             | UiLocation::PipelineItem
             | UiLocation::PortItem
+            | UiLocation::MarkerItem
             | UiLocation::Statusbar
             | UiLocation::RunsEmpty
             | UiLocation::TopbarAccount

@@ -91,7 +91,10 @@ const EXTENSION: ExtensionEntry = {
     bundle_url: "/ext/test/ui.js",
     react_major: hostReactMajor(),
     ui_module_major: null,
-    contributions: [{ location: "run/info", id: "people", label: "People", type: "section", component: "People" }] as UiContribution[],
+    contributions: [
+      { location: "run/info", id: "people", label: "People", type: "section", component: "People" },
+      { location: "marker/item", id: "ids", label: "Linked tasks", type: "decoration", component: "People" },
+    ] as UiContribution[],
     commands: [],
     locations: [],
   },
@@ -180,6 +183,20 @@ describe("the Run canvas block", () => {
     expect(isOn(switchOf("run.canvas.elapsed"))).toBe(true);
     fireEvent.click(switchOf("compact-nodes"));
     expect(switchOf("run.canvas.elapsed")).toBeEnabled();
+  });
+
+  it("ends with a switch per decoration of the Start and End markers, which Compact nodes leaves alone", async () => {
+    mount("canvas");
+    const block = screen.getByTestId("appearance-block-run-canvas");
+    await screen.findByTestId("setting-row-run.canvas.ext.test:ids");
+    const groups = [...block.querySelectorAll(".set-ablock__group")].map((group) => group.textContent);
+    expect(groups).toEqual(["ExtensionsStart and End of a Run"]);
+    expect(within(rowOf("run.canvas.ext.test:ids")).getByText("Test · Linked tasks")).toBeInTheDocument();
+    expect(isOn(switchOf("run.canvas.ext.test:ids"))).toBe(true);
+    fireEvent.click(switchOf("compact-nodes"));
+    expect(switchOf("run.canvas.ext.test:ids")).toBeEnabled();
+    fireEvent.click(switchOf("run.canvas.ext.test:ids"));
+    expect(stored().elements).toEqual({ "run.canvas.ext.test:ids": false });
   });
 
   it("previews a few cards of the most recent Run with a fork, its orchestrator's child runs and its caption", async () => {

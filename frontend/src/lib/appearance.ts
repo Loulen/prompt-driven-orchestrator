@@ -150,6 +150,7 @@ export const SURFACE_OF_LOCATION: Readonly<Partial<Record<string, Surface>>> = {
   "run/item": "runs.list",
   "run/item/people": "runs.list",
   "run/info": "run.info",
+  "marker/item": "run.canvas",
   "trigger/item": "triggers.list",
   "pipeline/item": "pipelines.list",
 };

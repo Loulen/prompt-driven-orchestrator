@@ -640,6 +640,8 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
         triple("settings/page", "page", "settings-page"),
         triple("runs/empty", "decoration", "runs-empty"),
         triple("app/banner", "decoration", "app-banner"),
+        triple("marker/item", "decoration", "marker-mark"),
+        triple("marker/detail", "section", "marker-section"),
         triple("run/item/people", "decoration", "people"),
         triple("review/composer", "completion", "tags"),
         triple("palette", "action", "new-note"),
@@ -709,6 +711,13 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
     assert_eq!(set.status(), 200);
     assert_eq!(control.inbox.count(), 0);
     assert_eq!(daemon.get_json("/ext/test/inbox").await["count"], 0);
+    // 0.32: its marker section is End's only.
+    assert_eq!(contribution("marker-mark")["component"], "MarkerMark");
+    assert_eq!(contribution("marker-mark")["when"], Value::Null);
+    assert_eq!(
+        contribution("marker-section")["when"],
+        json!({ "eq": ["marker.type", "end"] })
+    );
     // 0.31: its application banner renders nothing until a test shows it.
     assert_eq!(contribution("app-banner")["component"], "AppBanner");
     assert_eq!(

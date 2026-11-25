@@ -23,6 +23,7 @@ import InspectorTabs from "../pipeline/components/InspectorTabs";
 import TriggerDetailPanel from "../trigger/components/TriggerDetailPanel";
 import type { Project } from "../workspace/model/project";
 import { resolveNodeInspector } from "../lib/structuralMarkers";
+import { markerReached } from "../pipeline/components/editNodeDerivation";
 import { deriveEdgeTrigger } from "../lib/edgeTrigger";
 import { useInspectorTab } from "../hooks/useInspectorTab";
 import { useOnHitChosen } from "../run/store/runSearchStore";
@@ -270,10 +271,14 @@ export default function RightPane({
                 runId={selectedRun.run_id}
                 runName={selectedRun.name || selectedRun.run_id}
                 nodeId={selection.id}
+                nodeName={markerName(selectedRun, selection.id)}
               />
             ) : selection.kind === "node" && nodeInspectorKind === "run-end" && selectedRun?.end_node ? (
               <EndInspector
                 endNode={selectedRun.end_node}
+                runId={selectedRun.run_id}
+                reached={markerReached("end", selectedRun)}
+                nodeName={markerName(selectedRun, selectedRun.end_node.id)}
               />
             ) : selection.kind === "node" && nodeInspectorKind === "marker" && editNode ? (
               <MarkerInspector key={editNode.id} node={editNode} />
@@ -328,11 +333,15 @@ export default function RightPane({
                 runId={selectedRun.run_id}
                 runName={selectedRun.name || selectedRun.run_id}
                 nodeId={selectedNodeId!}
+                nodeName={markerName(selectedRun, selectedNodeId!)}
               />
             )}
             {selectedNodeType === "end" && selectedRun?.end_node && (
               <EndInspector
                 endNode={selectedRun.end_node}
+                runId={selectedRun.run_id}
+                reached={markerReached("end", selectedRun)}
+                nodeName={markerName(selectedRun, selectedRun.end_node.id)}
               />
             )}
             {selectedNode && selectedRun && selectedNodeType !== "start" && selectedNodeType !== "end" && (
@@ -360,4 +369,9 @@ export default function RightPane({
         )}
     </>
   );
+}
+
+/** A Start or End marker's name in the Run's pipeline, when it has one. */
+function markerName(run: RunState, nodeId: string): string | null {
+  return run.node_defs?.find((d) => d.id === nodeId)?.name ?? null;
 }

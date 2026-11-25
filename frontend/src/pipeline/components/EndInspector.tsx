@@ -1,14 +1,20 @@
 import { Circle, CircleCheck, Square } from "lucide-react";
 import type { EndNodeInfo } from "../../shared/generated/EndNodeInfo";
 import { Chip, EmptyState, Section } from "../../shared/ui/kit";
+import MarkerDetailSections from "./MarkerDetailSections";
 import "./inspect.css";
 
 interface Props {
   endNode: EndNodeInfo;
+  runId: string;
+  /** The Run has reached End (`markerReached`). */
+  reached: boolean;
+  /** The marker's name in the Run's pipeline, when it has one. */
+  nodeName?: string | null;
 }
 
 /** The Run's End: each of its ports, received or pending, and the reason it ended. */
-export default function EndInspector({ endNode }: Props) {
+export default function EndInspector({ endNode, runId, reached, nodeName = null }: Props) {
   return (
     <aside className="end-inspector ei" data-testid="end-inspector">
       <div className="ei-bar">
@@ -47,6 +53,8 @@ export default function EndInspector({ endNode }: Props) {
           </div>
         ))}
       </Section>
+
+      <MarkerDetailSections run={runId} node={endNode.id} name={nodeName ?? endNode.id} type="end" reached={reached} />
     </aside>
   );
 }

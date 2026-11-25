@@ -27,6 +27,9 @@ import type { NodeCost } from "../../shared/generated/NodeCost";
 import type { NodeAgentLabel } from "../model/nodeAgent";
 import type { ChildCounts } from "../../run/model/orchestration";
 import SearchMatchBadge from "../../run/components/runSearch/SearchMatchBadge";
+import ExtensionDecorations from "../../shared/extensions/ExtensionDecorations";
+import type { MarkerContext } from "../../shared/extensions/contract";
+import { useMarkerExtra, type MarkerType } from "../../shared/extensions/markerContext";
 // The four emergent body anchor handles (#168), each pinned to its side-centre
 // with the matching xyflow `Position` so a bound incoming edge arrives from that
 // side. `transform` re-centres the 1px handle on the edge midpoint.
@@ -90,6 +93,13 @@ export interface EditNodeData {
   compact?: boolean;
   /** On a Run canvas not being edited: the card leaves out the elements the Apparence hides. */
   runCanvas?: boolean;
+  /**
+   * A Start or End marker on a Run canvas not being edited, which an extension
+   * decorates (`marker/item`): a card's width, its row of decorations under
+   * its title (`useCanvasCompaction`). With the Run it belongs to.
+   */
+  decorated?: boolean;
+  runId?: string;
   /** The node in the Run: its iteration, its time and its cost. */
   run?: {
     iter: number;
@@ -206,10 +216,20 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
 
   if (data.nodeType === "start" || data.nodeType === "end") {
     const start = data.nodeType === "start";
+    // A decorated marker is drawn only on a Run canvas being read (ADR-0081, amendment CORE-322).
+    const decorated = data.decorated === true && data.runCanvas === true && data.runId != null;
+    const title = (
+      <>
+        <NodeTypeIcon type={data.nodeType} size={11} className="cv-mk__ic" />
+        <span className="cv-mk__name">{data.label}</span>
+        {reached && !start && <CircleCheck size={12} strokeWidth={1.5} className="cv-mk__ok" aria-label="Reached" />}
+      </>
+    );
     return (
       <div
         data-testid="node-card"
         data-kind={data.nodeType}
+        data-decorated={decorated || undefined}
         data-reached={reached || undefined}
         data-selected={isSelected || undefined}
         data-rim={rimHover || undefined}
@@ -220,9 +240,14 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
       >
         {selectedBy && <SelectedByLabel participant={selectedBy} />}
         {handles}
-        <NodeTypeIcon type={data.nodeType} size={11} className="cv-mk__ic" />
-        <span>{data.label}</span>
-        {reached && !start && <CircleCheck size={12} strokeWidth={1.5} className="cv-mk__ok" aria-label="Reached" />}
+        {decorated ? (
+          <>
+            <div className="cv-mk__head">{title}</div>
+            <MarkerRow run={data.runId} node={data.nodeId} name={data.label} type={data.nodeType} reached={start || reached} />
+          </>
+        ) : (
+          title
+        )}
         {rim}
       </div>
     );
@@ -275,5 +300,19 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
           it; `nodrag` keeps the click from moving the node. */}
       {play}
     </>
+  );
+}
+
+/**
+ * The `marker/item` row of a decorated Start or End marker: one line of fixed
+ * height, its decorations side by side, cut when wider. It is reserved even
+ * when every decoration renders nothing, so the graph keeps its place.
+ */
+function MarkerRow(props: { run?: string; node: string; name: string; type: MarkerType; reached: boolean }) {
+  const extra = useMarkerExtra({ ...props, run: props.run ?? "" });
+  return (
+    <div className="cv-mk__row" data-testid="marker-row">
+      <ExtensionDecorations<MarkerContext> location="marker/item" extra={extra} block nowrap />
+    </div>
   );
 }

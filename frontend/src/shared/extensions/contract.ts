@@ -27,6 +27,8 @@ export type * from "./paletteContract";
 export type * from "./pageContract";
 // API 0.22: New Run, opened prefilled by an extension's UI.
 export type * from "./newRunContract";
+// API 0.32: the Start and End markers of a Run, `marker/item` and `marker/detail`.
+export type * from "./markerContract";
 
 /** Who the element belongs to. */
 export interface ExtensionRef {
@@ -213,7 +215,7 @@ export interface TabProps extends ContributionProps<TabContext> {
 
 /**
  * A decoration (`run/item`, `run/item/people`, `trigger/item`, `pipeline/item`,
- * `port/item`, `review/file`, `statusbar`, `app/banner`): the item it marks,
+ * `port/item`, `marker/item`, `review/file`, `statusbar`, `app/banner`): the item it marks,
  * `null` on the status bar and the application banner. A decoration sits
  * inside its item (often a button): a clickable one calls
  * `event.stopPropagation()`.

@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.91.0
 
 - New extension seams on the Start and End markers of a Run (extension API, minor): `marker/item`
   puts an extension's decorations on a fixed one-line row under the marker's title, on the canvas

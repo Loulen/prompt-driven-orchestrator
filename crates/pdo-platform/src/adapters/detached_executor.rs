@@ -198,6 +198,12 @@ mod tests {
     use std::time::{Duration, Instant};
 
     fn fake_binary(path: &Path, version: &str, marker: &Path, starts: bool) {
+        fake_binary_saying(path, version, &format!("pdo {version}"), marker, starts);
+    }
+
+    /// [`fake_binary`], whose `--version` prints `says` (a Distribution
+    /// appends the core's version).
+    fn fake_binary_saying(path: &Path, version: &str, says: &str, marker: &Path, starts: bool) {
         use std::os::unix::fs::PermissionsExt;
         let daemon = if starts {
             // It also notes the release identifier it was started with.
@@ -212,7 +218,7 @@ mod tests {
         std::fs::write(
             path,
             format!(
-                "#!/bin/sh\ncase \"$1\" in\n  --version) echo \"pdo {version}\" ;;\n  daemon) {daemon} ;;\nesac\n"
+                "#!/bin/sh\ncase \"$1\" in\n  --version) echo \"{says}\" ;;\n  daemon) {daemon} ;;\nesac\n"
             ),
         )
         .unwrap();
@@ -263,6 +269,16 @@ mod tests {
     /// [`run_update`], the executor handed `token` as the binary's own release
     /// identifier.
     fn run_update_with(new_starts: bool, upgrade: &str, token: Option<&str>) -> Rollback {
+        run_update_full(new_starts, upgrade, token, "pdo 2.0.0")
+    }
+
+    /// [`run_update_with`], the new binary's `--version` printing `new_says`.
+    fn run_update_full(
+        new_starts: bool,
+        upgrade: &str,
+        token: Option<&str>,
+        new_says: &str,
+    ) -> Rollback {
         let tmp = tempfile::tempdir().unwrap();
         let journal = FsUpdateJournal::new(Some(tmp.path().join("home")));
         let marker = journal.ready_marker_path(5172);
@@ -271,7 +287,7 @@ mod tests {
         std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
         fake_binary(&exe, "1.0.0", &marker, true);
         let new = tmp.path().join("new-pdo");
-        fake_binary(&new, "2.0.0", &marker, new_starts);
+        fake_binary_saying(&new, "2.0.0", new_says, &marker, new_starts);
         let db = tmp.path().join("repo/.pdo/pdo.db");
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
         std::fs::write(&db, "old data").unwrap();
@@ -403,6 +419,32 @@ mod tests {
         ] {
             assert!(log.contains(step), "missing `{step}`:\n{log}");
         }
+    }
+
+    /// A Distribution's `--version` appends the core's version: the log and
+    /// the reason name the Distribution's own version, not the core's.
+    #[test]
+    fn a_distribution_that_does_not_start_is_named_by_its_own_version() {
+        let r = run_update_full(
+            false,
+            "cp $NEW $EXE && printf migrated > $DB",
+            None,
+            "acme-pdo 2.0.0 (core PDO 9.9.9)",
+        );
+        let log = r.journal.read_log("a1").unwrap().unwrap_or_default();
+        assert_eq!(r.exit, Some(1), "{log}");
+        let a = r.journal.read_attempt().unwrap();
+        assert_eq!(a.status, AttemptStatus::Failed, "{log}");
+        assert!(a.rolled_back);
+        assert_eq!(
+            a.reason.as_deref(),
+            Some(
+                "v2.0.0 did not answer within 2 s after the restart. \
+                 The previous version and its data were restored."
+            )
+        );
+        assert!(log.contains("installed 2.0.0"), "{log}");
+        assert!(!log.contains("9.9.9"), "{log}");
     }
 
     #[test]

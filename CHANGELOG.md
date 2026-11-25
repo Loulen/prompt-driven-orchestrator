@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.90.2
 
 - The one-click Update (Settings › Update) works again on an instance where an identity extension
   (`iam`) requires sign-in. Its `pdo service install` step took the running daemon, which refuses

@@ -14,6 +14,15 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- The one-click Update (Settings › Update) works again on an instance where an identity extension
+  (`iam`) requires sign-in. Its `pdo service install` step took the running daemon, which refuses
+  anonymous calls with `401`, for a foreign process: the step refused and the Update rolled back.
+  The port probe now recognises PDO's own `401 {"error": "unauthenticated"}` as a PDO daemon; any
+  other `401` still counts as foreign. `pdo service install` on a machine where a signed-in-only
+  daemon already runs now enables the unit for boot without starting a second instance.
+
 ## 2.90.1
 
 - The harness reference (`docs/reference/harnesses.md`) gains a section "Where a harness key

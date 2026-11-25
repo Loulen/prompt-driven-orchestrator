@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use super::env::{resolve_config_home, resolve_node_dir};
 use super::host_installation::stable_exe_path_from_env;
 use crate::application::ports::{CmdOutcome, ServiceHost};
-use crate::domain::service_unit::{connect_addr, PortState};
+use crate::domain::service_unit::{classify_daemon_reply, connect_addr, PortState};
 
 /// Production `ServiceHost`: real env lookups, real TCP probe, real
 /// `std::process::Command`.
@@ -71,17 +71,11 @@ impl ServiceHost for RealServiceHost {
             Err(_) => return PortState::Foreign,
         };
         match client.get(format!("http://{addr}/sessions")).send() {
-            Ok(resp) if resp.status().is_success() => {
-                let body = resp.text().unwrap_or_default();
-                // The `/sessions` payload carries `cap` + `version` — markers no
-                // random service would emit together.
-                if body.contains("\"cap\"") && body.contains("\"version\"") {
-                    PortState::PdoDaemon
-                } else {
-                    PortState::Foreign
-                }
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                classify_daemon_reply(status, &resp.text().unwrap_or_default())
             }
-            _ => PortState::Foreign,
+            Err(_) => PortState::Foreign,
         }
     }
 
@@ -118,6 +112,44 @@ impl ServiceHost for RealServiceHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+
+    /// A one-shot HTTP stub on loopback answering every request with `status`
+    /// and `body`; returns the port it holds.
+    fn http_stub(status: &'static str, body: &'static str) -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let reply = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(reply.as_bytes());
+            }
+        });
+        port
+    }
+
+    #[test]
+    fn a_daemon_refusing_with_the_admission_401_is_a_pdo_daemon() {
+        let port = http_stub(
+            "401 Unauthorized",
+            r#"{"error":"unauthenticated","message":"authentication required: sign in first","reason":"sign in first","redirect":"/ext/iam/sign-in"}"#,
+        );
+        let state = RealServiceHost.probe_port(SocketAddr::from(([127, 0, 0, 1], port)));
+        assert_eq!(state, PortState::PdoDaemon);
+    }
+
+    #[test]
+    fn a_foreign_401_is_foreign() {
+        let port = http_stub("401 Unauthorized", r#"{"error":"invalid_token"}"#);
+        let state = RealServiceHost.probe_port(SocketAddr::from(([127, 0, 0, 1], port)));
+        assert_eq!(state, PortState::Foreign);
+    }
 
     #[test]
     fn wildcard_service_probe_detects_a_listener_on_another_local_address() {

@@ -60,6 +60,11 @@ async fn the_assistant_opens_once_in_the_templates_folder_with_its_primer_and_ho
     let (name, cwd, _) = tmux.created.lock().unwrap()[0].clone();
     assert_eq!(name, LIBASSIST_SESSION_NAME);
     assert_eq!(cwd, root.path().join(".pdo/pipelines"));
+    assert_eq!(
+        host.launches.lock().unwrap()[0].working_dir.as_deref(),
+        Some(cwd.to_str().unwrap()),
+        "the extensions see the folder the assistant runs in"
+    );
     let primer = std::fs::read_to_string(root.path().join(".pdo/.libassist/assistant.md")).unwrap();
     assert!(primer.starts_with("# Pipeline Assistant Runtime Preamble"));
     assert!(primer.contains("http://localhost:6172/sessions/libassist/focus"));

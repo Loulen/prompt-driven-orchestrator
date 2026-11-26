@@ -2118,7 +2118,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-daemon"
-version = "2.92.0"
+version = "2.96.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2166,7 +2166,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-extension-api"
-version = "0.33.0"
+version = "0.37.1"
 dependencies = [
  "axum",
  "serde",
@@ -2177,7 +2177,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-harness"
-version = "2.92.0"
+version = "2.96.1"
 dependencies = [
  "aho-corasick",
  "filetime",
@@ -2194,7 +2194,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-kernel"
-version = "2.92.0"
+version = "2.96.1"
 dependencies = [
  "chrono",
  "form_urlencoded",
@@ -2209,7 +2209,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-pipeline"
-version = "2.92.0"
+version = "2.96.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2246,7 +2246,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-platform"
-version = "2.92.0"
+version = "2.96.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2272,7 +2272,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-review"
-version = "2.92.0"
+version = "2.96.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2302,7 +2302,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-run"
-version = "2.92.0"
+version = "2.96.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2340,7 +2340,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-sandbox"
-version = "2.92.0"
+version = "2.96.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2362,7 +2362,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-session"
-version = "2.92.0"
+version = "2.96.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2387,7 +2387,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-settings"
-version = "2.92.0"
+version = "2.96.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2420,7 +2420,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-skill"
-version = "2.92.0"
+version = "2.96.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2445,7 +2445,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-stats"
-version = "2.92.0"
+version = "2.96.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2474,7 +2474,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-telemetry"
-version = "2.92.0"
+version = "2.96.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -2500,7 +2500,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-trigger"
-version = "2.92.0"
+version = "2.96.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2533,7 +2533,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-workspace"
-version = "2.92.0"
+version = "2.96.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -3855,7 +3855,7 @@ dependencies = [
 
 [[package]]
 name = "tidy"
-version = "2.92.0"
+version = "2.96.1"
 
 [[package]]
 name = "tinystr"

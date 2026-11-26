@@ -7,7 +7,10 @@
 //! parent of a Run, its primary repository and the Projet recorded at its
 //! launch (ADR-0087), which the access checks read, its activity, which
 //! the date filter of the lists reads, and the status of each of its working
-//! nodes, which the row of the list draws as its progress.
+//! nodes, which the row of the list draws as its progress, and the name of
+//! each named node, which the extensions read (API 0.37).
+
+use std::collections::BTreeMap;
 
 use pdo_kernel::Actor;
 use serde::{Deserialize, Serialize};
@@ -23,7 +26,7 @@ use crate::domain::state::{NodeStatus, RunState, RunStatus};
 /// The shape of [`RunSummary`]: the Résumés written under another version
 /// are rebuilt from the event log at boot. Bump it with any change of the
 /// fields or of how they are derived.
-pub const SUMMARY_VERSION: i64 = 6;
+pub const SUMMARY_VERSION: i64 = 7;
 
 /// One Run, as the lists show it and the access checks read it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -72,6 +75,11 @@ pub struct RunSummary {
     /// status: the progress the row of the list draws.
     #[serde(default)]
     pub nodes: Vec<NodeProgress>,
+    /// The name of every node its pipeline names (`node_defs`), by node id:
+    /// what an extension's `Host::run_names` reads. A node without a name is
+    /// absent.
+    #[serde(default)]
+    pub node_names: BTreeMap<String, String>,
 }
 
 /// One working node of a Run, as the row of the list draws it.
@@ -99,6 +107,17 @@ pub(crate) fn working_nodes(run: &RunState) -> Vec<NodeProgress> {
                 .nodes
                 .get(&def.id)
                 .map_or(NodeStatus::Pending, |node| node.status.clone()),
+        })
+        .collect()
+}
+
+/// The name of every node of `run` that has one, by node id.
+fn node_names(run: &RunState) -> BTreeMap<String, String> {
+    run.node_defs
+        .iter()
+        .filter_map(|def| {
+            let name = def.name.as_deref().filter(|name| !name.is_empty())?;
+            Some((def.id.clone(), name.to_string()))
         })
         .collect()
 }
@@ -131,6 +150,7 @@ impl RunSummary {
             last_activity_at: activity.last().map(|span| span.to.clone()),
             activity,
             nodes: working_nodes(run),
+            node_names: node_names(run),
         }
     }
 }
@@ -265,6 +285,26 @@ mod tests {
                     status: NodeStatus::Pending,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn a_summary_names_every_named_node_whatever_its_type() {
+        let mut start = started("r", None);
+        start.payload.as_mut().unwrap()["node_defs"] = serde_json::json!([
+            { "id": "start", "name": "Début", "node_type": "start", "view_x": null, "view_y": null, "inputs": [], "outputs": [] },
+            { "id": "chat", "name": "Assistant", "node_type": "agent", "view_x": null, "view_y": null, "inputs": [], "outputs": [] },
+            { "id": "x", "node_type": "script", "view_x": null, "view_y": null, "inputs": [], "outputs": [] },
+            { "id": "end", "name": "Fin", "node_type": "end", "view_x": null, "view_y": null, "inputs": [], "outputs": [] },
+        ]);
+        let summary = summarize(&[start]).unwrap();
+        assert_eq!(
+            summary.node_names,
+            BTreeMap::from([
+                ("chat".to_string(), "Assistant".to_string()),
+                ("end".to_string(), "Fin".to_string()),
+                ("start".to_string(), "Début".to_string()),
+            ])
         );
     }
 

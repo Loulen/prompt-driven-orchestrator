@@ -148,6 +148,6 @@ pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// added, on the wire, the rank of a `palette` contribution,
 /// `UiContribution::rank`, and the counter of a global Action of `palette`;
 /// 0.30 only added `SessionKind::SupportAgent`; 0.34 only added
-/// `SessionLaunch::working_dir`; the next minor only adds
+/// `SessionLaunch::working_dir`; 0.35 only added
 /// `HostedRefusal::denied`).
 pub const OLDEST_COMPATIBLE_API_VERSION: &str = "0.1.0";

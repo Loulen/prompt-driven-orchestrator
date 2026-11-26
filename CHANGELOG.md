@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.94.0
 
 - Extensions (extension API, minor): a `HostedRefusal` built from a refused Operation carries its
   `Denied` (`HostedRefusal::denied`, `HostedRefusal::refused`, `From<Denied>`). An extension that

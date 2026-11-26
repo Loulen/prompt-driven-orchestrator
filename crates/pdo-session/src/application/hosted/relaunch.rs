@@ -258,7 +258,7 @@ impl Hosted {
         record: &HostedRecord,
     ) -> Result<(), HostedRefusal> {
         self.allowed(actor, action, record.id())
-            .map_err(|denied| HostedRefusal::new(403, denied.to_string()))
+            .map_err(HostedRefusal::refused)
     }
 
     /// The Operation `session` × `action` on the session named `id`, in the

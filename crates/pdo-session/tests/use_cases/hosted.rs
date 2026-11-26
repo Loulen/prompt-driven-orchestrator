@@ -201,6 +201,11 @@ async fn an_agent_opens_running_without_a_byte_in_its_folder_nor_a_run() {
     assert_eq!(launches[0].session.key.as_deref(), Some("n1"));
     assert_eq!(launches[0].started_by, Some(alice()));
     assert_eq!(launches[0].projects, ["p1"]);
+    assert_eq!(
+        launches[0].working_dir.as_deref(),
+        Some(folder.path().to_str().unwrap()),
+        "the extensions see the folder the session runs in"
+    );
 
     let asked = w.host.asked();
     assert_eq!(asked[0].resource, ResourceKind::Session);
@@ -488,6 +493,36 @@ async fn a_restart_takes_back_the_live_sessions_with_their_starter() {
     assert_eq!(gone_now.state, HostedState::Ended);
     assert_eq!(gone_now.end_reason, Some(EndReason::Exited));
     assert_eq!(after.ledger.hosted_live(), 1);
+}
+
+#[tokio::test]
+async fn a_relaunch_publishes_the_folder_it_resolves_again_not_the_recorded_one() {
+    let w = World::new();
+    w.ended(OpenSession::shell("s")).await;
+    assert_eq!(
+        w.host.launches.lock().unwrap()[0].working_dir.as_deref(),
+        Some(w.home.path().to_str().unwrap())
+    );
+    // The daemon restarts with another home folder: the recorded one is stale.
+    let after = World::over(w.store.clone(), w.tmux.clone(), w.host.clone());
+    after.hosted.restore();
+
+    let session = after.hosted.relaunch(EXT, &bob(), "s").await.unwrap();
+
+    let launches = after.host.launches.lock().unwrap().clone();
+    let relaunched = launches.last().unwrap();
+    assert_eq!(
+        relaunched.working_dir.as_deref(),
+        Some(after.home.path().to_str().unwrap()),
+        "the folder resolved for this launch"
+    );
+    let created = after.tmux.created.lock().unwrap();
+    let (_, dir, _) = created
+        .iter()
+        .rev()
+        .find(|(n, _, _)| n == &session.id)
+        .unwrap();
+    assert_eq!(dir, after.home.path(), "tmux runs in the same folder");
 }
 
 #[tokio::test]

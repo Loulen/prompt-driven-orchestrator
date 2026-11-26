@@ -72,17 +72,20 @@ impl Hosted {
         // Asked once for this launch, before its conversation is looked for:
         // a `CLAUDE_CONFIG_DIR` moves where the relaunched harness keeps it.
         let contribution = {
-            let (hosted, record, session_ref, actor) = (
+            let (hosted, record, session_ref, actor, cwd) = (
                 self.clone(),
                 record.clone(),
                 session_ref.clone(),
                 actor.clone(),
+                cwd.clone(),
             );
-            tokio::task::spawn_blocking(move || hosted.contribution(&record, &session_ref, &actor))
-                .await
-                .map_err(|e| {
-                    HostedRefusal::new(500, format!("the launch contribution panicked: {e}"))
-                })?
+            tokio::task::spawn_blocking(move || {
+                hosted.contribution(&record, &session_ref, &actor, &cwd)
+            })
+            .await
+            .map_err(|e| {
+                HostedRefusal::new(500, format!("the launch contribution panicked: {e}"))
+            })?
         };
         let relaunch = match &harness {
             Some(harness) => {

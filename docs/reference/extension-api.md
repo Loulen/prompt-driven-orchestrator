@@ -487,11 +487,13 @@ library assistant do too. `session_env` and `session_preamble` receive a `Sessio
                "node_id": null, "iter": null },
   "started_by": { "kind": "identified", "namespace": "acme", "id": "bob" },
   "projects": ["p1"],
-  "node": null }
+  "node": null,
+  "working_dir": null }
 ```
 
 - `session.kind`: `node`, `manager`, `library_assistant`, `hosted` (0.19, a Session hébergée:
-  `session.extension` and `session.key` name it, absent for the other kinds), or `shell`, in the
+  `session.extension` and `session.key` name it, absent for the other kinds), `support_agent`
+  (0.30, the Agent de support), or `shell`, in the
   events only: a run shell runs no agent and asks no hook. `session.id` is the tmux session's name, the one the
   terminals use (`/sessions/<id>/pty`).
 - `started_by`: who starts the session. A Node: the creator of its Run. The Pipeline Manager:
@@ -503,6 +505,13 @@ library assistant do too. `session_env` and `session_preamble` receive a `Sessio
 - `projects`: the Projet recorded on the Run (ADR-0087), or the Projet of a Session hébergée;
   none for a Run in no Projet and for the library assistant.
 - `node`: for a Node, its `NodeLaunch` (above); `null` otherwise.
+- `working_dir` (0.34): the absolute path of the folder a session outside any Run runs in, the
+  folder its tmux session starts in. The Agent de support: its own folder,
+  `<home>/.pdo/support/<session>`. The library assistant: `<repository>/.pdo/pipelines`. A
+  Session hébergée: the folder it is opened in, resolved again at each relaunch (a relaunch
+  publishes the folder of that launch). `null` for a Node (read `node.repository`) and for the
+  Pipeline Manager. An extension that sets a `CLAUDE_CONFIG_DIR` reads it to trust that folder
+  ahead of time, so the harness does not stop on its trust dialog.
 
 By default `session_env` answers `node_env(launch.node)` for a Node and nothing for any other
 session, and `session_preamble` the same with `node_preamble`: an extension that only knows the

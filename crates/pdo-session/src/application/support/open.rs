@@ -65,9 +65,11 @@ impl Support {
             SupportError::Folder(format!("failed to create {}: {e}", dir.display()))
         })?;
         let session_ref = SessionRef::new(&session, SessionKind::SupportAgent);
-        let contribution = self
-            .host
-            .session_launch(&SessionLaunch::new(session_ref.clone()).started_by(actor.clone()));
+        let contribution = self.host.session_launch(
+            &SessionLaunch::new(session_ref.clone())
+                .started_by(actor.clone())
+                .in_dir(dir.to_string_lossy()),
+        );
         let instructions = format!(
             "{SUPPORT_AGENT_PROMPT}\n{}",
             self.instance_section(&dir).await?

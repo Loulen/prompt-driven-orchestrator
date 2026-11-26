@@ -19,7 +19,7 @@ use crate::domain::transition_guard::{validate_transition, Verdict};
 pub struct AppendEvent {
     store: Arc<dyn EventStore>,
     bus: Arc<dyn EventBus>,
-    /// The Projet of each Run (API 0.34): a `RunStarted` records its own.
+    /// The Projet of each Run (API 0.36): a `RunStarted` records its own.
     run_projects: Arc<RunProjects>,
 }
 
@@ -46,7 +46,7 @@ impl AppendEvent {
     ///
     /// The single point that names, on the events of a gesture, the Actor
     /// who made it ([`crate::application::gesture`]), and the one that
-    /// records the Projet of a Run that starts (API 0.34): once the event is
+    /// records the Projet of a Run that starts (API 0.36): once the event is
     /// stored, before the bus announces it, so whoever hears of the Run can
     /// read its Projet.
     pub async fn execute(&self, event: &Event) -> anyhow::Result<()> {

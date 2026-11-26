@@ -14,6 +14,30 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- Extensions (extension API, minor): `Host::run_project(run_id)` returns the Projet a Run was
+  launched in, the `project_id` that `GET /runs/<id>` shows, and `None` for an unknown or forgotten
+  Run or a Run in no Projet. It is synchronous: an extension may call it from its own `authorize`
+  to place an Operation on a Run in the Run's Projet instead of the one a client names.
+
+## 2.94.0
+
+- Extensions (extension API, minor): a `HostedRefusal` built from a refused Operation carries its
+  `Denied` (`HostedRefusal::denied`, `HostedRefusal::refused`, `From<Denied>`). An extension that
+  opens, relaunches or drives a hosted session answers the refusal with `denied.into_response()`:
+  the person reads the Droits extension's refusal sentence, the same body as a refusal of the
+  core. `message` and `Display` are unchanged.
+
+## 2.93.0
+
+- Extensions (extension API, minor): `SessionLaunch::working_dir`, the absolute path of the folder
+  a session outside any Run runs in, given to `session_env` and `session_preamble` for the support
+  agent (`<home>/.pdo/support/<session>`), the library assistant (`<repository>/.pdo/pipelines`)
+  and a hosted session (its folder, resolved again at each relaunch); `null` for a Node and the
+  Pipeline Manager. An extension that sets a `CLAUDE_CONFIG_DIR` can trust that folder ahead of
+  time.
+
 ## 2.92.0
 
 - New command `pdo service refresh [--port] [--bind] [--dry-run]`: rewrites the installed service

@@ -29,7 +29,7 @@
 //!   its descendants ([`archive`]), `retry_all` ([`retry_all`]).
 //! - Who has a Run open in a browser ([`presence`], API 0.12): what each
 //!   connection of the event stream shows, announced on the bus.
-//! - The Projet of each Run, in memory ([`run_projects`], API 0.34).
+//! - The Projet of each Run, in memory ([`run_projects`], API 0.36).
 //! - The daemon's own transitions: [`boot_recovery`], the [`stale`] sweep,
 //!   the sandbox preparation ([`sandbox_prep`]), an edit of a run-scoped
 //!   pipeline on disk ([`pipeline_modified`]).

@@ -317,7 +317,7 @@ fn identify_layer(extensions: Extensions, inner: Option<RouterLayer>) -> RouterL
         started.serve_project_names(resources.project_names.clone());
         let contexts = contexts::wire(resources, contexts_host.clone());
         // API 0.9: an extension's `Host::create_run` creates through the Runs;
-        // API 0.12 / 0.34: its `Host::presences`, `Host::run_cost` and
+        // API 0.12 / 0.36: its `Host::presences`, `Host::run_cost` and
         // `Host::run_project` read them.
         started.serve_runs(Arc::new(ExtensionRuns::of(&contexts.run)));
         started.serve_run_views(Arc::new(ExtensionRuns::of(&contexts.run)));

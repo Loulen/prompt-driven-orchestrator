@@ -1,6 +1,6 @@
 //! The port through which an extension's [`Host`](pdo_extension_api::Host)
 //! sees a Run as people do (API 0.12): who has it open, what it cost, and
-//! (API 0.34) the Projet it was launched in.
+//! (API 0.36) the Projet it was launched in.
 
 use pdo_extension_api::{Presence, RunCostRead};
 
@@ -16,7 +16,7 @@ pub trait RunViews: Send + Sync {
     /// daemon does not know.
     fn run_cost(&self, run_id: &str) -> RunCostRead;
 
-    /// The Projet `run_id` was launched in (API 0.34); `None` for a Run the
+    /// The Projet `run_id` was launched in (API 0.36); `None` for a Run the
     /// daemon does not know (or forgot) and a Run in no Projet. Synchronous
     /// and quick: answered from memory, never from the store.
     fn run_project(&self, run_id: &str) -> Option<String>;

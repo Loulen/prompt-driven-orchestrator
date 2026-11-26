@@ -1,5 +1,5 @@
 //! A Run as the test extension sees it through its `Host` (API 0.12): the
-//! core's fixture for the Presences, the cost and (API 0.34) the Projet of a
+//! core's fixture for the Presences, the cost and (API 0.36) the Projet of a
 //! Run.
 //!
 //! - `GET /ext/test/runs/<id>/view`: `{"presences": […], "cost": <RunCost |

@@ -107,7 +107,7 @@ pub trait Host: Send + Sync {
         None
     }
 
-    /// The Projet the Run `run_id` was launched in (API 0.34, ADR-0087 of the
+    /// The Projet the Run `run_id` was launched in (API 0.36, ADR-0087 of the
     /// core): the `project_id` `GET /runs/{id}` shows. `None` for a Run the
     /// core does not know (or forgot), a Run launched in no Projet, and by
     /// default. Synchronous and quick: an extension may call it from its own

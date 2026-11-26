@@ -141,6 +141,12 @@ async fn an_actor_opens_asks_and_closes_its_own_support_agent() {
     // Its folder holds the embedded prompt, as its instructions, and the
     // first question.
     let dir = daemon.repo_root().join("home/.pdo/support").join(&session);
+    // The extensions see the folder the agent runs in (CORE-323).
+    assert_eq!(launch["launch"]["working_dir"], dir.to_str().unwrap());
+    assert!(
+        env.contains(&format!("PWD={}\n", dir.display())),
+        "the agent runs in it: {env}"
+    );
     let instructions = std::fs::read_to_string(dir.join("AGENTS.md")).unwrap();
     assert!(instructions.contains("pdo help"), "{instructions}");
     let question = std::fs::read_to_string(dir.join("question.md")).unwrap();

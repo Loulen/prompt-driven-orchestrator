@@ -10,7 +10,7 @@ use std::pin::Pin;
 
 use serde::{Deserialize, Serialize};
 
-use crate::Actor;
+use crate::{Actor, Denied};
 
 /// What a Session hébergée runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -253,11 +253,16 @@ impl HostedSession {
 
 /// Why the core did not do what an extension asked of a Session hébergée: an
 /// HTTP status and a message, as a route of the extension would answer them.
+/// A refused Operation also carries its [`Denied`] (CORE-208): the extension
+/// answers it with `denied.into_response()`, the body of a refusal of the
+/// core, so the person reads the Phrase de refus.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct HostedRefusal {
     pub status: u16,
     pub message: String,
+    /// The refusal of the Operation, when the authorization refused it.
+    pub denied: Option<Denied>,
 }
 
 impl HostedRefusal {
@@ -265,6 +270,17 @@ impl HostedRefusal {
         Self {
             status,
             message: message.into(),
+            denied: None,
+        }
+    }
+
+    /// `403`: the authorization refused the Operation. The message is the
+    /// refusal's technical one; the [`Denied`] travels with it.
+    pub fn refused(denied: Denied) -> Self {
+        Self {
+            status: 403,
+            message: denied.to_string(),
+            denied: Some(denied),
         }
     }
 
@@ -281,6 +297,12 @@ impl fmt::Display for HostedRefusal {
 }
 
 impl std::error::Error for HostedRefusal {}
+
+impl From<Denied> for HostedRefusal {
+    fn from(denied: Denied) -> Self {
+        Self::refused(denied)
+    }
+}
 
 /// What a gesture on a Session hébergée answers: the session as it now
 /// stands, or the refusal.
@@ -400,5 +422,32 @@ mod tests {
             HostedRefusal::new(409, "session cap reached").to_string(),
             "session cap reached (409)"
         );
+    }
+
+    #[test]
+    fn a_refused_operation_carries_its_denied_and_reads_as_before() {
+        let refusal = HostedRefusal::refused(Denied::new("r").saying("P"));
+        assert_eq!(refusal.status, 403);
+        assert_eq!(refusal.message, "operation refused: r");
+        assert_eq!(refusal.to_string(), "operation refused: r (403)");
+        let denied = refusal.denied.expect("the denied travels");
+        assert_eq!(denied.sentence(), "P");
+        assert_eq!(denied.reason, "r");
+    }
+
+    #[test]
+    fn a_denied_without_a_sentence_becomes_a_refusal_with_the_generic_one() {
+        let refusal = HostedRefusal::from(Denied::new("r"));
+        assert_eq!(refusal, HostedRefusal::refused(Denied::new("r")));
+        assert_eq!(
+            refusal.denied.as_ref().map(Denied::sentence),
+            Some(crate::GENERIC_REFUSAL)
+        );
+    }
+
+    #[test]
+    fn a_refusal_other_than_an_operation_carries_no_denied() {
+        assert_eq!(HostedRefusal::new(409, "x").denied, None);
+        assert_eq!(HostedRefusal::unavailable("y").denied, None);
     }
 }

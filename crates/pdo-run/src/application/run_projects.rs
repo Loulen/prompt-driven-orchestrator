@@ -1,6 +1,6 @@
 //! The Projet of each Run, as an extension's
 //! [`Host::run_project`](pdo_extension_api::Host::run_project) reads it (API
-//! 0.34): answered from memory, loaded from the Résumés before the daemon
+//! 0.36): answered from memory, loaded from the Résumés before the daemon
 //! serves, then kept current by [`AppendEvent`](super::append_event::AppendEvent)
 //! and [`Runs::forget_run`].
 

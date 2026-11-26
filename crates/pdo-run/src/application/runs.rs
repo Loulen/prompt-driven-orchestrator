@@ -102,7 +102,7 @@ pub struct Runs {
     pub(crate) options: RunsOptions,
     append_event: AppendEvent,
     read_run: ReadRun,
-    /// The Projet of each Run, in memory (API 0.34), shared with
+    /// The Projet of each Run, in memory (API 0.36), shared with
     /// [`AppendEvent`], which records it.
     pub(crate) run_projects: Arc<RunProjects>,
     pub(crate) tmux: Arc<dyn Tmux>,

@@ -1,4 +1,4 @@
-//! The Projet of each Run, by Run id, in memory (API 0.34): what an
+//! The Projet of each Run, by Run id, in memory (API 0.36): what an
 //! extension's [`Host::run_project`](pdo_extension_api::Host::run_project)
 //! reads, synchronously, even from its own `authorize`.
 //!

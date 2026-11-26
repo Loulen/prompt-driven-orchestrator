@@ -22,6 +22,12 @@ const E2E_WAITER_MESSAGE = "Which layout do you prefer?";
 
 export default defineConfig({
   testDir: "./e2e",
+  // Only the specs: `e2e/*.test.ts` are vitest unit tests of the harness.
+  testMatch: "**/*.spec.ts",
+  // CORE-341: reaps the Runs the suite created and fails on any branch or
+  // worktree they leave in the repo it runs from (e2e/run-ledger.ts). Runs
+  // after the webServer starts; its teardown runs before the webServer stops.
+  globalSetup: "./e2e/run-ledger.ts",
   timeout: 30_000,
   expect: { timeout: 5_000 },
   fullyParallel: false,
@@ -106,10 +112,12 @@ export default defineConfig({
       // run in the daemon's DB (admission::count_live_node_sessions). The suite
       // creates many runs whose stub nodes stay "running" (the `sleep` branch
       // below); specs that create runs archive them in `afterAll`
-      // (helpers.ts `cleanupRun`) so the live count stays near zero and never
-      // approaches the default cap. A modest bump gives headroom for the
-      // handful of runs a single spec holds open at once without lifting the
-      // tmux-protecting cap so high that a missed cleanup could pile up.
+      // (helpers.ts `cleanupRuns`) so the live count stays near zero and never
+      // approaches the default cap. A spec that forgets is caught after the
+      // suite by the run ledger (globalSetup above), not mid-suite. A modest
+      // bump gives headroom for the handful of runs a single spec holds open at
+      // once without lifting the tmux-protecting cap so high that a missed
+      // cleanup could pile up.
       PDO_SESSION_CAP: "64",
       // #427: the e2e daemon is the REAL binary, so it reads `PDO_PRICE_SYNC` from
       // the environment (armed by default). Disarm it: the suite must never depend

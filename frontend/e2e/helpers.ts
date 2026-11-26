@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -133,7 +134,7 @@ export async function openRunNodeDetails(
 }
 
 /** baseURL of the e2e daemon, mirroring playwright.config's PDO_E2E_PORT. */
-const E2E_BASE_URL = `http://127.0.0.1:${Number(process.env.PDO_E2E_PORT ?? 5273)}`;
+export const E2E_BASE_URL = `http://127.0.0.1:${Number(process.env.PDO_E2E_PORT ?? 5273)}`;
 
 /**
  * Archive one or more runs and reap their node + manager tmux sessions
@@ -147,7 +148,11 @@ const E2E_BASE_URL = `http://127.0.0.1:${Number(process.env.PDO_E2E_PORT ?? 5273
  * `afterAll` keeps each spec's footprint near zero.
  *
  * Uses `fetch` (not a Page fixture) so it works in `afterAll`, where no page is
- * available. Best-effort: never throws.
+ * available. Best-effort: never throws. The guarantee is the run ledger
+ * (`run-ledger.ts`, CORE-341): after the suite it reaps every Run a spec left
+ * behind and fails on any leftover branch or worktree. This helper still frees
+ * the admission slots mid-suite, and records each id in the ledger so the
+ * teardown checks its git leftovers too.
  */
 export async function cleanupRuns(
   ...runIds: (string | undefined)[]
@@ -155,6 +160,7 @@ export async function cleanupRuns(
   for (const runId of runIds) {
     if (!runId) continue;
     try {
+      await recordInLedger(runId);
       // Archive: marks the run terminal (frees its admission slot) + reaps its
       // node/manager tmux sessions.
       await fetch(`${E2E_BASE_URL}/runs/${runId}/commands`, {
@@ -169,5 +175,27 @@ export async function cleanupRuns(
     } catch {
       // best-effort teardown
     }
+  }
+}
+
+/**
+ * Tell the run ledger (`run-ledger.ts`) a spec reaped this Run itself, with its
+ * pipeline: the Run is gone from `GET /runs` by the teardown, which still
+ * checks its git leftovers and must name it.
+ */
+async function recordInLedger(runId: string): Promise<void> {
+  const ledger = process.env.PDO_E2E_RUN_LEDGER;
+  if (!ledger) return;
+  let pipeline = "";
+  try {
+    const resp = await fetch(`${E2E_BASE_URL}/runs/${runId}`);
+    if (resp.ok) pipeline = ((await resp.json()) as { pipeline_name?: string }).pipeline_name ?? "";
+  } catch {
+    // The id alone still widens the teardown's git check.
+  }
+  try {
+    fs.appendFileSync(ledger, `${runId}\t${pipeline}\n`);
+  } catch {
+    // The ledger only widens the teardown's git check; never fail a spec on it.
   }
 }

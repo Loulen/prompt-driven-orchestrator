@@ -103,7 +103,9 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
-    exclude: ['e2e/**', 'node_modules/**'],
+    // The Playwright specs are not vitest's; the e2e harness's pure logic
+    // (`e2e/*.test.ts`, e.g. the run ledger) is.
+    exclude: ['e2e/**/*.spec.ts', 'node_modules/**'],
     // Heavy App/EditCanvas jsdom renders routinely exceed vitest's 5s default
     // when the suite runs on a loaded machine (parallel workers); the failures
     // were pure timeouts moving between unrelated heavy tests run to run.

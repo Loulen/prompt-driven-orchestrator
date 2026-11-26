@@ -140,7 +140,7 @@ impl DockerfileStore for InMemoryDockerfiles {
     }
 }
 
-/// A staged home in memory: which Runs have a staging, and what was done to it.
+/// A staged home in memory: which Runs have a prepared staging, and what was done to it.
 #[derive(Default)]
 pub(crate) struct InMemoryStaging {
     staged: Mutex<Vec<String>>,
@@ -158,7 +158,7 @@ impl InMemoryStaging {
 }
 
 impl HomeStaging for InMemoryStaging {
-    fn exists(&self, _sandbox_root: &Path, run_id: &str) -> bool {
+    fn is_prepared(&self, _sandbox_root: &Path, run_id: &str) -> bool {
         self.staged.lock().unwrap().iter().any(|r| r == run_id)
     }
 

@@ -3,7 +3,8 @@ use serde::Serialize;
 use crate::{
     Actor, ActorDisplay, Attributes, Authorization, EntityRef, HostedConfig, HostedGesture,
     HostedRefusal, HostedSession, LiveArtifact, NewRun, NodeNotWritten, NodeWrite, NodeWriting,
-    OpenSession, OperationApplied, Presence, Resource, RunCostRead, RunCreation, RunNotCreated,
+    OpenSession, OperationApplied, Presence, Resource, RunCostRead, RunCreation, RunNames,
+    RunNotCreated,
 };
 
 /// The `type` of an event an extension publishes, on `/ws` and in the other
@@ -107,6 +108,16 @@ pub trait Host: Send + Sync {
         None
     }
 
+    /// The Projet the Run `run_id` was launched in (API 0.36, ADR-0087 of the
+    /// core): the `project_id` `GET /runs/{id}` shows. `None` for a Run the
+    /// core does not know (or forgot), a Run launched in no Projet, and by
+    /// default. Synchronous and quick: an extension may call it from its own
+    /// `authorize`, to place an Operation on a Run in the Run's Projet rather
+    /// than in the one a client names.
+    fn run_project(&self, _run_id: &str) -> Option<String> {
+        None
+    }
+
     /// Tell the core that the suspensions of the Triggers changed (API 0.11):
     /// what [`Extension::trigger_suspension`](crate::Extension::trigger_suspension)
     /// answers is no longer what it answered, for a cause outside any
@@ -133,6 +144,18 @@ pub trait Host: Send + Sync {
     /// from a hook.
     fn run_cost(&self, _run_id: &str) -> RunCostRead {
         Box::pin(std::future::ready(None))
+    }
+
+    /// How people name the Run `run_id` and its Nodes (API 0.37): its display
+    /// name (its `name`, else its Pipeline's name) and, by Node id, the name
+    /// its pipeline gives each Node that has one, as `GET /runs/{id}` reads
+    /// them. `None` for a Run the core does not know, an archived Run, a
+    /// forgotten Run, and by default: show the ids then. Synchronous and
+    /// quick, from memory: a renaming is answered before its `run_renamed` is
+    /// announced. It asks no Actor: hiding a Run's name from who may not read
+    /// it (`run` × `read`) is the caller's job.
+    fn run_names(&self, _run_id: &str) -> Option<RunNames> {
+        None
     }
 
     /// Have the core open the Session hébergée `open` on behalf of `actor`
@@ -426,6 +449,7 @@ mod tests {
         host.applied(OperationApplied::new(Actor::LocalOperator, op, None));
         assert_eq!(host.catalogue(), crate::core_resources());
         assert_eq!(host.project_name("prj-1"), None);
+        assert_eq!(host.run_project("r1"), None);
         host.triggers_changed();
     }
 
@@ -447,12 +471,14 @@ mod tests {
         assert_eq!(Older.project_name("prj-1"), None);
         Older.triggers_changed();
         assert!(Older.presences("r1").is_empty());
+        assert_eq!(Older.run_project("r1"), None);
     }
 
     #[tokio::test]
     async fn the_neutral_host_sees_nobody_and_no_cost() {
         assert!(NeutralHost.presences("r1").is_empty());
         assert_eq!(NeutralHost.run_cost("r1").await, None);
+        assert_eq!(NeutralHost.run_names("r1"), None);
     }
 
     #[tokio::test]

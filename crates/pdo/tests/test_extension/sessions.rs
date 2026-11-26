@@ -7,7 +7,8 @@
 //! - `POST /ext/test/sessions` opens one on behalf of the caller (the body is
 //!   an [`OpenSession`]: `{"key", "kind": "agent"|"shell", "config"?,
 //!   "folder"?, "project"?}`) and answers the session (`201`) or the
-//!   refusal (`{"error"}`, with its status);
+//!   refusal: the core's body for a refused Operation (`operation_refused`,
+//!   its `reason` and `sentence`), `{"error"}` with its status otherwise;
 //! - `GET /ext/test/sessions` lists them, `GET /ext/test/sessions/<key>`
 //!   reads one;
 //! - `DELETE /ext/test/sessions/<key>` terminates it on behalf of the caller;
@@ -76,7 +77,12 @@ pub fn identify(request: &RequestParts) -> Option<Actor> {
     })
 }
 
+/// The answer to `refusal`: the core's body for a refused Operation (its
+/// Phrase de refus, CORE-208), `{"error"}` with its status otherwise.
 fn refused(refusal: HostedRefusal) -> Response {
+    if let Some(denied) = refusal.denied {
+        return denied.into_response();
+    }
     let status = StatusCode::from_u16(refusal.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     (status, Json(json!({ "error": refusal.message }))).into_response()
 }

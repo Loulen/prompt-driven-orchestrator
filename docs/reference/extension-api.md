@@ -9,7 +9,8 @@ Version: **0.20.0** (0.17 added the design system of `@pdo/extension-ui`, see
 Theme, independent of the mode, and the theme script, see
 [extension-ui.md](extension-ui.md#tokens), and in the command field the rank of a group, the
 counter of a global Action and the fixed shape of a result's status, see
-[extension-ui.md](extension-ui.md#palette); 0.36 the Projet of a Run, `Host::run_project`). In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
+[extension-ui.md](extension-ui.md#palette); 0.36 the Projet of a Run, `Host::run_project`; 0.37 the names of a Run and its Nodes,
+`Host::run_names`). In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
 version the daemon still runs (`0.1.0`: no minor has broken the wire so far).
 
 ## The hooks
@@ -333,6 +334,15 @@ core's mechanisms (amendment #34):
   follows the rules of a `RunCost`: one descendant without a cost makes every sum it belongs to
   unknown, one lower bound makes them lower bounds. `tree` is absent for a Run without child Run. Await it from a route or a task. An extension that
   aggregates costs reads them so, without reading the transcripts.
+- `run_names(run_id)` (0.37): how people name the Run and its Nodes, `RunNames { name, nodes }`:
+  `name` is its display name (its `name`, else its Pipeline's name), `nodes` the name of every
+  Node its pipeline names, by Node id (the `node_defs` of `GET /runs/<id>`; a Node without a name
+  is absent, show its id). `None` for a Run the core does not know, an archived Run and a
+  forgotten one: show the ids then. Synchronous and quick, from memory: the core loads the names
+  from the Résumés de Run before it serves and keeps them at each start, renaming and archiving of
+  a Run, before the event is announced. It asks no Actor: hiding a Run's name from who may not
+  read it (`run` × `read`) is the extension's job. A command line (`pdo ext <id> …`) names the Runs
+  so, without the core's HTTP.
 - `triggers_changed()` (0.11): the suspensions of the Triggers changed for a cause outside a
   Trigger's mutation, one the extension holds itself. The core announces
   `{"type": "trigger_updated"}`, without `trigger_id`, and the list of the Triggers reads them all

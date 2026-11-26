@@ -12,7 +12,8 @@
 //! and to a Trigger's guard, told when it ends ([`GuardEnd`]),
 //! observe who starts a session, takes control of its terminal and when it
 //! ends ([`SessionEvent`]), suspend a Trigger, see a Run as people do: who
-//! has it open ([`Presence`]) and what it cost ([`RunCost`]), and have the core
+//! has it open ([`Presence`]), what it cost ([`RunCost`]) and how it and its
+//! Nodes are named ([`RunNames`]), and have the core
 //! hold agents and shells outside any Run ([`HostedSession`]), answer a Node
 //! that waits for a person on behalf of an Actor ([`NodeWrite`]) and lead a
 //! person to a Node ([`node_link`]), and offer Destinations de bug report
@@ -101,7 +102,8 @@ pub use node_write::{
 pub use operation::{Operation, ResourceKind, Verb};
 pub use run_creation::{ExtensionData, NewRun, Provenance, RunCreation, RunNotCreated, RunRepo};
 pub use run_view::{
-    Presence, RunCost, RunCostRead, RunDepthCost, RunTreeCost, PRESENCE_ARRIVED, PRESENCE_LEFT,
+    Presence, RunCost, RunCostRead, RunDepthCost, RunNames, RunTreeCost, PRESENCE_ARRIVED,
+    PRESENCE_LEFT,
 };
 pub use session::{
     SessionChange, SessionEvent, SessionKind, SessionLaunch, SessionRef, SESSION_ENDED,
@@ -150,5 +152,5 @@ pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// 0.30 only added `SessionKind::SupportAgent`; 0.34 only added
 /// `SessionLaunch::working_dir`; 0.35 only added
 /// `HostedRefusal::denied`; 0.36 only added
-/// `Host::run_project`).
+/// `Host::run_project`; 0.37 only added `Host::run_names` and `RunNames`).
 pub const OLDEST_COMPATIBLE_API_VERSION: &str = "0.1.0";

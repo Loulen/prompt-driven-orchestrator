@@ -419,6 +419,11 @@ async fn forgetting_needs_an_archived_run_then_purges_and_announces_it() {
     seed_relay(&w, "r1").await;
     let (status, _) = body(w.runs.forget_run(&Actor::LocalOperator, "r1").await).await;
     assert_eq!(status, 409, "a live Run cannot be forgotten");
+    assert_eq!(
+        w.runs.run_names("r1").map(|names| names.name).as_deref(),
+        Some("relay"),
+        "a live Run is named"
+    );
 
     for kind in [EventKind::RunCompleted, EventKind::RunArchived] {
         w.runs
@@ -427,9 +432,11 @@ async fn forgetting_needs_an_archived_run_then_purges_and_announces_it() {
             .await
             .unwrap();
     }
+    assert_eq!(w.runs.run_names("r1"), None, "an archived Run has no name");
     let (status, answer) = body(w.runs.forget_run(&Actor::LocalOperator, "r1").await).await;
     assert_eq!(status, 200, "{answer}");
     assert_eq!(answer["status"], "forgotten");
+    assert_eq!(w.runs.run_names("r1"), None, "nor a forgotten one");
     assert!(kinds(&w, "r1").is_empty(), "the log is purged");
     assert!(w.store.forgotten.lock().unwrap().contains("r1"));
     assert!(w

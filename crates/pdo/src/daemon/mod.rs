@@ -143,6 +143,11 @@ pub async fn serve_with_config(
     load_project_names(&SqliteProjects::new(db.clone()), &project_names).await;
     // API 0.34: and the Projet of each Run, from the Résumés rebuilt above.
     run.load_run_projects().await;
+    // API 0.37: and the names of the Runs, from their Résumés, current by
+    // now, before any append can name a Run fresher than what is loaded.
+    if let Err(e) = run.load_run_names().await {
+        warn!("the names of the Runs could not be loaded: {e:#}");
+    }
     platform
         .init()
         .await

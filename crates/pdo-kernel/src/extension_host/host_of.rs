@@ -9,7 +9,7 @@ use pdo_extension_api::{
     ActorDisplay, Attributes, Authorization, EntityRef, ExtensionData, ExtensionEvent, Host,
     HostedConfig, HostedGesture, HostedRefusal, HostedSession, LiveArtifact, NewRun,
     NodeNotWritten, NodeWrite, NodeWriting, OpenSession, OperationApplied, Presence, Resource,
-    RunCostRead, RunCreation, RunNotCreated,
+    RunCostRead, RunCreation, RunNames, RunNotCreated,
 };
 
 use super::{ExtensionHost, Extensions, HostedSessions, Registry};
@@ -131,6 +131,13 @@ impl Host for ExtensionHostOf {
             Some(views) => views.run_cost(run_id),
             None => Box::pin(std::future::ready(None)),
         }
+    }
+
+    fn run_names(&self, run_id: &str) -> Option<RunNames> {
+        self.registry
+            .upgrade()
+            .and_then(|registry| registry.run_views.get().cloned())
+            .and_then(|views| views.run_names(run_id))
     }
 
     fn run_project(&self, run_id: &str) -> Option<String> {

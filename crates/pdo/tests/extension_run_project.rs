@@ -1,4 +1,4 @@
-//! API 0.34 against the real daemon, with the test extension: the Projet a
+//! API 0.36 against the real daemon, with the test extension: the Projet a
 //! Run was launched in, as the extension's `Host::run_project` reads it.
 //!
 //! It is the `project_id` `GET /runs/<id>` shows; `null` for a Run in no

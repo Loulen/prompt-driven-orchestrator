@@ -1,4 +1,4 @@
-//! The Projet of each Run, in memory (API 0.34): recorded when a Run starts,
+//! The Projet of each Run, in memory (API 0.36): recorded when a Run starts,
 //! before anyone hears of it, forgotten with the Run, loaded from the Résumés
 //! at boot.
 

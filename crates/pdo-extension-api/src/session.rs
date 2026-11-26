@@ -118,6 +118,12 @@ pub struct SessionLaunch {
     /// For a Node, its launch as [`Extension::node_env`](crate::Extension::node_env)
     /// sees it; `None` for any other session.
     pub node: Option<NodeLaunch>,
+    /// The absolute path of the folder the session runs in, for a session
+    /// outside any Run: the Agent de support, the library assistant and a
+    /// Session hébergée (the folder it is opened or relaunched in). `None`
+    /// for a Node (read [`NodeLaunch::repository`]) and the Pipeline Manager.
+    /// API 0.34; absent before.
+    pub working_dir: Option<String>,
 }
 
 impl SessionLaunch {
@@ -128,6 +134,7 @@ impl SessionLaunch {
             started_by: None,
             projects: Vec::new(),
             node: None,
+            working_dir: None,
         }
     }
 
@@ -150,6 +157,13 @@ impl SessionLaunch {
     /// The same launch, of the Node `node`.
     pub fn of_node(mut self, node: NodeLaunch) -> Self {
         self.node = Some(node);
+        self
+    }
+
+    /// The same launch, of a session running in the folder `dir` (an
+    /// absolute path).
+    pub fn in_dir(mut self, dir: impl Into<String>) -> Self {
+        self.working_dir = Some(dir.into());
         self
     }
 }
@@ -302,6 +316,7 @@ mod tests {
                 "started_by": { "kind": "local_operator" },
                 "projects": ["p1"],
                 "node": null,
+                "working_dir": null,
             })
         );
         let node = NodeLaunch::new("r1", "n1", 1, NodeKind::Script, "/repo");
@@ -310,5 +325,16 @@ mod tests {
         assert_eq!(launch.node, Some(node));
         assert_eq!(launch.started_by, None);
         assert!(launch.projects.is_empty());
+        assert_eq!(launch.working_dir, None);
+    }
+
+    #[test]
+    fn a_launch_outside_any_run_publishes_its_working_dir() {
+        let launch =
+            SessionLaunch::new(SessionRef::new("pdo-support-1", SessionKind::SupportAgent))
+                .in_dir("/home/u/.pdo/support/pdo-support-1");
+        let json = serde_json::to_value(&launch).unwrap();
+        assert_eq!(json["working_dir"], "/home/u/.pdo/support/pdo-support-1");
+        assert_eq!(json["node"], serde_json::Value::Null);
     }
 }

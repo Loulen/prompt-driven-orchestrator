@@ -149,6 +149,8 @@ pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// and the counter of a page's icon, `UiContribution::counter`; 0.20 only
 /// added, on the wire, the rank of a `palette` contribution,
 /// `UiContribution::rank`, and the counter of a global Action of `palette`;
-/// the next minor only adds `SessionKind::SupportAgent`. Later, 0.34 only
-/// added `Host::run_names` and `RunNames`).
+/// 0.30 only added `SessionKind::SupportAgent`; 0.34 only added
+/// `SessionLaunch::working_dir`; 0.35 only added
+/// `HostedRefusal::denied`; 0.36 only added
+/// `Host::run_project`; 0.37 only added `Host::run_names` and `RunNames`).
 pub const OLDEST_COMPATIBLE_API_VERSION: &str = "0.1.0";

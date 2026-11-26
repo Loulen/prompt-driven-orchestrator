@@ -2,7 +2,7 @@
 //! [`Presence`]s) and what it cost ([`RunCost`], its tree of child Runs
 //! included), read through the
 //! [`Host`](crate::Host) or announced on the bus. And how people name it and
-//! its Nodes (API 0.34, [`RunNames`]).
+//! its Nodes (API 0.37, [`RunNames`]).
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -171,7 +171,7 @@ impl RunCost {
     }
 }
 
-/// How people read a Run and its Nodes (API 0.34), the answer of
+/// How people read a Run and its Nodes (API 0.37), the answer of
 /// [`Host::run_names`](crate::Host::run_names): `"Démo vendredi › Assistant"`
 /// rather than ids.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

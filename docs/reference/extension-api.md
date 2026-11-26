@@ -9,7 +9,8 @@ Version: **0.20.0** (0.17 added the design system of `@pdo/extension-ui`, see
 Theme, independent of the mode, and the theme script, see
 [extension-ui.md](extension-ui.md#tokens), and in the command field the rank of a group, the
 counter of a global Action and the fixed shape of a result's status, see
-[extension-ui.md](extension-ui.md#palette)). In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
+[extension-ui.md](extension-ui.md#palette); 0.36 the Projet of a Run, `Host::run_project`; 0.37 the names of a Run and its Nodes,
+`Host::run_names`). In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
 version the daemon still runs (`0.1.0`: no minor has broken the wire so far).
 
 ## The hooks
@@ -312,6 +313,12 @@ core's mechanisms (amendment #34):
   does not know. Synchronous and quick: call it from your own `authorize` to name the Projet in a
   refusal's reason. The core reads the Projets once before it serves and again at each change, so
   the name follows a renaming before the change is announced; a deleted Projet has none.
+- `run_project(run_id)` (0.36): the Projet the Run was launched in, the `project_id`
+  `GET /runs/{id}` shows; `None` for a Run the core does not know (or forgot) and a Run launched
+  in no Projet. Synchronous and quick: call it from your own `authorize` to place an Operation on
+  a Run in the Run's own Projet rather than in the one a client names. The Projet of a Run never
+  changes (ADR-0087): the core reads them from the Runs before it serves and records each new
+  Run's before the Run is announced; a forgotten Run has none.
 - `presences(run_id)` (0.12): the Actors who have the Run open in a browser right now, by order
   of arrival ([Presences](#presences-012)); empty for a Run nobody has open or the core does not
   know. Synchronous and quick.
@@ -327,7 +334,7 @@ core's mechanisms (amendment #34):
   follows the rules of a `RunCost`: one descendant without a cost makes every sum it belongs to
   unknown, one lower bound makes them lower bounds. `tree` is absent for a Run without child Run. Await it from a route or a task. An extension that
   aggregates costs reads them so, without reading the transcripts.
-- `run_names(run_id)` (0.34): how people name the Run and its Nodes, `RunNames { name, nodes }`:
+- `run_names(run_id)` (0.37): how people name the Run and its Nodes, `RunNames { name, nodes }`:
   `name` is its display name (its `name`, else its Pipeline's name), `nodes` the name of every
   Node its pipeline names, by Node id (the `node_defs` of `GET /runs/<id>`; a Node without a name
   is absent, show its id). `None` for a Run the core does not know, an archived Run and a
@@ -352,7 +359,7 @@ core's mechanisms (amendment #34):
   for a person, on behalf of `actor`, and submit it ([Answering a Node](#answering-a-node-023)).
 
 `NeutralHost` allows everything, publishes nothing, answers the core's catalogue alone, creates no
-Run (`503`), names no Projet, signals nothing, sees nobody on a Run, knows no cost and holds no
+Run (`503`), names no Projet, knows no Run's Projet, signals nothing, sees nobody on a Run, knows no cost and holds no
 Session hébergée (`503`) and writes into no Node (`503`): the host of `ExtensionContext::new`, and
 a stand-in in an extension's tests.
 
@@ -496,11 +503,13 @@ library assistant do too. `session_env` and `session_preamble` receive a `Sessio
                "node_id": null, "iter": null },
   "started_by": { "kind": "identified", "namespace": "acme", "id": "bob" },
   "projects": ["p1"],
-  "node": null }
+  "node": null,
+  "working_dir": null }
 ```
 
 - `session.kind`: `node`, `manager`, `library_assistant`, `hosted` (0.19, a Session hébergée:
-  `session.extension` and `session.key` name it, absent for the other kinds), or `shell`, in the
+  `session.extension` and `session.key` name it, absent for the other kinds), `support_agent`
+  (0.30, the Agent de support), or `shell`, in the
   events only: a run shell runs no agent and asks no hook. `session.id` is the tmux session's name, the one the
   terminals use (`/sessions/<id>/pty`).
 - `started_by`: who starts the session. A Node: the creator of its Run. The Pipeline Manager:
@@ -512,6 +521,13 @@ library assistant do too. `session_env` and `session_preamble` receive a `Sessio
 - `projects`: the Projet recorded on the Run (ADR-0087), or the Projet of a Session hébergée;
   none for a Run in no Projet and for the library assistant.
 - `node`: for a Node, its `NodeLaunch` (above); `null` otherwise.
+- `working_dir` (0.34): the absolute path of the folder a session outside any Run runs in, the
+  folder its tmux session starts in. The Agent de support: its own folder,
+  `<home>/.pdo/support/<session>`. The library assistant: `<repository>/.pdo/pipelines`. A
+  Session hébergée: the folder it is opened in, resolved again at each relaunch (a relaunch
+  publishes the folder of that launch). `null` for a Node (read `node.repository`) and for the
+  Pipeline Manager. An extension that sets a `CLAUDE_CONFIG_DIR` reads it to trust that folder
+  ahead of time, so the harness does not stop on its trust dialog.
 
 By default `session_env` answers `node_env(launch.node)` for a Node and nothing for any other
 session, and `session_preamble` the same with `node_preamble`: an extension that only knows the

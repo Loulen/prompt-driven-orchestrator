@@ -13,7 +13,7 @@
 //!   dropped once mute, and its Presence falls (the delay shortened here).
 //! - **Cost**: `Host::run_cost` answers the cost `GET /runs/<id>` gives the
 //!   Info tab, a lower bound and an unknown amount included.
-//! - **Names** (0.34): `Host::run_names` answers the name and the named
+//! - **Names** (0.37): `Host::run_names` answers the name and the named
 //!   `node_defs` of `GET /runs/<id>`, follows a renaming at once, keeps them
 //!   across a restart, and answers nothing once the Run is archived or
 //!   forgotten.

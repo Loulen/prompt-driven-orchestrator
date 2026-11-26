@@ -1,4 +1,4 @@
-//! The names of the Runs and of their Nodes, by Run id, in memory (API 0.34):
+//! The names of the Runs and of their Nodes, by Run id, in memory (API 0.37):
 //! what an extension's [`Host::run_names`](pdo_extension_api::Host::run_names)
 //! reads, synchronously.
 //!

@@ -25,6 +25,7 @@ use super::ports::{
 use super::read_run::ReadRun;
 use crate::domain::presence::ConnectionId;
 use crate::domain::run_names::RunNameBook;
+use crate::domain::run_projects::RunProjects;
 use crate::domain::stream_liveness::StreamLiveness;
 
 /// Every port the context needs, as the composition root plugs them in.
@@ -102,6 +103,9 @@ pub struct Runs {
     pub(crate) options: RunsOptions,
     append_event: AppendEvent,
     read_run: ReadRun,
+    /// The Projet of each Run, in memory (API 0.36), shared with
+    /// [`AppendEvent`], which records it.
+    pub(crate) run_projects: Arc<RunProjects>,
     pub(crate) tmux: Arc<dyn Tmux>,
     sessions: Arc<SessionLedger>,
     pub(crate) waits: Arc<dyn DeclaredWaits>,
@@ -158,7 +162,7 @@ pub struct Runs {
     pub(crate) node_done_tail_gate_armed: Arc<AtomicBool>,
     /// Who has which Run open (API 0.12), by connection of the event stream.
     pub(crate) presences: std::sync::Mutex<crate::domain::presence::PresenceBook>,
-    /// How people name each live Run and its Nodes (API 0.34), kept by
+    /// How people name each live Run and its Nodes (API 0.37), kept by
     /// [`AppendEvent`] from the Résumés.
     pub(crate) run_names: Arc<RunNameBook>,
     /// The id of the next connection of the event stream.
@@ -194,9 +198,16 @@ impl Runs {
             extensions,
         } = ports;
         let run_names = Arc::new(RunNameBook::default());
+        let run_projects = Arc::new(RunProjects::default());
         Arc::new(Self {
-            append_event: AppendEvent::new(store.clone(), bus.clone(), run_names.clone()),
+            append_event: AppendEvent::new(
+                store.clone(),
+                bus.clone(),
+                run_names.clone(),
+                run_projects.clone(),
+            ),
             run_names,
+            run_projects,
             read_run: ReadRun::new(store.clone(), live_facts.clone(), managers),
             live_facts,
             store,
@@ -255,7 +266,7 @@ impl Runs {
         &self.append_event
     }
 
-    /// How people name the Run `run_id` and its Nodes (API 0.34), from
+    /// How people name the Run `run_id` and its Nodes (API 0.37), from
     /// memory; `None` for a Run unknown, archived or forgotten.
     pub fn run_names(&self, run_id: &str) -> Option<pdo_extension_api::RunNames> {
         self.run_names.get(run_id)

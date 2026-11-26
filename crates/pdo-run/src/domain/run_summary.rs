@@ -8,7 +8,7 @@
 //! launch (ADR-0087), which the access checks read, its activity, which
 //! the date filter of the lists reads, and the status of each of its working
 //! nodes, which the row of the list draws as its progress, and the name of
-//! each named node, which the extensions read (API 0.34).
+//! each named node, which the extensions read (API 0.37).
 
 use std::collections::BTreeMap;
 

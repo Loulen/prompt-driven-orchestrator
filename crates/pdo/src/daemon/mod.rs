@@ -141,7 +141,9 @@ pub async fn serve_with_config(
     // API 0.11: the extensions read the names of the Projets from the first
     // request on.
     load_project_names(&SqliteProjects::new(db.clone()), &project_names).await;
-    // API 0.34: and the names of the Runs, from their Résumés, current by
+    // API 0.34: and the Projet of each Run, from the Résumés rebuilt above.
+    run.load_run_projects().await;
+    // API 0.37: and the names of the Runs, from their Résumés, current by
     // now, before any append can name a Run fresher than what is loaded.
     if let Err(e) = run.load_run_names().await {
         warn!("the names of the Runs could not be loaded: {e:#}");

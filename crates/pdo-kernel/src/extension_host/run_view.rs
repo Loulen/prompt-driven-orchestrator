@@ -1,6 +1,7 @@
 //! The port through which an extension's [`Host`](pdo_extension_api::Host)
-//! sees a Run as people do (API 0.12): who has it open, what it cost. And
-//! how it and its Nodes are named (API 0.34).
+//! sees a Run as people do (API 0.12): who has it open, what it cost,
+//! (API 0.36) the Projet it was launched in, and (API 0.37) how it and its
+//! Nodes are named.
 
 use pdo_extension_api::{Presence, RunCostRead, RunNames};
 
@@ -16,7 +17,12 @@ pub trait RunViews: Send + Sync {
     /// daemon does not know.
     fn run_cost(&self, run_id: &str) -> RunCostRead;
 
-    /// How `run_id` and its Nodes are named, from memory; `None` for a Run
+    /// The Projet `run_id` was launched in (API 0.36); `None` for a Run the
+    /// daemon does not know (or forgot) and a Run in no Projet. Synchronous
+    /// and quick: answered from memory, never from the store.
+    fn run_project(&self, run_id: &str) -> Option<String>;
+
+    /// How `run_id` and its Nodes are named, from memory (API 0.37); `None` for a Run
     /// the daemon does not know, an archived or a forgotten one.
     fn run_names(&self, run_id: &str) -> Option<RunNames>;
 }
@@ -60,6 +66,9 @@ mod tests {
         fn run_names(&self, run_id: &str) -> Option<RunNames> {
             (run_id == "r1").then(|| RunNames::new("Démo").with_node("chat", "Assistant"))
         }
+        fn run_project(&self, run_id: &str) -> Option<String> {
+            (run_id == "r1").then(|| "p1".to_owned())
+        }
     }
 
     #[tokio::test]
@@ -69,6 +78,7 @@ mod tests {
         assert!(host.presences("r1").is_empty());
         assert_eq!(host.run_cost("r1").await, None);
         assert_eq!(host.run_names("r1"), None);
+        assert_eq!(host.run_project("r1"), None);
         extensions.serve_run_views(Arc::new(OneRun));
         assert_eq!(
             host.presences("r1"),
@@ -82,5 +92,7 @@ mod tests {
             Some(RunNames::new("Démo").with_node("chat", "Assistant"))
         );
         assert_eq!(host.run_names("r2"), None);
+        assert_eq!(host.run_project("r1").as_deref(), Some("p1"));
+        assert_eq!(host.run_project("r2"), None);
     }
 }

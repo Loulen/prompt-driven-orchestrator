@@ -167,6 +167,11 @@ async fn the_agent_opens_in_its_folder_with_the_prompt_the_question_and_the_acto
         pdo_extension_api::SessionKind::SupportAgent
     );
     assert_eq!(launch.started_by, Some(alice()));
+    assert_eq!(
+        launch.working_dir.as_deref(),
+        Some(cwd.to_str().unwrap()),
+        "the extensions see the folder the agent runs in"
+    );
     let asked = host.asked();
     assert_eq!(asked[0].resource, ResourceKind::Session);
     assert_eq!(asked[0].verb, Verb::Create);

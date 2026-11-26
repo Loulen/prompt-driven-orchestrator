@@ -140,6 +140,13 @@ impl Host for ExtensionHostOf {
             .and_then(|views| views.run_names(run_id))
     }
 
+    fn run_project(&self, run_id: &str) -> Option<String> {
+        self.registry
+            .upgrade()
+            .and_then(|registry| registry.run_views.get().cloned())
+            .and_then(|views| views.run_project(run_id))
+    }
+
     fn create_run(&self, actor: &Actor, run: NewRun) -> RunCreation {
         let runs = self
             .registry

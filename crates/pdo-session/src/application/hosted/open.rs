@@ -47,8 +47,7 @@ impl Hosted {
         }
         let operation = Operation::new(ResourceKind::Session, Verb::Action(OPEN.into()))
             .in_projects(open.project.iter().cloned());
-        authorize(self.host.as_ref(), actor, &operation)
-            .map_err(|denied| HostedRefusal::new(403, denied.to_string()))?;
+        authorize(self.host.as_ref(), actor, &operation).map_err(HostedRefusal::refused)?;
         let cwd = self.folder(&open.folder, open.project.as_deref()).await?;
         let harness = match open.kind {
             HostedKind::Agent => Some(self.harness(open.config.harness.as_deref()).await?),
@@ -74,14 +73,15 @@ impl Hosted {
         // Blocking (the extensions' hooks, the state folder, tmux): off the
         // async runtime's threads.
         let launched = {
-            let (hosted, record, session_ref, actor) = (
+            let (hosted, record, session_ref, actor, cwd) = (
                 self.clone(),
                 record.clone(),
                 session_ref.clone(),
                 actor.clone(),
+                cwd.clone(),
             );
             tokio::task::spawn_blocking(move || {
-                let contribution = hosted.contribution(&record, &session_ref, &actor);
+                let contribution = hosted.contribution(&record, &session_ref, &actor, &cwd);
                 let agent = harness.as_ref().map(|harness| Agent {
                     harness,
                     resume: false,
@@ -195,18 +195,22 @@ impl Hosted {
         })
     }
 
-    /// What the extensions add to the launch of `record` started by `actor`:
-    /// asked once per launch, blocking (the extensions' hooks).
+    /// What the extensions add to the launch of `record` started by `actor`
+    /// in the folder `cwd`: asked once per launch, blocking (the extensions'
+    /// hooks). `cwd` is the folder this launch resolved, never the recorded
+    /// one: a relaunch resolves it again and records it only after asking.
     pub(super) fn contribution(
         &self,
         record: &HostedRecord,
         session_ref: &SessionRef,
         actor: &Actor,
+        cwd: &Path,
     ) -> NodeContribution {
         self.host.session_launch(
             &SessionLaunch::new(session_ref.clone())
                 .started_by(actor.clone())
-                .in_projects(record.projects()),
+                .in_projects(record.projects())
+                .in_dir(cwd.to_string_lossy()),
         )
     }
 

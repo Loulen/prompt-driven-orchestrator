@@ -1,8 +1,9 @@
 //! The Runs an extension creates through its `Host` (API 0.9): the same
 //! create as `POST /runs`, for the Actor the extension names. And a Run as
 //! an extension sees it (API 0.12): its Presences, and its cost as its Info
-//! tab shows it, the cost of its tree of child Runs included. And how it and
-//! its Nodes are named (API 0.34).
+//! tab shows it, the cost of its tree of child Runs included, (API 0.36)
+//! the Projet it was launched in, and how it and its Nodes are named
+//! (API 0.37).
 
 use std::sync::{Arc, Weak};
 
@@ -87,6 +88,10 @@ impl RunViews for ExtensionRuns {
 
     fn run_names(&self, run_id: &str) -> Option<RunNames> {
         self.0.upgrade()?.run_names(run_id)
+    }
+
+    fn run_project(&self, run_id: &str) -> Option<String> {
+        self.0.upgrade().and_then(|runs| runs.run_project(run_id))
     }
 
     /// The cost `GET /runs/{id}` serves the Info tab, read the same way: the

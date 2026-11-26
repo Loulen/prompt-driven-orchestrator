@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.96.1
 
 - Frontend e2e suite: a global setup/teardown (`frontend/e2e/run-ledger.ts`) reaps every Run the
   suite created on the e2e daemon (`cleanup_run`, then `DELETE /runs/<id>`) and fails the suite when

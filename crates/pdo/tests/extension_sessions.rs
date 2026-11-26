@@ -165,6 +165,7 @@ async fn the_manager_bob_starts_on_the_run_of_alice_carries_what_the_extension_g
     assert_eq!(launches[0]["session"]["kind"], "manager");
     assert_eq!(launches[0]["session"]["run_id"], run_id.as_str());
     assert_eq!(launches[0]["node"], Value::Null);
+    assert_eq!(launches[0]["working_dir"], Value::Null);
     assert_eq!(launches_of(&control, "session_preamble", &manager).len(), 1);
 
     let env = env_of(envs.path(), &manager).await;
@@ -283,6 +284,13 @@ async fn two_actors_open_two_library_assistants() {
     let launches = launches_of(&control, "session_env", &bob);
     assert_eq!(launches[0]["session"]["kind"], "library_assistant");
     assert_eq!(launches[0]["started_by"], identified("bob"));
+    // The extensions see the folder the assistant runs in (CORE-323).
+    let pipelines = daemon.repo_root().join(".pdo/pipelines");
+    assert_eq!(launches[0]["working_dir"], pipelines.to_str().unwrap());
+    assert!(
+        env.contains(&format!("PWD={}\n", pipelines.display())),
+        "{env}"
+    );
 
     // Alice's second open re-attaches hers.
     let (_, again) = call_as(

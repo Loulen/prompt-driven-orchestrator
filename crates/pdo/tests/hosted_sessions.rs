@@ -209,6 +209,11 @@ async fn an_agent_opens_touching_neither_its_folder_nor_a_run_and_terminates() {
     assert_eq!(launch["launch"]["session"]["kind"], "hosted");
     assert_eq!(launch["launch"]["session"]["key"], "a1");
     assert_eq!(launch["launch"]["started_by"]["id"], "alice");
+    assert_eq!(
+        launch["launch"]["working_dir"],
+        empty.path().to_str().unwrap(),
+        "the extensions see the folder it runs in (CORE-323)"
+    );
 
     // In a repository: the tree stays clean.
     let repo = tempfile::tempdir().unwrap();

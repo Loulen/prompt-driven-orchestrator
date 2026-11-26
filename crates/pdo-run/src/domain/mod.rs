@@ -13,6 +13,7 @@
 //!   [`run_root`]: the Run at the top of a chain of parents.
 //! - [`live_session`]: a node's facts for the gestures that speak to its agent.
 //! - [`presence`]: who has a Run open in a browser (API 0.12).
+//! - [`run_projects`]: the Projet of each Run, in memory (API 0.34).
 //! - [`provenance`]: where a Run an extension created comes from.
 //! - What a Run costs: [`prices`] (the price table's tiers) and [`run_cost`]
 //!   (the contributions and a transcript's usage).
@@ -43,6 +44,7 @@ pub mod retry_verdict;
 pub mod review_comment;
 pub mod run_activity;
 pub mod run_cost;
+pub mod run_projects;
 pub mod run_refs;
 pub mod run_root;
 pub mod run_stall;

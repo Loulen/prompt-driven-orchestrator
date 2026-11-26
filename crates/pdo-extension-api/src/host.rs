@@ -107,6 +107,16 @@ pub trait Host: Send + Sync {
         None
     }
 
+    /// The Projet the Run `run_id` was launched in (API 0.34, ADR-0087 of the
+    /// core): the `project_id` `GET /runs/{id}` shows. `None` for a Run the
+    /// core does not know (or forgot), a Run launched in no Projet, and by
+    /// default. Synchronous and quick: an extension may call it from its own
+    /// `authorize`, to place an Operation on a Run in the Run's Projet rather
+    /// than in the one a client names.
+    fn run_project(&self, _run_id: &str) -> Option<String> {
+        None
+    }
+
     /// Tell the core that the suspensions of the Triggers changed (API 0.11):
     /// what [`Extension::trigger_suspension`](crate::Extension::trigger_suspension)
     /// answers is no longer what it answered, for a cause outside any
@@ -426,6 +436,7 @@ mod tests {
         host.applied(OperationApplied::new(Actor::LocalOperator, op, None));
         assert_eq!(host.catalogue(), crate::core_resources());
         assert_eq!(host.project_name("prj-1"), None);
+        assert_eq!(host.run_project("r1"), None);
         host.triggers_changed();
     }
 
@@ -447,6 +458,7 @@ mod tests {
         assert_eq!(Older.project_name("prj-1"), None);
         Older.triggers_changed();
         assert!(Older.presences("r1").is_empty());
+        assert_eq!(Older.run_project("r1"), None);
     }
 
     #[tokio::test]

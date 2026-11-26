@@ -206,6 +206,10 @@ mod extension_event_guard;
 #[path = "extension_run_view.rs"]
 mod extension_run_view;
 
+// API 0.34: the Projet a Run was launched in, as an extension reads it.
+#[path = "extension_run_project.rs"]
+mod extension_run_project;
+
 // `/ext/<id>` of an extension that is not there: 404 JSON, never the SPA (#22).
 #[path = "extension_not_found.rs"]
 mod extension_not_found;

@@ -24,6 +24,7 @@ use super::ports::{
 };
 use super::read_run::ReadRun;
 use crate::domain::presence::ConnectionId;
+use crate::domain::run_projects::RunProjects;
 use crate::domain::stream_liveness::StreamLiveness;
 
 /// Every port the context needs, as the composition root plugs them in.
@@ -101,6 +102,9 @@ pub struct Runs {
     pub(crate) options: RunsOptions,
     append_event: AppendEvent,
     read_run: ReadRun,
+    /// The Projet of each Run, in memory (API 0.34), shared with
+    /// [`AppendEvent`], which records it.
+    pub(crate) run_projects: Arc<RunProjects>,
     pub(crate) tmux: Arc<dyn Tmux>,
     sessions: Arc<SessionLedger>,
     pub(crate) waits: Arc<dyn DeclaredWaits>,
@@ -189,8 +193,10 @@ impl Runs {
             pipeline_triggers,
             extensions,
         } = ports;
+        let run_projects = Arc::new(RunProjects::default());
         Arc::new(Self {
-            append_event: AppendEvent::new(store.clone(), bus.clone()),
+            append_event: AppendEvent::new(store.clone(), bus.clone(), run_projects.clone()),
+            run_projects,
             read_run: ReadRun::new(store.clone(), live_facts.clone(), managers),
             live_facts,
             store,

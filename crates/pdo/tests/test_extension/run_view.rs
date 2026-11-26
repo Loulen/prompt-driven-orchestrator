@@ -1,8 +1,10 @@
 //! A Run as the test extension sees it through its `Host` (API 0.12): the
-//! core's fixture for the Presences and the cost of a Run.
+//! core's fixture for the Presences, the cost and (API 0.34) the Projet of a
+//! Run.
 //!
 //! - `GET /ext/test/runs/<id>/view`: `{"presences": […], "cost": <RunCost |
-//!   null>}`, as `Host::presences` and `Host::run_cost` answer them;
+//!   null>, "project": <id | null>}`, as `Host::presences`, `Host::run_cost`
+//!   and `Host::run_project` answer them;
 //! - `GET /ext/test/act-as?actor=<id>`: signs the browser in as the Actor
 //!   `<id>` (the cookie [`ACTOR_COOKIE`], read by `identify` like the
 //!   [`ACTOR_HEADER`](super::ACTOR_HEADER)), then back to `/`: two browsers,
@@ -45,7 +47,9 @@ pub(super) fn routes(creation: Creation) -> Router {
                     };
                     let presences = host.presences(&id);
                     let cost = host.run_cost(&id).await;
-                    Json(json!({ "presences": presences, "cost": cost })).into_response()
+                    let project = host.run_project(&id);
+                    Json(json!({ "presences": presences, "cost": cost, "project": project }))
+                        .into_response()
                 }
             }),
         )

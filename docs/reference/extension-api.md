@@ -9,7 +9,7 @@ Version: **0.20.0** (0.17 added the design system of `@pdo/extension-ui`, see
 Theme, independent of the mode, and the theme script, see
 [extension-ui.md](extension-ui.md#tokens), and in the command field the rank of a group, the
 counter of a global Action and the fixed shape of a result's status, see
-[extension-ui.md](extension-ui.md#palette)). In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
+[extension-ui.md](extension-ui.md#palette); 0.34 the Projet of a Run, `Host::run_project`). In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
 version the daemon still runs (`0.1.0`: no minor has broken the wire so far).
 
 ## The hooks
@@ -312,6 +312,12 @@ core's mechanisms (amendment #34):
   does not know. Synchronous and quick: call it from your own `authorize` to name the Projet in a
   refusal's reason. The core reads the Projets once before it serves and again at each change, so
   the name follows a renaming before the change is announced; a deleted Projet has none.
+- `run_project(run_id)` (0.34): the Projet the Run was launched in, the `project_id`
+  `GET /runs/{id}` shows; `None` for a Run the core does not know (or forgot) and a Run launched
+  in no Projet. Synchronous and quick: call it from your own `authorize` to place an Operation on
+  a Run in the Run's own Projet rather than in the one a client names. The Projet of a Run never
+  changes (ADR-0087): the core reads them from the Runs before it serves and records each new
+  Run's before the Run is announced; a forgotten Run has none.
 - `presences(run_id)` (0.12): the Actors who have the Run open in a browser right now, by order
   of arrival ([Presences](#presences-012)); empty for a Run nobody has open or the core does not
   know. Synchronous and quick.
@@ -343,7 +349,7 @@ core's mechanisms (amendment #34):
   for a person, on behalf of `actor`, and submit it ([Answering a Node](#answering-a-node-023)).
 
 `NeutralHost` allows everything, publishes nothing, answers the core's catalogue alone, creates no
-Run (`503`), names no Projet, signals nothing, sees nobody on a Run, knows no cost and holds no
+Run (`503`), names no Projet, knows no Run's Projet, signals nothing, sees nobody on a Run, knows no cost and holds no
 Session hébergée (`503`) and writes into no Node (`503`): the host of `ExtensionContext::new`, and
 a stand-in in an extension's tests.
 

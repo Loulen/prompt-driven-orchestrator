@@ -15,6 +15,7 @@ mod projections;
 mod pruning;
 mod read_access;
 mod read_run;
+mod run_projects;
 mod run_summary;
 mod scheduler;
 mod start_to_end;

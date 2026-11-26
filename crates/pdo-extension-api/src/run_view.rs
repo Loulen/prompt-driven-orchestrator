@@ -1,8 +1,10 @@
 //! A Run as an extension sees it (API 0.12): who has it open (its
 //! [`Presence`]s) and what it cost ([`RunCost`], its tree of child Runs
 //! included), read through the
-//! [`Host`](crate::Host) or announced on the bus.
+//! [`Host`](crate::Host) or announced on the bus. And how people name it and
+//! its Nodes (API 0.34, [`RunNames`]).
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -169,6 +171,36 @@ impl RunCost {
     }
 }
 
+/// How people read a Run and its Nodes (API 0.34), the answer of
+/// [`Host::run_names`](crate::Host::run_names): `"Démo vendredi › Assistant"`
+/// rather than ids.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct RunNames {
+    /// The Run's display name: its `name`, else its Pipeline's name.
+    pub name: String,
+    /// The name of each Node its pipeline names, by Node id (the `node_defs`
+    /// of `GET /runs/{id}`). A Node without a name is absent: show its id.
+    #[serde(default)]
+    pub nodes: BTreeMap<String, String>,
+}
+
+impl RunNames {
+    /// A Run named `name`, none of its Nodes named.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            nodes: BTreeMap::new(),
+        }
+    }
+
+    /// The same names, the Node `id` named `name`.
+    pub fn with_node(mut self, id: impl Into<String>, name: impl Into<String>) -> Self {
+        self.nodes.insert(id.into(), name.into());
+        self
+    }
+}
+
 /// The answer of [`Host::run_cost`](crate::Host::run_cost): the Run's cost,
 /// or `None` for a Run the daemon does not know. Await it from a route or a
 /// task; from a thread, drive it with `tokio::runtime::Handle::block_on`.
@@ -193,6 +225,18 @@ mod tests {
                 "actor": { "kind": "identified", "namespace": "test", "id": "alice" },
                 "since": "2026-10-09T10:00:00Z",
             })
+        );
+    }
+
+    #[test]
+    fn run_names_carry_the_run_and_its_named_nodes_both_ways() {
+        let names = RunNames::new("Démo").with_node("chat", "Assistant");
+        let json = serde_json::json!({ "name": "Démo", "nodes": { "chat": "Assistant" } });
+        assert_eq!(serde_json::to_value(&names).unwrap(), json);
+        assert_eq!(serde_json::from_value::<RunNames>(json).unwrap(), names);
+        assert_eq!(
+            serde_json::from_value::<RunNames>(serde_json::json!({ "name": "p" })).unwrap(),
+            RunNames::new("p")
         );
     }
 

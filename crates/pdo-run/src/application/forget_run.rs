@@ -51,6 +51,7 @@ impl Runs {
             error!("failed to delete events for {run_id}: {e}");
             return (StatusCode::INTERNAL_SERVER_ERROR, "event log error").into_response();
         }
+        state.run_names.remove(run_id);
 
         // A forgotten run has nothing left to recover: reap its manager/shell sessions so
         // they can't keep POSTing commands.

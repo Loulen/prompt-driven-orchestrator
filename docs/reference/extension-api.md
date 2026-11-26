@@ -327,6 +327,15 @@ core's mechanisms (amendment #34):
   follows the rules of a `RunCost`: one descendant without a cost makes every sum it belongs to
   unknown, one lower bound makes them lower bounds. `tree` is absent for a Run without child Run. Await it from a route or a task. An extension that
   aggregates costs reads them so, without reading the transcripts.
+- `run_names(run_id)` (0.34): how people name the Run and its Nodes, `RunNames { name, nodes }`:
+  `name` is its display name (its `name`, else its Pipeline's name), `nodes` the name of every
+  Node its pipeline names, by Node id (the `node_defs` of `GET /runs/<id>`; a Node without a name
+  is absent, show its id). `None` for a Run the core does not know, an archived Run and a
+  forgotten one: show the ids then. Synchronous and quick, from memory: the core loads the names
+  from the Résumés de Run before it serves and keeps them at each start, renaming and archiving of
+  a Run, before the event is announced. It asks no Actor: hiding a Run's name from who may not
+  read it (`run` × `read`) is the extension's job. A command line (`pdo ext <id> …`) names the Runs
+  so, without the core's HTTP.
 - `triggers_changed()` (0.11): the suspensions of the Triggers changed for a cause outside a
   Trigger's mutation, one the extension holds itself. The core announces
   `{"type": "trigger_updated"}`, without `trigger_id`, and the list of the Triggers reads them all

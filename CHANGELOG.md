@@ -14,6 +14,15 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- Extensions (API 0.34): `Host::run_names(run_id)` answers how people name a Run and its Nodes
+  (`RunNames { name, nodes }`: its name, else its Pipeline's, and the name of every named Node),
+  synchronously and from memory; `None` for an unknown, archived or forgotten Run. An extension's
+  command line can now show a Run and a Node by their names rather than ids.
+- The run summaries are rebuilt once from the event log at the first start of this version (they
+  now carry the names of the Nodes).
+
 ## 2.92.0
 
 - New command `pdo service refresh [--port] [--bind] [--dry-run]`: rewrites the installed service

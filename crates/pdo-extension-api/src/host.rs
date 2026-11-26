@@ -3,7 +3,8 @@ use serde::Serialize;
 use crate::{
     Actor, ActorDisplay, Attributes, Authorization, EntityRef, HostedConfig, HostedGesture,
     HostedRefusal, HostedSession, LiveArtifact, NewRun, NodeNotWritten, NodeWrite, NodeWriting,
-    OpenSession, OperationApplied, Presence, Resource, RunCostRead, RunCreation, RunNotCreated,
+    OpenSession, OperationApplied, Presence, Resource, RunCostRead, RunCreation, RunNames,
+    RunNotCreated,
 };
 
 /// The `type` of an event an extension publishes, on `/ws` and in the other
@@ -133,6 +134,18 @@ pub trait Host: Send + Sync {
     /// from a hook.
     fn run_cost(&self, _run_id: &str) -> RunCostRead {
         Box::pin(std::future::ready(None))
+    }
+
+    /// How people name the Run `run_id` and its Nodes (API 0.34): its display
+    /// name (its `name`, else its Pipeline's name) and, by Node id, the name
+    /// its pipeline gives each Node that has one, as `GET /runs/{id}` reads
+    /// them. `None` for a Run the core does not know, an archived Run, a
+    /// forgotten Run, and by default: show the ids then. Synchronous and
+    /// quick, from memory: a renaming is answered before its `run_renamed` is
+    /// announced. It asks no Actor: hiding a Run's name from who may not read
+    /// it (`run` × `read`) is the caller's job.
+    fn run_names(&self, _run_id: &str) -> Option<RunNames> {
+        None
     }
 
     /// Have the core open the Session hébergée `open` on behalf of `actor`
@@ -453,6 +466,7 @@ mod tests {
     async fn the_neutral_host_sees_nobody_and_no_cost() {
         assert!(NeutralHost.presences("r1").is_empty());
         assert_eq!(NeutralHost.run_cost("r1").await, None);
+        assert_eq!(NeutralHost.run_names("r1"), None);
     }
 
     #[tokio::test]

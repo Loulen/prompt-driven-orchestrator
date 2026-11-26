@@ -43,6 +43,7 @@ pub mod retry_verdict;
 pub mod review_comment;
 pub mod run_activity;
 pub mod run_cost;
+pub mod run_names;
 pub mod run_refs;
 pub mod run_root;
 pub mod run_stall;

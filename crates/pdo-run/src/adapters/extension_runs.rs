@@ -1,12 +1,14 @@
 //! The Runs an extension creates through its `Host` (API 0.9): the same
 //! create as `POST /runs`, for the Actor the extension names. And a Run as
 //! an extension sees it (API 0.12): its Presences, and its cost as its Info
-//! tab shows it, the cost of its tree of child Runs included.
+//! tab shows it, the cost of its tree of child Runs included. And how it and
+//! its Nodes are named (API 0.34).
 
 use std::sync::{Arc, Weak};
 
 use pdo_extension_api::{
-    NewRun, Presence, RunCost, RunCostRead, RunCreation, RunDepthCost, RunNotCreated, RunTreeCost,
+    NewRun, Presence, RunCost, RunCostRead, RunCreation, RunDepthCost, RunNames, RunNotCreated,
+    RunTreeCost,
 };
 use pdo_kernel::extension_host::{RunCreator, RunViews};
 use pdo_kernel::Actor;
@@ -81,6 +83,10 @@ impl RunViews for ExtensionRuns {
             .upgrade()
             .map(|runs| runs.presences(run_id))
             .unwrap_or_default()
+    }
+
+    fn run_names(&self, run_id: &str) -> Option<RunNames> {
+        self.0.upgrade()?.run_names(run_id)
     }
 
     /// The cost `GET /runs/{id}` serves the Info tab, read the same way: the

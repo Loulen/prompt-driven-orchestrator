@@ -13,6 +13,10 @@
 //!   dropped once mute, and its Presence falls (the delay shortened here).
 //! - **Cost**: `Host::run_cost` answers the cost `GET /runs/<id>` gives the
 //!   Info tab, a lower bound and an unknown amount included.
+//! - **Names** (0.34): `Host::run_names` answers the name and the named
+//!   `node_defs` of `GET /runs/<id>`, follows a renaming at once, keeps them
+//!   across a restart, and answers nothing once the Run is archived or
+//!   forgotten.
 
 use std::time::Duration;
 
@@ -20,7 +24,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::common::flow::git_init;
+use crate::common::flow::{git_init, solo_pipeline_yaml, write_pipeline};
 use crate::common::{ws_text, TestDaemon};
 use crate::test_extension::{Refusal, TestExtension};
 
@@ -395,4 +399,136 @@ async fn the_host_reads_the_cost_the_info_tab_shows() {
 
     // A Run the daemon does not know has no cost at all.
     assert_eq!(view(&daemon, "no-such-run").await["cost"], Value::Null);
+}
+
+/// A daemon over `root` (a git repository holding the `solo` pipeline) with
+/// the test extension.
+async fn daemon_over(root: &std::path::Path) -> TestDaemon {
+    let (ext, _control) = TestExtension::new(Refusal::Nothing);
+    TestDaemon::spawn_at_with_extensions(root, ext.boxed())
+        .await
+        .unwrap()
+}
+
+/// `POST /runs/<id>/commands` with `command`, which must succeed.
+async fn command(daemon: &TestDaemon, run_id: &str, command: Value) {
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs/{run_id}/commands", daemon.url()))
+        .json(&command)
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status();
+    assert!(
+        status.is_success(),
+        "{command}: {status} {}",
+        resp.text().await.unwrap_or_default()
+    );
+}
+
+/// The names `GET /runs/<id>` shows: `{name, nodes}` as `Host::run_names`
+/// carries them, its name or else its Pipeline's.
+async fn shown_names(daemon: &TestDaemon, run_id: &str) -> Value {
+    let run = daemon.get_json(&format!("/runs/{run_id}")).await;
+    let name = run["name"]
+        .as_str()
+        .filter(|name| !name.is_empty())
+        .or(run["pipeline_name"].as_str())
+        .unwrap()
+        .to_string();
+    let nodes: serde_json::Map<String, Value> = run["node_defs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|def| Some((def["id"].as_str()?.to_string(), def.get("name")?.clone())))
+        .filter(|(_, name)| name.is_string())
+        .collect();
+    json!({ "name": name, "nodes": nodes })
+}
+
+#[tokio::test]
+async fn the_host_names_a_run_and_its_nodes_as_its_detail_does() {
+    let root = tempfile::tempdir().unwrap();
+    write_pipeline(root.path(), "solo", &solo_pipeline_yaml("solo", false)).unwrap();
+    git_init(root.path()).unwrap();
+    let daemon = daemon_over(root.path()).await;
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs", daemon.url()))
+        .json(&json!({
+            "pipeline": "solo",
+            "input": "go",
+            "name": "Démo vendredi",
+            "target_repo": root.path().to_string_lossy(),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let run_id = resp.json::<Value>().await.unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let names = view(&daemon, &run_id).await["names"].clone();
+    assert_eq!(
+        names,
+        json!({
+            "name": "Démo vendredi",
+            "nodes": { "start": "Start", "worker": "Worker", "end": "End" },
+        })
+    );
+    assert_eq!(names, shown_names(&daemon, &run_id).await);
+    assert_eq!(view(&daemon, "no-such-run").await["names"], Value::Null);
+
+    // A renaming is read at once; an empty name falls back to the Pipeline's.
+    command(
+        &daemon,
+        &run_id,
+        json!({ "kind": "rename_run", "name": "Démo lundi" }),
+    )
+    .await;
+    assert_eq!(view(&daemon, &run_id).await["names"]["name"], "Démo lundi");
+    command(
+        &daemon,
+        &run_id,
+        json!({ "kind": "rename_run", "name": "" }),
+    )
+    .await;
+    let names = view(&daemon, &run_id).await["names"].clone();
+    assert_eq!(names["name"], "solo");
+    assert_eq!(names, shown_names(&daemon, &run_id).await);
+    command(
+        &daemon,
+        &run_id,
+        json!({ "kind": "rename_run", "name": "Démo lundi" }),
+    )
+    .await;
+
+    // A restart reads them again from the Résumés.
+    drop(daemon);
+    let daemon = daemon_over(root.path()).await;
+    assert_eq!(
+        view(&daemon, &run_id).await["names"],
+        json!({
+            "name": "Démo lundi",
+            "nodes": { "start": "Start", "worker": "Worker", "end": "End" },
+        })
+    );
+
+    // Archived: no name, though its detail still answers.
+    command(&daemon, &run_id, json!({ "kind": "cleanup_run" })).await;
+    crate::common::flow::wait_run(&daemon, &run_id, "archived", |run| {
+        run["status"] == "archived"
+    })
+    .await;
+    assert_eq!(view(&daemon, &run_id).await["names"], Value::Null);
+
+    // Forgotten: none either.
+    let resp = reqwest::Client::new()
+        .delete(format!("{}/runs/{run_id}", daemon.url()))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "{}", resp.status());
+    assert_eq!(view(&daemon, &run_id).await["names"], Value::Null);
 }

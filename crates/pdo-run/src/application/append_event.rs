@@ -8,21 +8,36 @@
 use std::sync::Arc;
 
 use pdo_kernel::event_bus::EventBus;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::application::ports::EventStore;
 use crate::domain::event::{Event, EventKind};
 use crate::domain::projection::project;
+use crate::domain::run_names::RunNameBook;
 use crate::domain::transition_guard::{validate_transition, Verdict};
 
 pub struct AppendEvent {
     store: Arc<dyn EventStore>,
     bus: Arc<dyn EventBus>,
+    run_names: Arc<RunNameBook>,
+    /// Held from the read of a Résumé to the update of the names: of two
+    /// concurrent appends on a Run, the last to refresh reads the Résumé of
+    /// both, so a stale name never overwrites a fresher one.
+    names_refresh: tokio::sync::Mutex<()>,
 }
 
 impl AppendEvent {
-    pub fn new(store: Arc<dyn EventStore>, bus: Arc<dyn EventBus>) -> Self {
-        Self { store, bus }
+    pub fn new(
+        store: Arc<dyn EventStore>,
+        bus: Arc<dyn EventBus>,
+        run_names: Arc<RunNameBook>,
+    ) -> Self {
+        Self {
+            store,
+            bus,
+            run_names,
+            names_refresh: tokio::sync::Mutex::new(()),
+        }
     }
 
     /// Append `event` and publish it.
@@ -52,7 +67,30 @@ impl AppendEvent {
             }
         }
         self.store.append(event).await?;
+        self.refresh_run_names(event).await;
         self.bus.publish(event.bus_message());
         Ok(())
+    }
+
+    /// Keep the names an extension reads (API 0.34) up to date with the
+    /// Résumé of a Run that started, was renamed or archived, before anyone
+    /// hears of it. A Résumé that cannot be read forgets the names: the caller
+    /// shows the ids rather than a stale name.
+    async fn refresh_run_names(&self, event: &Event) {
+        if !matches!(
+            event.kind,
+            EventKind::RunStarted | EventKind::RunRenamed | EventKind::RunArchived
+        ) {
+            return;
+        }
+        let _refreshing = self.names_refresh.lock().await;
+        match self.store.summary(&event.run_id).await {
+            Ok(Some(summary)) => self.run_names.apply(&summary),
+            Ok(None) => self.run_names.remove(&event.run_id),
+            Err(e) => {
+                warn!("the names of run {} are forgotten: {e}", event.run_id);
+                self.run_names.remove(&event.run_id);
+            }
+        }
     }
 }

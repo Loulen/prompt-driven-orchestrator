@@ -14,6 +14,13 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## 2.95.0
+
+- Extensions (extension API, minor): `Host::run_project(run_id)` returns the Projet a Run was
+  launched in, the `project_id` that `GET /runs/<id>` shows, and `None` for an unknown or forgotten
+  Run or a Run in no Projet. It is synchronous: an extension may call it from its own `authorize`
+  to place an Operation on a Run in the Run's Projet instead of the one a client names.
+
 ## 2.94.0
 
 - Extensions (extension API, minor): a `HostedRefusal` built from a refused Operation carries its

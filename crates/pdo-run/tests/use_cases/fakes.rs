@@ -202,9 +202,14 @@ impl EventStore for Store {
     }
 }
 
-/// The bus, recording what was published.
+/// What a test runs at each publication, as the bus publishes.
+pub type Probe = Box<dyn Fn(&serde_json::Value) + Send + Sync>;
+
+/// The bus, recording what was published; `probe`, when set, runs at each
+/// publication, before anyone hears of it.
 pub struct Bus {
     pub published: Mutex<Vec<serde_json::Value>>,
+    pub probe: Mutex<Option<Probe>>,
     tx: broadcast::Sender<serde_json::Value>,
 }
 
@@ -212,6 +217,7 @@ impl Default for Bus {
     fn default() -> Self {
         Self {
             published: Mutex::default(),
+            probe: Mutex::default(),
             tx: broadcast::channel(16).0,
         }
     }
@@ -219,6 +225,9 @@ impl Default for Bus {
 
 impl EventBus for Bus {
     fn publish(&self, event: serde_json::Value) {
+        if let Some(probe) = self.probe.lock().unwrap().as_ref() {
+            probe(&event);
+        }
         self.published.lock().unwrap().push(event.clone());
         let _ = self.tx.send(event);
     }

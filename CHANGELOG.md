@@ -14,6 +14,14 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- Frontend e2e suite: a global setup/teardown (`frontend/e2e/run-ledger.ts`) reaps every Run the
+  suite created on the e2e daemon (`cleanup_run`, then `DELETE /runs/<id>`) and fails the suite when
+  a `pdo/run-*` branch, a worktree registration or a Run it owns remains. The suite no longer leaks
+  worktrees and branches into the repository it runs from. `PDO_E2E_KEEP_RUNS=1` keeps them for
+  debugging.
+
 ## 2.96.0
 
 - Extensions (API 0.37): `Host::run_names(run_id)` answers how people name a Run and its Nodes

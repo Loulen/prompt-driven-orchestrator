@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.93.0
 
 - Extensions (extension API, minor): `SessionLaunch::working_dir`, the absolute path of the folder
   a session outside any Run runs in, given to `session_env` and `session_preamble` for the support

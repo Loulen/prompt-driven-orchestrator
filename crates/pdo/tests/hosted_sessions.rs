@@ -20,7 +20,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::Message;
 
 use crate::common::{lock_session_cap, TestDaemon};
-use crate::test_extension::{Control, Refusal, TestExtension, ACTOR_HEADER};
+use crate::test_extension::{self, Control, Refusal, TestExtension, ACTOR_HEADER};
 
 /// A daemon with the test extension whose agent sessions write their
 /// environment to `<envs>/<session name>.env`, then sleep.
@@ -368,6 +368,132 @@ async fn the_gestures_are_operations_in_the_projet_of_the_session() {
         .find(|(_, op)| op.verb == pdo::extension_api::Verb::Action("attach".into()))
         .unwrap();
     assert_eq!(attach.1.projects, ["p1"]);
+}
+
+/// The `session` × `action` Operation the test extension refuses.
+fn session_op(action: &str) -> pdo::extension_api::Operation {
+    pdo::extension_api::Operation::new(
+        pdo::extension_api::ResourceKind::Session,
+        pdo::extension_api::Verb::Action(action.into()),
+    )
+}
+
+/// The sentence the test extension gives for refusing `action` on a session.
+fn session_sentence(action: &str) -> String {
+    test_extension::sentence(&session_op(action))
+}
+
+/// CORE-208: a gesture an extension asks of its Host and the authorization
+/// refuses answers, through the extension's route, the core's body for a
+/// refused Operation: its Phrase de refus, or the generic one; a refusal of
+/// another kind keeps its `{"error"}`.
+#[tokio::test]
+async fn a_refused_gesture_through_the_host_reads_its_phrase_de_refus() {
+    let envs = tempfile::tempdir().unwrap();
+    let (daemon, control) = daemon(envs.path()).await;
+    let url = daemon.url();
+    let home = tempfile::tempdir().unwrap();
+
+    control.set(Refusal::parse("session:open").unwrap());
+    let (status, body) = open_as(&url, "alice", in_path("no", "shell", home.path())).await;
+    assert_eq!(status, 403, "{body}");
+    assert_eq!(body["error"], "operation_refused", "{body}");
+    assert_eq!(body["sentence"], session_sentence("open"), "{body}");
+    assert_eq!(
+        body["reason"],
+        test_extension::reason(&session_op("open")),
+        "{body}"
+    );
+
+    control.set(Refusal::parse("session:open!").unwrap());
+    let (status, body) = open_as(&url, "alice", in_path("no", "shell", home.path())).await;
+    assert_eq!(status, 403, "{body}");
+    assert_eq!(body["error"], "operation_refused", "{body}");
+    assert_eq!(
+        body["sentence"],
+        pdo::extension_api::GENERIC_REFUSAL,
+        "{body}"
+    );
+
+    control.set(Refusal::Nothing);
+    let (status, opened) = open_as(&url, "alice", in_path("t", "shell", home.path())).await;
+    assert_eq!(status, 201, "{opened}");
+    let gestures: [(&str, reqwest::Method, &str, Option<Value>); 6] = [
+        (
+            "relaunch",
+            reqwest::Method::POST,
+            "/ext/test/sessions/t/relaunch",
+            None,
+        ),
+        (
+            "configure",
+            reqwest::Method::PUT,
+            "/ext/test/sessions/t/config",
+            Some(json!({ "model": "opus" })),
+        ),
+        (
+            "terminate",
+            reqwest::Method::DELETE,
+            "/ext/test/sessions/t",
+            None,
+        ),
+        (
+            "type",
+            reqwest::Method::POST,
+            "/ext/test/sessions/t/type",
+            Some(json!({ "text": "x" })),
+        ),
+        (
+            "zoom",
+            reqwest::Method::PUT,
+            "/ext/test/sessions/t/zoom",
+            Some(json!({ "zoom": 80 })),
+        ),
+        (
+            "forget",
+            reqwest::Method::POST,
+            "/ext/test/sessions/t/forget",
+            None,
+        ),
+    ];
+    for (action, method, path, body) in gestures {
+        control.set(Refusal::parse(&format!("session:{action}")).unwrap());
+        let (status, refused) = call_as(&url, method, path, "alice", body).await;
+        assert_eq!(status, 403, "{action}: {refused}");
+        assert_eq!(refused["error"], "operation_refused", "{action}: {refused}");
+        assert_eq!(
+            refused["sentence"],
+            session_sentence(action),
+            "{action}: {refused}"
+        );
+    }
+
+    // Concealed, a gesture is an ordinary 403 (ADR-0105 §1).
+    control.set(Refusal::parse("session:relaunch?").unwrap());
+    let (status, refused) = post_as(&url, "/ext/test/sessions/t/relaunch", "alice", None).await;
+    assert_eq!(status, 403, "{refused}");
+    assert_eq!(
+        refused["sentence"],
+        session_sentence("relaunch"),
+        "{refused}"
+    );
+
+    // Any other refusal keeps its `{"error"}`, with no sentence.
+    control.set(Refusal::Nothing);
+    let (status, unknown) =
+        post_as(&url, "/ext/test/sessions/unknown/relaunch", "alice", None).await;
+    assert_eq!(status, 404, "{unknown}");
+    assert!(unknown["error"].is_string(), "{unknown}");
+    assert!(unknown.get("sentence").is_none(), "{unknown}");
+    let (status, empty) = post_as(
+        &url,
+        "/ext/test/sessions/t/type",
+        "alice",
+        Some(json!({ "text": "" })),
+    )
+    .await;
+    assert_eq!(status, 400, "{empty}");
+    assert!(empty.get("sentence").is_none(), "{empty}");
 }
 
 /// The first role frame a PTY socket is sent.
@@ -1075,6 +1201,10 @@ async fn the_zoom_of_a_terminal_is_set_by_the_api_and_the_host_and_reaches_who_m
     let (status, refused) = put("alice", zoom_path.clone(), json!(200)).await;
     assert_eq!(status, 403, "{refused}");
     assert_eq!(refused["error"], "operation_refused");
+    let (status, refused) = put("alice", "/ext/test/sessions/z/zoom".into(), json!(80)).await;
+    assert_eq!(status, 403, "{refused}");
+    assert_eq!(refused["error"], "operation_refused", "{refused}");
+    assert_eq!(refused["sentence"], session_sentence("zoom"), "{refused}");
     let (_, read) = get_as(&url, &zoom_path, "alice").await;
     assert_eq!(read["zoom"], 75);
 

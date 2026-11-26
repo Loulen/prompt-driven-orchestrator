@@ -104,7 +104,7 @@ impl Hosted {
         let record = self.recorded(extension, key)?;
         self.zoom_by_id(actor, record.id(), zoom)
             .map_err(|e| match e {
-                HostedZoomError::Refused(denied) => HostedRefusal::new(403, denied.to_string()),
+                HostedZoomError::Refused(denied) => HostedRefusal::refused(denied),
                 other => HostedRefusal::new(other.status(), other.to_string()),
             })
     }

@@ -47,8 +47,7 @@ impl Hosted {
         }
         let operation = Operation::new(ResourceKind::Session, Verb::Action(OPEN.into()))
             .in_projects(open.project.iter().cloned());
-        authorize(self.host.as_ref(), actor, &operation)
-            .map_err(|denied| HostedRefusal::new(403, denied.to_string()))?;
+        authorize(self.host.as_ref(), actor, &operation).map_err(HostedRefusal::refused)?;
         let cwd = self.folder(&open.folder, open.project.as_deref()).await?;
         let harness = match open.kind {
             HostedKind::Agent => Some(self.harness(open.config.harness.as_deref()).await?),

@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.96.0
 
 - Extensions (API 0.37): `Host::run_names(run_id)` answers how people name a Run and its Nodes
   (`RunNames { name, nodes }`: its name, else its Pipeline's, and the name of every named Node),

@@ -14,6 +14,15 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+- Extensions (extension API, minor): `SessionLaunch::working_dir`, the absolute path of the folder
+  a session outside any Run runs in, given to `session_env` and `session_preamble` for the support
+  agent (`<home>/.pdo/support/<session>`), the library assistant (`<repository>/.pdo/pipelines`)
+  and a hosted session (its folder, resolved again at each relaunch); `null` for a Node and the
+  Pipeline Manager. An extension that sets a `CLAUDE_CONFIG_DIR` can trust that folder ahead of
+  time.
+
 ## 2.92.0
 
 - New command `pdo service refresh [--port] [--bind] [--dry-run]`: rewrites the installed service

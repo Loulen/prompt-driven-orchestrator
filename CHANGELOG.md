@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.95.0
 
 - Extensions (extension API, minor): `Host::run_project(run_id)` returns the Projet a Run was
   launched in, the `project_id` that `GET /runs/<id>` shows, and `None` for an unknown or forgotten

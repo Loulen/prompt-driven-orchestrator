@@ -14,6 +14,15 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## 2.96.2
+
+- Sandbox: `prepare` writes a completion marker (`<staging>/.prepared`) as its last step, and
+  `ensure_ready` re-prepares a staging that lacks it. A daemon killed during the walk of a `full`
+  profile no longer leaves a Run with silently truncated skills or plugins: the next boot recovery,
+  resume or run shell completes the staging and the next spawn re-applies the `claude` set. A
+  staging made by an older daemon has no marker, so each live sandboxed Run is re-prepared once
+  after the upgrade.
+
 ## 2.96.1
 
 - Frontend e2e suite: a global setup/teardown (`frontend/e2e/run-ledger.ts`) reaps every Run the

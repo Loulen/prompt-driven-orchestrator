@@ -23,7 +23,7 @@ Both methods install a checksum-verified `pdo` binary on your `PATH`.
 
 | Task | Command |
 | --- | --- |
-| Update from the app | Click the version in the status bar (or Settings › General › Version & update) → **Update**. PDO runs your install method's command in a detached process, reinstalls the service unit, restarts, and the page reloads on the new version |
+| Update from the app | Click the version in the status bar (or Settings › General › Version & update) → **Update**. PDO runs your install method's command in a detached process, refreshes the service unit (`pdo service refresh`), restarts, and the page reloads on the new version |
 | Update with Homebrew | `brew update && brew upgrade Loulen/tap/pdo` (`brew update` first: a stale tap hides the latest formula) |
 | Update with the script | Run the install script again |
 | Install a specific release | Replace `latest` with a tag such as `v1.31.2` |
@@ -49,7 +49,10 @@ Run `pdo daemon`, then open [http://localhost:5172](http://localhost:5172).
 
 ## Keep PDO running
 
-Run `pdo service install` to start PDO at boot and keep it running after logout. Check it with
+Run `pdo service install` to start PDO at boot and keep it running after logout. After updating
+by hand, `pdo service refresh` brings the unit in line with the new binary: run it from the same
+directory, with the same `--port` and `--bind` as the install (the unit is rendered from them, the
+defaults otherwise), and check with `--dry-run` first. Check it with
 `pdo service status` or remove it with `pdo service uninstall`.
 
 ## CLI commands
@@ -58,6 +61,7 @@ Run `pdo service install` to start PDO at boot and keep it running after logout.
 | --- | --- |
 | `pdo daemon [--port <port>] [--bind <ip>]` | Start the daemon, listening on all interfaces by default. `PDO_PORT` and `PDO_BIND` provide defaults, while command-line flags take precedence. A sandboxed Run's nodes call the daemon from their container through the host gateway (`host.docker.internal`): a daemon bound to `127.0.0.1` does not answer them, and their `pdo complete` fails. |
 | `pdo service install [--port <port>] [--bind <ip>] [--dry-run]` | Install the systemd user service or launchd agent; `--dry-run` prints the definition without changing the host. Keep `PDO_ALLOWED_WS_ORIGINS` in a `pdo.service.d/override.conf` drop-in, which survives unit rewrites including Update. |
+| `pdo service refresh [--port <port>] [--bind <ip>] [--dry-run]` | Rewrite the installed service unit only if the binary in place renders it differently (`unchanged` or `rewrote <path>`, then `systemctl --user daemon-reload`), without checking the port nor enabling anything; the one-click Update runs it, and you can after updating by hand. Fails when no unit is installed; `--dry-run` prints the diff. |
 | `pdo service status` | Show the installed service status. |
 | `pdo service uninstall` | Stop, disable, and remove the installed service. |
 | `pdo complete [--auto]` | Complete the current node; `--auto` is reserved for runtime hooks. In a hosted session (`PDO_SESSION_ID`, no `PDO_RUN_ID`): refused, exit 3, nothing changes. |

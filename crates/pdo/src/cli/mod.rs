@@ -573,6 +573,36 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_service_refresh_with_bind_port_and_dry_run() {
+        let cli = Cli::try_parse_from([
+            "pdo",
+            "service",
+            "refresh",
+            "--bind",
+            "127.0.0.1",
+            "--port",
+            "6183",
+            "--dry-run",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Service {
+                action:
+                    ServiceAction::Refresh {
+                        bind,
+                        port,
+                        dry_run,
+                    },
+            } => {
+                assert_eq!(bind, Some("127.0.0.1".parse().unwrap()));
+                assert_eq!(port, 6183);
+                assert!(dry_run);
+            }
+            _ => panic!("expected Service Refresh"),
+        }
+    }
+
+    #[test]
     fn cli_parses_service_status() {
         let cli = Cli::try_parse_from(["pdo", "service", "status"]).unwrap();
         assert!(matches!(

@@ -24,7 +24,7 @@ default, and with no extension the daemon behaves as if none existed.
 | `identify(request)` | on every request; the first `Some` wins | `None`: the core decides |
 | `admit(request)` (0.8) | on a request no extension identified, before any route; the first non-`Admit` wins, a panic refuses | `Admission::Admit` |
 | `display_name(actor)` (0.8) | wherever an Actor is shown; the first `Some` wins, a panic is skipped | `None`: shown as without extension |
-| `authorize(actor, operation)` | before every mutation of an actor, and every guarded read (0.8, below); the first refusal wins, a panic refuses; also by `pdo service install` / `uninstall`, unstarted (below) | allow |
+| `authorize(actor, operation)` | before every mutation of an actor, and every guarded read (0.8, below); the first refusal wins, a panic refuses; also by `pdo service install` / `refresh` / `uninstall`, unstarted (below) | allow |
 | `on_create(actor, entity)` | after a creation; attributes prefixed `<id>/` | none |
 | `validate_create(actor, kind, value)` (0.9) | before a creation carrying a value for this extension, after the authorization; `Err(reason)` refuses with `400`, a panic refuses | accept |
 | `on_create_with_data(actor, entity, data)` (0.9) | in place of `on_create`, with the value the creation carried (`None` without one); a Run's before its first Node | `on_create(actor, entity)` |
@@ -46,9 +46,11 @@ default, and with no extension the daemon behaves as if none existed.
 ### Outside the daemon: `pdo service`
 
 Every `pdo service` subcommand builds the binary's extensions too (ADR-0081): their constructors
-run and `manifest` is called. `pdo service install` and `pdo service uninstall` then ask
-`authorize` for the local operator: `service` × `create` for the install (not on `--dry-run`),
-`service` × `delete` for the uninstall; `pdo service status` asks nothing. Only `manifest` and
+run and `manifest` is called. `pdo service install`, `pdo service refresh` and
+`pdo service uninstall` then ask `authorize` for the local operator: `service` × `create` for the
+install (not on `--dry-run`), `service` × `update` for the refresh (not on `--dry-run`; the
+one-click Update of a supervised daemon runs it, and a refusal rolls the Update back), `service` ×
+`delete` for the uninstall; `pdo service status` asks nothing. Only `manifest` and
 `authorize` are called, **never** `start` nor `skills`: no data folder, no `Host`, no async runtime
 (the `on_event` thread is started but receives nothing). An extension that refuses for lack of its
 state (its database not open) makes `pdo service install` fail on a fresh install.

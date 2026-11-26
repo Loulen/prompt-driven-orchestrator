@@ -17,6 +17,7 @@ pub mod ports;
 pub mod read_attempt_log;
 pub mod read_pages;
 pub mod record_audit;
+pub mod refresh_service;
 pub mod release_run_pages;
 pub mod service_status;
 pub mod uninstall_service;

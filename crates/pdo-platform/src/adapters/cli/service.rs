@@ -1,4 +1,4 @@
-//! `pdo service` — install, remove or inspect the daemon's OS service unit.
+//! `pdo service` — install, refresh, remove or inspect the daemon's OS service unit.
 
 use anyhow::Result;
 use pdo_kernel::extension_host::ExtensionHost;
@@ -7,6 +7,7 @@ use pdo_kernel::Actor;
 use super::ServiceAction;
 use crate::adapters::host_service::RealServiceHost;
 use crate::application::install_service::{InstallService, InstallServiceCommand};
+use crate::application::refresh_service::{RefreshService, RefreshServiceCommand, ServiceManager};
 use crate::application::service_status::ServiceStatus;
 use crate::application::uninstall_service::UninstallService;
 
@@ -28,6 +29,24 @@ pub fn run_service(action: ServiceAction, extensions: &dyn ExtensionHost) -> Res
         .execute(
             &actor,
             InstallServiceCommand {
+                bind,
+                port,
+                dry_run,
+            },
+            &mut out,
+        ),
+        ServiceAction::Refresh {
+            bind,
+            port,
+            dry_run,
+        } => RefreshService {
+            host: &host,
+            extensions,
+            manager: ServiceManager::of_this_host(),
+        }
+        .execute(
+            &actor,
+            RefreshServiceCommand {
                 bind,
                 port,
                 dry_run,

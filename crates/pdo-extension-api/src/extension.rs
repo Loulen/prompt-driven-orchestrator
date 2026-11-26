@@ -24,9 +24,10 @@ pub type RequestParts = axum::http::request::Parts;
 ///
 /// The daemon is not the only caller. Every `pdo service` subcommand builds
 /// the binary's extensions too (ADR-0081, amendment #23): their constructors
-/// run and [`Extension::manifest`] is called. `pdo service install` and
-/// `pdo service uninstall` then ask [`Extension::authorize`] for the
-/// [`Actor::LocalOperator`] (`service` × `create` / `delete`), but **never
+/// run and [`Extension::manifest`] is called. `pdo service install`,
+/// `pdo service refresh` and `pdo service uninstall` then ask
+/// [`Extension::authorize`] for the [`Actor::LocalOperator`] (`service` ×
+/// `create` / `update` / `delete`), but **never
 /// call** [`Extension::start`] nor [`Extension::skills`]: no data folder, no
 /// [`Host`], no async runtime. Only `manifest` and `authorize` are called
 /// there ([`Extension::on_event`]'s thread is started but receives nothing).
@@ -85,8 +86,10 @@ pub trait Extension: Send + Sync + 'static {
     /// resource and verb, never on a verb you do not know.
     ///
     /// Also asked outside the daemon, by `pdo service install` (`service` ×
-    /// `create`, not on `--dry-run`) and `pdo service uninstall` (`service` ×
-    /// `delete`), for the [`Actor::LocalOperator`], on an extension that was
+    /// `create`, not on `--dry-run`), `pdo service refresh` (`service` ×
+    /// `update`, not on `--dry-run`; the one-click Update runs it) and
+    /// `pdo service uninstall` (`service` × `delete`), for the
+    /// [`Actor::LocalOperator`], on an extension that was
     /// **never started**: no data folder, no [`Host`]. An extension that
     /// refuses for lack of its state (its database not open) makes
     /// `pdo service install` fail on a fresh install.

@@ -79,6 +79,14 @@ impl ServiceHost for RealServiceHost {
         }
     }
 
+    fn read_file(&self, path: &Path) -> Result<Option<String>> {
+        match std::fs::read_to_string(path) {
+            Ok(contents) => Ok(Some(contents)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e).with_context(|| format!("failed to read {}", path.display())),
+        }
+    }
+
     fn write_file(&self, path: &Path, contents: &str) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -170,8 +178,13 @@ mod tests {
         );
         let dir = tempfile::tempdir().unwrap();
         let unit = dir.path().join("systemd/user/pdo.service");
+        assert_eq!(RealServiceHost.read_file(&unit).unwrap(), None);
         RealServiceHost.write_file(&unit, "unit").unwrap();
         assert_eq!(std::fs::read_to_string(&unit).unwrap(), "unit");
+        assert_eq!(
+            RealServiceHost.read_file(&unit).unwrap().as_deref(),
+            Some("unit")
+        );
         RealServiceHost.remove_file(&unit).unwrap();
         RealServiceHost
             .remove_file(&unit)

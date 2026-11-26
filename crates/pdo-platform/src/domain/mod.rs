@@ -12,6 +12,7 @@ pub mod release;
 pub mod release_channel;
 pub mod service_health;
 pub mod service_unit;
+pub mod unit_diff;
 pub mod update_check;
 pub mod update_plan;
 pub mod update_rollback;

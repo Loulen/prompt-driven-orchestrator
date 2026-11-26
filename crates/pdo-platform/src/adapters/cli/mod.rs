@@ -68,6 +68,19 @@ pub enum ServiceAction {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Rewrite the installed service unit only if the binary in place renders it
+    /// differently (then `daemon-reload` under systemd). Never probes the port,
+    /// never enables nor creates a unit: what the one-click Update runs.
+    Refresh {
+        /// Address the service daemon listens on. Omit to keep the default.
+        #[arg(long)]
+        bind: Option<IpAddr>,
+        #[arg(short, long, env = "PDO_PORT", default_value_t = DEFAULT_PORT)]
+        port: u16,
+        /// Print `unchanged` or the diff of the unit, make NO changes.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Stop, disable, and remove the service unit.
     Uninstall,
     /// Show the service unit's status (`systemctl --user status pdo` / launchd equivalent).

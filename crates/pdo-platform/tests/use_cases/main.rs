@@ -7,4 +7,5 @@ mod fakes;
 mod audit;
 mod pages;
 mod service;
+mod service_refresh;
 mod update;

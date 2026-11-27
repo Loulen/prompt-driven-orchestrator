@@ -93,6 +93,15 @@ export function estimateNoteHeight(content: string): number {
 
 const isMarker = (type: string) => type === "start" || type === "end";
 
+/**
+ * The estimated width of a marker pill (`.cv-mk`: padding, icon, gap, name), at
+ * most a card's width. Estimated, not measured: the canvas lays markers out
+ * before React Flow draws them, and a decorated Run canvas never draws the pill.
+ */
+export function markerPillWidth(name: string): number {
+  return Math.min(COMPACT_CARD.width, 40 + name.length * 7);
+}
+
 export function compactCanvas(pipeline: EditorPipelineDef, input: CompactCanvasInput = {}): CompactCanvas {
   const withRuns = input.withRuns ?? new Set<string>();
   const size = input.card ?? COMPACT_SIZE;
@@ -110,7 +119,7 @@ export function compactCanvas(pipeline: EditorPipelineDef, input: CompactCanvasI
         nodeRects.push({ id: n.id, x, y, w: COMPACT_CARD.width, h, hCompact: h });
         return;
       }
-      const w = Math.min(COMPACT_CARD.width, 40 + (n.name ?? n.id).length * 7);
+      const w = markerPillWidth(n.name ?? n.id);
       nodeRects.push({ id: n.id, x, y, w, h: COMPACT_CARD.marker, hCompact: COMPACT_CARD.marker });
       return;
     }

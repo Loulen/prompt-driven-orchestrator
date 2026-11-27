@@ -3,7 +3,7 @@ import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import type { PortSide } from "../../shared/generated/PortSide";
 import { anchorPoint } from "../../lib/anchorSide";
 import { boxesOverlap, type Box } from "../../lib/compactLayout";
-import { COMPACT_CARD, compactCanvas, estimateNoteHeight, type CardSize } from "./compactCanvas";
+import { COMPACT_CARD, compactCanvas, estimateNoteHeight, markerPillWidth, type CardSize } from "./compactCanvas";
 import type { EditorNodeDef, EditorPipelineDef } from "./pipeline";
 
 const node = (id: string, x: number, y: number, type: EditorNodeDef["type"] = "agent"): EditorNodeDef => ({
@@ -356,5 +356,13 @@ describe.each(SIZES)("compactCanvas, cards at %s", (_, card) => {
     const note = c.pipeline.notes![0].view!;
     expect(note.y).toBeLessThan(at(2, 7).y);
     expect(note.x).toBe(at(2, 7).x);
+  });
+});
+
+describe("the estimated width of a marker pill", () => {
+  it("grows with the name, up to a card's width", () => {
+    expect(markerPillWidth("start")).toBe(75);
+    expect(markerPillWidth("end")).toBe(61);
+    expect(markerPillWidth("x".repeat(40))).toBe(COMPACT_CARD.width);
   });
 });

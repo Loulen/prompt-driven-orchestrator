@@ -124,9 +124,11 @@ impl OpenAssistant {
         )
         .unwrap_or_default();
         let session_ref = SessionRef::new(&session, SessionKind::LibraryAssistant);
-        let contribution = self
-            .host
-            .session_launch(&SessionLaunch::new(session_ref.clone()).started_by(actor.clone()));
+        let contribution = self.host.session_launch(
+            &SessionLaunch::new(session_ref.clone())
+                .started_by(actor.clone())
+                .in_dir(cwd.to_string_lossy()),
+        );
         let full_prompt =
             contribution.above(build_library_assistant_prompt(&daemon_url, &static_prompt));
         let extension_env: Vec<(String, String)> = contribution.env.into_iter().collect();

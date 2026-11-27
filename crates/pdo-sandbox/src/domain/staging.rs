@@ -132,13 +132,28 @@ impl StagingFill {
     }
 }
 
+/// `<staging_dir>/.prepared` — le **marqueur de complétion** du staging (CORE-343) :
+/// écrit **en dernier** (et atomiquement) par [`crate::adapters::staging::prepare`].
+/// Sa présence implique que le walk est allé à son terme ; un staging sans marqueur
+/// (daemon tué en plein walk) est re-préparé par `ensure_ready`. Vit à la racine du
+/// staging, jamais montée dans le conteneur.
+pub fn staging_prepared_marker(sandbox_root: &Path, run_id: &str) -> PathBuf {
+    staging_dir_for_run(sandbox_root, run_id).join(".prepared")
+}
+
+/// `<staging_dir>/sets` — le dossier des marqueurs de staging set. Une re-préparation
+/// l'**efface** (CORE-343) : elle recopie le `.claude.json` / `settings.json` hôte par
+/// dessus les fixups, donc le spawn suivant doit re-poser set et fixups.
+pub fn staging_sets_dir(sandbox_root: &Path, run_id: &str) -> PathBuf {
+    staging_dir_for_run(sandbox_root, run_id).join("sets")
+}
+
 /// `<staging_dir>/sets/<harness>` — le **marqueur** « le set de ce harnais est posé
 /// dans ce Run ». Écrit **après** la copie : un crash entre les deux fait recopier
-/// (additif, idempotent), jamais sauter.
+/// (additif, idempotent), jamais sauter. Invalidé par une re-préparation du staging
+/// ([`staging_sets_dir`]).
 pub fn staging_set_marker(sandbox_root: &Path, run_id: &str, harness: &str) -> PathBuf {
-    staging_dir_for_run(sandbox_root, run_id)
-        .join("sets")
-        .join(harness)
+    staging_sets_dir(sandbox_root, run_id).join(harness)
 }
 
 #[cfg(test)]
@@ -159,6 +174,23 @@ mod tests {
         assert_eq!(
             staged_claude_json(sandbox, "run-x"),
             PathBuf::from("/home/u/.pdo/sandbox/run-x/.claude.json")
+        );
+    }
+
+    #[test]
+    fn markers_live_at_the_staging_root_never_in_a_mounted_dir() {
+        let sandbox = Path::new("/home/u/.pdo/sandbox");
+        assert_eq!(
+            staging_prepared_marker(sandbox, "run-x"),
+            PathBuf::from("/home/u/.pdo/sandbox/run-x/.prepared")
+        );
+        assert_eq!(
+            staging_sets_dir(sandbox, "run-x"),
+            PathBuf::from("/home/u/.pdo/sandbox/run-x/sets")
+        );
+        assert_eq!(
+            staging_set_marker(sandbox, "run-x", "claude"),
+            PathBuf::from("/home/u/.pdo/sandbox/run-x/sets/claude")
         );
     }
 }

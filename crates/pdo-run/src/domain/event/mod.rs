@@ -257,6 +257,16 @@ impl Event {
         serde_json::from_value(actor.clone()).ok()
     }
 
+    /// The Projet a `RunStarted` records (ADR-0087): its `project_id`;
+    /// `None` for a Run launched in no Projet (`null` or, before the
+    /// migration, absent) and for any other event.
+    pub fn started_project_id(&self) -> Option<&str> {
+        if self.kind != EventKind::RunStarted {
+            return None;
+        }
+        self.payload.as_ref()?.get("project_id")?.as_str()
+    }
+
     /// The message that announces this event on the bus, exactly as `/ws`
     /// relays it to the front (D20): `{"type": "event", "event": …}`.
     pub fn bus_message(&self) -> serde_json::Value {

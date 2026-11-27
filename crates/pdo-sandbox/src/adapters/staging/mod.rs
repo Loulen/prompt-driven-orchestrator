@@ -56,22 +56,24 @@
 //!   [`crate::domain::profile::landing`], partagé par [`prepare`] et [`extra_mounts`].
 
 mod copy;
+mod marker;
 mod set;
 pub mod stores;
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::application::ports::HomeStaging;
 use crate::domain::profile::{landing, Landing};
 use crate::domain::staging::{
     staged_claude_home, staged_claude_json, staged_home_extras, staged_path, staging_dir_for_run,
-    staging_set_marker, StagedMount, StagingFill, CLAUDE_HOME_REL,
+    staging_prepared_marker, staging_set_marker, StagedMount, StagingFill, CLAUDE_HOME_REL,
 };
 
 use copy::{copy_jsonl_tree, materialise_entries};
+use marker::{drop_set_markers, write_prepared_marker};
 use set::{apply_staging_set, set_mode_0600};
 
 /// The staged homes under a sandbox root, on the local filesystem.
@@ -79,8 +81,8 @@ use set::{apply_staging_set, set_mode_0600};
 pub struct FsStaging;
 
 impl HomeStaging for FsStaging {
-    fn exists(&self, sandbox_root: &Path, run_id: &str) -> bool {
-        staging_dir_for_run(sandbox_root, run_id).exists()
+    fn is_prepared(&self, sandbox_root: &Path, run_id: &str) -> bool {
+        staging_prepared_marker(sandbox_root, run_id).is_file()
     }
 
     fn prepare(
@@ -119,7 +121,8 @@ impl HomeStaging for FsStaging {
 /// La queue variable de `-v` qu'une liste d'entrées gelée produit (#432).
 ///
 /// **Pas** une valeur de retour de [`prepare`] : `ensure_ready` saute `prepare` quand
-/// le staging existe déjà, ce qui est le cas de 3 de ses 4 appelants. Dériver de
+/// le staging est déjà préparé (marqueur de complétion présent), ce qui est le cas de
+/// 3 de ses 4 appelants. Dériver de
 /// `liste gelée × disque` est **total** — même réponse que `prepare` ait tourné ou
 /// non.
 ///
@@ -189,7 +192,16 @@ pub fn extra_mounts(
 /// a disparu — les défauts virtuels sont des listes nommées, `minimal` étant la vide.
 ///
 /// Idempotent (`create_dir_all` ; copy-or-overwrite) et **additif** — jamais de
-/// suppression (ADR-0031 §6).
+/// suppression de contenu stagé (ADR-0031 §6).
+///
+/// **Marqueur de complétion** (CORE-343) : la dernière étape écrit
+/// [`staging_prepared_marker`] (la liste gelée, une entrée par ligne — diagnostic
+/// seulement), atomiquement (`.prepared.tmp` puis `rename`). Sans lui, un daemon tué en
+/// plein walk laissait un staging tronqué que tout `ensure_ready` suivant sautait. Avant
+/// le walk, les marqueurs de staging set ([`staging_sets_dir`]) sont effacés : le walk
+/// recopie `.claude.json` / `settings.json` hôte par dessus les fixups de `claude`, donc
+/// le spawn suivant doit re-poser set et fixups. Un crash à n'importe quel point laisse
+/// « ni `.prepared`, ni marqueur de set », un état cohérent.
 pub fn prepare(
     home_root: &Path,
     sandbox_root: &Path,
@@ -197,15 +209,23 @@ pub fn prepare(
     run_id: &str,
 ) -> Result<PathBuf> {
     let staging = staging_dir_for_run(sandbox_root, run_id);
+    if staging.exists() {
+        warn!(
+            "sandbox: run {run_id} has a staging without completion marker (interrupted walk \
+             or staged by a pre-marker daemon), re-preparing"
+        );
+    }
     let home = staged_claude_home(sandbox_root, run_id);
     std::fs::create_dir_all(&home)
         .with_context(|| format!("create staged claude home {}", home.display()))?;
+    drop_set_markers(sandbox_root, run_id)?;
 
     let src = home_root.join(".claude");
     let staged_json = staged_claude_json(sandbox_root, run_id);
 
     materialise_entries(home_root, &src, &home, &staged_json, &staging, entries)?;
     ensure_mount_anchors(sandbox_root, run_id)?;
+    write_prepared_marker(sandbox_root, run_id, entries)?;
 
     Ok(staging)
 }
@@ -356,6 +376,7 @@ pub fn teardown(sandbox_root: &Path, run_id: &str) -> Result<()> {
 mod tests {
     use super::set::{BYPASS_PERMISSIONS_KEY, SETTINGS_FILE};
     use super::*;
+    use crate::domain::staging::staging_sets_dir;
 
     /// Baseline de managed settings poussée par l'organisation, cachée par Claude Code
     /// dans `~/.claude/`. Depuis ADR-0063 le chemin runtime est une **entrée du staging set
@@ -373,13 +394,13 @@ mod tests {
         run_id: &str,
         trusted_root: Option<&Path>,
     ) -> Result<PathBuf> {
-        // Faithful to `ensure_ready`: `prepare` runs ONCE (gated on the staging dir),
+        // Faithful to `ensure_ready`: `prepare` runs ONCE (gated on the completion marker),
         // then `fill_staging_set` (marker-gated, idempotent) fills `claude`'s set as
         // the first claude spawn would. Calling `prepare` unconditionally twice would
         // re-copy the host `settings.json` over the merged one while the marker made
         // the fill skip the bypass merge — a shape production never reaches.
         let staging = staging_dir_for_run(sandbox_root, run_id);
-        if !staging.exists() {
+        if !FsStaging.is_prepared(sandbox_root, run_id) {
             prepare(home_root, sandbox_root, entries, run_id)?;
         }
         fill_staging_set(
@@ -1372,7 +1393,7 @@ mod tests {
     }
 
     /// `extra_mounts` dérive de `liste gelée × disque`, PAS d'une valeur de retour de
-    /// `prepare` — `ensure_ready` saute `prepare` quand le staging existe déjà (3 de ses
+    /// `prepare` — `ensure_ready` saute `prepare` quand le staging est déjà préparé (3 de ses
     /// 4 appelants). La dérivation doit donc être **totale** : même réponse que `prepare`
     /// ait tourné ou non.
     #[test]
@@ -1757,5 +1778,127 @@ mod tests {
             !pi_home.join("auth.json").exists(),
             "a claude-only Run must not have pi's auth in its staging"
         );
+    }
+
+    // ---- CORE-343: the completion marker -------------------------------------------
+
+    #[test]
+    fn prepare_writes_the_completion_marker_last() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let sandbox_dir = tempfile::tempdir().unwrap();
+        let (home, sandbox) = (home_dir.path(), sandbox_dir.path());
+        fabricate_home(home);
+        let entries = full_entries();
+
+        prepare(home, sandbox, &entries, "run1").unwrap();
+
+        let marker = staging_prepared_marker(sandbox, "run1");
+        assert!(marker.is_file(), "the marker closes the walk");
+        let listed: Vec<String> = std::fs::read_to_string(&marker)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(listed, entries, "the marker lists the frozen entries");
+        let leftovers: Vec<_> = std::fs::read_dir(staging_dir_for_run(sandbox, "run1"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "the temporary file is renamed, never left behind: {leftovers:?}"
+        );
+        assert!(FsStaging.is_prepared(sandbox, "run1"));
+    }
+
+    #[test]
+    fn a_staging_without_the_marker_is_not_prepared() {
+        let sandbox_dir = tempfile::tempdir().unwrap();
+        let sandbox = sandbox_dir.path();
+        assert!(!FsStaging.is_prepared(sandbox, "run1"), "absent staging");
+
+        // A daemon killed right after `create_dir_all`: the dir exists, no marker.
+        std::fs::create_dir_all(staged_claude_home(sandbox, "run1")).unwrap();
+        assert!(!FsStaging.is_prepared(sandbox, "run1"));
+    }
+
+    #[test]
+    fn prepare_completes_a_partial_staging_additively() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let sandbox_dir = tempfile::tempdir().unwrap();
+        let (home, sandbox) = (home_dir.path(), sandbox_dir.path());
+        fabricate_home(home);
+        write(&home.join(".claude/skills/b/SKILL.md"), "# b\n");
+        // Partial walk: `skills/foo` copied, `skills/b` and `plugins/` missing; the
+        // Run already wrote a transcript in the staging.
+        let staged_home = staged_claude_home(sandbox, "run1");
+        write(&staged_home.join("skills/foo/skill.md"), "# skill\n");
+        write(&staged_home.join("projects/x.jsonl"), "{\"run\":1}\n");
+
+        prepare(home, sandbox, &full_entries(), "run1").unwrap();
+
+        assert!(staged_home.join("skills/b/SKILL.md").is_file());
+        assert!(staged_home.join("plugins/bar/plugin.json").is_file());
+        assert!(staged_home.join("settings.json").is_file());
+        assert_eq!(
+            std::fs::read_to_string(staged_home.join("projects/x.jsonl")).unwrap(),
+            "{\"run\":1}\n",
+            "a re-prepare never purges what the Run wrote"
+        );
+        assert!(FsStaging.is_prepared(sandbox, "run1"));
+    }
+
+    #[test]
+    fn prepare_drops_the_staging_set_markers() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let sandbox_dir = tempfile::tempdir().unwrap();
+        let (home, sandbox) = (home_dir.path(), sandbox_dir.path());
+        fabricate_home(home);
+        // Partial staging whose `claude` set was already filled by an earlier spawn.
+        std::fs::create_dir_all(staged_claude_home(sandbox, "run1")).unwrap();
+        write(
+            &staging_set_marker(sandbox, "run1", pdo_harness::registry::CLAUDE),
+            "",
+        );
+
+        prepare(home, sandbox, &full_entries(), "run1").unwrap();
+        assert!(
+            !staging_sets_dir(sandbox, "run1").exists(),
+            "the re-prepare overwrote the fixups: the set markers must go"
+        );
+
+        let trusted = Path::new("/repo/root");
+        let fill = fill_staging_set(
+            home,
+            sandbox,
+            "run1",
+            pdo_harness::registry::CLAUDE,
+            Some(trusted),
+        )
+        .unwrap();
+        assert!(matches!(fill, StagingFill::Filled(_)), "got {fill:?}");
+        let json = read_json(&staged_claude_json(sandbox, "run1"));
+        assert_eq!(
+            json["projects"]["/repo/root"]["hasTrustDialogAccepted"],
+            serde_json::json!(true)
+        );
+        let settings = read_json(&staged_claude_home(sandbox, "run1").join(SETTINGS_FILE));
+        assert_eq!(settings[BYPASS_PERMISSIONS_KEY], serde_json::json!(true));
+    }
+
+    #[test]
+    fn teardown_removes_the_marker() {
+        let home_dir = tempfile::tempdir().unwrap();
+        let sandbox_dir = tempfile::tempdir().unwrap();
+        let (home, sandbox) = (home_dir.path(), sandbox_dir.path());
+        prepare(home, sandbox, &[], "run1").unwrap();
+        assert!(FsStaging.is_prepared(sandbox, "run1"));
+
+        teardown(sandbox, "run1").unwrap();
+
+        assert!(!staging_prepared_marker(sandbox, "run1").exists());
+        assert!(!staging_dir_for_run(sandbox, "run1").exists());
+        assert!(!FsStaging.is_prepared(sandbox, "run1"));
     }
 }

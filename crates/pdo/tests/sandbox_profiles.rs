@@ -970,8 +970,8 @@ async fn editing_a_profile_does_not_change_a_running_runs_staging() {
         200
     );
 
-    // A SECOND `ensure_ready` for the same Run. `prepare` is gated on the staging dir
-    // existing so it does not re-run, and `extra_mounts` derives from the FROZEN list.
+    // A SECOND `ensure_ready` for the same Run. `prepare` is gated on the staging's
+    // completion marker so it does not re-run, and `extra_mounts` derives from the FROZEN list.
     daemon.run_boot_recovery_tick().await;
 
     let run = get_run(&daemon, &run_id).await;

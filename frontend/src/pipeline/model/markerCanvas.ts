@@ -1,7 +1,7 @@
 /**
  * A Run's canvas whose Start or End marker carries a `marker/item` row (ADR-0081,
  * amendment CORE-322): the decorated marker is a card's width, centred on the
- * pill it replaces (the pill's width is estimated, `markerPillWidth`), and a
+ * pill it replaces (the pill's width from its measured name, `markerPillWidth`), and a
  * fixed height, taller than the 24 px pill every position was placed for, so
  * the rest of the pipeline goes down by as much (`lib/growLayout.ts`). Pure: it
  * returns a shifted COPY of the pipeline for the canvas to draw, never written

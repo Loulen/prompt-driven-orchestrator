@@ -25,6 +25,7 @@ import type { PortSide } from "../../shared/generated/PortSide";
 import { anchorPoint, landsByDrop } from "../../lib/anchorSide";
 import { boxesOverlap, compactLayout, type Box, type CompactPoint, type CompactRect } from "../../lib/compactLayout";
 import { fallbackNodeSpot, fallbackNoteSpot } from "../../lib/nodePlacement";
+import { uiTextWidth } from "../../lib/textWidth";
 import type { EditorPipelineDef } from "./pipeline";
 
 /**
@@ -93,13 +94,18 @@ export function estimateNoteHeight(content: string): number {
 
 const isMarker = (type: string) => type === "start" || type === "end";
 
+/** A marker pill around its name (`.cv-mk`): 1 px borders, 8 px paddings, the 11 px icon, a 5 px gap. */
+const PILL_CHROME = 2 + 16 + 11 + 5;
+
 /**
- * The estimated width of a marker pill (`.cv-mk`: padding, icon, gap, name), at
- * most a card's width. Estimated, not measured: the canvas lays markers out
- * before React Flow draws them, and a decorated Run canvas never draws the pill.
+ * The width of a marker pill (`.cv-mk`: borders, padding, icon, gap, name), at
+ * most a card's width. The name is measured with the canvas text metrics
+ * (`lib/textWidth.ts`), not on the pill: the canvas lays markers out before
+ * React Flow draws them, and a decorated Run canvas never draws the pill
+ * (CORE-347). Without a canvas (jsdom), 7 px per character.
  */
-export function markerPillWidth(name: string): number {
-  return Math.min(COMPACT_CARD.width, 40 + name.length * 7);
+export function markerPillWidth(name: string, measure: (text: string) => number | null = uiTextWidth): number {
+  return Math.min(COMPACT_CARD.width, PILL_CHROME + (measure(name) ?? name.length * 7));
 }
 
 export function compactCanvas(pipeline: EditorPipelineDef, input: CompactCanvasInput = {}): CompactCanvas {

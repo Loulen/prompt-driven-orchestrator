@@ -359,10 +359,20 @@ describe.each(SIZES)("compactCanvas, cards at %s", (_, card) => {
   });
 });
 
-describe("the estimated width of a marker pill", () => {
-  it("grows with the name, up to a card's width", () => {
-    expect(markerPillWidth("start")).toBe(75);
-    expect(markerPillWidth("end")).toBe(61);
-    expect(markerPillWidth("x".repeat(40))).toBe(COMPACT_CARD.width);
+describe("the width of a marker pill", () => {
+  it("is the measured name plus the pill's borders, padding, icon and gap", () => {
+    // The widths the FP measured on the drawn pills (CORE-347): « Start » 60, « End » 56.
+    const measured: Record<string, number> = { Start: 26, End: 22 };
+    expect(markerPillWidth("Start", (t) => measured[t])).toBe(60);
+    expect(markerPillWidth("End", (t) => measured[t])).toBe(56);
+  });
+
+  it("is at most a card's width", () => {
+    expect(markerPillWidth("Kick-off the nightly batch", () => 400)).toBe(COMPACT_CARD.width);
+  });
+
+  it("estimates 7 px per character when nothing can measure", () => {
+    expect(markerPillWidth("start", () => null)).toBe(69);
+    expect(markerPillWidth("x".repeat(40), () => null)).toBe(COMPACT_CARD.width);
   });
 });

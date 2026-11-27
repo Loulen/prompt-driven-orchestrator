@@ -14,7 +14,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## Unreleased
+## 2.96.3
 
 - Run view: a Start or End marker that carries an extension decoration (`marker/item`) keeps the
   horizontal centre of its pill, as in the Pipeline editor, instead of growing to the right. Its

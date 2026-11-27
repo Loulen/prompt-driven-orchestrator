@@ -859,8 +859,10 @@ carte, pour les seuls **Nœuds structurels**, sans revenir sur ce qui avait moti
   (sa clause `when` vraie), même si son composant ne rend rien : la hauteur du marqueur est connue
   avant le rendu, et la compaction comme les routes des arêtes la suivent sans mesurer. Le marqueur
   prend alors la largeur d'une carte ; un contenu plus large est coupé (à l'extension de dire
-  « +n »). Masquable par contribution dans Appearance › Run canvas ; « Compact nodes » ne la masque
-  pas.
+  « +n »). Le marqueur décoré garde le centre horizontal de la pastille ; la largeur de la
+  pastille vient du nom mesuré par les métriques de texte du canvas, sans rendre la pastille
+  (CORE-347). Masquable par contribution dans Appearance › Run canvas ;
+  « Compact nodes » ne la masque pas.
 - **`marker/detail`** : une Section par contribution dans l'inspecteur de Start et de End, après
   celles du core.
 - **Contexte** : le contexte de base, `entity` (`kind: "node"`, l'id, `type: "start" | "end"`, le

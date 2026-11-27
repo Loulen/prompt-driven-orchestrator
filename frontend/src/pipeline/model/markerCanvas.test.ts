@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { boxesOverlap, type Box } from "../../lib/compactLayout";
-import { COMPACT_CARD, COMPACT_SIZE, compactCanvas, estimateNoteHeight } from "./compactCanvas";
+import { COMPACT_CARD, COMPACT_SIZE, compactCanvas, estimateNoteHeight, markerPillWidth } from "./compactCanvas";
 import { markerGrownCanvas, markerHeight } from "./markerCanvas";
 import type { EditorNodeDef, EditorPipelineDef } from "./pipeline";
 
@@ -97,5 +97,64 @@ describe("a decorated marker on a Run canvas", () => {
     expect(yOf(c.pipeline, "end")).toBeGreaterThanOrEqual(c.cards.review.y + c.cards.review.h);
     // The work cards rise against the grown layout: less than the stored distance between them.
     expect(c.cards.review.y - c.cards.work.y).toBeLessThan(100);
+  });
+});
+
+/** Start, a work card, End, every pill centred over the 208 px card column at x = 0. */
+function centred(startName = "start", endName = "end"): EditorPipelineDef {
+  const pill = (id: string, name: string, y: number, type: "start" | "end"): EditorNodeDef => ({
+    ...node(id, (COMPACT_CARD.width - markerPillWidth(name)) / 2, y, type),
+    name,
+  });
+  return {
+    name: "centred",
+    version: "1.0",
+    variables: {},
+    nodes: [pill("start", startName, 0, "start"), node("work", 0, 60, "agent"), pill("end", endName, 160, "end")],
+    edges: [
+      { source: { node: "start", port: "out" }, target: { node: "work", port: "in" }, source_anchor: { side: "bottom", offset: 20 } },
+      { source: { node: "work", port: "out" }, target: { node: "end", port: "result" }, target_anchor: { side: "top" } },
+    ],
+  };
+}
+
+const xOf = (p: EditorPipelineDef, id: string) => p.nodes.find((n) => n.id === id)!.view!.x;
+const columnCentre = COMPACT_CARD.width / 2;
+
+describe("a decorated marker keeps the horizontal centre of the pill it replaces", () => {
+  it("centres a decorated Start on the card column", () => {
+    const grown = markerGrownCanvas(centred(), new Set(["start"]));
+    expect(xOf(grown, "start") + COMPACT_CARD.width / 2).toBe(columnCentre);
+  });
+
+  it("centres a decorated End on the compacted card column", () => {
+    const decorated = new Set(["end"]);
+    const c = compactCanvas(markerGrownCanvas(centred(), decorated), { card: COMPACT_SIZE, decorated });
+    expect(xOf(c.pipeline, "end") + COMPACT_CARD.width / 2).toBe(c.cards.work.x + c.cards.work.w / 2);
+  });
+
+  it("leaves a marker whose pill is already a card wide where it is", () => {
+    const long = "a marker name far longer than any card";
+    const pipeline = centred(long);
+    expect(xOf(pipeline, "start")).toBe(0);
+    expect(xOf(markerGrownCanvas(pipeline, new Set(["start"])), "start")).toBe(0);
+  });
+
+  it("moves only the decorated marker sideways", () => {
+    const pipeline = centred();
+    const grown = markerGrownCanvas(pipeline, new Set(["start"]));
+    expect(xOf(grown, "work")).toBe(0);
+    expect(xOf(grown, "end")).toBe(xOf(pipeline, "end"));
+  });
+
+  it("re-offsets a top or bottom anchor so it keeps its abscissa, and leaves a centred anchor alone", () => {
+    const pipeline = centred();
+    const grown = markerGrownCanvas(pipeline, new Set(["start", "end"]));
+    const inset = (COMPACT_CARD.width - markerPillWidth("start")) / 2;
+    expect(grown.edges[0].source_anchor).toEqual({ side: "bottom", offset: 20 + inset });
+    expect(xOf(grown, "start") + grown.edges[0].source_anchor!.offset!).toBe(xOf(pipeline, "start") + 20);
+    expect(grown.edges[1].target_anchor).toEqual({ side: "top" });
+    const centredAnchor = { ...pipeline, edges: [{ ...pipeline.edges[0], source_anchor: { side: "bottom" as const } }] };
+    expect(markerGrownCanvas(centredAnchor, new Set(["start"])).edges[0].source_anchor).toEqual({ side: "bottom" });
   });
 });

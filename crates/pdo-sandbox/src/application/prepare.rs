@@ -45,12 +45,14 @@ impl SandboxRuntime {
         };
 
         // 1. Stage the profile ONCE. The ~1 GB `full` walk must not repeat on every
-        //    ensure_ready — gate on the staging dir already existing. No harness
+        //    ensure_ready — gate on the staging being already *prepared*: its
+        //    completion marker, not the bare dir, so a walk cut short by a killed
+        //    daemon is resumed instead of skipped for ever (CORE-343). No harness
         //    **staging set** is applied here (#708, ADR-0063 §3): `claude`'s five
         //    guarantees and `pi`'s home are copied at the spawn of the first session of
         //    the Run that resolves that harness — so a claude-only Run never carries
         //    pi's auth, and vice versa.
-        if !self.staging.exists(&ctx.sandbox_root, &ctx.run_id) {
+        if !self.staging.is_prepared(&ctx.sandbox_root, &ctx.run_id) {
             // Name the profile AND the list once per staging, so "why does this Run
             // carry plugins/" is answerable from the log rather than by reading the DB
             // (which may have been edited since — the list is frozen, the profile is not).
@@ -237,7 +239,7 @@ mod tests {
     use crate::domain::image::{self as sandbox_image};
     use crate::domain::mode::SandboxMode;
     use crate::domain::profile::{base_entries, resolve_entry_list, FULL_PROFILE, MINIMAL_PROFILE};
-    use crate::domain::staging::staging_dir_for_run;
+    use crate::domain::staging::{staging_dir_for_run, staging_prepared_marker};
     use std::collections::BTreeMap;
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
@@ -524,7 +526,8 @@ mod tests {
 
         retry_etxtbsy(|| ensure_ready(&ctx)).unwrap();
         // Drop a sentinel into the staging dir; a second ensure_ready must NOT
-        // re-run prepare (which would recreate/rewrite the tree).
+        // re-run prepare (which would recreate/rewrite the tree): the completion
+        // marker holds (CORE-343 AC2).
         let staging = staging_dir_for_run(&ctx.sandbox_root, "r1");
         let sentinel = staging.join("SENTINEL");
         std::fs::write(&sentinel, "keep").unwrap();
@@ -532,8 +535,69 @@ mod tests {
         retry_etxtbsy(|| ensure_ready(&ctx)).unwrap();
         assert!(
             sentinel.exists(),
-            "staging must not be re-prepared when present"
+            "staging must not be re-prepared when already prepared"
         );
+    }
+
+    /// CORE-343: a daemon killed mid-walk leaves the staging dir without its completion
+    /// marker. The next `ensure_ready` (boot recovery, resume, run shell) must resume the
+    /// walk, not skip it: the Run gets the same tree as a clean staging.
+    #[test]
+    fn ensure_ready_reprepares_a_staging_without_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (docker, _) = write_fake_docker(tmp.path());
+        let ctx = test_ctx(tmp.path(), docker, full());
+        let claude = ctx.home_root.join(".claude");
+        std::fs::create_dir_all(claude.join("agents")).unwrap();
+        std::fs::write(claude.join("agents/x.md"), "agent\n").unwrap();
+        std::fs::write(claude.join("CLAUDE.md"), "# global\n").unwrap();
+        std::fs::write(claude.join("settings.json"), r#"{"hooks":{}}"#).unwrap();
+        std::fs::write(ctx.home_root.join(".claude.json"), r#"{"host":"json"}"#).unwrap();
+        // Killed right after `create_dir_all`: the dir exists, no marker.
+        std::fs::create_dir_all(staging_dir_for_run(&ctx.sandbox_root, "r1")).unwrap();
+
+        retry_etxtbsy(|| ensure_ready(&ctx)).unwrap();
+
+        let home = staged_claude_home(&ctx.sandbox_root, "r1");
+        assert!(home.join("settings.json").is_file());
+        assert!(home.join("CLAUDE.md").is_file());
+        assert!(home.join("agents/x.md").is_file());
+        let json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(staged_claude_json(&ctx.sandbox_root, "r1")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            json["host"],
+            serde_json::json!("json"),
+            "the host .claude.json, not the `{{}}` anchor: {json}"
+        );
+        assert!(staging_prepared_marker(&ctx.sandbox_root, "r1").is_file());
+    }
+
+    /// CORE-343 AC3: `cleanup` purges the staging (marker included); a resume then
+    /// re-prepares it from scratch.
+    #[test]
+    fn ensure_ready_after_cleanup_restages() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (docker, _) = write_fake_docker(tmp.path());
+        let ctx = test_ctx(tmp.path(), docker, minimal());
+
+        retry_etxtbsy(|| ensure_ready(&ctx)).unwrap();
+        let marker = staging_prepared_marker(&ctx.sandbox_root, "r1");
+        assert!(marker.is_file());
+        // `cleanup` swallows errors (ETXTBSY on the fake docker); the staging purge is
+        // what this test pins.
+        retry_side_effect(
+            || cleanup(&ctx.docker, &ctx.home_root, &ctx.sandbox_root, "r1"),
+            || !staging_dir_for_run(&ctx.sandbox_root, "r1").exists(),
+        );
+        assert!(
+            !marker.exists(),
+            "cleanup takes the marker with the staging"
+        );
+
+        retry_etxtbsy(|| ensure_ready(&ctx)).unwrap();
+        assert!(marker.is_file(), "the resumed Run is prepared again");
     }
 
     /// #708 / ADR-0063 §3: `ensure_ready` no longer applies `claude`'s staging set —

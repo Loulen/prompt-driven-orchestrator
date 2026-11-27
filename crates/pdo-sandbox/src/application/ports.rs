@@ -60,9 +60,12 @@ pub trait DockerfileStore: Send + Sync {
 /// The staged home of a sandboxed Run on disk (#404, #432, #708). Implemented by
 /// [`crate::adapters::staging::FsStaging`].
 pub trait HomeStaging: Send + Sync {
-    /// Whether the Run's staging directory exists.
-    fn exists(&self, sandbox_root: &Path, run_id: &str) -> bool;
-    /// Materialise the frozen entry list and anchor the fixed mounts.
+    /// Whether the Run's staging was fully prepared: it exists **and** carries the
+    /// completion marker [`prepare`](Self::prepare) writes last (CORE-343). A staging
+    /// left half-walked by a killed daemon is *not* prepared.
+    fn is_prepared(&self, sandbox_root: &Path, run_id: &str) -> bool;
+    /// Materialise the frozen entry list, anchor the fixed mounts, then write the
+    /// completion marker. Additive: safe on a partial staging.
     fn prepare(
         &self,
         home_root: &Path,
